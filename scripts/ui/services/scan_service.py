@@ -18,6 +18,7 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from ui.models.setup import SetupRow
 from ui.services.data_feed import enrich_setup_rows_for_display, load_latest_setup_rows, rows_from_run_result
+from swallowed import note_swallowed
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[2]
@@ -560,8 +561,8 @@ class ScanService(QObject):
             return
         try:
             proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            pass
+        except subprocess.TimeoutExpired as exc:
+            note_swallowed("warehouse build still running after the wait timeout", exc, quiet=True)
 
     @Slot(str)
     def _handle_failed(self, message: str) -> None:
@@ -710,14 +711,14 @@ def terminate_owned_scan_processes(grace_seconds: float = 3.0) -> dict[str, int]
             proc.wait(timeout=max(0.0, grace_seconds))
             summary["finished"] += 1
             continue
-        except subprocess.TimeoutExpired:
-            pass
+        except subprocess.TimeoutExpired as swallowed_exc:
+            note_swallowed("scan process outlived its grace period; terminating it", swallowed_exc, quiet=True)
         try:
             proc.terminate()
             proc.wait(timeout=5)
             summary["terminated"] += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("scan process terminate/wait failed at shutdown", exc)
     return summary
 
 
@@ -905,13 +906,13 @@ def _wait_for_scan_marker(
                 sink.append(line)
                 if watch_marker and marker in line:
                     marker_seen.set()
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as swallowed_exc:
+            note_swallowed("scan output stream closed while draining", swallowed_exc, quiet=True)
         finally:
             try:
                 stream.close()
-            except OSError:
-                pass
+            except OSError as exc:
+                note_swallowed("scan output stream close failed", exc, quiet=True)
 
     drains = [
         threading.Thread(target=_drain, args=(proc.stdout, stdout_tail, True), name="scan-stdout-drain", daemon=True),

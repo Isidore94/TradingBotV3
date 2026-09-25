@@ -146,7 +146,7 @@ def compute_smi(
     smoothed_range = _ema(_ema(ranges, config.first_smoothing), config.second_smoothing)
 
     sm1: list[float | None] = []
-    for numerator, denominator in zip(smoothed_distance, smoothed_range):
+    for numerator, denominator in zip(smoothed_distance, smoothed_range, strict=False):
         if numerator is None or denominator is None or denominator == 0:
             # A motionless window has no range to normalize by. That is
             # unmeasurable, not neutral - reporting 0.0 would say "at the

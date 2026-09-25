@@ -49,6 +49,7 @@ import pandas as pd
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+from swallowed import note_swallowed  # noqa: E402
 
 from project_paths import (  # noqa: E402
     DATA_DIR,
@@ -764,8 +765,8 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
     except Exception:
         try:
             os.unlink(temp_name)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("industry scanner temp CSV not removed after a failed write", exc, quiet=True)
         raise
 
 
@@ -781,8 +782,8 @@ def _write_text(path: Path, text: str) -> None:
     except Exception:
         try:
             os.unlink(temp_name)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("industry scanner temp text not removed after a failed write", exc, quiet=True)
         raise
 
 

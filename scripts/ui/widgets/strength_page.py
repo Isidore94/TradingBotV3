@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui import theme
+from swallowed import note_swallowed
 
 #: The page's floor: the one the strength column had, so the alert column's
 #: 360 px budget (170 for the tab stack, 170 here) is untouched by the move.
@@ -88,8 +89,8 @@ class _DocumentFit(QObject):
             if self._layout is not None:
                 try:
                     self._layout.documentSizeChanged.disconnect(self._on_document_size)
-                except (RuntimeError, TypeError):
-                    pass
+                except (RuntimeError, TypeError) as exc:
+                    note_swallowed("strength page layout signal already disconnected", exc, quiet=True)
             self._layout = layout
             layout.documentSizeChanged.connect(self._on_document_size)
         self._fit()

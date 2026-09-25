@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
+
+#: The invalid (root) index used as the default parent.
+_NO_PARENT = QModelIndex()
 from PySide6.QtGui import QColor
 
 from ui import theme
@@ -38,10 +41,10 @@ class ThetaTableModel(QAbstractTableModel):
         super().__init__(parent)
         self._rows = list(rows or [])
 
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def rowCount(self, parent: QModelIndex = _NO_PARENT) -> int:
         return 0 if parent.isValid() else len(self._rows)
 
-    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def columnCount(self, parent: QModelIndex = _NO_PARENT) -> int:
         return 0 if parent.isValid() else len(self.COLUMNS)
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:

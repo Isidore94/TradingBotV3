@@ -49,6 +49,7 @@ from evidence_stats import LATELY_SESSIONS, MIN_REPORTABLE_N
 # Import only: `scripts/indicators/` is an ask-first tree and nothing here edits it.
 from indicators.atr import DEFAULT_LENGTH as ATR_LENGTH, wilder_atr
 from swing_headline import WILSON_Z, wilson_lower_bound
+from swallowed import note_swallowed
 
 
 REJECTS = frozenset({"veto", "pass", "not_today", "dislike", "m5_click_away"})
@@ -239,8 +240,8 @@ def earlier_sessions(session: str, *, count: int = EARLIER_SESSION_COUNT) -> tup
         for _ in range(max(0, int(count))):
             cursor = market_calendar.previous_session(cursor)
             out.append(cursor.isoformat())
-    except market_calendar.SessionCalendarError:
-        pass
+    except market_calendar.SessionCalendarError as exc:
+        note_swallowed("market calendar ran out of range; fewer earlier sessions returned", exc, quiet=True)
     return tuple(reversed(out))
 
 
@@ -1240,7 +1241,8 @@ def build(
             )
         )
 
-    sort = lambda row: (row.ran_after_pct is None, -(row.ran_after_pct or 0), row.symbol)
+    def sort(row):
+        return (row.ran_after_pct is None, -(row.ran_after_pct or 0), row.symbol)
     populations = {
         "liked_not_traded": tuple(sorted(liked, key=sort)),
         "rejected": tuple(sorted(rejected, key=sort)),

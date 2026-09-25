@@ -36,6 +36,7 @@ from ui.timer_utils import start_staggered
 from ui.annotations.store import EVENT_LIKE_CLAIM, EVENT_VETO
 from ui.widgets.candle_chart import CandleChart
 from ui.widgets.paint_lines_button import PaintLinesButton
+from swallowed import note_swallowed
 
 #: Per-symbol backfill cooldown, shared across every snapshot widget so two
 #: open charts of one stale symbol cannot double-fetch, and a holiday (which
@@ -889,8 +890,8 @@ class SymbolSnapshotWidget(QWidget):
                 )
             try:
                 self._d1BackfillDone.emit(symbol)
-            except RuntimeError:
-                pass  # widget deleted while the fetch ran
+            except RuntimeError as exc:
+                note_swallowed("forming D1 backfill done after the widget was deleted", exc, quiet=True)  # widget deleted while the fetch ran
 
         self._forming_thread = threading.Thread(
             target=worker, name=f"d1-forming-{symbol}", daemon=True
@@ -931,8 +932,8 @@ class SymbolSnapshotWidget(QWidget):
                 logging.warning("D1 store backfill failed for %s.", symbol, exc_info=True)
             try:
                 self._d1BackfillDone.emit(symbol)
-            except RuntimeError:
-                pass  # widget deleted while the fetch ran
+            except RuntimeError as exc:
+                note_swallowed("D1 store backfill done after the widget was deleted", exc, quiet=True)  # widget deleted while the fetch ran
 
         self._d1_backfill_thread = threading.Thread(
             target=worker, name=f"d1-backfill-{symbol}", daemon=True
@@ -1454,9 +1455,9 @@ class SymbolSnapshotDialog(QDialog):
             return
         try:
             self.snapshot.refresh()
-        except Exception:
+        except Exception as exc:
             # A refresh must never take down the popup; the next tick retries.
-            pass
+            note_swallowed("symbol snapshot auto refresh failed", exc)
 
     def show_symbol(
         self, symbol: str, *, bot=None, side: str = "", watch_host=None, review_host=None
@@ -1626,8 +1627,8 @@ class SymbolSnapshotDialog(QDialog):
         if signal is not None:
             try:
                 signal.disconnect(self._refresh_watch_actions)
-            except (RuntimeError, TypeError):
-                pass
+            except (RuntimeError, TypeError) as exc:
+                note_swallowed("armed watches signal already disconnected", exc, quiet=True)
         signal = getattr(host, "armedWatchesChanged", None)
         if signal is not None:
             signal.connect(self._refresh_watch_actions)

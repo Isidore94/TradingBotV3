@@ -20,6 +20,9 @@ from datetime import datetime
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt, Signal
+
+#: The invalid (root) index used as the default parent.
+_NO_PARENT = QModelIndex()
 from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -38,6 +41,7 @@ from PySide6.QtWidgets import (
 import movers_scan
 from ui import theme
 from ui.timer_utils import SignalCoalescer
+from swallowed import note_swallowed
 
 #: Same floor as the Strength page it sits above (alert column budget: 360 px).
 MIN_BOARD_WIDTH = 170
@@ -217,10 +221,10 @@ class MoversTableModel(QAbstractTableModel):
         self._columns = COLUMNS["pop"]
         self._side = "long"
 
-    def rowCount(self, parent=QModelIndex()) -> int:  # noqa: N802 - Qt API
+    def rowCount(self, parent=_NO_PARENT) -> int:  # noqa: N802 - Qt API
         return 0 if parent.isValid() else len(self._rows)
 
-    def columnCount(self, parent=QModelIndex()) -> int:  # noqa: N802 - Qt API
+    def columnCount(self, parent=_NO_PARENT) -> int:  # noqa: N802 - Qt API
         return 0 if parent.isValid() else len(self._columns)
 
     def row(self, index: int) -> dict[str, Any] | None:
@@ -627,8 +631,8 @@ class MoversBoard(QWidget):
             from project_paths import save_local_setting
 
             save_local_setting(key, value)
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("movers board setting write failed", exc)
 
     def _load_hidden(self) -> tuple[str, set[str]]:
         saved = self._setting(MOVERS_HIDDEN_SETTING, {})

@@ -384,7 +384,7 @@ def test_each_confirm_signs_off_its_own_session_words(tmp_path, monkeypatch, win
     lane = {row["exit_session"]: row for row in
             window._mentor_exit_drafts(store, WEDNESDAY.isoformat())}
 
-    for session, draft in lane.items():
+    for draft in lane.values():
         result = check.confirm_exit_fields(
             store, trade_id, draft,
             now=datetime.fromisoformat("2026-09-16T09:05:00-04:00"),

@@ -904,16 +904,17 @@ def test_a_failing_job_records_the_messages_it_returned(tmp_path):
     from ai_jobs import runner
 
     led = tmp_path / "ledger.jsonl"
-    job = lambda **k: {
-        "status": "FAILED",
-        "ok": False,
-        "messages": [
-            "journal database requires trader-present preparation in the GUI; "
-            "nightly import refused without migrating it"
-        ],
-    }
+    def job(**k):
+        return {
+            "status": "FAILED",
+            "ok": False,
+            "messages": [
+                "journal database requires trader-present preparation in the GUI; "
+                "nightly import refused without migrating it"
+            ],
+        }
     with _store_ok(tmp_path), _window_open(), _no_session_block():
-        report = runner.run_slots([_slot("journal_import", job)], now=OVERNIGHT, ledger_path=led)
+        runner.run_slots([_slot("journal_import", job)], now=OVERNIGHT, ledger_path=led)
     row = _rows(led)[-1]
     assert row["status"] == "failed"
     assert row["reason"], "a failure with a blank reason is not observable"

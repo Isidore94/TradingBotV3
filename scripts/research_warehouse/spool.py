@@ -450,7 +450,7 @@ def _live_grain_keys(store: ResearchStore, dataset: str, partition: str, grain: 
     except Exception:
         return set()
     columns = [table.column(name).to_pylist() for name in grain]
-    return {tuple(_key_value(value) for value in values) for values in zip(*columns)}
+    return {tuple(_key_value(value) for value in values) for values in zip(*columns, strict=False)}
 
 
 def _seal_shed_log(store: ResearchStore, shed_log: Path, *, job_id: str) -> int:

@@ -575,8 +575,7 @@ def personal_cells(
             continue
         kept.append((trade, tags))
 
-    # The ENTRY context, one ref per kept trade, side by side with nothing else.
-    refs = [dict(row=trade, tags=tags) for trade, tags in kept]
+    # The ENTRY context for each kept trade, side by side with nothing else.
     clocks = [
         {"opened_at": _field(trade, "opened_at"), "trade_id": _text(_field(trade, "trade_id"))}
         for trade, _tags in kept

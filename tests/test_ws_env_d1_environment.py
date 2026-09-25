@@ -391,7 +391,7 @@ def test_the_environment_result_is_immutable():
     from indicators.d1_environment import classify_environment
 
     env = classify_environment(_recorded_spy_bars())
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):  # dataclasses.FrozenInstanceError
         env.label = "trending_up"  # type: ignore[misc]
 
 

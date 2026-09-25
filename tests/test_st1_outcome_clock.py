@@ -534,7 +534,7 @@ def test_a_favorable_move_is_never_printed_as_a_win_rate():
             _scan_row("STOPPED", day, close)
             for day, close in zip(
                 ("2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05", "2026-06-08"),
-                (100.0, 94.0, 97.0, 99.0, 101.0, 108.0),
+                (100.0, 94.0, 97.0, 99.0, 101.0, 108.0), strict=False,
             )
         ]
     )
@@ -673,7 +673,7 @@ def test_a_derived_tier_never_validates_the_assigned_tier_cells():
         assigned = "S" if index <= 4 else ""  # PRESENT AND EMPTY on the old rows
         for day, close in zip(
             ("2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05", "2026-06-08"),
-            (100.0, 101.0, 102.0, 103.0, 104.0, 110.0),
+            (100.0, 101.0, 102.0, 103.0, 104.0, 110.0), strict=False,
         ):
             rows.append(_scan_row(f"T{index}", day, close, assigned_tier=assigned))
     history = pd.DataFrame(rows)

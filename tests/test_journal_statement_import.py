@@ -458,7 +458,7 @@ def test_the_import_run_records_what_it_did(tmp_path, store):
 def test_a_failed_import_records_its_own_failure(tmp_path, store):
     broken = tmp_path / "broken.xlsx"
     broken.write_bytes(b"not a zip")
-    with pytest.raises(Exception):
+    with pytest.raises(zipfile.BadZipFile):
         statement.import_questrade_statement(store, broken)
     assert store.list_import_runs(limit=5) == [] or store.list_import_runs(limit=5)[0][
         "status"

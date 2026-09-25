@@ -41,6 +41,7 @@ from __future__ import annotations
 from typing import Any, Iterable, Mapping
 
 from ui.models.setup import SetupRow
+from swallowed import note_swallowed
 
 #: The claim key the setups table reads as a bucket.
 CLAIMED_BUCKET = "claimed_like"
@@ -102,8 +103,8 @@ def claimed_label(setup_id: object) -> str:
         for claim in all_setup_claims():
             if str(claim.setup_id).strip().lower() == key:
                 return str(claim.label or "").strip() or key.replace("_", " ")
-    except Exception:  # noqa: BLE001 - a missing label never costs the row
-        pass
+    except Exception as exc:  # noqa: BLE001 - a missing label never costs the row
+        note_swallowed("setup claim label lookup failed; using the key", exc, quiet=True)
     return key.replace("_", " ")
 
 

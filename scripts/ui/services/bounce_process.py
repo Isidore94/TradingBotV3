@@ -16,6 +16,7 @@ import queue
 import threading
 from pathlib import Path
 from typing import Any, Callable
+from swallowed import note_swallowed
 
 MESSAGE_QUEUE_LIMIT = 8192
 START_TIMEOUT_SECONDS = 60.0
@@ -140,8 +141,8 @@ def _child_main(
     except Exception as exc:  # noqa: BLE001 - startup must report, not vanish
         try:
             connection.send({"type": "failed", "error": f"{type(exc).__name__}: {exc}"})
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("bot child could not report its startup failure", swallowed_exc)
     finally:
         if bot is not None:
             try:
@@ -153,16 +154,16 @@ def _child_main(
             except Exception:
                 try:
                     bot.disconnect()
-                except Exception:
-                    pass
+                except Exception as swallowed_exc:
+                    note_swallowed("bot child disconnect failed", swallowed_exc)
         try:
             events.put(("closed", None, ""), timeout=0.5)
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("bot child could not post its closed event", swallowed_exc, quiet=True)
         try:
             connection.close()
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("bot child connection close failed", swallowed_exc, quiet=True)
 
 
 class BounceProcessProxy:
@@ -300,8 +301,8 @@ class BounceProcessProxy:
             return
         try:
             self._rpc("stop", timeout=float(timeout))
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("bot child stop RPC failed; terminating", swallowed_exc, quiet=True)
         self._closed.set()
         self._process.join(max(0.0, float(timeout)))
         if self._is_alive():
@@ -311,12 +312,12 @@ class BounceProcessProxy:
         try:
             self._events.close()
             self._events.join_thread()
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("bot child event queue close failed", swallowed_exc, quiet=True)
         try:
             self._connection.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("bot child connection close failed at stop", exc, quiet=True)
 
     def disconnect(self) -> None:
         self.stop()

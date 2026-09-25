@@ -903,7 +903,7 @@ def test_every_status_a_job_may_report_is_honoured(tmp_path):
             mock.patch.object(window, "market_session_block", return_value=""),
         ):
             runner.run_slots(
-                [runner.JobSlot(name="ai_summary", run=lambda **k: {"status": status})],
+                [runner.JobSlot(name="ai_summary", run=lambda _status=status, **k: {"status": _status})],
                 now=datetime.fromisoformat("2026-08-08T02:00:00+00:00"),
                 ledger_path=led,
             )

@@ -69,6 +69,15 @@ _RECAP_LINE = re.compile(r"^- Recap rule for \d{4}-\d{2}-\d{2}: \S")
 LOCK_TIMEOUT_SECONDS = 5.0
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 def slug(heading: str) -> str:
     """`Setups I trade` -> `setups_i_trade`."""
     return re.sub(r"[^a-z0-9]+", "_", str(heading or "").lower()).strip("_")
@@ -238,8 +247,8 @@ def read_plan(
             with target.open("x", encoding="utf-8", newline="") as handle:
                 handle.write(TEMPLATE)
             created = True
-        except FileExistsError:
-            pass
+        except FileExistsError as swallowed_exc:
+            note_swallowed("trading plan template already created by another writer", swallowed_exc, quiet=True)
         except OSError as exc:
             result["error"] = f"the plan template could not be written: {exc}"
             return result
@@ -316,8 +325,8 @@ def _write_plan(target: Path, text: str) -> None:
     except OSError as exc:
         try:
             temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as swallowed_exc:
+            note_swallowed("trading plan temp file not removed", swallowed_exc, quiet=True)
         raise PlanWriteError(f"the trading plan was not saved: {exc}") from exc
 
 

@@ -111,6 +111,15 @@ HORIZON_FOR_TIMEFRAME = {
 }
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 class PredictionTimeframeError(ValueError):
     """A row whose timeframe and prediction horizon disagree. Never stored."""
 
@@ -661,8 +670,8 @@ def session_date_for(now: datetime | None = None) -> str:
         # trader's own clock. Both mean the same thing: the note is about the
         # last session that actually traded.
         return previous_session(market_date).isoformat()
-    except Exception:  # noqa: BLE001 - never the reason a thought is lost
-        pass
+    except Exception as exc:  # noqa: BLE001 - never the reason a thought is lost
+        note_swallowed("market calendar unavailable for the note's session; using the local date", exc, quiet=True)
     return local.date().isoformat()
 
 
@@ -680,8 +689,8 @@ def session_of_entry(entry: Mapping[str, Any]) -> str:
     if raw:
         try:
             return session_date_for(datetime.fromisoformat(raw))
-        except Exception:  # noqa: BLE001 - never lose an entry to a calendar
-            pass
+        except Exception as exc:  # noqa: BLE001 - never lose an entry to a calendar
+            note_swallowed("entry created_at unparseable; using its stored session date", exc, quiet=True)
     return str(entry.get("session_date") or "")
 
 
@@ -790,7 +799,7 @@ def agreement_rate(shifts: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
 
     compared = 0
     agreed = 0
-    for session, sources in by_session.items():
+    for sources in by_session.values():
         auto = sources.get("auto")
         if not auto:
             continue

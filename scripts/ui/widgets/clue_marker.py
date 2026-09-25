@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 import recap_store
 from ui import theme
+from swallowed import note_swallowed
 
 #: Plain words for each clue tag, in `recap_store.CLUE_TAGS` order.
 CLUE_TAG_LABELS: dict[str, str] = {
@@ -252,8 +253,8 @@ class ClueMarker(QObject):
                 scene = self._chart.mapToScene(event.position().toPoint())
                 view = self._chart.getPlotItem().vb.mapSceneToView(scene)
                 self.mark_at_view(float(view.x()), float(view.y()))
-            except Exception:  # noqa: BLE001 - a bad click never takes the chart down
-                pass
+            except Exception as exc:  # noqa: BLE001 - a bad click never takes the chart down
+                note_swallowed("clue click could not be mapped to the chart", exc, quiet=True)
             # Consumed: in clue mode a click marks, it does not pan or open menus.
             return True
         return False

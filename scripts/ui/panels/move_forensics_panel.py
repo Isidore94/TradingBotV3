@@ -20,13 +20,12 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from move_forensics import (
+from project_paths import (
     FORENSICS_AI_DIGEST_JSON,
     FORENSICS_BASELINE_CSV,
     FORENSICS_MOVERS_CSV,
     FORENSICS_PATTERNS_CSV,
     FORENSICS_REPORT_TXT,
-    run_move_forensics,
 )
 from ui.models.tracker_table_model import ROW_ROLE, TrackerSortProxyModel, TrackerTableModel
 from ui.widgets.data_table import DataTable
@@ -188,6 +187,9 @@ class MoveForensicsPanel(QFrame):
 
     def _run_worker(self, **params) -> None:
         try:
+            # Imported here, on the worker: it pulls in master_avwap_lib.legacy.
+            from move_forensics import run_move_forensics
+
             result = run_move_forensics(
                 progress=lambda message: self._runFinished.emit(f"PROGRESS:{message}"),
                 **params,

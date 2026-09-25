@@ -10,6 +10,7 @@ from typing import Iterable
 
 from project_paths import ALERT_CENTER_IGNORED_SYMBOLS_FILE
 from watchlist_utils import extract_watchlist_symbols
+from swallowed import note_swallowed
 
 
 def load_ignored_alert_symbols(
@@ -70,8 +71,8 @@ def save_ignored_alert_symbols(
     finally:
         try:
             staged.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("ignored-alert temp file not removed", exc, quiet=True)
     return normalized
 
 
@@ -129,8 +130,8 @@ def save_day_scoped_flags(
     finally:
         try:
             staged.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("day-scoped flag temp file not removed", exc, quiet=True)
     return normalized
 
 

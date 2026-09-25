@@ -85,6 +85,15 @@ SEED_LEDGER_NAME = "yahoo_m5_seed_ledger.jsonl"
 YAHOO_M5_WINDOW_DAYS = 60
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 @dataclass
 class BackfillReport:
     job: str = ""
@@ -149,7 +158,9 @@ def _bar_rows(
         if start.tzinfo is None:
             continue  # a naive timestamp is uncertainty, never a guess
         start = start.astimezone(timezone.utc)
-        get = (lambda name: bar.get(name)) if isinstance(bar, dict) else (lambda name: getattr(bar, name, None))
+        get = (lambda name, _bar=bar: _bar.get(name)) if isinstance(bar, dict) else (
+            lambda name, _bar=bar: getattr(_bar, name, None)
+        )
         end = get("interval_end") or (start + interval)
         rows.append(
             {
@@ -246,8 +257,8 @@ def _session_date_of(session_id, stamp: datetime) -> date:
     if len(text) >= 10:
         try:
             return date.fromisoformat(text[-10:])
-        except ValueError:
-            pass
+        except ValueError as exc:
+            note_swallowed("session id carries no date; deriving it another way", exc, quiet=True)
     try:
         from .bar_archive import session_context
     except ImportError:  # pragma: no cover - scripts/ on sys.path
@@ -289,7 +300,7 @@ def archive_state(store: ResearchStore, dataset: str, symbols, days):
             table.column("symbol").to_pylist(),
             table.column("interval_start").to_pylist(),
             table.column("capture_mode").to_pylist(),
-            table.column("session_id").to_pylist(),
+            table.column("session_id").to_pylist(), strict=False,
         ):
             symbol = str(name)
             if start is None or (wanted and symbol not in wanted):

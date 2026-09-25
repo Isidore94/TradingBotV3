@@ -207,7 +207,7 @@ class BounceFeedbackTests(unittest.TestCase):
                     "close": close,
                     "volume": 10_000 + idx,
                 }
-                for idx, (ts, (open_, high, low, close)) in enumerate(zip(timestamps, rows))
+                for idx, (ts, (open_, high, low, close)) in enumerate(zip(timestamps, rows, strict=False))
             ]
         )
 

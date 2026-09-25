@@ -48,6 +48,7 @@ from datetime import date
 from typing import Any
 
 from journal_identity import BUY_SIDE_WORDS, normalize_security_type
+from swallowed import note_swallowed
 
 #: A day's cash may differ by this much before the file is treated as
 #: disagreeing, plus :data:`TOLERANCE_PER_FILL` for each fill the file lists.
@@ -113,8 +114,8 @@ def _multiplier_for(row: Mapping[str, Any]) -> float:
             value = float(payload.get("multiplier"))
             if value > 0:
                 return value
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            note_swallowed("journal row multiplier unparseable; using the security-type default", exc, quiet=True)
     return 100.0 if normalize_security_type(row.get("security_type")) in {"OPT", "FOP"} else 1.0
 
 

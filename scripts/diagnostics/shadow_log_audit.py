@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import Any
 
 from diagnostics.shadow_session_rollup import audit_session_summaries
+from swallowed import note_swallowed
 
 __all__ = [
     "SHADOW_LOG_AUDIT_SCHEMA",
@@ -235,8 +236,8 @@ def _spy_schemas() -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
 
         accepted = set(market_state_bridge.COMPATIBLE_SHADOW_SCHEMAS)
         episodes = {market_state_bridge.EPISODE_SCHEMA}
-    except Exception:
-        pass
+    except Exception as exc:
+        note_swallowed("market_state_bridge schemas unavailable; using built-in list", exc, quiet=True)
     primary = frozenset(accepted - episodes)
     return frozenset(accepted | episodes), primary, frozenset(episodes)
 
@@ -247,8 +248,8 @@ def _greatness_schemas() -> tuple[frozenset[str], frozenset[str]]:
         import greatness_shadow
 
         accepted = set(greatness_shadow.COMPATIBLE_SHADOW_SCHEMAS)
-    except Exception:
-        pass
+    except Exception as exc:
+        note_swallowed("greatness_shadow schemas unavailable; using built-in list", exc, quiet=True)
     return frozenset(accepted), frozenset(accepted)
 
 

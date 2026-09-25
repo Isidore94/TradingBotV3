@@ -150,6 +150,7 @@ from ui.widgets.section_header import SectionHeader
 from ui.widgets.strength_page import StrengthPage
 from ui.widgets.tab_drawer import TabDrawer
 from ui.widgets.setup_detail_view import SetupDetailView
+from swallowed import note_swallowed
 
 if TYPE_CHECKING:  # pragma: no cover - annotation only, never imported at runtime
     # `attach_strength_board` imports the real class inside the method, so the
@@ -3679,8 +3680,8 @@ class AlertCenterPanel(QFrame):
             ]
             if symbols:
                 shared_service().prefetch(symbols)
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("review queue chart prefetch failed", exc, quiet=True)
 
     # ------------------------------------------------------------------
     # Decision logging: the training data for learning the trader's revealed
@@ -3832,8 +3833,8 @@ class AlertCenterPanel(QFrame):
             return
         try:
             record_review_event(action, path=self._review_events_path, **kwargs)
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("alert review event write failed", exc)
 
     def _record_review_events(self, entries) -> None:
         """Many rows, ONE kernel lock and ONE open (PCT-1 review blocker 3a).
@@ -3849,8 +3850,8 @@ class AlertCenterPanel(QFrame):
             from review_events import record_review_events
 
             record_review_events(entries, path=self._review_events_path)
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("alert review events batch write failed", exc)
 
     def _review_dwell_ms(self, symbol: str) -> int | None:
         """How long the review pane showed this symbol before the action."""
@@ -3913,10 +3914,10 @@ class AlertCenterPanel(QFrame):
             shared_refresh_service().refresh_if_stale(
                 symbols, lambda sym: self._m5_bars_for(sym, sessions=2), bot
             )
-        except Exception:
+        except Exception as exc:
             # Display refresh only - it must never break the watch tick that
             # shares this timer.
-            pass
+            note_swallowed("stale review-queue bar refresh failed", exc)
 
     def _refresh_review_chart(self) -> None:
         """30s tick: keep the visible review chart on current bars.
@@ -3929,10 +3930,10 @@ class AlertCenterPanel(QFrame):
             return
         try:
             self.chart_review.refresh_chart(bot=self._current_bot())
-        except Exception:
+        except Exception as exc:
             # Display refresh only - it must never break the watch tick that
             # shares this timer.
-            pass
+            note_swallowed("review chart refresh failed", exc)
 
     def _render_current_review(self) -> None:
         alert = self._current_review_alert
@@ -4112,8 +4113,8 @@ class AlertCenterPanel(QFrame):
             import claimed_picks
 
             claimed_picks.sweep_expired(Path(path))
-        except Exception:  # noqa: BLE001 - a sweep never costs the day roll
-            pass
+        except Exception as exc:  # noqa: BLE001 - a sweep never costs the day roll
+            note_swallowed("expired claim sweep failed", exc)
         self._claim_keys_stamp = _CLAIM_KEYS_UNREAD
 
     def _place_claimed_d1(self, alert: BounceAlert, claim_row: object) -> None:
@@ -5403,8 +5404,8 @@ class AlertCenterPanel(QFrame):
                 self._focus_d1_flags_path,
                 market_date=self._ignored_market_date,
             )
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("focus D1 flags write failed", exc)
 
     def _toggle_review_cross_focus(self, alert: BounceAlert) -> None:
         """The chart's cross-promote toggle. Never advances the queue.
@@ -6382,8 +6383,8 @@ class AlertCenterPanel(QFrame):
             )
             if entry:
                 stats = f"{entry['avg_close_r']:+.2f}R n={entry['sample_count']}"
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("bounce learning stats unreadable for tracker note", exc, quiet=True)
         window = ""
         if bucket:
             window = (
@@ -6411,8 +6412,8 @@ class AlertCenterPanel(QFrame):
             return
         try:
             save_d1_level_watches(self._d1_level_watches, self._d1_level_watches_path)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("D1 level watches write failed", exc)
 
     # ------------------------------------------------------------------
     # Persistent D1 candle-level alerts: armed by clicking a D1 chart candle,
@@ -6577,8 +6578,8 @@ class AlertCenterPanel(QFrame):
         fill_source = ""
         try:
             fill_source = self.chart_review.arm_bar.last_fill_source()
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("arm bar fill source unreadable", exc, quiet=True)
         self.request_d1_level_watch(symbol, direction, level, fill_source=fill_source)
 
     def _disarm_level_from_dock(self, symbol: str, direction: str, level: float) -> None:
@@ -6778,8 +6779,8 @@ class AlertCenterPanel(QFrame):
             ):
                 self._commit_journal_entry()
                 return True
-        except Exception:  # noqa: BLE001 - a key handler never breaks the panel
-            pass
+        except Exception as exc:  # noqa: BLE001 - a key handler never breaks the panel
+            note_swallowed("alert center journal key handler raised", exc)
         return super().eventFilter(watched, event)
 
     def _commit_journal_entry(self) -> None:
@@ -6978,8 +6979,8 @@ class AlertCenterPanel(QFrame):
             from ui.services.chart_data_service import shared_service
 
             shared_service().prefetch(symbols)
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("D1 chart prefetch failed", exc, quiet=True)
 
     # ------------------------------------------------------------------
     # A2 (2026-09-01): an arm has a life, measured in SESSIONS.
@@ -7094,8 +7095,8 @@ class AlertCenterPanel(QFrame):
         if self._d1_event_watches_path is not None:
             try:
                 save_d1_event_watches(self._d1_event_watches, self._d1_event_watches_path)
-            except Exception:
-                pass
+            except Exception as exc:
+                note_swallowed("D1 event watches write failed", exc)
 
     def _toggle_d1_event_watch(self, alert: BounceAlert, kind: str) -> None:
         if alert is None or not alert.symbol:
@@ -7557,8 +7558,8 @@ class AlertCenterPanel(QFrame):
         if callable(reader):
             try:
                 return reader(symbol)
-            except Exception:
-                pass
+            except Exception as exc:
+                note_swallowed("pullback cache token reader failed", exc, quiet=True)
         # Old test doubles have no generation reader.  They are tiny; the
         # fallback preserves their delivery semantics without touching real
         # cache snapshots on every desk poll.
@@ -7574,8 +7575,8 @@ class AlertCenterPanel(QFrame):
         if callable(reader):
             try:
                 return reader(symbol)
-            except Exception:
-                pass
+            except Exception as exc:
+                note_swallowed("pullback cache snapshot reader failed", exc, quiet=True)
         bars = cache.bars_for(symbol) if cache is not None else []
         return bars, cls._pullback_cache_token(cache, symbol) if cache is not None else None
 
@@ -7674,7 +7675,7 @@ class AlertCenterPanel(QFrame):
         """
         if getattr(self, "_pullback_eval_busy", False):
             return False
-        marks = self._pullback_judged_marks()
+        self._pullback_judged_marks()  # creates the judged-marks dict on first use
         jobs: list[dict] = []
         for watch in armed:
             triggers = self._pullback_triggers(watch)
@@ -8380,8 +8381,8 @@ class AlertCenterPanel(QFrame):
                 save_any_bounce_watches(
                     self._any_bounce_watches, self._any_bounce_watches_path
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                note_swallowed("any-bounce watches write failed", exc)
 
     def _toggle_any_bounce_watch(self, alert: BounceAlert) -> None:
         if alert is None or not alert.symbol:
@@ -9001,8 +9002,8 @@ class AlertCenterPanel(QFrame):
                     self._ignored_symbols_path,
                     market_date=self._ignored_market_date,
                 )
-            except OSError:
-                pass
+            except OSError as exc:
+                note_swallowed("ignored alert symbols write failed", exc)
         self._alerts = [alert for alert in self._alerts if alert.symbol != symbol]
         self._d1_alerts = [
             alert for alert in self._d1_alerts if alert.symbol != symbol
@@ -9052,8 +9053,8 @@ class AlertCenterPanel(QFrame):
                     self._ignored_symbols_path,
                     market_date=self._ignored_market_date,
                 )
-            except OSError:
-                pass
+            except OSError as exc:
+                note_swallowed("ignored alert symbols write failed on restore", exc)
         self._refresh_ignored_button()
         self._record_review_event("restore_today", symbol=symbol)
         self.statusChanged.emit(
@@ -9142,8 +9143,8 @@ class AlertCenterPanel(QFrame):
                     self._parked_symbols_path,
                     market_date=self._ignored_market_date,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                note_swallowed("parked review symbols write failed", exc)
 
     def _unpark_review_symbol(self, symbol: str) -> None:
         symbol = str(symbol or "").strip().upper()
@@ -9157,8 +9158,8 @@ class AlertCenterPanel(QFrame):
                     self._parked_symbols_path,
                     market_date=self._ignored_market_date,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                note_swallowed("parked review symbols write failed on unpark", exc)
 
     def _has_armed_d1_alerts(self, symbol: str) -> bool:
         symbol = str(symbol or "").strip().upper()

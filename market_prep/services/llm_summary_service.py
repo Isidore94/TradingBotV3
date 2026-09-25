@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 from typing import Any
@@ -364,7 +365,7 @@ def _extract_html_text(raw_html: str) -> str:
         try:
             node.drop_tree()
         except Exception:
-            pass
+            logging.getLogger("market_prep").debug("HTML node could not be dropped", exc_info=True)
     article_paragraphs = [_normalize_spaces(node.text_content()) for node in document.xpath("//article//p")]
     paragraphs = [text for text in article_paragraphs if len(text) >= 40]
     if sum(len(text) for text in paragraphs) < 600:

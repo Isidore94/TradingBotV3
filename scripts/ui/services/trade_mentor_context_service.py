@@ -11,6 +11,7 @@ from typing import Any, Callable, Mapping
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from trade_mentor_context import SYMBOLS, build_context, unavailable_context
+from swallowed import note_swallowed
 
 _MAX_HOUR_CACHE = 4
 _MAX_D1_SESSION_CACHE = 2
@@ -339,12 +340,12 @@ def _symbol_frame(data: Any, symbol: str, count: int) -> Any:
             for level in range(columns.nlevels):
                 if symbol in columns.get_level_values(level):
                     return data.xs(symbol, axis=1, level=level)
-    except Exception:
-        pass
+    except Exception as swallowed_exc:
+        note_swallowed("multi-index frame has no column level for the symbol", swallowed_exc, quiet=True)
     if count == 1:
         return data
     try:
         return data[symbol]
-    except Exception:
-        pass
+    except Exception as exc:
+        note_swallowed("frame has no column for the symbol", exc, quiet=True)
     return None

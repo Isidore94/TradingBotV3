@@ -53,6 +53,7 @@ from ui.annotations.store import (
     record_annotation,
     record_annotation_with_bars,
 )
+from swallowed import note_swallowed
 
 __all__ = [
     "SURFACE_CHART_REVIEW",
@@ -125,10 +126,10 @@ def scan_context_from_row(row: Any) -> dict[str, Any]:
                 context["canonical_setup_id"] = setup_registry.canonical_setup_id(
                     str(family)
                 )
-        except Exception:
+        except Exception as exc:
             # An unknown family, or a registry that will not load, costs the
             # canonical id and never the verdict.
-            pass
+            note_swallowed("setup registry lookup failed; canonical id left out", exc, quiet=True)
     return context
 
 

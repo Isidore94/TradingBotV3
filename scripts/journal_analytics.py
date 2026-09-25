@@ -16,6 +16,7 @@ from project_paths import (
     MASTER_AVWAP_FOCUS_FILE,
     MASTER_AVWAP_SETUP_TRACKER_FILE,
 )
+from swallowed import note_swallowed
 
 
 DEFAULT_SWING_LOOKBACK_CALENDAR_DAYS = 16
@@ -46,8 +47,8 @@ def _parse_datetime(value: Any) -> datetime | None:
     normalized = text.replace("Z", "+00:00")
     try:
         return datetime.fromisoformat(normalized)
-    except ValueError:
-        pass
+    except ValueError as exc:
+        note_swallowed("journal datetime not ISO; trying other formats", exc, quiet=True)
     for fmt in ("%Y%m%d  %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
         try:
             return datetime.strptime(text, fmt)

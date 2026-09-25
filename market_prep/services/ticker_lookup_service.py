@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import replace
 from datetime import date, datetime
@@ -643,7 +644,6 @@ def rank_landmine_headlines(
 def build_swing_risk_assessment(payload: dict[str, Any]) -> dict[str, Any]:
     ticker = normalize_lookup_ticker(payload.get("ticker"))
     report_day = _parse_date(payload.get("report_date")) or datetime.now().date()
-    window_days = max(1, _safe_int(payload.get("window_days"), 10))
     headline_lookback_days = max(1, _safe_int(payload.get("headline_lookback_days"), 14))
     score = 0
     risk_items: list[dict[str, Any]] = []
@@ -1251,7 +1251,7 @@ def _headline_date(row: dict[str, Any]) -> date | None:
     try:
         return datetime.fromisoformat(normalized[:10] if len(normalized) >= 10 else normalized).date()
     except ValueError:
-        pass
+        logging.getLogger("market_prep").debug("headline date not ISO; trying other formats")
     try:
         return parsedate_to_datetime(text).date()
     except (TypeError, ValueError, IndexError, AttributeError):

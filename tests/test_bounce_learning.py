@@ -1065,8 +1065,8 @@ def _session_bars(start, ohlc_rows):
     from datetime import timedelta
 
     return [
-        _make_bar(start + timedelta(minutes=5 * index), o, h, l, c)
-        for index, (o, h, l, c) in enumerate(ohlc_rows)
+        _make_bar(start + timedelta(minutes=5 * index), o, h, lo, c)
+        for index, (o, h, lo, c) in enumerate(ohlc_rows)
     ]
 
 
@@ -1208,7 +1208,8 @@ def test_bounce_trade_plan_stop_override_and_atr_floor():
 
     stub = SimpleNamespace(atr_cache={"NOIS": 4.0, "WIDE": 4.0})
     stub._to_float_or_blank = lambda value: BounceBot._to_float_or_blank(stub, value)
-    plan_for = lambda *args, **kwargs: BounceBot._build_bounce_trade_plan(stub, *args, **kwargs)
+    def plan_for(*args, **kwargs):
+        return BounceBot._build_bounce_trade_plan(stub, *args, **kwargs)
 
     # Tiny signal bar (risk 0.10 on a 100.00 stock, ATR 4.00): the floor
     # widens the stop to 0.15 * ATR = 0.60.
@@ -1325,7 +1326,7 @@ def test_ema8_grind_rejects_broken_grind_and_inverts_for_shorts():
 
     # Mirror of the good long session (price' = 200 - price): grind below the
     # 8-EMA into a new LOD. The flat-100 prior day is its own mirror.
-    mirrored = [(200 - o, 200 - l, 200 - h, 200 - c) for (o, h, l, c) in rows]
+    mirrored = [(200 - o, 200 - lo, 200 - h, 200 - c) for (o, h, lo, c) in rows]
     short_bars = prev_day + _session_bars(start, mirrored)
 
     stub = _daytrade_sweep_stub(
@@ -1341,7 +1342,7 @@ def _structure_df(rows):
     import pandas as pd
 
     return pd.DataFrame(
-        [{"open": o, "high": h, "low": l, "close": c} for (o, h, l, c) in rows]
+        [{"open": o, "high": h, "low": lo, "close": c} for (o, h, lo, c) in rows]
     )
 
 
@@ -1366,7 +1367,7 @@ def test_session_structure_gate_wants_trend_plus_simple_retest():
 
     # Mirrored tape: same structure reads clean for a short.
     mirrored = _structure_df(
-        [(200 - o, 200 - l, 200 - h, 200 - c) for (o, h, l, c) in clean[["open", "high", "low", "close"]].itertuples(index=False)]
+        [(200 - o, 200 - lo, 200 - h, 200 - c) for (o, h, lo, c) in clean[["open", "high", "low", "close"]].itertuples(index=False)]
     )
     ok_short, reason_short = _session_structure_report(mirrored, "short", 0.5)
     assert ok_short, reason_short

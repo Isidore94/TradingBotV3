@@ -23,6 +23,15 @@ CONFIDENCE_PRIORITY = {"unknown": 0, "supplemental": 1, "inferred": 2, "confirme
 ACTIVE_FUTURE_SUPERSESSION_WINDOW_DAYS = 120
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 def normalize_release_session(value: Any) -> str:
     text = str(value or "").strip().lower()
     if not text:
@@ -515,8 +524,8 @@ def parse_market_cap(value: Any) -> int | None:
     try:
         numeric = int(float(value))
         return numeric if numeric >= 0 else None
-    except (TypeError, ValueError):
-        pass
+    except (TypeError, ValueError) as exc:
+        note_swallowed("market cap not numeric; parsing text form", exc, quiet=True)
     text = str(value or "").strip()
     if not text or text.upper() in {"N/A", "NA", "--", "NONE"}:
         return None

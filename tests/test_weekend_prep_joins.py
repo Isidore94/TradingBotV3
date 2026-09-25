@@ -653,7 +653,7 @@ def test_the_new_streams_are_wired_to_their_pages_not_merely_defined():
     from ui.panels import weekend_prep_panel
 
     source = Path(weekend_prep_panel.__file__).read_text(encoding="utf-8")
-    week_page = source.split("class WeekReviewPage")[1].split("\nclass ")[0]
+    assert "class WeekReviewPage" in source
     focus_page = source.split("class FocusReviewPage")[1].split("\nclass ")[0]
 
     # CHANGED BY V2 item 2c: the RS/RW extremes left this page for the live

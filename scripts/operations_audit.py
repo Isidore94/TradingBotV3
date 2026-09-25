@@ -86,6 +86,7 @@ from project_paths import (
     get_diagnostics_dir,
     get_local_setting,
 )
+from swallowed import note_swallowed
 
 AUDIT_SCHEMA = "operations_audit_v2"
 AWAY_REPORT_DEGRADED_AFTER_MINUTES = 75.0
@@ -1972,8 +1973,8 @@ def _writability_probe(directory: Path) -> tuple[bool, str, str]:
         os.close(fd)
         try:
             os.remove(name)
-        except OSError:
-            pass
+        except OSError as swallowed_exc:
+            note_swallowed("writability probe file not removed after open failed", swallowed_exc, quiet=True)
         return False, f"{type(exc).__name__}: {exc}", str(name)
     try:
         with handle:
@@ -1985,8 +1986,8 @@ def _writability_probe(directory: Path) -> tuple[bool, str, str]:
     finally:
         try:
             os.remove(name)
-        except OSError:
-            pass
+        except OSError as swallowed_exc:
+            note_swallowed("writability probe file not removed", swallowed_exc, quiet=True)
     return True, "", str(name)
 
 
@@ -2622,7 +2623,7 @@ def _outcome_sweep_check(now: datetime, local_tz, diagnostics: Path | None = Non
         reference = now.replace(tzinfo=None) if stamp.tzinfo is None else now
         age_days = (reference - stamp).total_seconds() / 86400.0
     except ValueError:
-        pass
+        age_days = None  # unparseable sweep stamp: age unknown
 
     tail = (
         f" Last sweep {swept_at}: {finalized} finalized"
@@ -2694,7 +2695,7 @@ def _daily_bar_units_check(now: datetime, local_tz, diagnostics: Path | None = N
             stamp = stamp.replace(tzinfo=timezone.utc)
         age_hours = (now.astimezone(timezone.utc) - stamp).total_seconds() / 3600.0
     except ValueError:
-        pass
+        age_hours = None  # unparseable measure stamp: age unknown
 
     details = {
         "rows": rows,
@@ -2891,7 +2892,7 @@ def _evidence_snapshot_check(now: datetime, local_tz, staging: Path | None = Non
     try:
         age_days = (now.date() - _date.fromisoformat(stamp)).days
     except (TypeError, ValueError):
-        pass
+        age_days = None  # unparseable snapshot stamp: age unknown
     if age_days is None:
         status = STATUS_UNKNOWN
     elif age_days <= 1:
@@ -3209,8 +3210,8 @@ def write_operations_audit(payload: dict[str, Any], path: Path | str | None = No
         if os.path.exists(tmp_name):
             try:
                 os.remove(tmp_name)
-            except OSError:
-                pass
+            except OSError as exc:
+                note_swallowed("operations audit temp file not removed", exc, quiet=True)
     return target
 
 

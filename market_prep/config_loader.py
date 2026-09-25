@@ -372,7 +372,7 @@ def _local_market_prep_secret_file() -> Path:
 
         return Path(LOCAL_SETTINGS_DIR) / "market_prep_secrets.json"
     except ImportError:
-        pass
+        logging.getLogger("market_prep").debug("project_paths unavailable; using the standalone secrets path")
     local_appdata = os.environ.get("LOCALAPPDATA")
     if local_appdata:
         return Path(local_appdata) / "TradingBotV3" / "market_prep_secrets.json"

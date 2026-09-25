@@ -25,6 +25,7 @@ import math
 from datetime import datetime, timedelta
 from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
+from swallowed import note_swallowed
 
 ET = ZoneInfo("America/New_York")
 NOT_KNOWN = "not known"
@@ -383,8 +384,8 @@ def draft_sentence(fields: Mapping[str, Any]) -> str:
             import exit_reasons
 
             code = exit_reasons.label_for(code) or code
-        except Exception:  # noqa: BLE001 - the code reads fine on its own
-            pass
+        except Exception as exc:  # noqa: BLE001 - the code reads fine on its own
+            note_swallowed("exit reason label lookup failed; using the code", exc, quiet=True)
         parts.append(f"you exited because: {_words(code)}")
     felt = [
         _text((row or {}).get("code")) for row in (fields.get("felt") or () if isinstance(fields, Mapping) else ())
@@ -726,8 +727,8 @@ def read_mentor_state(
 
         state = json.loads(Path(TRADE_MENTOR_SLOTS_FILE).read_text(encoding="utf-8"))
         retired = [str(item) for item in state.get("retired_subjects") or () if str(item or "").strip()]
-    except Exception:  # noqa: BLE001 - no file means nothing retired
-        pass
+    except Exception as exc:  # noqa: BLE001 - no file means nothing retired
+        note_swallowed("trade mentor slots unreadable; nothing retired", exc, quiet=True)
     rows = [dict(t) for t in trades if isinstance(t, Mapping)]
     return {
         "session": day,

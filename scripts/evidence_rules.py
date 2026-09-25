@@ -119,6 +119,15 @@ _DAILY_BAR_SUCCESS_PREFIX = "provider.daily_bars.success."
 _SHARE_DENOMINATED_PROVIDERS = frozenset({"yahoo", "yfinance"})
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 @dataclass(frozen=True)
 class RuleSpec:
     """What a rule means, for a reader who meets its name in a report."""
@@ -593,8 +602,8 @@ def _entry_minute(entry_time: str | None) -> int | None:
     for parser in (datetime.fromisoformat,):
         try:
             return parser(raw).minute
-        except ValueError:
-            pass
+        except ValueError as exc:
+            note_swallowed("entry time not ISO; trying other formats", exc, quiet=True)
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%H:%M:%S", "%H:%M"):
         try:
             return datetime.strptime(raw, fmt).minute

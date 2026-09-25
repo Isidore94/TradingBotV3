@@ -48,6 +48,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from swallowed import note_swallowed
 
 #: The window in which the level has to hold. Minutes, from the entry.
 HELD_WINDOW_MINUTES = 30
@@ -710,8 +711,8 @@ def window_report(
             try:
                 if is_session(cursor):
                     session_days.append(cursor.isoformat())
-            except Exception:  # noqa: BLE001 - outside the validated range: not a session we can name
-                pass
+            except Exception as exc:  # noqa: BLE001 - outside the validated range: not a session we can name
+                note_swallowed("day outside the market calendar range; not counted as a session", exc, quiet=True)
             cursor += _timedelta(days=1)
     except Exception:  # noqa: BLE001 - a report is never worth a blank readout
         session_days = []

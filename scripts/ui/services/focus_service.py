@@ -4,6 +4,7 @@ from PySide6.QtCore import QObject, Signal
 
 from focus_picks import FocusPickStore
 from pick_feedback import record_pick_feedback
+from swallowed import note_swallowed
 
 
 class FocusService(QObject):
@@ -138,8 +139,8 @@ class FocusService(QObject):
                 reason=reason,
                 context=context,
             )
-        except Exception:
-            pass  # the log is best-effort; never block a GUI action on it
+        except Exception as exc:
+            note_swallowed("focus feedback log write failed", exc)  # the log is best-effort; never block a GUI action on it
 
     # ---- reads ----
     def focus_symbols(self, side, category=None) -> list[str]:

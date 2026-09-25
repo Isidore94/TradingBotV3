@@ -35,7 +35,7 @@ def _sessions(count: int, last: str = "2026-09-24") -> list[str]:
 
 def _bars(closes: list[float], last: str = "2026-09-24") -> list[dict]:
     days = _sessions(len(closes), last)
-    return [{"dt": d, "close": c} for d, c in zip(days, closes)]
+    return [{"dt": d, "close": c} for d, c in zip(days, closes, strict=False)]
 
 
 # -- the pure rule -----------------------------------------------------------

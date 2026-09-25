@@ -35,6 +35,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 import watchlist_views
 from ui.timer_utils import start_staggered, stop_staggered
+from swallowed import note_swallowed
 
 logger = logging.getLogger(__name__)
 
@@ -332,8 +333,8 @@ class WatchlistTabService(QObject):
             from ui.services import journal_feed
 
             paths["journal"] = journal_feed.journal_db_path()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            note_swallowed("journal path unavailable for change watch", exc, quiet=True)
         changed = False
         for name, path in paths.items():
             try:

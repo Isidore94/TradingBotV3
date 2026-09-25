@@ -73,6 +73,7 @@ from project_paths import (
 )
 from swing_evidence import POLICY_SCANROW_V1, read_eligible_rows
 from swing_headline import wilson_lower_bound
+from swallowed import note_swallowed
 
 #: The cohort a like with no named setup lands in (`like_cohort.like_cohort_source`).
 #: It is a real answer - "this chart was good and I decline to name it" - and a
@@ -299,8 +300,8 @@ def _as_of_iso(as_of: Any) -> str:
     if text:
         try:
             return date.fromisoformat(text).isoformat()
-        except ValueError:
-            pass
+        except ValueError as exc:
+            note_swallowed("claimed pick as_of date unparseable; using today", exc, quiet=True)
     return date.today().isoformat()
 
 

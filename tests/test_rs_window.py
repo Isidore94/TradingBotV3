@@ -232,10 +232,11 @@ def test_industry_m5_insufficient_coverage_is_not_a_confident_value():
 
     start = datetime(2026, 7, 8, 9, 30)
     end = start + timedelta(minutes=5)
-    bars = lambda first, last: [
-        {"dt": start, "open": first, "close": first},
-        {"dt": end, "open": first, "close": last},
-    ]
+    def bars(first, last):
+        return [
+            {"dt": start, "open": first, "close": first},
+            {"dt": end, "open": first, "close": last},
+        ]
     context = {
         "AAA": {
             "industry": "Sparse",

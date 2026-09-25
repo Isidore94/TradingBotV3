@@ -43,6 +43,7 @@ from ui.services.scan_service import (
     stderr_tail_lines,
 )
 from ui.timer_utils import start_staggered, stop_staggered
+from swallowed import note_swallowed
 
 
 _TICK_INTERVAL_MS = 30_000
@@ -137,8 +138,8 @@ def _enter_background_thread_mode() -> None:
         thread_priority_lowest = -2
         if not kernel32.SetThreadPriority(handle, thread_mode_background_begin):
             kernel32.SetThreadPriority(handle, thread_priority_lowest)
-    except Exception:
-        pass
+    except Exception as exc:
+        note_swallowed("background thread priority not set", exc, quiet=True)
 _MAX_REPORT_LOG_LINES = 30
 
 
@@ -1338,8 +1339,8 @@ class AutopilotService(QObject):
                 last_dt = datetime.strptime(f"{self._state.get('date')} {last_check}", "%Y-%m-%d %H:%M:%S")
                 if (now - last_dt).total_seconds() < core.AUTOPILOT_HOD_CHECK_COOLDOWN_MINUTES * 60:
                     return
-            except ValueError:
-                pass
+            except ValueError as swallowed_exc:
+                note_swallowed("HOD check stamp unparseable; checking now", swallowed_exc, quiet=True)
         bot = self._current_bot()
         if bot is None:
             return
@@ -1665,8 +1666,8 @@ class AutopilotService(QObject):
                 for row in csv.DictReader(handle):
                     if row.get("date") == today:
                         logged_pairs.add((str(row.get("symbol") or "").upper(), str(row.get("side") or "").lower()))
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("autopilot picks file unreadable for manual snapshot", exc)
 
         written = self._state.get("autopilot_written") or {}
         longs, shorts = self._read_watchlists()
@@ -1697,8 +1698,8 @@ class AutopilotService(QObject):
         try:
             with AUTOPILOT_PICKS_FILE.open("r", encoding="utf-8", newline="") as handle:
                 picks = [row for row in csv.DictReader(handle) if row.get("date") == today]
-        except FileNotFoundError:
-            pass
+        except FileNotFoundError as exc:
+            note_swallowed("no autopilot picks file yet", exc, quiet=True)
         if not picks:
             return ["Picks scorecard: nothing logged today."]
 
@@ -1911,8 +1912,8 @@ class AutopilotService(QObject):
                 return
             try:
                 self._reportFinished.emit(publish, str(reason or ""))
-            except RuntimeError:
-                pass
+            except RuntimeError as exc:
+                note_swallowed("autopilot report finished after the service was torn down", exc, quiet=True)
 
         threading.Thread(target=worker, name="autopilot-report", daemon=True).start()
         return True
@@ -2478,8 +2479,8 @@ class AutopilotService(QObject):
             AUTOPILOT_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
             with AUTOPILOT_LOG_FILE.open("a", encoding="utf-8") as handle:
                 handle.write(f"{datetime.now():%Y-%m-%d} {line}\n")
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("autopilot log file append failed", exc)
         self.logMessage.emit(line)
 
     def _log_file_block(self, title: str, lines: list[str]) -> None:
@@ -2492,8 +2493,8 @@ class AutopilotService(QObject):
             AUTOPILOT_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
             with AUTOPILOT_LOG_FILE.open("a", encoding="utf-8") as handle:
                 handle.write(f"{now:%Y-%m-%d} [{now:%H:%M:%S}] {title} ({len(lines)} lines):\n{body}")
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("autopilot log block append failed", exc)
 
     def log(self, message: str) -> None:
         """Write one line into the Auto Pilot log from outside this service.

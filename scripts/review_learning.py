@@ -51,6 +51,7 @@ from typing import Any, Callable, Iterable
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+from swallowed import note_swallowed  # noqa: E402
 
 from project_paths import (  # noqa: E402
     ALERT_REVIEW_EVENTS_FILE,
@@ -598,7 +599,7 @@ def attach_forward_returns(
                 return list(
                     zip(
                         [d.date().isoformat() for d in frame["datetime"]],
-                        [float(c) for c in frame["close"]],
+                        [float(c) for c in frame["close"]], strict=False,
                     )
                 )
         except Exception:
@@ -895,8 +896,8 @@ def save_review_learning_state(
     except OSError:
         try:
             os.unlink(temp_name)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("review learning temp file not removed", exc, quiet=True)
         raise
 
 
@@ -1055,8 +1056,8 @@ def refresh_review_learning_if_stale(
             fresh = (datetime.now().timestamp() - state_mtime) < max_age_hours * 3600
             if fresh and events_mtime <= state_mtime:
                 return False
-    except OSError:
-        pass
+    except OSError as swallowed_exc:
+        note_swallowed("review learning state stamp unreadable; rebuilding", swallowed_exc, quiet=True)
     state = build_review_learning_state(
         events_path=events_path, outcomes_path=outcomes_path
     )
@@ -1065,8 +1066,8 @@ def refresh_review_learning_if_stale(
         report_path = Path(report_path)
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(render_report(state), encoding="utf-8")
-    except OSError:
-        pass
+    except OSError as exc:
+        note_swallowed("review learning report write failed", exc)
     return True
 
 

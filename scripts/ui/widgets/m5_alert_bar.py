@@ -67,6 +67,7 @@ from PySide6.QtWidgets import (
 
 from ui import theme
 from ui.models.bounce import REGIME_PAUSE_TRIGGER_PREFIX
+from swallowed import note_swallowed
 
 #: Oldest rows fall off past this; a session produced 72 M5 alerts in its
 #: first 46 minutes on 2026-08-27, so this is a whole day with room.
@@ -86,7 +87,7 @@ def alert_type_label(alert: Any) -> str:
     """
     trigger = str(getattr(alert, "trigger", "") or "").strip()
     if trigger.startswith(REGIME_PAUSE_TRIGGER_PREFIX):
-        tail = trigger[len(REGIME_PAUSE_TRIGGER_PREFIX) :].lstrip(" ··:-")
+        tail = trigger[len(REGIME_PAUSE_TRIGGER_PREFIX) :].lstrip(" ·:-")
         trigger = tail or "regime pause"
     if trigger.startswith("[") and "]" in trigger:
         trigger = trigger.split("]", 1)[1].strip() or trigger
@@ -531,8 +532,8 @@ class M5AlertBar(QWidget):
         token = "long" if side == "LONG" else "short" if side == "SHORT" else "text_muted"
         try:
             item.setForeground(QColor(theme.color(token)))
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("M5 alert row colour not applied", exc, quiet=True)
 
     def alerts(self) -> list:
         """Top to bottom - newest first."""
@@ -560,8 +561,8 @@ class M5AlertBar(QWidget):
             clipboard = QApplication.clipboard()
             if clipboard is not None:
                 clipboard.setText(text)
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("M5 alert tickers not copied to the clipboard", exc)
         return text
 
     def clear_all(self) -> None:

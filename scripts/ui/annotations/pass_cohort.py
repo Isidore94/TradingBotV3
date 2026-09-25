@@ -392,7 +392,7 @@ def pass_pick_rows(
         )
 
         sources = [pass_cohort_source(code, version) for code in codes] + [PASS_ALL_SOURCE]
-        for source, code in zip(sources, [*codes, ""]):
+        for source, code in zip(sources, [*codes, ""], strict=False):
             key = (trade_date, symbol, side, source)
             if key in rows:
                 continue

@@ -23,8 +23,8 @@ import master_avwap as m
 from master_avwap_lib import selection_policy as sp  # noqa: E402
 
 
-def _daily(d, o, h, l, c):
-    return {"date": d, "open": o, "high": h, "low": l, "close": c, "volume": 1_000_000}
+def _daily(d, o, h, lo, c):
+    return {"date": d, "open": o, "high": h, "low": lo, "close": c, "volume": 1_000_000}
 
 
 def _long_rows(*, fresh: bool, band: float = 100.0):

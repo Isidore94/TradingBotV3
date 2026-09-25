@@ -248,6 +248,10 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "greatness_monitor",
     "research_warehouse.config",
     "diagnostics",
+    # P2-11d: the secret migration runs on a worker at desk start; secret_store
+    # imports keyring inside functions. Import only - no credential is read.
+    "secret_store",
+    "keyring.backends.Windows",
     # the desk itself
     "ui.app",
     "ui.theme",
@@ -389,6 +393,26 @@ def _check_setup_registry() -> None:
         raise RuntimeError("the setup registry resolved a known name to nothing")
 
 
+def _check_keyring_backend() -> None:
+    """P2-11d: secrets need the real Windows Credential Manager backend.
+
+    A bundle missing keyring's backend entry points falls back to keyring's
+    ``fail``/``null`` backend, which silently keeps every secret in JSON. This
+    names the backend only; it reads no credential. Skipped off Windows and
+    when a backend is forced through PYTHON_KEYRING_BACKEND (the test suite).
+    """
+    import os
+
+    if sys.platform != "win32" or os.environ.get("PYTHON_KEYRING_BACKEND"):
+        return
+    import keyring
+
+    backend = keyring.get_keyring()
+    names = {type(backend).__name__} | {type(b).__name__ for b in getattr(backend, "backends", ())}
+    if "WinVaultKeyring" not in names:
+        raise RuntimeError(f"keyring backend is {type(backend).__name__}, not WinVaultKeyring")
+
+
 ASSET_CHECKS: tuple[tuple[str, Callable[[], None]], ...] = (
     ("ui/theme.qss", _check_stylesheet),
     ("ui/annotations/vocabularies/veto_reasons_v*.json", _check_veto_vocabulary),
@@ -398,6 +422,7 @@ ASSET_CHECKS: tuple[tuple[str, Callable[[], None]], ...] = (
     ("frozen sys.path assumptions", _check_frozen_path_assumptions),
     ("chart level payload", _check_chart_level_payload),
     ("setup_registry_v1.json", _check_setup_registry),
+    ("keyring backend is WinVault", _check_keyring_backend),
 )
 
 

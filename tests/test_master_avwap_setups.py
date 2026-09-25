@@ -1126,11 +1126,11 @@ class MasterAvwapSetupTests(unittest.TestCase):
         dates = pd.bdate_range("2026-06-01", periods=6)
         strong_rows = [
             {"date": dt_value.date().isoformat(), "close": close}
-            for dt_value, close in zip(dates, [100.0, 101.0, 102.0, 103.0, 104.0, 108.0])
+            for dt_value, close in zip(dates, [100.0, 101.0, 102.0, 103.0, 104.0, 108.0], strict=False)
         ]
         weak_rows = [
             {"date": dt_value.date().isoformat(), "close": close}
-            for dt_value, close in zip(dates, [100.0, 99.0, 98.0, 97.0, 96.0, 92.0])
+            for dt_value, close in zip(dates, [100.0, 99.0, 98.0, 97.0, 96.0, 92.0], strict=False)
         ]
         spy = {"one_day_return_pct": 0.5, "five_day_return_pct": 1.0}
 
@@ -6438,7 +6438,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         prices[21] = 95.0
         dates = pd.bdate_range("2024-01-01", periods=40)
         rows = []
-        for idx, (day, price) in enumerate(zip(dates, prices)):
+        for idx, (day, price) in enumerate(zip(dates, prices, strict=False)):
             if idx == 39:
                 rows.append({"datetime": day, "open": 99.5, "high": 100.0, "low": 99.0, "close": 99.5, "volume": 1.0})
             else:

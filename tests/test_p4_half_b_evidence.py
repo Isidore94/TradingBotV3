@@ -73,7 +73,7 @@ def test_b1_adds_only_the_floor_columns_and_changes_no_existing_value():
     frozen = fixture["leaderboard_rows"]
 
     assert len(rows) == len(frozen)
-    for actual, expected in zip(_clean(rows), frozen):
+    for actual, expected in zip(_clean(rows), frozen, strict=False):
         assert set(actual) - set(expected) == B1_NEW_COLUMNS
         for key, value in expected.items():
             assert actual[key] == value, f"{key} moved: {value!r} -> {actual[key]!r}"

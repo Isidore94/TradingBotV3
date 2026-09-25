@@ -315,7 +315,7 @@ def _interp_anchors(x: float, anchors: list) -> float:
         return points[0][1]
     if x >= points[-1][0]:
         return points[-1][1]
-    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+    for (x0, y0), (x1, y1) in zip(points, points[1:], strict=False):
         if x0 <= x <= x1:
             if x1 == x0:
                 return y1
@@ -468,7 +468,7 @@ def _isotonic_non_decreasing(values: list, weights: list) -> list:
     """
 
     blocks: list[list[float]] = []  # each block: [mean, total_weight, count]
-    for value, weight in zip(values, weights):
+    for value, weight in zip(values, weights, strict=False):
         weight = max(float(weight), 1e-9)
         blocks.append([float(value), weight, 1])
         while len(blocks) >= 2 and blocks[-2][0] > blocks[-1][0]:
@@ -586,7 +586,7 @@ def calibrate_prior_anchors(
         bin_shrunk_r.append(shrunk_r)
 
     fitted_r = _isotonic_non_decreasing(bin_shrunk_r, bin_weights)
-    anchors = [[round(p, 1), round(r, 3)] for p, r in zip(bin_points, fitted_r)]
+    anchors = [[round(p, 1), round(r, 3)] for p, r in zip(bin_points, fitted_r, strict=False)]
 
     bin_diagnostics = [
         {

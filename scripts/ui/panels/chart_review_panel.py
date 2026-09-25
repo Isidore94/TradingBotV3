@@ -55,6 +55,7 @@ from ui.timer_utils import start_staggered
 from ui.widgets.capture_rail import CaptureRail
 from ui.widgets.flow_layout import FlowLayout
 from ui.widgets.symbol_snapshot_dialog import REFRESH_INTERVAL_MS, SymbolSnapshotWidget
+from swallowed import note_swallowed
 
 #: The snapshot was measured at 11.5MB; this refuses one that has grown into
 #: the raw tracker's problem instead of parsing it anyway (same ceiling as
@@ -211,8 +212,8 @@ class _SetupsSummaryTask(QRunnable):
         text = read_setups_summary(self._path)
         try:
             self._bridge.ready.emit(self._request_id, text)
-        except RuntimeError:
-            pass
+        except RuntimeError as exc:
+            note_swallowed("setups summary read finished after the panel was deleted", exc, quiet=True)
 
 
 class ChartReviewPanel(QFrame):
@@ -418,8 +419,8 @@ class ChartReviewPanel(QFrame):
             return
         try:
             self.snapshot.refresh(bot=self._current_bot())
-        except Exception:
-            pass  # display-only refresh; the next owned tick retries
+        except Exception as exc:
+            note_swallowed("chart review refresh failed", exc)  # display-only refresh; the next owned tick retries
 
     def _on_d1_level_selected(
         self, symbol: str, level_id: str, family: str, _price: float

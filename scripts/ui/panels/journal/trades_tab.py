@@ -54,6 +54,7 @@ from ui.panels.journal.tag_chips import (
 )
 from ui.services import journal_feed
 from ui.widgets.data_table import apply_width_rule_to_table_widget
+from swallowed import note_swallowed
 
 #: The Trades table's own header, named once (G2a) so `_populate_table` can take
 #: `Symbol`'s and `Tags`' indices from the list rather than a literal - a column
@@ -966,8 +967,8 @@ class TradesTab(QFrame):
         result = self._measure_excursion(raw)
         try:
             self._excursionReady.emit(trade_id, result)
-        except RuntimeError:  # the tab was destroyed while the bars loaded
-            pass
+        except RuntimeError as exc:  # the tab was destroyed while the bars loaded
+            note_swallowed("excursion read finished after the tab was destroyed", exc, quiet=True)
 
     def _on_excursion(self, trade_id: str, result) -> None:
         """Show the result only if that trade is still the one on screen."""

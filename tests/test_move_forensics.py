@@ -18,7 +18,7 @@ def _frame(closes, *, start="2026-01-02", spread=0.5, volume=1_000_000.0) -> pd.
     dates = pd.bdate_range(start, periods=len(closes))
     rows = []
     prev = closes[0]
-    for dt, close in zip(dates, closes):
+    for dt, close in zip(dates, closes, strict=False):
         rows.append(
             {
                 "datetime": dt,
@@ -126,9 +126,9 @@ class TestScanSymbol:
 class TestPatternMining:
     def _rows(self):
         movers = []
-        for k in range(20):  # co-occurring pair present in most movers
+        for _k in range(20):  # co-occurring pair present in most movers
             movers.append({"side": "LONG", "move_atr": 4.0, "ema15_bounce": True, "volume_2x_recent": True})
-        for k in range(10):
+        for _k in range(10):
             movers.append({"side": "LONG", "move_atr": 3.0, "second_dev_breakout": True})
         baseline = [{"side": "LONG"} for _ in range(95)]
         baseline += [{"side": "LONG", "ema15_bounce": True} for _ in range(5)]

@@ -36,6 +36,7 @@ from ui.widgets.setups_toggle_button import SetupsToggleButton
 from ui.widgets.best_now_strip import BestNowStrip
 from ui.widgets.live_results_strip import LiveResultsStrip
 from ui.widgets.working_lately_strip import WorkingLatelyStrip
+from swallowed import note_swallowed
 
 # v3 (2026-08-27): the M5 alert bar moved to the LEFT of the chart column, so a
 # v2 split saved with the bar in the middle must not be replayed onto it.
@@ -762,8 +763,8 @@ class TradingDeskPanel(QWidget):
         for panel in rescued:
             try:
                 panel.setParent(None)
-            except RuntimeError:
-                pass
+            except RuntimeError as exc:
+                note_swallowed("mode panel already deleted while detaching", exc, quiet=True)
         self.desk_splitter = None
 
     def _apply_column_floors(self) -> None:

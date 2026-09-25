@@ -47,6 +47,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT_DIR / "scripts"))
+from swallowed import note_swallowed
 
 MANIFEST_SCHEMA = "evidence_snapshot_manifest_v1"
 
@@ -497,8 +498,8 @@ def health(staging_root: Path, das_root: Path | None = None) -> dict:
                 stored_bytes=int(m.get("stored_bytes", 0)),
                 skipped=int(m.get("skipped", 0)),
             )
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as swallowed_exc:
+            note_swallowed("evidence snapshot manifest unreadable", swallowed_exc)
     if das_root is not None:
         try:
             out["das_reachable"] = Path(das_root).is_dir()
@@ -507,8 +508,8 @@ def health(staging_root: Path, das_root: Path | None = None) -> dict:
     marker = staging_root / "last_restore_test.json"
     try:
         out["last_restore_test"] = json.loads(marker.read_text(encoding="utf-8")).get("at", "")
-    except (OSError, ValueError):
-        pass
+    except (OSError, ValueError) as exc:
+        note_swallowed("last restore-test marker unreadable", exc, quiet=True)
     return out
 
 

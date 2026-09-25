@@ -32,6 +32,7 @@ import time
 from datetime import datetime
 
 from PySide6.QtCore import QObject, Signal
+from swallowed import note_swallowed
 
 #: Retry period for a hungry key, a failed first fetch, and whole-bot values
 #: (zone arms, regime label).
@@ -205,8 +206,8 @@ class M5BarCache(QObject):
         if previous is None or _stamp(previous[0]) != _stamp(bars):
             try:
                 self.barsUpdated.emit(key[0])
-            except RuntimeError:
-                pass  # the QObject is gone at shutdown
+            except RuntimeError as exc:
+                note_swallowed("M5 bar cache signal after the QObject was gone", exc, quiet=True)  # the QObject is gone at shutdown
 
     # -- the worker ----------------------------------------------------------
     def _ensure_worker(self) -> None:

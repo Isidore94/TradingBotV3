@@ -184,7 +184,7 @@ def assess_pick_persistence(state: Mapping[str, Any]) -> dict[str, dict[str, Any
                     "distance_pct": float(reading.get("distance_pct") or 0.0),
                 }
             )
-    for symbol, series in verdicts.items():
+    for series in verdicts.values():
         readings = series.pop("readings")
         first, latest = readings[0], readings[-1]
         side = series["side"]

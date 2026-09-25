@@ -28,6 +28,7 @@ from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo
 
 from PySide6.QtCore import QObject, QTimer, Signal
+from swallowed import note_swallowed
 
 EASTERN = ZoneInfo("America/New_York")
 PACIFIC = ZoneInfo("America/Los_Angeles")
@@ -193,8 +194,8 @@ class EconReminderService(QObject):
         for timer in (self._tick_timer, self._refresh_timer):
             try:
                 timer.stop()
-            except RuntimeError:  # pragma: no cover - already torn down
-                pass
+            except RuntimeError as exc:  # pragma: no cover - already torn down
+                note_swallowed("econ reminder timer already torn down", exc, quiet=True)
 
     # -- mode -------------------------------------------------------------
     @staticmethod

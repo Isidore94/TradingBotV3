@@ -113,7 +113,7 @@ class FlowLayout(QLayout):
         extra, remainder = divmod(max(0, spare), len(self._items))
         height = max(effective.height(), max(h.height() for h in hints))
         x = effective.x()
-        for position, (item, hint) in enumerate(zip(self._items, hints)):
+        for position, (item, hint) in enumerate(zip(self._items, hints, strict=False)):
             width = hint.width() + extra + (1 if position < remainder else 0)
             item.setGeometry(QRect(x, effective.y(), width, height))
             x += width + spacing

@@ -544,10 +544,8 @@ def _payload(picks):
 
 def _swing_lines(text: str) -> list[str]:
     lines = text.splitlines()
-    for index, line in enumerate(lines):
-        if line.startswith("1. "):
-            break
-    else:
+    index = next((i for i, line in enumerate(lines) if line.startswith("1. ")), None)
+    if index is None:
         return []
     out = []
     for line in lines[index:]:

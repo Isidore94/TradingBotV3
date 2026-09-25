@@ -17,6 +17,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, Signal
+from swallowed import note_swallowed
 
 #: How often a symbol's reading may be re-fetched (one new M5 bar = 5 min).
 REFRESH = timedelta(minutes=2)
@@ -195,8 +196,8 @@ class IntradayRvolService(QObject):
             logging.warning("Intraday rvol fetch failed for %s.", key, exc_info=True)
         try:
             self.readingReady.emit(key)
-        except RuntimeError:
-            pass  # service torn down while the fetch ran
+        except RuntimeError as exc:
+            note_swallowed("rvol reading finished after the service was torn down", exc, quiet=True)  # service torn down while the fetch ran
 
 
 _SHARED: IntradayRvolService | None = None

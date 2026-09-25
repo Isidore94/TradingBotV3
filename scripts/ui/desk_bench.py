@@ -216,6 +216,15 @@ _SIZE_DEFAULT = "3456x2160"
 # ---------------------------------------------------------------------------
 # Pure helpers. No Qt, nothing under `scripts/`. These are what the tests pin.
 # ---------------------------------------------------------------------------
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 def percentile(values: Sequence[float], fraction: float) -> float | None:
     """Nearest-rank percentile. `None` for an empty sample, never 0.0.
 
@@ -937,13 +946,13 @@ def shutdown_panel(panel) -> None:
         if callable(call):
             try:
                 call()
-            except Exception:  # noqa: BLE001 - teardown must not fail a run
-                pass
+            except Exception as swallowed_exc:  # noqa: BLE001 - teardown must not fail a run
+                note_swallowed("bench panel shutdown or close failed", swallowed_exc, quiet=True)
     try:
         panel.setParent(None)
         panel.deleteLater()
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        note_swallowed("bench panel deleteLater failed", exc, quiet=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1354,8 +1363,8 @@ def main(argv: Sequence[str] | None = None, *, stream=None) -> int:
     if callable(reconfigure):
         try:
             reconfigure(encoding="utf-8", errors="replace")
-        except (ValueError, OSError):  # pragma: no cover - a non-file stream
-            pass
+        except (ValueError, OSError) as swallowed_exc:  # pragma: no cover - a non-file stream
+            note_swallowed("bench output stream could not be reconfigured", swallowed_exc, quiet=True)
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
 

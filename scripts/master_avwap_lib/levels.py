@@ -32,12 +32,21 @@ CLOUD_TOL_PCT = 0.0005
 CLOUD_LEVEL_WEIGHT = 1.0
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 def _coerce_float(value) -> float | None:
     try:
         if pd.isna(value):
             return None
-    except TypeError:
-        pass
+    except TypeError as exc:
+        note_swallowed("value not a scalar for isna; converting directly", exc, quiet=True)
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -327,7 +336,7 @@ def _cluster_from_members(members: list[dict], atr20: float | None) -> dict:
     weights = [max(_coerce_float(member.get("relvol")) or 0.0, 0.01) for member in members]
     prices = [float(member["price"]) for member in members]
     total_weight = sum(weights) or 1.0
-    price = sum(price * weight for price, weight in zip(prices, weights)) / total_weight
+    price = sum(price * weight for price, weight in zip(prices, weights, strict=False)) / total_weight
     bucket = "green" if any(str(member.get("bucket")) == "green" for member in members) else "red"
     first_seen_values = [str(member.get("first_seen") or "") for member in members if member.get("first_seen")]
     last_seen_values = [

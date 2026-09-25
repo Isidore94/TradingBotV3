@@ -320,6 +320,23 @@ class TestTheFocusChip:
 
         return FocusStatusChip("NVDA", tone="long", state={})
 
+    @staticmethod
+    def _badge_restyles(monkeypatch, chip):
+        """Every restyle of the badge: a stylesheet set, or (P2-11e) a theme.qss repolish."""
+        import ui.panels.focus_picks_panel as fpp
+
+        calls = []
+        monkeypatch.setattr(chip.live_flag, "setStyleSheet", lambda css: calls.append(css))
+        real = fpp._repolish
+
+        def counting(widget):
+            if widget is chip.live_flag:
+                calls.append("repolish")
+            real(widget)
+
+        monkeypatch.setattr(fpp, "_repolish", counting)
+        return calls
+
     def test_the_badge_stylesheet_is_inside_the_look_guard(self, monkeypatch):
         """It ran a stylesheet parse per chip per update - on a 45-name board,
         for every bounce alert and every mover pass."""
@@ -327,8 +344,7 @@ class TestTheFocusChip:
         state = {"bounce": {"text": "BOUNCE 5m", "tone": "long"}}
         chip.update_state(state)
 
-        sets = []
-        monkeypatch.setattr(chip.live_flag, "setStyleSheet", lambda css: sets.append(css))
+        sets = self._badge_restyles(monkeypatch, chip)
         for _ in range(10):
             chip.update_state(dict(state))
 
@@ -338,11 +354,11 @@ class TestTheFocusChip:
         chip = self._chip(monkeypatch)
         chip.update_state({"bounce": {"text": "BOUNCE", "tone": "long"}})
 
-        sets = []
-        monkeypatch.setattr(chip.live_flag, "setStyleSheet", lambda css: sets.append(css))
+        sets = self._badge_restyles(monkeypatch, chip)
         chip.update_state({"rrs": {"text": "RRS +1.2", "tone": "short"}})
 
         assert len(sets) == 1
+        assert chip.live_flag.property("liveTone") == "short"
         assert chip.live_flag.text() == "RRS"
 
     def test_an_rrs_snapshot_is_coalesced_like_every_other_rebuild(self, tmp_path, monkeypatch):

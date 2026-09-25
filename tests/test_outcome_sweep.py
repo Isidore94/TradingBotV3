@@ -477,7 +477,7 @@ def test_a_backlog_stop_out_is_recovered_from_its_own_csv_rows(tmp_path, monkeyp
     over at bar 3, so bar 12's wider excursion describes price action after an
     exit that had already happened. The recovery itself is unchanged.
     """
-    path = _csv(tmp_path, [
+    _csv(tmp_path, [
         {"event_id": "a", "event_type": "3_bar", "close_r": "-0.8", "mfe_r": "0.4",
          "mae_r": "-1.5", "best_price": "100.4", "worst_price": "98.5",
          "stop_hit": "True", "bars_elapsed": "3", "logged_at": "2026-08-21T08:00:00"},
@@ -507,7 +507,7 @@ def test_a_backlog_stop_out_is_recovered_from_its_own_csv_rows(tmp_path, monkeyp
 
 def test_a_recovered_measurement_reconstructs_the_close_from_stored_numbers(tmp_path, monkeypatch):
     """`last_close` is arithmetic on the row's own close_r, entry and risk."""
-    path = _csv(tmp_path, [
+    _csv(tmp_path, [
         {"event_id": "a", "event_type": "12_bar", "close_r": "0.5", "mfe_r": "0.8",
          "mae_r": "-0.2", "best_price": "100.8", "worst_price": "99.8",
          "stop_hit": "False", "bars_elapsed": "12", "logged_at": "2026-08-21T09:00:00"},
@@ -521,7 +521,7 @@ def test_a_recovered_measurement_reconstructs_the_close_from_stored_numbers(tmp_
 
 
 def test_a_short_recovers_its_close_on_the_other_side(tmp_path, monkeypatch):
-    path = _csv(tmp_path, [
+    _csv(tmp_path, [
         {"event_id": "a", "event_type": "12_bar", "close_r": "0.5", "stop_hit": "False",
          "bars_elapsed": "12", "logged_at": "2026-08-21T09:00:00"},
     ])
@@ -534,7 +534,7 @@ def test_a_short_recovers_its_close_on_the_other_side(tmp_path, monkeypatch):
 
 def test_an_empty_csv_row_is_not_recovered_as_a_measurement(tmp_path, monkeypatch):
     """Recovering nothing would only relabel an absence as a measurement."""
-    path = _csv(tmp_path, [
+    _csv(tmp_path, [
         {"event_id": "a", "event_type": "1_bar", "close_r": "", "stop_hit": "False",
          "bars_elapsed": "1", "logged_at": "2026-08-21T08:00:00"},
     ])

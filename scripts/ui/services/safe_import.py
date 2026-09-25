@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """One-at-a-time first import of the heavy engine modules.
 
-``master_avwap_lib/__init__.py`` imports its own ``legacy`` submodule, so the
-package is only usable once that import has run to completion. While the
-chart path was synchronous this never mattered: everything imported it from
+``master_avwap_lib.legacy`` is heavy. Until P2-11e the package imported it
+eagerly; now it loads on first use, and ``MainWindow`` calls ``warm`` on one
+worker at startup so that first use is here, under this lock. While the
+chart path was synchronous none of this mattered: everything imported it from
 the GUI thread, in order.
 
 Now the snapshot build runs on a pool worker while the D1 backfill and
@@ -20,6 +21,7 @@ the first import is serialized and the rest are cache hits.
 """
 
 import threading
+from swallowed import note_swallowed
 
 _LOCK = threading.RLock()
 
@@ -51,7 +53,7 @@ def warm() -> None:
             import chart_snapshot  # noqa: F401
             import setup_playbook_study  # noqa: F401
             from master_avwap_lib import legacy  # noqa: F401
-        except Exception:
+        except Exception as exc:
             # A failed warm is not fatal here - the real call site will raise
             # (and log) with the context that actually matters.
-            pass
+            note_swallowed("background warm import failed; the call site will report it", exc, quiet=True)

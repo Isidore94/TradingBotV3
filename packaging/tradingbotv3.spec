@@ -177,6 +177,10 @@ hiddenimports += ["ib_market_scanner", "yahoo_download"]
 # P1-7: the plan view's worker and the Mentor's answer writer import the plan
 # and its challenge store inside functions.
 hiddenimports += ["trading_plan", "plan_challenges"]
+# P2-11d: the desk moves two secrets into Windows Credential Manager on a
+# worker; secret_store imports keyring inside functions (keyring's own hook
+# collects its backends and entry-point metadata).
+hiddenimports += ["secret_store", "swallowed", "keyring", "keyring.backends.Windows"]
 # The UI loads panels/services by name in places, and the engines import each
 # other lazily inside functions; collecting the first-party trees outright is
 # far cheaper than chasing ModuleNotFoundError one launch at a time.

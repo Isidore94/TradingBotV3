@@ -61,6 +61,7 @@ from ui.widgets.bounce_status_proxy import BounceStatusProxy
 from ui.widgets.page_tab_row import PageTabRow
 from ui.widgets.price_alert_toast import PriceAlertToastManager
 from ui.widgets.technical_integrity_dialog import TechnicalIntegrityDialog
+from swallowed import note_swallowed
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,12 @@ DAY_REVIEW_PAGE_TITLE = "Day Review"
 class MainWindow(QMainWindow):
     def __init__(self, state: UiState) -> None:
         super().__init__()
+        # P2-11e: master_avwap_lib.legacy (and yfinance) no longer load with
+        # ui.app. Load them once, now, on one worker under safe_import's lock,
+        # so the first real use is neither on the Qt thread nor a race.
+        from ui.services import safe_import
+
+        threading.Thread(target=safe_import.warm, name="engine-warm", daemon=True).start()
         self.state = state
         self.price_alert_toasts = PriceAlertToastManager(self)
         self.setWindowTitle("TradingBotV3 Trading Desk")
@@ -229,7 +236,7 @@ class MainWindow(QMainWindow):
         )
         self.settings_panel.stateChanged.connect(self._apply_state_changes)
         self.settings_panel.riskPerTradeChanged.connect(self.trading_panel.set_risk_per_trade)
-        self.health_panel = HealthPanel()
+        self.health_panel = HealthPanel(bot_provider=self.trading_panel.bounce_panel.service.current_bot)
         self.ai_summary_panel = AiSummaryPanel(bounce_service=self.trading_panel.bounce_panel.service)
         self._opening_latest_day_review = False
         self.ai_summary_panel.dailyReviewRequested.connect(self.show_latest_completed_day_review)
@@ -447,14 +454,20 @@ class MainWindow(QMainWindow):
         # local file reads, never touches IB or the UI.
         QTimer.singleShot(5000, self._refresh_review_learning)
 
+        # P2-11d: move the OpenAI key and ntfy token into Windows Credential
+        # Manager. A daemon thread: the first keyring use costs ~0.2 s.
+        import secret_store
+
+        secret_store.migrate_in_background()
+
     def _refresh_review_learning(self) -> None:
         def worker() -> None:
             try:
                 from review_learning import refresh_review_learning_if_stale
 
                 refresh_review_learning_if_stale()
-            except Exception:
-                pass  # the scoreboard is advisory; startup must never notice
+            except Exception as exc:
+                note_swallowed("review learning refresh failed at startup", exc)  # the scoreboard is advisory; startup must never notice
 
         threading.Thread(target=worker, name="review-learning-refresh", daemon=True).start()
 
@@ -718,8 +731,8 @@ class MainWindow(QMainWindow):
 
             for worker in list((getattr(self, "_rule_size_workers", None) or {}).values()):
                 join_worker(worker)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            note_swallowed("rule size baseline worker join failed at shutdown", exc, quiet=True)
 
     def _set_technical_integrity(self, snapshot) -> None:
         self._technical_integrity_snapshot = snapshot if isinstance(snapshot, dict) else {}
@@ -741,8 +754,8 @@ class MainWindow(QMainWindow):
             self.trading_panel.bounce_panel.service.alertReceived.emit(
                 BounceAlert.from_callback(f"PRICE ALERT: {message}", "red")
             )
-        except Exception:
-            pass  # the push already went out; the desk echo is best-effort
+        except Exception as exc:
+            note_swallowed("price alert desk echo failed", exc)  # the push already went out; the desk echo is best-effort
         self.price_alert_toasts.show_alert(payload, replayed=replayed)
 
     def _show_technical_integrity_details(self) -> None:
@@ -866,8 +879,8 @@ class MainWindow(QMainWindow):
                     page_tab_row.set_page_visible(index, show)
         try:
             self.trading_panel.alert_center.apply_unused_tab_visibility(show)
-        except Exception:  # noqa: BLE001 - a hidden tab is never worth a broken desk
-            pass
+        except Exception as exc:  # noqa: BLE001 - a hidden tab is never worth a broken desk
+            note_swallowed("unused alert-center tab visibility not applied", exc)
 
     def _start_tag_review_badge(self) -> None:
         """Count the trades awaiting tag review, off-thread, once at startup.
@@ -906,8 +919,8 @@ class MainWindow(QMainWindow):
             from ui.read_worker import join_worker
 
             join_worker(worker)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            note_swallowed("tag review badge worker join failed at shutdown", exc, quiet=True)
 
     def _apply_tag_review_badge(self, payload: object) -> None:
         """"Journal (12 to review)". Zero leaves the label exactly as it was."""
@@ -2102,8 +2115,8 @@ class MainWindow(QMainWindow):
 
             for chip in self.findChildren(RuleChip):
                 chip.shutdown()
-        except Exception:  # noqa: BLE001 - shutdown must not raise
-            pass
+        except Exception as swallowed_exc:  # noqa: BLE001 - shutdown must not raise
+            note_swallowed("rule chip shutdown failed", swallowed_exc)
         self._join_rule_size_baseline()
         for panel in (
             self.trading_panel,
@@ -2123,46 +2136,46 @@ class MainWindow(QMainWindow):
         ):
             try:
                 panel.shutdown()
-            except Exception:
-                pass
+            except Exception as swallowed_exc:
+                note_swallowed("page shutdown failed", swallowed_exc)
         # The strength board's service is owned by the window rather than by a
         # panel (its surface is a section inside the Alert Center), so it is
         # not in the loop above and needs stopping here. Its timer is the only
         # thing it holds.
         try:
             self.strength_board_service.shutdown()
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("strength board service shutdown failed", swallowed_exc)
         try:
             self.movers_service.shutdown()
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("movers service shutdown failed", swallowed_exc)
         # Same reason, same list: the Working-lately service is owned by the
         # window (four surfaces read it) and holds one timer and one bounded
         # reader. ST6.3.
         try:
             self.working_lately_service.shutdown()
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("working lately service shutdown failed", swallowed_exc)
         # Same list, same reason (WISHLIST 10J): one timer, owned here.
         try:
             self.trade_mentor_service.shutdown()
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("trade mentor service shutdown failed", swallowed_exc)
         try:
             self.econ_reminder_service.shutdown()
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("econ reminder service shutdown failed", swallowed_exc)
         try:
             self.trade_mentor_context_service.shutdown(timeout_ms=250)
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("trade mentor context service shutdown failed", swallowed_exc)
         # TJ-9 item 6: the morning retry's worker, when one was ever built.
         try:
             if self._journal_importer is not None:
                 self._journal_importer.shutdown()
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("journal importer shutdown failed", swallowed_exc)
         # Backstop for the shared writer lease: AutopilotService.shutdown
         # normally releases it, but a panel that failed to shut down must not
         # leave the lease held. Releasing twice is a no-op, and a lease this
@@ -2171,8 +2184,8 @@ class MainWindow(QMainWindow):
             import autopilot_core as core
 
             core.release_away_report_lease()
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("away report lease release failed at shutdown", exc)
         super().closeEvent(event)
 
 

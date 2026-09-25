@@ -169,7 +169,7 @@ def closes_from_daily_frames(
             if frame is not None and getattr(frame, "empty", True) is False:
                 stamps = frame["datetime"] if "datetime" in frame.columns else frame[frame.columns[0]]
                 closes = {}
-                for stamp, close in zip(stamps, frame["close"]):
+                for stamp, close in zip(stamps, frame["close"], strict=False):
                     day = pd.to_datetime(stamp)
                     value = float(close)
                     if value > 0 and not pd.isna(day):

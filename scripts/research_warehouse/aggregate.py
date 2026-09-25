@@ -300,7 +300,7 @@ def build_derived_bars(
 
         for timeframe in timeframes:
             existing = _existing_keys(store, timeframe, session)
-            for symbol, symbol_rows in sorted(by_symbol.items()):
+            for _symbol, symbol_rows in sorted(by_symbol.items()):
                 for derived in derive_session_bars(
                     symbol_rows, session, timeframe, as_of=cutoff, computed_at=stamp, run_id=run_id
                 ):
@@ -326,7 +326,7 @@ def _existing_keys(store: ResearchStore, timeframe: str, session: xcal.TradingSe
     partition = f"timeframe={str(timeframe).upper()}/month={session.rth_open_at:%Y-%m}"
     table = store.read_table("bar_derived", partition, columns=["symbol", "interval_start"])
     keys = set()
-    for symbol, start in zip(table.column("symbol").to_pylist(), table.column("interval_start").to_pylist()):
+    for symbol, start in zip(table.column("symbol").to_pylist(), table.column("interval_start").to_pylist(), strict=False):
         if start is None:
             continue
         keys.add((str(symbol), start if start.tzinfo else start.replace(tzinfo=timezone.utc)))

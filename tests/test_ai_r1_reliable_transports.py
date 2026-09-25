@@ -331,7 +331,7 @@ def test_day_story_v2_rejects_every_closed_mapping_breach_byte_identically(tmp_p
         prior.write_bytes(b'{"verified":"keep"}\n')
         before = prior.read_bytes()
 
-        def request(**kwargs):
+        def request(_broken=broken, **kwargs):
             evidence = kwargs["evidence"]
             return {
                 "model": "local-test-medium",
@@ -339,7 +339,7 @@ def test_day_story_v2_rejects_every_closed_mapping_breach_byte_identically(tmp_p
                     "headline": "The closed mapping matters.",
                     "what_happened": "One session.",
                     "what_you_thought": "One call.",
-                    "read_explanations": broken(evidence["read_explanations"]),
+                    "read_explanations": _broken(evidence["read_explanations"]),
                     "chased_against_news": {"verdict": "unknown", "evidence_id": ""},
                     "process": "Reject the whole reply.",
                     "sources": list(evidence["allowed_source_ids"]),

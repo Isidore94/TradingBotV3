@@ -44,6 +44,7 @@ from typing import Callable
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from trade_mentor_schedule import PACIFIC, MentorSlot, slots_for_session
+from swallowed import note_swallowed
 
 #: How long the trader may be away from the keyboard and still count as present.
 #: A trader reading a chart types nothing for minutes at a time, so this is
@@ -137,8 +138,8 @@ class TradeMentorService(QObject):
     def shutdown(self) -> None:
         try:
             self._timer.stop()
-        except RuntimeError:  # pragma: no cover - already torn down
-            pass
+        except RuntimeError as exc:  # pragma: no cover - already torn down
+            note_swallowed("trade mentor timer already torn down", exc, quiet=True)
 
     def _on_tick(self) -> None:
         try:

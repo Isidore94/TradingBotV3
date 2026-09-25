@@ -16,6 +16,7 @@ from project_paths import MARKET_ENVIRONMENT_ANNOTATIONS_FILE
 from technical_integrity import load_technical_integrity_snapshot
 from ui.models.bounce import BounceAlert
 from ui.timer_utils import start_staggered, stop_staggered
+from swallowed import note_swallowed
 
 try:  # pragma: no cover - shiboken6 ships with PySide6; guard for odd builds
     from shiboken6 import isValid as _shiboken_is_valid
@@ -388,7 +389,7 @@ class BounceService(QObject):
         """
 
         self._prune_unretired_locked()
-        for thread, what, session in self._unretired:
+        for thread, what, _session in self._unretired:
             if thread.is_alive() and what in {_WORK_STARTUP, _WORK_RETIRE}:
                 return f"{what} {thread.name}"
         return None
@@ -1199,8 +1200,8 @@ class BounceService(QObject):
         for bounce_key in list(self.bounce_type_settings):
             try:
                 bounce_types[bounce_key] = bool(bot.is_bounce_type_enabled(bounce_key))
-            except Exception:
-                pass
+            except Exception as exc:
+                note_swallowed("bounce type state unreadable from bot", exc, quiet=True)
 
         # --- commit phase: only if this generation still owns the service ---
         with self._lock:
@@ -1252,8 +1253,8 @@ class BounceService(QObject):
             session.cancelled.set()
         try:
             bot.stop(timeout=0.5)
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("dead bot child stop failed before restart", exc)
         self._emit(self.connectionChanged, "IB: scanner child restarting")
         self._emit(self.statusChanged, "scanner child stopped; restarting")
         return self.start()
@@ -1276,8 +1277,8 @@ class BounceService(QObject):
                 candidate = bot.get_auto_regime_reading()
                 if isinstance(candidate, dict):
                     reading = candidate
-            except Exception:
-                pass
+            except Exception as exc:
+                note_swallowed("bot regime reading unavailable for environment annotation", exc, quiet=True)
         return record_market_environment_annotation(
             selected_environment=selected,
             auto_reading=reading,

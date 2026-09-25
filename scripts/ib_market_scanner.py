@@ -55,6 +55,15 @@ _INFO_CODES = {2103, 2104, 2105, 2106, 2107, 2108, 2119, 2157, 2158, 165}
 _CONNECTION_LOST = {504, 1100, 1300, 502}
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 class ScannerError(RuntimeError):
     """No scanner answer: not connected, refused, or every scan failed."""
 
@@ -239,8 +248,8 @@ class IBMarketScanner:
     def _drop(app, thread) -> None:
         try:
             app.disconnect()
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("IB scanner client disconnect failed", exc, quiet=True)
         if thread is not None:
             thread.join(timeout=2.0)
 
@@ -289,8 +298,8 @@ class IBMarketScanner:
                 finally:
                     try:
                         app.cancelScannerSubscription(req_id)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        note_swallowed("IB scanner subscription cancel failed", exc, quiet=True)
                 symbols, error = app.take(req_id)
                 if error:
                     self.last_errors[code] = error

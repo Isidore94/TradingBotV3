@@ -73,6 +73,7 @@ from trade_mentor_schedule import (
     MentorSlot,
     manual_slot,
 )
+from swallowed import note_swallowed
 
 #: The trader's own reason when they dismiss a card by hand. Kept distinct from
 #: every absence reason the service records: "I looked and had nothing to say"
@@ -534,8 +535,8 @@ class TradeMentorCard(QWidget):
             try:
                 self._context_service.contextReady.disconnect(self._on_context_ready)
                 self._context_service.contextUnavailable.disconnect(self._on_context_unavailable)
-            except (RuntimeError, TypeError):
-                pass
+            except (RuntimeError, TypeError) as exc:
+                note_swallowed("old context service signals already disconnected", exc, quiet=True)
         self._context_service = context_service
         if context_service is not None:
             context_service.contextReady.connect(self._on_context_ready)
@@ -729,8 +730,8 @@ class TradeMentorCard(QWidget):
                 "previous read, with THIS hour's call. The earlier one stays "
                 "exactly as you wrote it."
             )
-        except RuntimeError:  # pragma: no cover - widget already torn down
-            pass
+        except RuntimeError as exc:  # pragma: no cover - widget already torn down
+            note_swallowed("prediction gate widget already torn down", exc, quiet=True)
 
     def _missing_prediction_reason(self, horizons: tuple[str, ...]) -> str:
         """Why a file verb refused. The gate lives HERE as well as on the button.
@@ -1852,8 +1853,8 @@ class TradeMentorCard(QWidget):
         original = str(self._exit_rewrite_original.get(str(key)) or "").strip()
         try:
             save.setEnabled(bool(words) and words != original)
-        except RuntimeError:  # pragma: no cover - widget already torn down
-            pass
+        except RuntimeError as exc:  # pragma: no cover - widget already torn down
+            note_swallowed("rewrite gate widget already torn down", exc, quiet=True)
 
     def _open_exit_rewrite(self, key: str) -> None:
         """Show the pre-filled box. From here it is an ordinary exit box."""
@@ -2575,8 +2576,8 @@ class TradeMentorCard(QWidget):
             for trade_id, button in self._trade_save_buttons.items():
                 button.setEnabled(trade_id in answered)
             self.save_answers_button.setEnabled(bool(answered))
-        except RuntimeError:  # pragma: no cover - widget already torn down
-            pass
+        except RuntimeError as exc:  # pragma: no cover - widget already torn down
+            note_swallowed("save gate widget already torn down", exc, quiet=True)
 
     # -- TJ-9E: the trader's two clicks on a waiting draft ------------------
     def _start_exit_write(self, trade_id: str, call: Callable[[], Any], busy: str) -> bool:

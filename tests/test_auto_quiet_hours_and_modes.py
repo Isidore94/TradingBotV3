@@ -567,7 +567,10 @@ class _Immediate:
             self._target(*self._args)
 
 
-def _alarm_service(monkeypatch, *, profile=AUTO_PROFILE_EVENING, bars=(_Bar(103.0),), prev=100.0):
+_DEFAULT_ALARM_BARS = (_Bar(103.0),)
+
+
+def _alarm_service(monkeypatch, *, profile=AUTO_PROFILE_EVENING, bars=_DEFAULT_ALARM_BARS, prev=100.0):
     service = _bare_service(profile=profile)
     monkeypatch.setattr("threading.Thread", _Immediate)
     service._d1_events_pending = deque(maxlen=_MAX_PENDING_D1_EVENTS)
@@ -826,7 +829,7 @@ def test_away_queues_alerts_without_a_sound(monkeypatch):
     panel = _panel(monkeypatch, "AWAY")
     beeps: list[int] = []
     monkeypatch.setattr(
-        "ui.panels.alert_center_panel.QApplication.beep", lambda: beeps.append(1)
+        "ui.panels.alert_center_panel.QApplication.beep", lambda _beeps=beeps: _beeps.append(1)
     )
     panel.sound_input.setChecked(True)
     panel.add_alert(_bounce_alert())
@@ -844,7 +847,7 @@ def test_evening_queues_alerts_without_a_sound(monkeypatch):
     panel = _panel(monkeypatch, "EVENING")
     beeps: list[int] = []
     monkeypatch.setattr(
-        "ui.panels.alert_center_panel.QApplication.beep", lambda: beeps.append(1)
+        "ui.panels.alert_center_panel.QApplication.beep", lambda _beeps=beeps: _beeps.append(1)
     )
     panel.sound_input.setChecked(True)
     panel.add_alert(_bounce_alert())
@@ -864,7 +867,7 @@ def test_the_d1_feed_beep_follows_the_same_rule(monkeypatch):
         panel = _panel(monkeypatch, mode)
         beeps: list[int] = []
         monkeypatch.setattr(
-            "ui.panels.alert_center_panel.QApplication.beep", lambda: beeps.append(1)
+            "ui.panels.alert_center_panel.QApplication.beep", lambda _beeps=beeps: _beeps.append(1)
         )
         panel.sound_input.setChecked(True)
         panel.add_alert(upgrade)
@@ -876,7 +879,7 @@ def test_desk_still_beeps(monkeypatch):
     panel = _panel(monkeypatch, "DESK")
     beeps: list[int] = []
     monkeypatch.setattr(
-        "ui.panels.alert_center_panel.QApplication.beep", lambda: beeps.append(1)
+        "ui.panels.alert_center_panel.QApplication.beep", lambda _beeps=beeps: _beeps.append(1)
     )
     panel.sound_input.setChecked(True)
     panel.add_alert(_bounce_alert())

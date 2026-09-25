@@ -25,7 +25,7 @@ def _bars(closes: list[float], *, start: str = "2026-03-02", spread: float = 0.5
             "close": close,
             "volume": 1_000_000,
         }
-        for dt, close in zip(dates, closes)
+        for dt, close in zip(dates, closes, strict=False)
     ]
     return pd.DataFrame(rows)
 

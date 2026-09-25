@@ -21,6 +21,15 @@ SCHEMA_VERSION = "run_manifest_v1"
 DEFAULT_KEEP = 90
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 def default_manifest_dir() -> Path:
     try:
         from project_paths import get_diagnostics_dir
@@ -111,8 +120,8 @@ class ManifestRecorder:
             if os.path.exists(tmp_name):
                 try:
                     os.remove(tmp_name)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    note_swallowed("run manifest temp file not removed", exc, quiet=True)
         prune_manifests(directory, keep=keep)
         return path
 
@@ -127,8 +136,8 @@ def prune_manifests(directory: Path | str, keep: int = DEFAULT_KEEP) -> int:
         try:
             path.unlink()
             removed += 1
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("old run manifest not pruned", exc, quiet=True)
     return removed
 
 

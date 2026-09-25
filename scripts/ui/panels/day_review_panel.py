@@ -68,6 +68,7 @@ from ai_jobs import window
 from ui import theme
 from ui.panels import desk_layout
 from ui.widgets.data_table import MEASURE_PRECISION_ROWS
+from swallowed import note_swallowed
 
 #: How often the page asks whether its automatic read is due (the Daily Recap's
 #: cadence, kept: the answer is a function of the clock, so a late tick reads the
@@ -2320,8 +2321,8 @@ class DayReviewPanel(QFrame):
         """
         try:
             self._redo_workers.remove(worker)
-        except ValueError:
-            pass
+        except ValueError as exc:
+            note_swallowed("redo worker already released", exc, quiet=True)
         self._release_redo()
         worker.deleteLater()
 
@@ -2330,8 +2331,8 @@ class DayReviewPanel(QFrame):
         self._redo_busy = False
         try:
             self.redo_story_button.setEnabled(True)
-        except RuntimeError:  # pragma: no cover - the panel is being destroyed
-            pass
+        except RuntimeError as exc:  # pragma: no cover - the panel is being destroyed
+            note_swallowed("redo button already destroyed", exc, quiet=True)
 
     def _redo_after_pack(self, session_date: str, built: bool) -> None:
         """Queue it for tonight, or start it - now that the facts exist.
@@ -2608,7 +2609,7 @@ class DayReviewPanel(QFrame):
         if not isinstance(skill, Mapping):
             return ""
         lines: list[str] = []
-        for key, window in (("session", "this session"), ("lately", "lately")):
+        for key, fallback_label in (("session", "this session"), ("lately", "lately")):
             block = skill.get(key)
             if not isinstance(block, Mapping):
                 continue
@@ -2618,7 +2619,7 @@ class DayReviewPanel(QFrame):
             sessions = block.get("window_sessions")
             count = f"{int(sessions)} session{'s' if int(sessions) != 1 else ''}" if isinstance(
                 sessions, (int, float)
-            ) else window
+            ) else fallback_label
             lines.append(f"{count}: {sentence}")
         return "\n".join(lines)
 
@@ -3177,8 +3178,8 @@ class DayReviewPanel(QFrame):
             ):
                 self.step_row(watched, 1 if event.key() == Qt.Key.Key_J else -1)
                 return True
-        except Exception:  # noqa: BLE001 - a key handler never breaks the page
-            pass
+        except Exception as exc:  # noqa: BLE001 - a key handler never breaks the page
+            note_swallowed("day review row key handler raised", exc)
         return super().eventFilter(watched, event)
 
     def _sync_after_the_fact(self) -> None:
@@ -3238,8 +3239,8 @@ class DayReviewPanel(QFrame):
                 dialog.raise_()
                 dialog.activateWindow()
                 return
-        except RuntimeError:  # the last dialog was deleted on close
-            pass
+        except RuntimeError as exc:  # the last dialog was deleted on close
+            note_swallowed("last forecast dialog already deleted", exc, quiet=True)
         self._forecast_dialog = self._ask_for_forecast(self._import_forecast)
 
     def _ask_for_forecast(self, on_accept: Callable[[dict], Any]):
@@ -3435,8 +3436,8 @@ class DayReviewPanel(QFrame):
     def shutdown(self) -> None:
         try:
             self._auto_timer.stop()
-        except RuntimeError:  # pragma: no cover - already torn down
-            pass
+        except RuntimeError as swallowed_exc:  # pragma: no cover - already torn down
+            note_swallowed("day review timer already torn down", swallowed_exc, quiet=True)
         for worker in (self._worker, self._index_worker, self._bars_worker):
             if worker is not None and worker.isRunning():
                 # Bounded: a desk that will not close is worse than an index
@@ -3446,12 +3447,12 @@ class DayReviewPanel(QFrame):
         # (bounded) rather than abandoned.
         try:
             self.ideas_card.shutdown()
-        except Exception:  # noqa: BLE001 - shutdown must not raise
-            pass
+        except Exception as swallowed_exc:  # noqa: BLE001 - shutdown must not raise
+            note_swallowed("day review ideas card shutdown failed", swallowed_exc)
         try:
             self.plan_view.shutdown()
-        except Exception:  # noqa: BLE001 - shutdown must not raise
-            pass
+        except Exception as exc:  # noqa: BLE001 - shutdown must not raise
+            note_swallowed("day review plan view shutdown failed", exc)
 
 
 __all__ = [

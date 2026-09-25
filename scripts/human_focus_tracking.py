@@ -25,6 +25,7 @@ from project_paths import (
     HUMAN_FOCUS_SNAPSHOT_STATE_FILE,
     MASTER_AVWAP_DAILY_BARS_DIR,
 )
+from swallowed import note_swallowed
 
 
 HORIZONS = (1, 3, 5, 10)
@@ -171,8 +172,8 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
         os.replace(tmp, path)
-    except OSError:
-        pass
+    except OSError as exc:
+        note_swallowed("human focus tracking JSON write failed", exc)
 
 
 def _read_csv_rows(path: Path) -> list[dict[str, str]]:
@@ -195,8 +196,8 @@ def _write_csv_rows(path: Path, columns: list[str], rows: list[dict[str, Any]]) 
             for row in rows:
                 writer.writerow({column: row.get(column, "") for column in columns})
         os.replace(tmp, path)
-    except OSError:
-        pass
+    except OSError as exc:
+        note_swallowed("human focus tracking CSV write failed", exc)
 
 
 def _side_label(side: Any) -> str:

@@ -196,7 +196,7 @@ def baseline_cell(rows: Sequence[Mapping[str, Any]], name: str) -> dict[str, Any
     mirrored = grades.baseline_reads(reads, name)
     scored = [
         {"verdict": _baseline_verdict(row, mirror)}
-        for row, mirror in zip(rows, mirrored)
+        for row, mirror in zip(rows, mirrored, strict=False)
     ]
     cell = grades.accuracy(scored)
     cell["baseline"] = str(name)

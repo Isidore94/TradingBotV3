@@ -900,3 +900,93 @@ QPushButton#JournalQuickTagChip:hover {
     border-color: @text_primary@;
     color: @text_primary@;
 }
+
+/* ------------------------------------------------------------------ */
+/* Focus board chips (P2-11e).                                          */
+/*                                                                      */
+/* Each chip used to parse its own f-string stylesheet (and its title,  */
+/* flags and badge theirs). The variants live here now; a chip picks    */
+/* one with dynamic properties plus an unpolish/polish.                 */
+/* ------------------------------------------------------------------ */
+
+QFrame#FocusStatusChip {
+    border-radius: 8px;
+    background: @focus_chip_plain_long_bg@;
+    border: 1px solid @focus_chip_plain_long_border@;
+}
+
+QFrame#FocusStatusChip[chipLook="plain-short"] {
+    background: @focus_chip_plain_short_bg@;
+    border: 1px solid @focus_chip_plain_short_border@;
+}
+
+QFrame#FocusStatusChip[chipLook="rrs-long"] {
+    background: @focus_chip_rrs_long_bg@;
+    border: 1px solid @focus_chip_rrs_long_border@;
+}
+
+QFrame#FocusStatusChip[chipLook="rrs-short"] {
+    background: @focus_chip_rrs_short_bg@;
+    border: 1px solid @focus_chip_rrs_short_border@;
+}
+
+QFrame#FocusStatusChip[chipLook="bounce"] {
+    background: @focus_chip_bounce_bg@;
+    border: 1px solid @focus_chip_bounce_border@;
+}
+
+QFrame#FocusStatusChip QLabel {
+    background: transparent;
+}
+
+QFrame#FocusStatusChip QToolButton {
+    color: @long@;
+    border: none;
+    background: transparent;
+    font-weight: 700;
+    padding: 0 2px;
+}
+
+QFrame#FocusStatusChip[chipSide="short"] QToolButton {
+    color: @short@;
+}
+
+QFrame#FocusStatusChip QToolButton:hover,
+QFrame#FocusStatusChip[chipSide="short"] QToolButton:hover {
+    color: @text_primary@;
+}
+
+QLabel#FocusChipTitle {
+    color: @long@;
+    font-weight: 700;
+}
+
+QLabel#FocusChipTitle[chipSide="short"] {
+    color: @short@;
+}
+
+QLabel#FocusMovingFlag {
+    color: @favorite@;
+    font-weight: 700;
+}
+
+QLabel#FocusLiveFlag {
+    font-weight: 700;
+}
+
+QLabel#FocusLiveFlag[liveTone="favorite"] {
+    color: @favorite@;
+}
+
+QLabel#FocusLiveFlag[liveTone="long"] {
+    color: @long@;
+}
+
+QLabel#FocusLiveFlag[liveTone="short"] {
+    color: @short@;
+}
+
+QLabel#SectionTitle[accent="favorite"] {
+    color: @favorite@;
+    font-weight: 700;
+}

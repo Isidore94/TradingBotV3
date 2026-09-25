@@ -175,7 +175,7 @@ def read_ib_sections(path: Path) -> dict[str, list[dict[str, str]]]:
             if not names:
                 continue
             sections.setdefault(section, []).append(
-                {name: value for name, value in zip(names, row[2:])}
+                {name: value for name, value in zip(names, row[2:], strict=False)}
             )
     return sections
 
@@ -208,7 +208,7 @@ def mask_matches(masked: str, candidate: str) -> bool:
     candidate = str(candidate or "").strip()
     if not masked or not candidate or len(masked) != len(candidate):
         return False
-    return all(left == "*" or left == right for left, right in zip(masked, candidate))
+    return all(left == "*" or left == right for left, right in zip(masked, candidate, strict=False))
 
 
 def resolve_account_number(
