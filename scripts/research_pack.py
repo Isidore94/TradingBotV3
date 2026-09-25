@@ -37,6 +37,10 @@ START HERE (for an AI session on the desk PC)
    * ``setup_summary.csv`` n, episodes, win rate, mean/median by family,
      side and trait. ``rank`` is empty for any cell under the floor: a thin
      cell is shown, never ranked. Everything is EXPLORATORY.
+   * ``trading_plan.md`` the trader's own plan (the history snapshot in force
+     at ``--as-of`` when given) and ``plan_challenges.json`` - the night's
+     challenges to it for the 7 days ending that date, each with the trader's
+     answer (accepted / rejected + reason) or open / expired.
 
 Point-in-time rules
 -------------------
@@ -157,6 +161,11 @@ class Sources:
     ai_store_root: Path | None = None
     #: Extra roots to refuse writing under (tests; other machines).
     protected: tuple = ()
+    #: P1-7: the trading plan, its history and the week's challenges / answers.
+    trading_plan: Path | None = None
+    plan_history_dir: Path | None = None
+    plan_challenges: Path | None = None
+    plan_answers: Path | None = None
 
 
 def _pp():
@@ -194,6 +203,10 @@ def resolve_sources() -> Sources:
             "alert_review_events": (Path(paths.ALERT_REVIEW_EVENTS_DIR), "trade_date"),
         },
         ai_store_root=ai_root,
+        trading_plan=Path(paths.TRADING_PLAN_FILE),
+        plan_history_dir=Path(paths.TRADING_PLAN_HISTORY_DIR),
+        plan_challenges=Path(paths.PLAN_CHALLENGES_FILE),
+        plan_answers=Path(paths.PLAN_CHALLENGE_ANSWERS_FILE),
     )
 
 
@@ -1062,6 +1075,50 @@ def summarize(d1_occurrences: list[dict], m5_alerts: list[dict], journal: list[d
 # ---------------------------------------------------------------------------
 # export
 # ---------------------------------------------------------------------------
+PLAN_WEEK_DAYS = 7
+
+
+def export_plan(sources: Sources, out_dir: Path, *, as_of: datetime | None = None,
+                today: date | None = None) -> dict:
+    """Copy the plan and write the week's challenges with their answers (P1-7 7c).
+
+    Read-only on every source. With ``as_of`` the plan is the newest history
+    snapshot taken by then, and later challenges and answers are hidden.
+    """
+    from scripts import plan_challenges, trading_plan
+
+    info: dict[str, Any] = {"plan": {"status": "missing", "file": None, "source": None},
+                            "challenges": {"status": "missing", "file": None, "rows": None}}
+    plan_text = None
+    if as_of is not None:
+        chosen = trading_plan.snapshot_at(as_of, sources.plan_history_dir) if sources.plan_history_dir else None
+        if chosen is not None:
+            plan_text = chosen.read_text(encoding="utf-8")
+            info["plan"]["source"] = f"snapshot {chosen.name}"
+    elif _exists(sources.trading_plan):
+        plan_text = Path(sources.trading_plan).read_text(encoding="utf-8")
+        info["plan"]["source"] = "current"
+    if plan_text is not None:
+        (out_dir / "trading_plan.md").write_text(plan_text, encoding="utf-8")
+        info["plan"].update(status="ok", file="trading_plan.md")
+
+    if _exists(sources.plan_challenges):
+        end = (as_of.astimezone(ET).date() if as_of is not None else (today or datetime.now(ET).date()))
+        rows = plan_challenges.week_rows(
+            end, days=PLAN_WEEK_DAYS, as_of=as_of, challenges_file=Path(sources.plan_challenges),
+            answers_file=Path(sources.plan_answers) if sources.plan_answers else Path(out_dir / "_none"),
+        )
+        by_status: dict[str, int] = {}
+        for row in rows:
+            by_status[row["status"]] = by_status.get(row["status"], 0) + 1
+        payload = {"window_end": end.isoformat(), "window_days": PLAN_WEEK_DAYS,
+                   "by_status": by_status, "challenges": rows}
+        (out_dir / "plan_challenges.json").write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        info["challenges"].update(status="ok", file="plan_challenges.json", rows=len(rows), by_status=by_status,
+                                  window_end=end.isoformat())
+    return info
+
+
 def _write_table(rows: list[dict], out_dir: Path, name: str, fmt: str) -> dict:
     if not rows:
         return {"status": "empty", "rows": 0, "file": None}
@@ -1133,6 +1190,11 @@ def export_pack(sources: Sources, out_dir: Path | None = None, *, as_of: datetim
         tables[name] = info
     summary_info = _write_table(cells, target, "setup_summary", "csv")
     tables["setup_summary"] = summary_info
+    try:
+        plan_info = export_plan(sources, target, as_of=as_of)
+    except Exception as exc:  # noqa: BLE001 - one bad source must not sink the pack
+        plan_info = {}
+        notes["trading_plan"] = f"plan read failed: {exc}"
 
     def _count(rows, column):
         return sum(1 for row in rows or [] if row.get(column))
@@ -1147,6 +1209,7 @@ def export_pack(sources: Sources, out_dir: Path | None = None, *, as_of: datetim
                        "d1_headline_recipe": d1_recipe, "outcome_definition_id": OUTCOME_DEFINITION_ID,
                        "d1_max_sessions": d1_max_sessions, "m5_window_minutes": m5_window_minutes},
         "tables": tables,
+        "trading_plan": plan_info,
         "join": {
             "journal_trades": len(matched or []),
             "d1_matched": _count(matched, "d1_occurrence_id"),
