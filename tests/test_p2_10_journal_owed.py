@@ -278,3 +278,27 @@ def test_statement_import_only_days_leaves_other_days_alone(tmp_path):
     )
     assert summary["days_written"] == 1
     assert summary["days_outside_scope"] == 1
+
+
+# ---------------------------------------------------------------------------
+# step 4: the half-exited status is read by the name the journal writes
+# ---------------------------------------------------------------------------
+def test_setup_evidence_reads_the_status_the_journal_writes_and_the_old_spellings():
+    import journal_store
+    import setup_environment_evidence as evidence
+
+    written = journal_store.TRADE_STATUS_CLOSED_PARTIAL
+    assert evidence._status_of({"status": written}) == evidence.STATUS_PARTLY_CLOSED  # before: open
+    for old in ("PARTIAL", "PARTLY_CLOSED", "PARTIALLY_CLOSED", "closed_partial"):
+        assert evidence._status_of({"status": old}) == evidence.STATUS_PARTLY_CLOSED
+    assert evidence._status_of({"status": "CLOSED"}) == evidence.STATUS_COMPLETE
+    assert evidence._status_of({"status": "OPEN"}) == evidence.STATUS_OPEN
+
+
+def test_journal_store_names_every_half_exited_spelling_readers_accept():
+    import journal_store
+
+    assert journal_store.is_partly_closed("CLOSED_PARTIAL")
+    assert journal_store.is_partly_closed(" partially_closed ")
+    assert not journal_store.is_partly_closed("CLOSED")
+    assert not journal_store.is_partly_closed(None)

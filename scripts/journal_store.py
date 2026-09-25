@@ -73,6 +73,16 @@ TRADE_STATUSES = (
     TRADE_STATUS_CLOSED_PARTIAL,
     TRADE_STATUS_OPEN,
 )
+#: Every spelling a reader takes as "half exited": the one the assembler
+#: writes plus older readers' spellings. Read-only; stored rows are never rewritten.
+PARTLY_CLOSED_SPELLINGS = frozenset(
+    {TRADE_STATUS_CLOSED_PARTIAL, "PARTIALLY_CLOSED", "PARTLY_CLOSED", "PARTIAL"}
+)
+
+
+def is_partly_closed(status: Any) -> bool:
+    """True for a half-exited trade status, in any spelling a reader has used."""
+    return str(status or "").strip().upper() in PARTLY_CLOSED_SPELLINGS
 
 #: The adjustment action the bulk tagger appends for every tag it applies.
 #: Assembly never reads it - it is not in ``EXECUTION_ADJUSTMENT_ACTIONS`` and

@@ -476,8 +476,11 @@ def _holding(trade: Any) -> str:
 
 
 def _status_of(trade: Any) -> str:
+    from journal_store import is_partly_closed
+
     status = _text(_field(trade, "status")).upper()
-    if status in {"PARTIAL", "PARTLY_CLOSED", "PARTIALLY_CLOSED"}:
+    # The journal writes CLOSED_PARTIAL; older spellings are still accepted.
+    if is_partly_closed(status):
         return STATUS_PARTLY_CLOSED
     if status == "CLOSED":
         return STATUS_COMPLETE
