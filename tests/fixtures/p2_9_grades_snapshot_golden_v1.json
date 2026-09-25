@@ -131,6 +131,32 @@
      "side": "LONG",
      "win_rate": 0.35714285714285715,
      "wins": 5
+    },
+    {
+     "avg_r": 0.2,
+     "bucket": "favorite_setup",
+     "family": "floor_exactly_30",
+     "grade": "A",
+     "key": "LONG|favorite_setup|floor_exactly_30",
+     "low_bound": 0.6643564949358397,
+     "n": 30,
+     "sessions": 16,
+     "side": "LONG",
+     "win_rate": 0.8333333333333334,
+     "wins": 25
+    },
+    {
+     "avg_r": 0.2,
+     "bucket": "favorite_setup",
+     "family": "floor_just_under_30",
+     "grade": "New",
+     "key": "SHORT|favorite_setup|floor_just_under_30",
+     "low_bound": 0.6545156010980476,
+     "n": 29,
+     "sessions": 17,
+     "side": "SHORT",
+     "win_rate": 0.8275862068965517,
+     "wins": 24
     }
    ]
   },
@@ -192,6 +218,34 @@
      "side": "SHORT",
      "statistic": 0.8,
      "uncertainty_low": 0.6696289406777459
+    },
+    {
+     "family": "floor_exactly_30",
+     "kind": "swing_trade_r",
+     "latest_measured_session": "2026-09-14",
+     "meets_floor": true,
+     "n_eligible": 30,
+     "n_graded": 30,
+     "n_sessions": 16,
+     "n_symbols": 14,
+     "namespace": "live",
+     "side": "LONG",
+     "statistic": 0.8333333333333334,
+     "uncertainty_low": 0.6643564949358397
+    },
+    {
+     "family": "floor_just_under_30",
+     "kind": "swing_trade_r",
+     "latest_measured_session": "2026-09-11",
+     "meets_floor": false,
+     "n_eligible": 29,
+     "n_graded": 29,
+     "n_sessions": 17,
+     "n_symbols": 15,
+     "namespace": "live",
+     "side": "SHORT",
+     "statistic": 0.8275862068965517,
+     "uncertainty_low": 0.6545156010980476
     },
     {
      "family": "avwap_breakout",
@@ -335,7 +389,7 @@
     "kinds=swing_trade_r,swing_favorable,daytrade_held_run"
    ],
    "schema": "working_lately_snapshot_v2",
-   "snapshot_id": "49b6f05fcb438bf36195240f00d5cde871421e00",
+   "snapshot_id": "a7d5d609704c0408a77609d5d13aa552a57c6a2e",
    "sources": {
     "daytrade_held_run": {
      "mtime": null,
@@ -362,8 +416,10 @@
     "swing_trade_r": {
      "mtime": null,
      "path": "",
-     "rows": 4,
+     "rows": 6,
      "rows_by_session": {
+      "2026-09-11": 1,
+      "2026-09-14": 1,
       "2026-09-15": 1,
       "2026-09-16": 1,
       "2026-09-17": 1,
@@ -473,7 +529,7 @@
     "swing_trade_r": {
      "as_of": "2026-09-18",
      "coverage": {
-      "cells_considered": 4,
+      "cells_considered": 6,
       "concentrated": [],
       "concentration_limit": 0.5,
       "eligible": 2,
@@ -483,7 +539,7 @@
       "margin": 0.05,
       "margin_lb": 0.05,
       "no_session_on_cell": 0,
-      "not_fresh": 0,
+      "not_fresh": 2,
       "pending_leader": "LONG avwape_to_1stdev",
       "pending_leader_as_of": "2026-09-18",
       "pending_leader_snapshots": 1,
@@ -491,7 +547,7 @@
       "prior_leader": "",
       "prior_state": "",
       "rank_basis": "uncertainty_low",
-      "source_rows": 4,
+      "source_rows": 6,
       "studies_excluded": 1,
       "under_floor": 1,
       "unreadable": 0
@@ -3571,6 +3627,50 @@
     "setup_family": "hv_level_break",
     "side": "SHORT",
     "tracked_setups": "53"
+   },
+   {
+    "avg_closed_r": "0.21",
+    "closed_setups": "30",
+    "horizon_basis": "30d lookback, representative exit",
+    "knowledge_basis": "entry_scan_row_close_to_representative_exit",
+    "latest_measured_session": "2026-09-14",
+    "n_entry_sessions": "16",
+    "n_flats": "0",
+    "n_losses": "5",
+    "n_pending": "2",
+    "n_symbols": "14",
+    "n_unmeasured": "1",
+    "n_wins": "25",
+    "namespace": "live",
+    "outcome_kind": "representative_closed_r",
+    "outcome_version": "recent_types_v2",
+    "priority_bucket": "favorite_setup",
+    "representative_closed_r": "0.2",
+    "setup_family": "floor_exactly_30",
+    "side": "LONG",
+    "tracked_setups": "33"
+   },
+   {
+    "avg_closed_r": "0.21",
+    "closed_setups": "29",
+    "horizon_basis": "30d lookback, representative exit",
+    "knowledge_basis": "entry_scan_row_close_to_representative_exit",
+    "latest_measured_session": "2026-09-11",
+    "n_entry_sessions": "17",
+    "n_flats": "0",
+    "n_losses": "5",
+    "n_pending": "2",
+    "n_symbols": "15",
+    "n_unmeasured": "1",
+    "n_wins": "24",
+    "namespace": "live",
+    "outcome_kind": "representative_closed_r",
+    "outcome_version": "recent_types_v2",
+    "priority_bucket": "favorite_setup",
+    "representative_closed_r": "0.2",
+    "setup_family": "floor_just_under_30",
+    "side": "SHORT",
+    "tracked_setups": "32"
    }
   ],
   "sessions": [
@@ -3587,11 +3687,11 @@
  },
  "intentional_difference": "",
  "numeric_tolerance": 0.0,
- "provider_assumptions": "Synthetic tracker, outcome-log and tier-outcome rows; no provider call. Expected written by origin/main a793f661 before any P2-9 code.",
+ "provider_assumptions": "Synthetic tracker, outcome-log and tier-outcome rows; no provider call. Expected written by origin/main a793f661's setup_grades.py and working_lately.py.",
  "raw_input_keys": [
   "inputs"
  ],
- "raw_input_sha256": "a42f3ede1d3606918285e7c9ffe93e6219e5391e4af209c6b786530c6a1d27ff",
+ "raw_input_sha256": "1e8e327e42bf0db5e3eadec5ae77642bcbee6a5d276ee74af38e078c0d9758f5",
  "schema": "p2_9_grades_snapshot_golden_v1",
  "universe_version": "synthetic_p2_9_v1"
 }

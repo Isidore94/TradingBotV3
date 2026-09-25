@@ -197,6 +197,10 @@ def _service_with_fixture(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_outcome_rows", lambda: list(recent_rows))
     monkeypatch.setattr(svc, "_stream_outcome_rows", fake_stream)
     monkeypatch.setattr(svc, "_scoring_snapshot_path", lambda: snapshot)
+    # The prior-window cache keys on the log's mtime/size; a missing log is never cached.
+    log = tmp_path / "intraday_bounce_outcomes.csv"
+    log.write_text("event_id,trade_date\n", encoding="utf-8")
+    monkeypatch.setattr(svc, "_outcome_log_path", lambda: log)
     return svc, streamed, windows
 
 

@@ -33,6 +33,9 @@ POPULATIONS = ((SWING, "Swing picks by day"), (M5, "M5 alerts by day"))
 #: `evidence_stats.LATELY_SESSIONS`.
 M5_CURVE_WINDOWS = 2
 
+#: A swing pick whose tracker record has no representative scenario.
+UNMEASURABLE = "unmeasurable"
+
 
 def _float(value: Any) -> float | None:
     try:
@@ -144,6 +147,8 @@ def swing_pick_results(
                 "closed_setups": 1 if int(summary.get("closed_tradeable_scenario_count") or 0) > 0 else 0,
                 "representative_exit_date": str(summary.get("representative_exit_date") or ""),
                 "_r": closed_r if status == "closed" else None,
+                # No representative scenario: this pick can never be graded.
+                "_status": status or UNMEASURABLE,
             }
         )
     chosen = selection_policy.select_episode_rows(rows)
@@ -151,6 +156,7 @@ def swing_pick_results(
         {
             "session": row["scan_date"],
             "r": row["_r"],
+            "status": row["_status"],
             "side": row["side"],
             "family": row["setup_family"],
             "symbol": row["symbol"],
@@ -184,14 +190,22 @@ def m5_alert_results(outcome_rows: Iterable[Mapping[str, Any]] | None) -> list[d
 
 
 def equity_curve(results: Iterable[Mapping[str, Any]], *, population: str) -> dict[str, Any]:
-    """Cumulative R by session, with n. A None R is counted as not graded."""
+    """Cumulative R by session, with n.
+
+    A None R is "not graded yet", unless its status is `unmeasurable` (it never
+    can be graded). Both are counted apart and add nothing to the curve.
+    """
     by_day: dict[str, list[float]] = defaultdict(list)
     not_graded = 0
+    unmeasurable = 0
     for row in results or ():
         session = str(row.get("session") or "").strip()[:10]
         r = _float(row.get("r"))
         if not session or r is None:
-            not_graded += 1
+            if str(row.get("status") or "") == UNMEASURABLE:
+                unmeasurable += 1
+            else:
+                not_graded += 1
             continue
         by_day[session].append(r)
     points = []
@@ -220,6 +234,7 @@ def equity_curve(results: Iterable[Mapping[str, Any]], *, population: str) -> di
         "first_session": points[0]["session"] if points else "",
         "last_session": points[-1]["session"] if points else "",
         "not_graded": not_graded,
+        "unmeasurable": unmeasurable,
     }
 
 
@@ -232,6 +247,11 @@ def curve_line(curve: Mapping[str, Any] | None) -> str:
         f"{float(curve['total_r']):+.2f}R over n={int(curve['n'])} "
         f"(avg {float(avg):+.2f}R), {curve['first_session']} to {curve['last_session']}; "
         f"{int(curve.get('not_graded') or 0)} not graded yet"
+        + (
+            f"; {int(curve['unmeasurable'])} unmeasurable"
+            if int(curve.get("unmeasurable") or 0)
+            else ""
+        )
     )
 
 

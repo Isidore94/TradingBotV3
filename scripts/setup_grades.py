@@ -353,12 +353,14 @@ def badge(grade: str | None) -> str:
 
 #: What a window with no cell for a key says.
 NOT_IN_WINDOW = "none in this window"
+#: What the prior column says when the same key has no prior cell.
+NO_PRIOR = "no prior"
 
 
-def holdout_text(cell: Mapping[str, Any] | None) -> str:
+def holdout_text(cell: Mapping[str, Any] | None, *, missing: str = NOT_IN_WINDOW) -> str:
     """One graded cell as the hold-out column prints it. Under the floor says so."""
     if not cell:
-        return NOT_IN_WINDOW
+        return missing
     n = int(cell.get("n") or 0)
     if n < MIN_N:
         return f"n<{MIN_N} (n={n})"
@@ -395,7 +397,7 @@ def holdout_view(
             "recent_n": int((recent.get(key) or {}).get("n") or 0),
             "prior_n": int((prior.get(key) or {}).get("n") or 0),
             "recent_text": holdout_text(recent.get(key)),
-            "prior_text": holdout_text(prior.get(key)),
+            "prior_text": holdout_text(prior.get(key), missing=NO_PRIOR),
         }
         for key in keys
     ]

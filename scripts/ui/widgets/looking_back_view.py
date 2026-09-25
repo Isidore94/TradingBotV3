@@ -212,7 +212,7 @@ class LookingBackView(QFrame):
             rows.append(
                 (
                     KIND_LABELS.get(kind, kind),
-                    f"{row.get('side') or ''} {row.get('family') or ''}".strip(),
+                    _cell_name(row),
                     str(row.get("recent_text") or ""),
                     str(row.get("prior_text") or ""),
                 )
@@ -223,6 +223,14 @@ class LookingBackView(QFrame):
             for column, text in enumerate(values):
                 self.holdout_table.setItem(index, column, QTableWidgetItem(text))
         self.holdout_table.resizeColumnsToContents()
+
+
+def _cell_name(row: Mapping[str, Any]) -> str:
+    """SIDE bucket family, with a non-live namespace named: one population per row."""
+    parts = [str(row.get(key) or "") for key in ("side", "bucket", "family")]
+    name = " ".join(part for part in parts if part)
+    namespace = str(row.get("namespace") or "live")
+    return name if namespace == "live" else f"{name} [{namespace}]"
 
 
 def _span(windows: Any) -> tuple[str, str]:

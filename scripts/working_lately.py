@@ -2171,26 +2171,49 @@ def snapshot_cell_lines(payload: Mapping[str, Any] | None) -> list[str]:
 # hold-out view (P2-9 9b) - read-only, beside the snapshot
 # ---------------------------------------------------------------------------
 
-#: What a window with no cell for a key says.
+#: What the last window says when only the prior window has the cell.
 HOLDOUT_NOT_IN_WINDOW = "none in this window"
+#: What the prior column says when the same population has no prior cell.
+HOLDOUT_NO_PRIOR = "no prior"
 
 
 def _cell_value(cell: Any, name: str) -> Any:
     return cell.get(name) if isinstance(cell, Mapping) else getattr(cell, name, None)
 
 
-def _holdout_key(cell: Any) -> tuple[str, str, str]:
+def _entry(item: Any) -> tuple[str, Any]:
+    """`(priority_bucket, cell)`. A bare cell has no bucket (its kind has none)."""
+    if isinstance(item, tuple) and len(item) == 2:
+        return str(item[0] or ""), item[1]
+    return "", item
+
+
+def _holdout_key(bucket: str, cell: Any) -> tuple[str, str, str, str, str]:
+    """(kind, namespace, SIDE, bucket, family) - one population, never merged."""
     return (
         str(_cell_value(cell, "kind") or ""),
+        str(_cell_value(cell, "namespace") or "live").lower(),
         str(_cell_value(cell, "side") or "").upper(),
+        str(bucket or ""),
         str(_cell_value(cell, "family") or ""),
     )
 
 
-def holdout_text(cell: Any) -> str:
+def bucketed_trade_r_cells(recent_rows: Iterable[Mapping[str, Any]]) -> list[tuple[str, EvidenceCell]]:
+    """`swing_trade_r_cells`, one per row, each beside its row's priority bucket.
+
+    The cell itself carries no bucket, so two buckets of one family would read
+    as one population without it.
+    """
+    rows = [row for row in recent_rows or () if isinstance(row, Mapping)]
+    cells = swing_trade_r_cells(rows)
+    return [(_text(row.get("priority_bucket")), cell) for row, cell in zip(rows, cells)]
+
+
+def holdout_text(cell: Any, *, missing: str = HOLDOUT_NOT_IN_WINDOW) -> str:
     """One cell as the hold-out column prints it. Under its floor says so."""
     if cell is None:
-        return HOLDOUT_NOT_IN_WINDOW
+        return missing
     graded = int(_cell_value(cell, "n_graded") or 0)
     n = graded or int(_cell_value(cell, "n_eligible") or 0)
     floor = int(_cell_value(cell, "n_floor") or 0)
@@ -2204,36 +2227,63 @@ def holdout_text(cell: Any) -> str:
     return f"{float(statistic):.2f}{bound} n={n}"
 
 
-def _holdout_order(cells: Iterable[Any]) -> list[Any]:
-    def rank(cell: Any) -> tuple:
-        kind = _holdout_key(cell)[0]
+def _holdout_order(entries: Iterable[tuple[str, Any]]) -> list[tuple[str, Any]]:
+    def rank(entry: tuple[str, Any]) -> tuple:
+        bucket, cell = entry
+        key = _holdout_key(bucket, cell)
         return (
-            SNAPSHOT_KINDS.index(kind) if kind in SNAPSHOT_KINDS else len(SNAPSHOT_KINDS),
+            SNAPSHOT_KINDS.index(key[0]) if key[0] in SNAPSHOT_KINDS else len(SNAPSHOT_KINDS),
+            key[1] != "live",
             not bool(_cell_value(cell, "meets_floor")),
             -float(_cell_value(cell, "uncertainty_low") or 0.0),
-            _holdout_key(cell),
+            key,
         )
 
-    return sorted(list(cells or ()), key=rank)
+    return sorted(list(entries), key=rank)
 
 
-def holdout_view(recent_cells: Iterable[Any], prior_cells: Iterable[Any]) -> list[dict[str, Any]]:
-    """Each (kind, SIDE, family) recent cell beside the prior window's.
+def holdout_view(
+    recent_cells: Iterable[Any],
+    prior_cells: Iterable[Any],
+    *,
+    prior_sources: Mapping[str, Iterable[str]] | None = None,
+) -> list[dict[str, Any]]:
+    """Every recent cell, one row each, beside the SAME population's prior cell.
 
-    Both sides are the SAME cell builders over two date windows; nothing here
-    measures anything. Recent cells lead in rank order, then prior-only ones.
+    A cell is a population by (kind, namespace, SIDE, bucket, family); an item
+    may be a bare cell or `(bucket, cell)`. The prior side is paired only with
+    that exact population, else it says "no prior". `prior_sources` maps a kind
+    to the namespaces a prior was built for; any other namespace says so rather
+    than borrowing a neighbour. Prior-only cells follow the recent ones.
     """
-    recent = {_holdout_key(cell): cell for cell in _holdout_order(recent_cells)}
-    prior = {_holdout_key(cell): cell for cell in _holdout_order(prior_cells)}
-    keys = list(recent) + [key for key in prior if key not in recent]
-    return [
-        {
-            "kind": key[0],
-            "side": key[1],
-            "family": key[2],
-            "statistic_name": str(_cell_value(recent.get(key) or prior.get(key), "statistic_name") or ""),
-            "recent_text": holdout_text(recent.get(key)),
-            "prior_text": holdout_text(prior.get(key)),
+    recent = _holdout_order(_entry(item) for item in recent_cells or ())
+    waiting: dict[tuple, list[Any]] = {}
+    for bucket, cell in _holdout_order(_entry(item) for item in prior_cells or ()):
+        waiting.setdefault(_holdout_key(bucket, cell), []).append(cell)
+    sources = {str(kind): {str(ns).lower() for ns in spaces} for kind, spaces in (prior_sources or {}).items()}
+
+    def row(key: tuple, recent_cell: Any, prior_cell: Any) -> dict[str, Any]:
+        kind, namespace = key[0], key[1]
+        if prior_cell is None and kind in sources and namespace not in sources[kind]:
+            prior_text = f"no prior source ({namespace})"
+        else:
+            prior_text = holdout_text(prior_cell, missing=HOLDOUT_NO_PRIOR)
+        return {
+            "kind": kind,
+            "namespace": namespace,
+            "side": key[2],
+            "bucket": key[3],
+            "family": key[4],
+            "statistic_name": str(_cell_value(recent_cell or prior_cell, "statistic_name") or ""),
+            "recent_text": holdout_text(recent_cell),
+            "prior_text": prior_text,
         }
-        for key in keys
-    ]
+
+    rows = []
+    for bucket, cell in recent:
+        key = _holdout_key(bucket, cell)
+        matches = waiting.get(key) or []
+        rows.append(row(key, cell, matches.pop(0) if matches else None))
+    for key, cells in waiting.items():
+        rows.extend(row(key, None, cell) for cell in cells)
+    return rows

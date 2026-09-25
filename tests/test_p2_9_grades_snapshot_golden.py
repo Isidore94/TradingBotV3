@@ -37,6 +37,9 @@ def _recent_rows() -> list[dict]:
             ("avwap_breakout", 20, 15, 1, "0.12"),
             ("general", 5, 9, 0, "-0.3"),
             ("hv_level_break", 40, 10, 0, "0.5"),
+            # Either side of the n=30 floor, so a floor change fails here.
+            ("floor_exactly_30", 25, 5, 0, "0.2"),
+            ("floor_just_under_30", 24, 5, 0, "0.2"),
         )
     ):
         rows.append(

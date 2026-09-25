@@ -66,7 +66,7 @@ def test_setup_grades_holdout_shows_the_same_ladder_on_each_window_and_the_floor
     assert "win 85%" in row["recent_text"] and "n=40" in row["recent_text"]
     # Twelve in the prior window: under the floor, and it says so.
     assert row["prior_text"] == "n<30 (n=12)"
-    assert sg.holdout_view(recent, [])[0]["prior_text"] == sg.NOT_IN_WINDOW
+    assert sg.holdout_view(recent, [])[0]["prior_text"] == sg.NO_PRIOR
 
 
 def test_working_lately_holdout_puts_each_cell_beside_its_prior_window():
