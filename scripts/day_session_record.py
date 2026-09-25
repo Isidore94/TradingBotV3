@@ -278,6 +278,8 @@ def setup_family(tags: Any) -> str:
 
 
 def _trades(inputs: Mapping[str, Any], shifts: list[dict[str, Any]]) -> dict[str, Any]:
+    from journal_analytics import counts_in_pnl
+
     payload = inputs.get("payload") or {}
     reviews = {
         _text(row.get("trade_id")): row
@@ -291,6 +293,7 @@ def _trades(inputs: Mapping[str, Any], shifts: list[dict[str, Any]]) -> dict[str
             continue
         trade_id = _text(trade.get("trade_id"))
         closed = _text(trade.get("status")).upper() == "CLOSED"
+        counted = counts_in_pnl(dict(trade))
         pnl = _number(trade.get("net_pnl")) if closed else None
         pnl_cad = _number(trade.get("net_pnl_cad")) if closed else None
         risk = _number(trade.get("planned_risk"))
@@ -302,6 +305,7 @@ def _trades(inputs: Mapping[str, Any], shifts: list[dict[str, Any]]) -> dict[str
             "net_pnl": pnl,
             "net_pnl_cad": pnl_cad,
             "pnl_known": pnl is not None,
+            "counted_in_pnl": counted,
             "r_multiple": r_value,
             "setup_family": setup_family(trade.get("setup_tags")),
             "grade": UNKNOWN,
@@ -321,7 +325,8 @@ def _trades(inputs: Mapping[str, Any], shifts: list[dict[str, Any]]) -> dict[str
             "source": _source("trade_journal.sqlite3:trades", trade_id),
         })
         rows.append(item)
-    known = [row["net_pnl"] for row in rows if row["net_pnl"] is not None]
+    # Totals add only trades whose entry is real; a made-up entry keeps its row.
+    known = [row["net_pnl"] for row in rows if row["net_pnl"] is not None and row["counted_in_pnl"]]
     return {
         "n": len(rows),
         "n_pnl_known": len(known),

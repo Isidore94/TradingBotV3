@@ -177,9 +177,11 @@ def _looks_like_a_date(key: Any) -> bool:
 
 def _pnl_by_session(sessions, trades) -> tuple[tuple[str, float | None], ...]:
     """`(session, net)` per session from trades already read; None = no trade."""
+    from journal_analytics import has_invented_entry
+
     totals: dict[str, float] = {}
     for trade in trades or ():
-        if not isinstance(trade, Mapping):
+        if not isinstance(trade, Mapping) or has_invented_entry(dict(trade)):
             continue
         day = str(trade.get("trade_date") or "")[:10]
         try:

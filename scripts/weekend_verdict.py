@@ -282,11 +282,15 @@ def journal_week_line(trades: Iterable[Mapping[str, Any]]) -> VerdictLine:
     blended the tagger's provisional guesses into the trader's own record would
     be reporting the machine's opinion as the trader's week.
     """
+    from journal_analytics import has_invented_entry
+
+    # A trade with a made-up entry is kept in the journal but not added up.
     rows = [
         row
         for row in (trades or ())
         if str(row.get("tag_status") or "") == "confirmed"
         and str(row.get("setup_tags") or "").strip()
+        and not has_invented_entry(dict(row))
     ]
     values = [_as_float(row.get("net_pnl")) for row in rows]
     values = [value for value in values if value is not None]
