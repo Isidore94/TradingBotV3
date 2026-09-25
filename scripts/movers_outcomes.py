@@ -129,6 +129,7 @@ class DipOutcomeTracker:
                   else "episode abandoned at session roll")
         return {"kind": "abandoned", "reason": reason,
                 "session": episode["session"].isoformat(), "episode": episode["start"],
+                "state": episode.get("state"),
                 "side": episode["side"], "symbols": pending, "recorded_at": _iso(now)}
 
     # ------------------------------------------------------------ tick

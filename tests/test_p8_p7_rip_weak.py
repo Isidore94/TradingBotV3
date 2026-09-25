@@ -534,6 +534,19 @@ def test_a_rally_episode_ends_when_spy_loses_the_rally_low():
     assert reasons == {"spy_lost_rally_low"}
 
 
+def test_an_abandoned_rally_short_row_carries_state_rally():
+    import movers_outcomes as mo
+
+    tracker = mo.DipOutcomeTracker()
+    now = SPY_R[4]["dt"] + timedelta(minutes=5, seconds=20)
+    tracker.observe(_rally_board(), {"LEAD": SPY_R[:5], "SINK": SPY_R[:5]}, SPY_R[:5], now=now)
+    tomorrow = _ny_bars([401.0] * 3, start=OPEN_NY + timedelta(days=1))
+    rows = tracker.observe({"state": {}}, {}, tomorrow,
+                           now=tomorrow[-1]["dt"] + timedelta(minutes=6))
+    short = [r for r in rows if r["kind"] == "abandoned" and r["side"] == "short"]
+    assert len(short) == 1 and short[0]["state"] == "rally"
+
+
 def test_restore_keeps_the_rally_state():
     import movers_outcomes as mo
 
