@@ -321,6 +321,50 @@ def test_the_morning_retry_task_is_registered_at_0700_with_the_flag():
     assert "TradingBotV3 AI Jobs Morning Retry" in source
 
 
+# ---------------------------------------------------------------------------
+# Health: the journal import line names unresolved self-heal and mismatches
+# ---------------------------------------------------------------------------
+
+
+def _journal_line(led: Path) -> str:
+    import operations_audit
+
+    lines = [ln for ln in operations_audit.ai_night_lines(led) if ln.startswith("journal import")]
+    assert len(lines) == 1, lines
+    return lines[0]
+
+
+def test_health_journal_line_names_unresolved_self_heal_and_mismatches(tmp_path):
+    led = _led(tmp_path, [
+        {"job": "journal_import", "status": "ok", "session_date": "2026-09-21"},
+        {"job": "journal_import", "status": "failed", "session_date": "2026-09-24",
+         "reason": "failed: IBKR Flex: Statement could not be generated | imported 3 "
+                   "execution(s); rebuilt 40 trade(s); self-heal repaired 0, unresolved 189; "
+                   "reconciled 29 position(s), 26 mismatch(es)"},
+    ])
+    line = _journal_line(led)
+    assert line.startswith("journal import: last success 2026-09-21, last error 2026-09-24: ")
+    assert line.endswith(
+        "; last run 2026-09-24: unresolved self-heal 189, position mismatches 26"
+    )
+
+
+def test_health_journal_line_reads_the_newest_run_and_says_unknown_when_unmeasured(tmp_path):
+    led = _led(tmp_path, [
+        {"job": "journal_import", "status": "failed", "session_date": "2026-09-24",
+         "reason": "self-heal repaired 0, unresolved 189; reconciled 29 position(s), 26 mismatch(es)"},
+        {"job": "journal_import", "status": "ok", "session_date": "2026-09-24",
+         "morning_retry": True,
+         "reason": "morning retry: imported 3 execution(s); self-heal repaired 2, "
+                   "unresolved 5; reconcile skipped: no broker position source reachable"},
+    ])
+    line = _journal_line(led)
+    assert line.endswith(
+        "; last run 2026-09-24 (morning retry): unresolved self-heal 5, "
+        "position mismatches unknown"
+    )
+
+
 def test_the_ollama_probe_row_is_an_ops_row(tmp_path):
     from ai_jobs import ollama_probe
 
