@@ -618,10 +618,14 @@ def tracker_write_failure_line(state: dict | None = None) -> str:
     )
 
 
-#: The only two stale tracker copies ``--prune-copies`` may delete (decided 2026-09-24).
+#: The only stale tracker copies ``--prune-copies`` may delete (decided 2026-09-24; the
+#: three 2026-09-05 leftovers beside the damaged SQLite added for P0-2).
 PRUNABLE_COPY_NAMES = (
     "master_avwap_setup_tracker.json.bak",
     "master_avwap_setup_tracker.sqlite.damaged-20260905T200233",
+    "master_avwap_setup_tracker.sqlite-shm.damaged-20260905T200233",
+    "master_avwap_setup_tracker.sqlite-wal.damaged-20260905T200233",
+    "master_avwap_setup_tracker_digests.json.damaged-20260905T200233",
 )
 
 
@@ -645,7 +649,7 @@ def prune_copies(
     for name in requested:
         target = root / name
         if name not in PRUNABLE_COPY_NAMES or Path(name).name != name:
-            report["refused"].append({"name": name, "reason": "not one of the two prunable copies"})
+            report["refused"].append({"name": name, "reason": "not one of the prunable copies"})
         elif target.is_symlink() or (target.exists() and not target.is_file()):
             report["refused"].append({"name": name, "reason": "not a plain file"})
     if report["refused"]:
@@ -698,7 +702,7 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--prune-copies",
         action="store_true",
-        help="list the two stale tracker copies (.bak, .damaged-20260905T200233); delete only with --yes",
+        help="list the stale tracker copies (.bak and the .damaged-20260905T200233 leftovers); delete only with --yes",
     )
     parser.add_argument("--yes", action="store_true", help="with --prune-copies: actually delete")
     parser.add_argument("--dry-run", action="store_true", help="with --prune-copies: list only (the default)")
