@@ -166,3 +166,55 @@ def test_no_batch_when_daily_bars_go_to_ib_first(world):
 
     assert legacy.prefetch_daily_bars_from_yahoo(_Ib(), {"AAA": 40, "GAP": 40}) == 0
     assert _FakeTicker.calls == []
+
+
+def _duplicated_frame(days: int, repeat_at: int) -> pd.DataFrame:
+    frame = _history_frame("AAA", days)
+    return pd.concat([frame.iloc[: repeat_at + 1], frame.iloc[repeat_at:]])
+
+
+def test_a_realigned_batch_is_discarded_and_every_symbol_fetches_alone(world, monkeypatch, caplog):
+    """Reviewer's case: two tickers with different duplicated dates make yfinance's
+    `pd.concat` fail, `_realign_dfs` rewrites every frame, and a clean ticker lost a bar."""
+    original = _FakeTicker.history
+
+    def history(self, period=None, **kwargs):
+        if self.ticker in {"DUPA", "DUPB"}:
+            _FakeTicker.calls.append((self.ticker, period))
+            days = int(str(period).rstrip("d"))
+            return _duplicated_frame(days, 2 if self.ticker == "DUPA" else 5)
+        return original(self, period=period, **kwargs)
+
+    monkeypatch.setattr(_FakeTicker, "history", history)
+    requests = {"CLEAN": 40, "DUPA": 40, "DUPB": 40}
+
+    world("single_realign")
+    single = {symbol: legacy.fetch_daily_bars(None, symbol, days) for symbol, days in requests.items()}
+
+    world("batch_realign")
+    with caplog.at_level("WARNING"):
+        stored = legacy.prefetch_daily_bars_from_yahoo(None, requests)
+    batched = {symbol: legacy.fetch_daily_bars(None, symbol, days) for symbol, days in requests.items()}
+
+    assert stored == 0, "a realigned batch must not be used"
+    assert legacy._DAILY_BAR_FETCH_COUNTS["served_from_batch"] == 0
+    assert "realign" in caplog.text
+    for symbol in requests:
+        pd.testing.assert_frame_equal(batched[symbol], single[symbol], check_exact=True)
+
+
+def test_a_frame_with_duplicate_dates_is_not_stored(world, monkeypatch):
+    """Belt and braces: one duplicated ticker (no realign) still fetches on its own."""
+    original = _FakeTicker.history
+
+    def history(self, period=None, **kwargs):
+        if self.ticker == "DUPA":
+            _FakeTicker.calls.append((self.ticker, period))
+            return _duplicated_frame(int(str(period).rstrip("d")), 2)
+        return original(self, period=period, **kwargs)
+
+    monkeypatch.setattr(_FakeTicker, "history", history)
+    world("dup_one")
+    stored = legacy.prefetch_daily_bars_from_yahoo(None, {"CLEAN": 40, "DUPA": 40})
+    assert stored == 1
+    assert ("DUPA", "25d") not in legacy._DAILY_BAR_YAHOO_PREFETCH

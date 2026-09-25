@@ -19332,6 +19332,9 @@ def prefetch_daily_bars_from_yahoo(ib: IBApi | None, days_by_symbol: dict[str, i
                 frame = frames.get(symbol)
                 if symbol in errors or frame is None or getattr(frame, "empty", True):
                     continue
+                # Duplicate dates or all-empty (reindexed) rows: leave it to the per-symbol call.
+                if not frame.index.is_unique or bool(frame.isna().all(axis=1).any()):
+                    continue
                 # The ticker's own frame (not a slice of the joined result), so no NaN padding or dtype change.
                 _DAILY_BAR_YAHOO_PREFETCH[(symbol, period)] = frame.copy()
                 stored += 1
