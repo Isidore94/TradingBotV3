@@ -782,6 +782,67 @@ def merge_autopilot_watchlist(
     return {"symbols": merged, "manual_kept": manual_kept}
 
 
+def typed_watchlist_names(
+    current_longs: Iterable[str],
+    current_shorts: Iterable[str],
+    written: Mapping[str, Iterable[str]] | None,
+) -> set[str]:
+    """Names in longs.txt/shorts.txt that Auto Pilot did not write: the trader's own."""
+    written = written or {}
+    auto = {
+        str(symbol or "").strip().upper()
+        for side in ("longs", "shorts")
+        for symbol in (written.get(side) or ())
+    }
+    return {
+        symbol
+        for symbol in (str(item or "").strip().upper() for item in [*current_longs, *current_shorts])
+        if symbol and symbol not in auto
+    }
+
+
+def plan_watchlist_write(
+    auto_longs: Iterable[str],
+    auto_shorts: Iterable[str],
+    current_longs: Iterable[str],
+    current_shorts: Iterable[str],
+    written: Mapping[str, Iterable[str]] | None,
+) -> dict[str, Any]:
+    """What the open-scan build writes, with every typed name kept as the trader's.
+
+    A typed name (in either file, not written by Auto Pilot) is never an auto
+    pick on either side and never recorded in `autopilot_written`, so a later
+    merge can never drop it or flip its side.
+    """
+    auto_longs = list(auto_longs or ())
+    auto_shorts = list(auto_shorts or ())
+    current_longs = list(current_longs or ())
+    current_shorts = list(current_shorts or ())
+    written = written or {}
+    typed =typed_watchlist_names(current_longs, current_shorts, written)
+
+    def clean(symbols: Iterable[str]) -> list[str]:
+        out: list[str] = []
+        for symbol in symbols or ():
+            symbol = str(symbol or "").strip().upper()
+            if symbol and symbol not in typed and symbol not in out:
+                out.append(symbol)
+        return out
+
+    longs = clean(auto_longs)
+    shorts = clean(auto_shorts)
+    merged_longs = merge_autopilot_watchlist(longs, current_longs, written.get("longs", []))
+    merged_shorts = merge_autopilot_watchlist(shorts, current_shorts, written.get("shorts", []))
+    return {
+        "longs": longs,
+        "shorts": shorts,
+        "merged_longs": merged_longs,
+        "merged_shorts": merged_shorts,
+        "typed_skipped": sorted(typed & {str(s or "").strip().upper() for s in [*auto_longs, *auto_shorts]}),
+        "written": {"longs": list(longs), "shorts": list(shorts)},
+    }
+
+
 def read_scorecard_inputs(
     candidates_path, outcomes_path, today: str
 ) -> tuple[list[dict], list[dict]]:
