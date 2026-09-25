@@ -169,7 +169,7 @@ def _features_over_timestamps(
     # Volatility scale: std of the stock's aligned per-bar returns over the
     # window, in percent, floored so quiet tape cannot divide by ~zero.
     rets = []
-    for prev, cur in zip(in_window, in_window[1:]):
+    for prev, cur in zip(in_window, in_window[1:], strict=False):
         if stock[prev]:
             rets.append((stock[cur] - stock[prev]) / stock[prev] * 100.0)
     if len(rets) >= 2:
@@ -442,7 +442,7 @@ class RelativeStrengthEngine:
             )
 
         composite_percentiles = _percentile_ranks([res.composite for res in results])
-        for res, pct_rank, r in zip(results, composite_percentiles, raw):
+        for res, pct_rank, r in zip(results, composite_percentiles, raw, strict=False):
             res.percentile = pct_rank
             res.tier = self._tier(res, r)
         results.sort(key=lambda res: (-res.composite, res.symbol))

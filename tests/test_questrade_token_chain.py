@@ -170,7 +170,7 @@ def test_a_failed_refresh_leaves_the_stored_token_alone(monkeypatch):
         def get(self, *a, **k):
             return _Response(status=400)
 
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError):
         ji.QuestradeImporter(session=_Session()).refresh_access_token()
 
     assert saved[ji.QUESTRADE_REFRESH_TOKEN_SETTING] == "T1"

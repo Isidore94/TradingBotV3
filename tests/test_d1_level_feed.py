@@ -120,7 +120,8 @@ def test_feed_refreshes_when_ai_state_changes(tmp_path):
     second = get_d1_extra_levels(
         "MU", now=NOW, ai_state_path=ai_state, levels_dir=levels_dir
     )
-    trendline = lambda rows: [r["value"] for r in rows if r["family"] == "d1_trendline"]
+    def trendline(rows):
+        return [r["value"] for r in rows if r["family"] == "d1_trendline"]
     assert trendline(first) == [104.2]
     assert trendline(second) == [105.5]
 

@@ -7675,7 +7675,7 @@ class AlertCenterPanel(QFrame):
         """
         if getattr(self, "_pullback_eval_busy", False):
             return False
-        marks = self._pullback_judged_marks()
+        self._pullback_judged_marks()  # creates the judged-marks dict on first use
         jobs: list[dict] = []
         for watch in armed:
             triggers = self._pullback_triggers(watch)

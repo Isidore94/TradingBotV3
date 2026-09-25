@@ -355,7 +355,7 @@ class LevelModuleTests(unittest.TestCase):
         dates = pd.bdate_range("2024-01-01", periods=40)
         rows = [
             {"datetime": d, "open": p, "high": p, "low": p, "close": p, "volume": 1.0}
-            for d, p in zip(dates, prices)
+            for d, p in zip(dates, prices, strict=False)
         ]
         frame = pd.DataFrame(rows)
 

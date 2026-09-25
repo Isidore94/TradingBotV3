@@ -290,7 +290,7 @@ def test_build_derived_bars_publishes_exactly_what_the_old_read_produced(lake, m
     stamp_now = datetime(2026, 8, 27, 20, 0, tzinfo=timezone.utc)
     expected = []
     for timeframe in aggregate.SLICE_TIMEFRAMES:
-        for symbol, symbol_rows in sorted(by_symbol.items()):
+        for _symbol, symbol_rows in sorted(by_symbol.items()):
             expected.extend(
                 derive_session_bars(
                     symbol_rows, session_a, timeframe,

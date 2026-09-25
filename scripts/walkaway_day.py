@@ -1241,7 +1241,8 @@ def build(
             )
         )
 
-    sort = lambda row: (row.ran_after_pct is None, -(row.ran_after_pct or 0), row.symbol)
+    def sort(row):
+        return (row.ran_after_pct is None, -(row.ran_after_pct or 0), row.symbol)
     populations = {
         "liked_not_traded": tuple(sorted(liked, key=sort)),
         "rejected": tuple(sorted(rejected, key=sort)),

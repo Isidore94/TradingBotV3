@@ -791,7 +791,7 @@ def agreement_rate(shifts: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
 
     compared = 0
     agreed = 0
-    for session, sources in by_session.items():
+    for sources in by_session.values():
         auto = sources.get("auto")
         if not auto:
             continue

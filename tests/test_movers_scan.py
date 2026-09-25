@@ -495,7 +495,7 @@ def test_when_pullback_and_bounce_both_qualify_the_later_turn_wins():
     volumes = [100_000.0] * len(closes)
     bars = _series(closes, prior_close=400.0, today_volumes=volumes)
     today = [b for b in bars if b["dt"].date() == TODAY]
-    for index, bar in enumerate(today):
+    for _index, bar in enumerate(today):
         bar["high"] = max(bar["open"], bar["close"]) + 0.05
         bar["low"] = min(bar["open"], bar["close"]) - 0.05
     state = _state(bars, len(closes))

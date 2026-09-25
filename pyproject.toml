@@ -38,5 +38,11 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-# Start narrow on real defect classes; widen as the legacy cores shrink.
-select = ["E9", "F63", "F7", "F82", "F401"]
+# Real defect classes: syntax/statement errors, all of pyflakes, and bugbear
+# (P2-11b). The legacy cores stay excluded above; widen as they shrink.
+select = ["E7", "E9", "F", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Pinned byte-identical to commit 68b1fd7b by test_ws_rp_shared_report (gate #43),
+# so its one bare zip() cannot be edited.
+"tests/test_n3_narration_bounded.py" = ["B905"]

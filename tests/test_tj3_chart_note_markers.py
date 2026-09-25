@@ -121,7 +121,7 @@ def test_the_marker_glyphs_pool_across_three_renders(chart, qapp):
 
     assert chart.note_marker_count() == 3
     assert len(seen[0]) == len(seen[1]) == len(seen[2])
-    for first, second, third in zip(*seen):
+    for first, second, third in zip(*seen, strict=False):
         assert first is second is third, "the glyphs were rebuilt instead of reused"
 
 
@@ -138,7 +138,7 @@ def test_a_shorter_payload_hides_the_spare_glyphs_and_destroys_nothing(chart, qa
     assert chart.note_marker_count() == 2
     after = _scene_items(chart)
     assert len(after) == len(full)
-    for kept, now in zip(full, after):
+    for kept, now in zip(full, after, strict=False):
         assert kept is now, "a spare glyph was destroyed instead of hidden"
 
 

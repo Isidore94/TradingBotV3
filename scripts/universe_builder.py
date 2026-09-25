@@ -911,7 +911,7 @@ def restore_universe_snapshot(stamp: str) -> dict:
         contents[target] = path.read_text(encoding="utf-8")
     after = {
         name: len({token.strip().upper() for token in contents[target].replace(",", "\n").split() if token.strip()})
-        for name, target in zip(("all", "longs", "shorts"), targets)
+        for name, target in zip(("all", "longs", "shorts"), targets, strict=False)
     }
     if not after["all"]:
         raise ValueError(f"Snapshot {source} has an empty {UNIVERSE_ALL_FILE.name}; nothing restored.")

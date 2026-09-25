@@ -135,7 +135,7 @@ def test_provenance_survives_a_merge_of_two_sources():
         )
     )
     merged = master_avwap._merge_daily_bar_frames(older, newer)
-    by_source = dict(zip(merged["datetime"].dt.strftime("%Y-%m-%d"), merged["source"]))
+    by_source = dict(zip(merged["datetime"].dt.strftime("%Y-%m-%d"), merged["source"], strict=False))
     assert by_source["2026-08-03"] == "yahoo"
     assert by_source["2026-08-06"] == "ibkr"
 

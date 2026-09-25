@@ -2272,7 +2272,7 @@ class JournalStore:
             "intraday_regime": "",
             "regime_notes": "",
         }
-        for trade, date_value in zip(trades, regime_dates):
+        for trade, date_value in zip(trades, regime_dates, strict=False):
             trade.update(regimes.get(date_value, blank_regime))
             trade["display_tags"] = trade.get("setup_tags") or trade.get("auto_tag_summary") or ""
         # Tags are matched in Python, not SQL. They are free text in one

@@ -44,13 +44,13 @@ for part in ("month=2026-08", "month=2026-09"):
             try:
                 p = json.loads(payload)
             except Exception as e:
-                raise SystemExit(f"AUDIT ERROR: undecodable like-link payload in {part}: {row!r} ({e})")
+                raise SystemExit(f"AUDIT ERROR: undecodable like-link payload in {part}: {row!r} ({e})") from e
         else:
             p = payload
         try:
             link = like_links.LikeLink.from_payload(p)
         except ValueError as e:
-            raise SystemExit(f"AUDIT ERROR: unreadable like-link payload in {part}: {row!r} ({e})")
+            raise SystemExit(f"AUDIT ERROR: unreadable like-link payload in {part}: {row!r} ({e})") from e
         payloads.append(p)
         observed = str(row.get("observed_at") or "")
         if link.event_id not in latest_by_event or observed >= latest_by_event[link.event_id][0]:
@@ -82,7 +82,7 @@ for tf in ("M15", "M30", "H1", "H2"):
 print("\n=== Swing house v1 TARGETED rows ===")
 occ_view = latest_occurrences(store, 2026)
 outcome_view = latest_outcomes(store)
-for key, row in outcome_view.items():
+for _key, row in outcome_view.items():
     if row.get("recipe_id") != SWING_HOUSE_V1.recipe_id:
         continue
     if row.get("result_state") == "TARGETED":
@@ -93,7 +93,7 @@ for key, row in outcome_view.items():
 print("\n=== Swing house v1 open vs terminal ===")
 open_count = 0
 terminal_count = 0
-for key, row in outcome_view.items():
+for _key, row in outcome_view.items():
     if row.get("recipe_id") != SWING_HOUSE_V1.recipe_id:
         continue
     if row.get("result_state") in TERMINAL_RESULT_STATES:

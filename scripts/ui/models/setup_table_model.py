@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
+
+#: The invalid (root) index used as the default parent.
+_NO_PARENT = QModelIndex()
 from PySide6.QtGui import QColor
 
 from sector_exclusion import is_excluded, symbol_is_excluded
@@ -106,10 +109,10 @@ class SetupTableModel(QAbstractTableModel):
         #: P1-6 6d: `entry_timing.build_timing` map, built on the panel's worker.
         self._timing: dict = {}
 
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def rowCount(self, parent: QModelIndex = _NO_PARENT) -> int:
         return 0 if parent.isValid() else len(self._rows)
 
-    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def columnCount(self, parent: QModelIndex = _NO_PARENT) -> int:
         return 0 if parent.isValid() else len(self.COLUMNS)
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:

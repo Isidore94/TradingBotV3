@@ -599,7 +599,7 @@ def attach_forward_returns(
                 return list(
                     zip(
                         [d.date().isoformat() for d in frame["datetime"]],
-                        [float(c) for c in frame["close"]],
+                        [float(c) for c in frame["close"]], strict=False,
                     )
                 )
         except Exception:

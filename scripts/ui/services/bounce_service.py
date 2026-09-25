@@ -389,7 +389,7 @@ class BounceService(QObject):
         """
 
         self._prune_unretired_locked()
-        for thread, what, session in self._unretired:
+        for thread, what, _session in self._unretired:
             if thread.is_alive() and what in {_WORK_STARTUP, _WORK_RETIRE}:
                 return f"{what} {thread.name}"
         return None

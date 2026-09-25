@@ -229,7 +229,7 @@ def test_the_card_paints_its_six_lines_in_order(panel, tmp_path):
     widgets = list(panel.report_card_lines)
     assert len(widgets) == 6
     texts = [w.text() for w in widgets]
-    for key, text in zip(day_report_card.LINE_KEYS, texts):
+    for key, text in zip(day_report_card.LINE_KEYS, texts, strict=False):
         assert text.strip(), key
 
 

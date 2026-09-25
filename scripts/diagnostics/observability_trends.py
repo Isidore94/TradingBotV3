@@ -207,7 +207,7 @@ def _provider_rows(manifests) -> list[dict[str, Any]]:
                 elif event == "success":
                     bucket["successes"] += count
     rows = []
-    for family, entry in families.items():
+    for entry in families.values():
         entry["runs"] = len(list(manifests))
         entry["failure_rate"] = (
             round(entry["failures"] / entry["attempts"], 4) if entry["attempts"] else None

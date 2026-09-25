@@ -355,10 +355,11 @@ def _cell(rows: list[dict[str, Any]], *, useful_move_pct: float) -> dict[str, An
 def _review_comparison(rows: list[dict[str, Any]]) -> dict[str, Any]:
     liked = [row for row in rows if _text(row.get("population")) == "liked"]
     vetoed = [row for row in rows if _text(row.get("population")) == "vetoed"]
-    timing_signatures = lambda values: {
-        (_text(row.get("window")), _text(row.get("source_knowledge_basis")), _text(row.get("anchor_knowledge_basis")))
-        for row in values
-    }
+    def timing_signatures(values):
+        return {
+            (_text(row.get("window")), _text(row.get("source_knowledge_basis")), _text(row.get("anchor_knowledge_basis")))
+            for row in values
+        }
     if not liked or not vetoed or not timing_signatures(liked).intersection(timing_signatures(vetoed)):
         return {
             "status": "not_evaluated",
@@ -366,18 +367,19 @@ def _review_comparison(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "liked_count": len(liked),
             "vetoed_count": len(vetoed),
         }
-    comparison_signatures = lambda values: {
-        (
-            _text(row.get("window")),
-            _text(row.get("source_knowledge_basis")),
-            _text(row.get("anchor_knowledge_basis")),
-            int((row.get("coverage") or {}).get("expected_bars") or 0),
-            int((row.get("coverage") or {}).get("observed_bars") or 0),
-            int((row.get("coverage") or {}).get("missing_bars") or 0),
-            _text(row.get("entry_convention")),
-        )
-        for row in values
-    }
+    def comparison_signatures(values):
+        return {
+            (
+                _text(row.get("window")),
+                _text(row.get("source_knowledge_basis")),
+                _text(row.get("anchor_knowledge_basis")),
+                int((row.get("coverage") or {}).get("expected_bars") or 0),
+                int((row.get("coverage") or {}).get("observed_bars") or 0),
+                int((row.get("coverage") or {}).get("missing_bars") or 0),
+                _text(row.get("entry_convention")),
+            )
+            for row in values
+        }
     if not comparison_signatures(liked).intersection(comparison_signatures(vetoed)):
         return {
             "status": "not_evaluated",

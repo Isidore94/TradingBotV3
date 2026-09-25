@@ -20,8 +20,8 @@ if str(SCRIPTS_DIR) not in sys.path:
 import master_avwap as m  # noqa: E402
 
 
-def _daily(d, o, h, l, c):
-    return {"date": d, "open": o, "high": h, "low": l, "close": c, "volume": 1_000_000}
+def _daily(d, o, h, lo, c):
+    return {"date": d, "open": o, "high": h, "low": lo, "close": c, "volume": 1_000_000}
 
 
 def _long_rows(*, fresh: bool, band: float = 100.0):

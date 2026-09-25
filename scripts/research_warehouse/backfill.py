@@ -158,7 +158,9 @@ def _bar_rows(
         if start.tzinfo is None:
             continue  # a naive timestamp is uncertainty, never a guess
         start = start.astimezone(timezone.utc)
-        get = (lambda name: bar.get(name)) if isinstance(bar, dict) else (lambda name: getattr(bar, name, None))
+        get = (lambda name, _bar=bar: _bar.get(name)) if isinstance(bar, dict) else (
+            lambda name, _bar=bar: getattr(_bar, name, None)
+        )
         end = get("interval_end") or (start + interval)
         rows.append(
             {
@@ -298,7 +300,7 @@ def archive_state(store: ResearchStore, dataset: str, symbols, days):
             table.column("symbol").to_pylist(),
             table.column("interval_start").to_pylist(),
             table.column("capture_mode").to_pylist(),
-            table.column("session_id").to_pylist(),
+            table.column("session_id").to_pylist(), strict=False,
         ):
             symbol = str(name)
             if start is None or (wanted and symbol not in wanted):

@@ -679,7 +679,7 @@ class DaytradeTrackerPanel(QFrame):
         )
         self.learning_model.set_rows(learning_rows)
 
-        for key, (table, _model) in self._dimension_tables.items():
+        for table, _model in self._dimension_tables.values():
             table.fit_columns()
         self.learning_table.fit_columns()
 

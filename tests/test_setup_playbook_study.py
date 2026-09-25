@@ -19,7 +19,7 @@ def _frame(closes, *, volume=1_000_000.0, start="2026-01-02", spread=0.5) -> pd.
     dates = pd.bdate_range(start, periods=len(closes))
     rows = []
     prev = closes[0]
-    for dt, close in zip(dates, closes):
+    for dt, close in zip(dates, closes, strict=False):
         rows.append(
             {
                 "datetime": dt,
@@ -47,19 +47,19 @@ class MeasureEpisodeTests(unittest.TestCase):
     def test_long_stop_first_fills_at_stop(self):
         closes = [100.0] * 5 + [100.0, 101.0, 90.0, 95.0]
         frame = _frame(closes, spread=0.2)
-        o, h, l, c, atr = self._arrays(frame)
-        result = study.measure_episode(o, h, l, c, atr, 5, "LONG")
+        o, h, lo, c, atr = self._arrays(frame)
+        result = study.measure_episode(o, h, lo, c, atr, 5, "LONG")
         self.assertEqual(result["status"], "STOPPED")
         # stop = signal low - 0.1*ATR; the crash bar trades through it
-        self.assertAlmostEqual(result["stop"], l[5] - 0.2, places=6)
+        self.assertAlmostEqual(result["stop"], lo[5] - 0.2, places=6)
         self.assertLess(result["net_r"], 0)
         self.assertGreaterEqual(result["net_r"], -1.5)  # gap-at-open can exceed -1R slightly
 
     def test_long_time_stop_positive_r(self):
         closes = [100.0 + 0.5 * k for k in range(30)]
         frame = _frame(closes, spread=0.1)
-        o, h, l, c, atr = self._arrays(frame)
-        result = study.measure_episode(o, h, l, c, atr, 2, "LONG")
+        o, h, lo, c, atr = self._arrays(frame)
+        result = study.measure_episode(o, h, lo, c, atr, 2, "LONG")
         self.assertEqual(result["status"], "TIME_STOP")
         self.assertEqual(result["hold_sessions"], study.TRACKER_MAX_HOLD_DAYS)
         self.assertGreater(result["net_r"], 0)
@@ -69,8 +69,8 @@ class MeasureEpisodeTests(unittest.TestCase):
     def test_short_mirrors_long_r(self):
         closes = [100.0, 99.0, 98.0, 97.0, 96.0, 95.0, 94.0, 93.0, 92.0, 91.0] + [90.0] * 15
         frame = _frame(closes, spread=0.1)
-        o, h, l, c, atr = self._arrays(frame)
-        short = study.measure_episode(o, h, l, c, atr, 2, "SHORT")
+        o, h, lo, c, atr = self._arrays(frame)
+        short = study.measure_episode(o, h, lo, c, atr, 2, "SHORT")
         self.assertIsNotNone(short)
         self.assertGreater(short["net_r"], 0)
 
@@ -79,13 +79,13 @@ class MeasureEpisodeTests(unittest.TestCase):
         closes = [100.0] * 5 + [100.0, 80.0, 80.0]
         frame = _frame(closes, spread=0.2)
         frame.loc[6, "open"] = 80.0  # gap down through the stop before entry
-        o, h, l, c, atr = self._arrays(frame)
-        self.assertIsNone(study.measure_episode(o, h, l, c, atr, 5, "LONG"))
+        o, h, lo, c, atr = self._arrays(frame)
+        self.assertIsNone(study.measure_episode(o, h, lo, c, atr, 5, "LONG"))
 
     def test_no_next_bar_returns_none(self):
         frame = _frame([100.0] * 6, spread=0.2)
-        o, h, l, c, atr = self._arrays(frame)
-        self.assertIsNone(study.measure_episode(o, h, l, c, atr, 5, "LONG"))
+        o, h, lo, c, atr = self._arrays(frame)
+        self.assertIsNone(study.measure_episode(o, h, lo, c, atr, 5, "LONG"))
 
 
 def _bare_ctx(n=120, *, close=None, volume=None, ema8=None, ema15=None, sma50=None, weekly=None):
@@ -187,7 +187,7 @@ class ContextAndDetectorTests(unittest.TestCase):
     def _uptrend_with_pullback(self, periods=100):
         closes = []
         price = 50.0
-        for k in range(periods):
+        for _k in range(periods):
             price *= 1.008
             closes.append(price)
         # carve a one-day pullback near the end that tags EMA8 and recovers
@@ -246,8 +246,7 @@ class ContextAndDetectorTests(unittest.TestCase):
             if e["family"] == "baseline_every5" and e["side"] == "LONG"
         ]
         self.assertTrue(episodes)
-        entries = sorted(e["entry_date"] for e in episodes)
-        for prev, cur in zip(episodes, episodes[1:]):
+        for prev, cur in zip(episodes, episodes[1:], strict=False):
             self.assertGreater(cur["signal_date"], prev["entry_date"])
 
     def test_weekly_streak_series_signed_and_no_lookahead(self):

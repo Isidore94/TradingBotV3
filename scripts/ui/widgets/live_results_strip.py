@@ -279,7 +279,7 @@ class LiveResultsStrip(QFrame):
                 ]
                 + [
                     f"{lar.tooltip_line(row)} · {es.chip_detail(state)}"
-                    for row, state in zip(rows, self._states_for(rows))
+                    for row, state in zip(rows, self._states_for(rows), strict=False)
                 ]
             )
         else:

@@ -915,7 +915,7 @@ def test_the_calibration_cli_prints_one_table_per_measure_with_n_medians_and_an_
 
     for key in MEASURE_KEYS:
         block = _measure_block(result.stdout, key)
-        counts = re.search(rf"n\s*=\s*(\d+)\s*/\s*(\d+)", block)
+        counts = re.search(r"n\s*=\s*(\d+)\s*/\s*(\d+)", block)
         assert counts, f"{key}: no `n = vetoed / rest` in:\n{block}"
         assert (int(counts.group(1)), int(counts.group(2))) == (4, 2), key
 

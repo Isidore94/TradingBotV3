@@ -159,7 +159,7 @@ def test_real_mentor_note_keeps_full_metadata_and_scalar_context_in_small_ai_pac
     ai_row = next(row for row in source["content"] if row.get("text") == stored["text"])
     compact = ai_row["mentor"]["context_compact"]
     common = compact["common"]
-    rows = [dict(common, **dict(zip(compact["columns"], values))) for values in compact["rows"]]
+    rows = [dict(common, **dict(zip(compact["columns"], values, strict=False))) for values in compact["rows"]]
     assert ai_row["text"] == "I think SPY is holding the open."
     # TJ-14A item 4 widened the live builder to v2 (the day's change, the place
     # in the day's range, both prior-session sides and the derived block). A

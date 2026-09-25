@@ -554,7 +554,7 @@ def _values_match(actual: Any, expected: Any, tolerance: float) -> bool:
         if len(actual) != len(expected):
             return False
         return all(
-            _values_match(left, right, tolerance) for left, right in zip(actual, expected)
+            _values_match(left, right, tolerance) for left, right in zip(actual, expected, strict=False)
         )
     return actual == expected
 

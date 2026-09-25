@@ -88,7 +88,7 @@ def test_daily_rvol_matches_the_high_rvol_level_rule():
     )
     expected = compute_relvol(frame).tolist()
     got = rvol.daily_rvol_series(volumes)
-    for index, (want, have) in enumerate(zip(expected, got)):
+    for index, (want, have) in enumerate(zip(expected, got, strict=False)):
         if index < HV_VOL_SMA - 1:
             assert have is None
         else:

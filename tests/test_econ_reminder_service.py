@@ -62,7 +62,8 @@ def make_service(tmp_path):
 
     built = []
 
-    def _make(*, mode="DESK", engine_enabled=True, now=_at(9, 0)):
+    def _make(*, mode="DESK", engine_enabled=True, now=None):
+        now = _at(9, 0) if now is None else now
         service = EconReminderService(
             engine_enabled=engine_enabled,
             clock=lambda: now,

@@ -516,7 +516,7 @@ class CalendarTab(QFrame):
         not_counted = getattr(self, "_not_counted_line", "")
         self.summary.setText(f"{text}  |  {not_counted}" if not_counted else text)
         month_totals = year_month_totals(self._day_stats, year)
-        for card, totals in zip(self.month_cards, month_totals):
+        for card, totals in zip(self.month_cards, month_totals, strict=False):
             card.show_month(totals, totals["month"] == month)
         year_net = sum(card["net"] or 0.0 for card in month_totals)
         self.year_title.setText(

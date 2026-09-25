@@ -145,7 +145,6 @@ def test_a_tie_breaks_by_feature_name_and_never_by_how_big_the_group_is():
     import evidence_contrast
 
     high = [9.0, 9.0, 9.0, 9.0]
-    low = [1.0, 1.0, 1.0, 1.0]
     strong_a = [9.0, 9.0, 9.0, 9.0]
     misses = _rows(z_strongest=strong_a, b_tied=high, a_tied=high, mid=[6.0, 5.0, 5.0, 5.0])
     correct = _rows(

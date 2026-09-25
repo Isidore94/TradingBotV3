@@ -500,7 +500,7 @@ class VolumeItem(pg.GraphicsObject):
         painter = QPainter(self._picture)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         painter.setPen(Qt.PenStyle.NoPen)
-        for index, bar in enumerate(self._bars):
+        for index, _bar in enumerate(self._bars):
             value = volumes[index]
             if value <= 0.0:
                 continue

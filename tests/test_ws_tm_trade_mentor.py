@@ -232,7 +232,7 @@ def test_an_unanswered_prompt_expires_one_hour_after_it_was_scheduled():
 
     for slot in slots:
         assert slot.expires_at == slot.scheduled_at + timedelta(hours=1)
-    for earlier, later in zip(slots, slots[1:]):
+    for earlier, later in zip(slots, slots[1:], strict=False):
         assert earlier.expires_at == later.scheduled_at
 
 
@@ -995,7 +995,7 @@ def _ai_context_rows(mentor: dict) -> tuple[str, list[dict]]:
     for values in compact["rows"]:
         if isinstance(values, str):
             values = values.split("|")
-        rows.append(dict(zip(columns, values)))
+        rows.append(dict(zip(columns, values, strict=False)))
     return str(compact["captured_at"]), rows
 
 

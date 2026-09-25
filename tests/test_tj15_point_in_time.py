@@ -118,7 +118,7 @@ def _daily(*, run: bool, session: str = DECIDED, forward: int = 5) -> list[dict]
     days = _sessions_after(session, len(after))
     return flat + [
         {"dt": f"{day}T00:00:00", "open": o, "high": h, "low": low, "close": c}
-        for day, (o, h, low, c) in zip(days, after)
+        for day, (o, h, low, c) in zip(days, after, strict=False)
     ]
 
 

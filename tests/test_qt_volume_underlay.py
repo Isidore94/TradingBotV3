@@ -181,7 +181,7 @@ def test_drawing_volume_fetches_nothing():
     def _boom(*_a, **_k):
         raise AssertionError("volume rendering must not fetch")
 
-    original = getattr(chart_snapshot, "load_d1_bars")
+    original = chart_snapshot.load_d1_bars
     chart_snapshot.load_d1_bars = _boom
     try:
         chart = _chart(_bars())

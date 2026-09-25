@@ -302,7 +302,7 @@ def session_block_bootstrap(
     if len(labels) != len(values) or not all(labels):
         return {"measured": False, "reason": "no session identity on these rows"}
     blocks: dict[str, list[float]] = {}
-    for value, label in zip(values, labels):
+    for value, label in zip(values, labels, strict=False):
         blocks.setdefault(label, []).append(value)
     if len(blocks) < 2:
         return {

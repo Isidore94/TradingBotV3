@@ -105,7 +105,7 @@ def test_configure_caps_and_locks_controller_in_live_window(tmp_path: Path) -> N
     try:
         assert config.option.numprocesses == 4
         assert config.option.tx == ["popen"] * 4  # what xdist actually spawns from
-        assert getattr(config, "_tbv3_run_lock").fd >= 0
+        assert config._tbv3_run_lock.fd >= 0
     finally:
         guard.unconfigure(config)
 

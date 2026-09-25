@@ -239,7 +239,7 @@ def encode_rows(
     codes = _tag_codes(tags)
     tagged = {str(key) for key in (tags or {})}
     out: list[dict[str, Any]] = []
-    for row, block in zip(rows, scalars):
+    for row, block in zip(rows, scalars, strict=False):
         mapping: dict[str, Any] = {}
         for name, value in block.items():
             if _is_unmeasured(value):
@@ -270,7 +270,7 @@ def _split(
     """(right, wrong). A `flat`, a `pending` and an `unmeasured` are in NEITHER."""
     right: list[Mapping[str, Any]] = []
     wrong: list[Mapping[str, Any]] = []
-    for row, mapping in zip(rows, mappings):
+    for row, mapping in zip(rows, mappings, strict=False):
         verdict = str(row.get("verdict") or "")
         if verdict == grades.VERDICT_RIGHT:
             right.append(mapping)

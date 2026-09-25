@@ -667,7 +667,7 @@ def test_the_trades_detail_shows_the_latest_non_superseded_enrichment(
                     texts.append(str(reader()))
                 except TypeError:
                     pass
-    for index in range(getattr(tab, "auto_tags").count()):
+    for index in range(tab.auto_tags.count()):
         texts.append(tab.auto_tags.item(index).text())
     blob = "\n".join(texts)
 

@@ -47,7 +47,7 @@ def _line(card, key):
     for line in card.lines:
         if line["key"] == key:
             return line
-    raise AssertionError(f"no {key!r} line: {[l['key'] for l in card.lines]}")
+    raise AssertionError(f"no {key!r} line: {[item['key'] for item in card.lines]}")
 
 
 def _imported_names(path: Path) -> set[str]:

@@ -140,7 +140,7 @@ def _bot_sa_baselines(rows: list[dict[str, Any]]) -> dict[tuple[str, int], dict[
 def _weighted_average(rows: list[dict[str, Any]], weights: list[int], key: str) -> float | None:
     total_weight = 0
     total_value = 0.0
-    for row, weight in zip(rows, weights):
+    for row, weight in zip(rows, weights, strict=False):
         value = _float(row.get(key))
         if value is None or weight <= 0:
             continue

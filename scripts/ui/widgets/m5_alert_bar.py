@@ -87,7 +87,7 @@ def alert_type_label(alert: Any) -> str:
     """
     trigger = str(getattr(alert, "trigger", "") or "").strip()
     if trigger.startswith(REGIME_PAUSE_TRIGGER_PREFIX):
-        tail = trigger[len(REGIME_PAUSE_TRIGGER_PREFIX) :].lstrip(" ··:-")
+        tail = trigger[len(REGIME_PAUSE_TRIGGER_PREFIX) :].lstrip(" ·:-")
         trigger = tail or "regime pause"
     if trigger.startswith("[") and "]" in trigger:
         trigger = trigger.split("]", 1)[1].strip() or trigger

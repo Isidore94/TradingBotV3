@@ -140,7 +140,7 @@ class TestShortsAreAMirror:
 
         assert [event.level for event in shorts] == [event.level for event in longs]
         assert [event.bar_index for event in shorts] == [event.bar_index for event in longs]
-        for short_event, long_event in zip(shorts, longs):
+        for short_event, long_event in zip(shorts, longs, strict=False):
             assert short_event.value == pytest.approx(long_event.value)
         assert {event.side for event in shorts} == {"short"}
 

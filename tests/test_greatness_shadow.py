@@ -53,9 +53,9 @@ def frame(rows):
         [
             {
                 "datetime": pd.Timestamp(START + timedelta(minutes=5 * i)),
-                "open": o, "high": h, "low": l, "close": c, "volume": 1000,
+                "open": o, "high": h, "low": lo, "close": c, "volume": 1000,
             }
-            for i, (o, h, l, c) in enumerate(rows)
+            for i, (o, h, lo, c) in enumerate(rows)
         ]
     )
 

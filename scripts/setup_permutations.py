@@ -176,7 +176,7 @@ def _band(value: float | None, edges: tuple[float, ...], names: tuple[str, ...])
     """Bucket ``value``: ``names[i]`` holds values below ``edges[i]``; the last name the rest."""
     if value is None:
         return UNKNOWN
-    for edge, name in zip(edges, names):
+    for edge, name in zip(edges, names, strict=False):
         if value < edge:
             return name
     return names[-1]

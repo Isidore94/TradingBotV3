@@ -826,7 +826,7 @@ class FocusStatusChip(QFrame):
         texts = [
             str(item.get("text") or "").strip() for item in (bounce, rrs)
         ]
-        for label, text in zip(self.status_labels, texts):
+        for label, text in zip(self.status_labels, texts, strict=False):
             if label.text() != text:
                 label.setText(text)
             label.setVisible(bool(text))

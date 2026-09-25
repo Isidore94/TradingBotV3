@@ -328,7 +328,7 @@ def _cluster_from_members(members: list[dict], atr20: float | None) -> dict:
     weights = [max(_coerce_float(member.get("relvol")) or 0.0, 0.01) for member in members]
     prices = [float(member["price"]) for member in members]
     total_weight = sum(weights) or 1.0
-    price = sum(price * weight for price, weight in zip(prices, weights)) / total_weight
+    price = sum(price * weight for price, weight in zip(prices, weights, strict=False)) / total_weight
     bucket = "green" if any(str(member.get("bucket")) == "green" for member in members) else "red"
     first_seen_values = [str(member.get("first_seen") or "") for member in members if member.get("first_seen")]
     last_seen_values = [

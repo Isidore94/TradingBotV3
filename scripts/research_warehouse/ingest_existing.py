@@ -531,7 +531,7 @@ def _log_rows(artifact, source: Path, raw: bytes, source_sha: str, observed_at, 
         for offset, values in enumerate(reader, start=1):
             if offset <= after_offset:
                 continue
-            parsed = dict(zip(header, values))
+            parsed = dict(zip(header, values, strict=False))
             rows.append(
                 _bronze_row(
                     artifact,
@@ -694,7 +694,7 @@ def snapshot_universe_membership(
         (str(session), str(name))
         for session, name in zip(
             existing.column("session_date").to_pylist(),
-            existing.column("list_name").to_pylist(),
+            existing.column("list_name").to_pylist(), strict=False,
         )
     }
     stamp = now or utc_now()
@@ -881,7 +881,7 @@ def snapshot_level_geometry(
         (str(session), str(level))
         for session, level in zip(
             existing.column("session_date").to_pylist(),
-            existing.column("level_id").to_pylist(),
+            existing.column("level_id").to_pylist(), strict=False,
         )
     }
     stamp = now or utc_now()
@@ -1131,7 +1131,7 @@ def ingest_daily_bars(
     already = {
         (str(symbol), str(session))
         for symbol, session in zip(
-            existing.column("symbol").to_pylist(), existing.column("session_date").to_pylist()
+            existing.column("symbol").to_pylist(), existing.column("session_date").to_pylist(), strict=False
         )
     }
     rows: list[dict] = []

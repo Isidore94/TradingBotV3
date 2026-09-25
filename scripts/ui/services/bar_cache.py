@@ -84,7 +84,7 @@ class BarSeries:
                 "volume": float(v),
             }
             for stamp, o, h, low, c, v in zip(
-                stamps, self.open, self.high, self.low, self.close, self.volume
+                stamps, self.open, self.high, self.low, self.close, self.volume, strict=False
             )
         ]
 

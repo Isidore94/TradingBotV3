@@ -4257,7 +4257,7 @@ def hide_sector_names(
     ):
         pairs = [
             (line, symbol)
-            for line, symbol in zip(alerts, alert_symbols)
+            for line, symbol in zip(alerts, alert_symbols, strict=False)
             if keep(symbol)
         ]
         out["alerts"] = [line for line, _symbol in pairs]

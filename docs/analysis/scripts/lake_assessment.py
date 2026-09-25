@@ -109,7 +109,7 @@ print(f"  outcome_path latest view: {len(outcome_view)} rows")
 cov_path = outcome_coverage.coverage_path(store.root)
 if cov_path.exists():
     lines = cov_path.read_text().strip().splitlines()
-    recompute_lines = [l for l in lines if "outcomes_recompute" in l]
+    recompute_lines = [ln for ln in lines if "outcomes_recompute" in ln]
     buckets_covered = set()
     for line in recompute_lines:
         try:
@@ -160,7 +160,7 @@ swing_recipes = {SWING_HOUSE_V1.recipe_id, CONTROL_FIXED_1R2R_V1.recipe_id, CONT
 
 # Group outcomes by (setup, side, recipe)
 swing_cells = defaultdict(list)
-for key, row in outcome_view.items():
+for row in outcome_view.values():
     rid = row.get("recipe_id", "")
     if rid not in swing_recipes:
         continue
@@ -265,7 +265,7 @@ print("\n=== Q3: Day trades (M5-close recipes) ===")
 m5_recipe_ids = {r.recipe_id for r in M5_CLOSE_RECIPES}
 
 m5_cells = defaultdict(list)
-for key, row in outcome_view.items():
+for row in outcome_view.values():
     rid = row.get("recipe_id", "")
     if rid not in m5_recipe_ids:
         continue
@@ -280,7 +280,7 @@ for key, row in outcome_view.items():
 
 # Aggregate by recipe
 q3_by_recipe = defaultdict(list)
-for (setup, side, rid), rows in m5_cells.items():
+for (_setup, _side, rid), rows in m5_cells.items():
     q3_by_recipe[rid].extend(rows)
 
 q3_table = []
@@ -317,7 +317,7 @@ for r in neg_recipes[:5]:
 
 # By entry hour (ET)
 q3_by_hour = defaultdict(list)
-for key, row in outcome_view.items():
+for row in outcome_view.values():
     rid = row.get("recipe_id", "")
     if rid not in m5_recipe_ids:
         continue
@@ -356,7 +356,7 @@ for h in q3_hours:
 
 # By family
 q3_by_family = defaultdict(list)
-for key, row in outcome_view.items():
+for row in outcome_view.values():
     rid = row.get("recipe_id", "")
     if rid not in m5_recipe_ids:
         continue
@@ -488,13 +488,13 @@ for row in like_rows:
         try:
             p = json.loads(payload)
         except Exception as exc:
-            raise SystemExit(f"AUDIT ERROR: undecodable like-link payload: {row!r} ({exc})")
+            raise SystemExit(f"AUDIT ERROR: undecodable like-link payload: {row!r} ({exc})") from exc
     else:
         p = payload
     try:
         basis_counts[like_links.basis_of(p)] += 1
     except ValueError as exc:
-        raise SystemExit(f"AUDIT ERROR: unreadable like-link payload: {row!r} ({exc})")
+        raise SystemExit(f"AUDIT ERROR: unreadable like-link payload: {row!r} ({exc})") from exc
 
 q6["basis_distribution"] = dict(basis_counts)
 linked = sum(v for k, v in basis_counts.items() if k != "none")
@@ -557,7 +557,7 @@ print(f"  Swing families with n>=30: {len(q7_swing)}")
 q7_m5 = {}
 all_m5_rows = []
 lately_m5_rows = []
-for key, row in outcome_view.items():
+for row in outcome_view.values():
     rid = row.get("recipe_id", "")
     if rid not in m5_recipe_ids:
         continue
@@ -617,7 +617,7 @@ print(f"  Registry setups with 0 occurrences: {len(registry_zero)}: {sorted(regi
 
 # Symbol concentration of eligible cells
 eligible_symbols = Counter()
-for (setup, side, rid), rows in swing_cells.items():
+for (_setup, _side, _rid), rows in swing_cells.items():
     nr = _finite([r.get("net_r") for r in rows])
     if len(nr) < MIN_REPORTABLE_N:
         continue

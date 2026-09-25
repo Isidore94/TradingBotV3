@@ -141,7 +141,8 @@ def test_weekly_named_readers_use_one_owner_group_and_keep_waiting_counts():
             {"horizon": "day", "environment": ENVIRONMENT, "scope": "entry_environment", "stats": {"wins": 1, "closed": 2}, "trade_ids": ["a", "b"]},
         ],
     }
-    reader = lambda **_kwargs: window
+    def reader(**_kwargs):
+        return window
     waiting = improvement_ideas._window_read_accuracy(
         reader, name="read_accuracy_next_5_sessions", end_session=SESSION,
         sessions=5, scope={"environment": ENVIRONMENT},

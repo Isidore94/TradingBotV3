@@ -233,7 +233,7 @@ class MarketStateEngine:
             return None
         window = bars[-(self.config.atr_window + 1):]
         trs = []
-        for prev, cur in zip(window, window[1:]):
+        for prev, cur in zip(window, window[1:], strict=False):
             trs.append(
                 max(
                     cur.high - cur.low,
@@ -270,7 +270,7 @@ class MarketStateEngine:
     def _countertrend_closes(self, side_sign: int, lookback: int = 3) -> int:
         bars = self.bars[-(lookback + 1):]
         count = 0
-        for prev, cur in zip(bars, bars[1:]):
+        for prev, cur in zip(bars, bars[1:], strict=False):
             if side_sign * (cur.close - prev.close) < 0:
                 count += 1
         return count

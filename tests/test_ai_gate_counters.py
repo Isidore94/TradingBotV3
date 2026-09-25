@@ -106,7 +106,7 @@ def test_the_synthesis_counter_counts_the_way_the_job_counts(monkeypatch):
         return []
 
     monkeypatch.setattr(synthesis, "_read_cohort", fake_read)
-    monkeypatch.setattr(synthesis, "graded_sessions", lambda v, l: 2)
+    monkeypatch.setattr(synthesis, "graded_sessions", lambda v, like_rows: 2)
 
     counter = gate_counters._synthesis_counter()
     assert seen == ["veto", "like"]

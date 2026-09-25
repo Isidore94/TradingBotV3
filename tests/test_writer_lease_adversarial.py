@@ -1110,16 +1110,16 @@ def test_l_racing_publishers_cannot_both_replace_the_report(verified):
             results: list[dict] = []
             barrier = threading.Barrier(2)
 
-            def attempt(machine: str) -> None:
+            def attempt(machine: str, _barrier=barrier, _results=results) -> None:
                 local.name = machine
-                barrier.wait()
+                _barrier.wait()
                 outcome = verified.core.publish_away_report(
                     dict(FULL_PAYLOAD, generated_at=f"FROM-{machine}"),
                     verified.target,
                     archive=False,
                 )
                 with guard:
-                    results.append(outcome)
+                    _results.append(outcome)
 
             threads = [
                 threading.Thread(target=attempt, args=(name,))

@@ -2609,7 +2609,7 @@ class DayReviewPanel(QFrame):
         if not isinstance(skill, Mapping):
             return ""
         lines: list[str] = []
-        for key, window in (("session", "this session"), ("lately", "lately")):
+        for key, fallback_label in (("session", "this session"), ("lately", "lately")):
             block = skill.get(key)
             if not isinstance(block, Mapping):
                 continue
@@ -2619,7 +2619,7 @@ class DayReviewPanel(QFrame):
             sessions = block.get("window_sessions")
             count = f"{int(sessions)} session{'s' if int(sessions) != 1 else ''}" if isinstance(
                 sessions, (int, float)
-            ) else window
+            ) else fallback_label
             lines.append(f"{count}: {sentence}")
         return "\n".join(lines)
 

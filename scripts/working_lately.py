@@ -1045,8 +1045,8 @@ def _measured_stamp(row: Mapping[str, Any], policy: Any) -> str:
     date - it dates the cell earlier than the truth, which can only ever make
     the freshness test stricter, never looser.
     """
-    for field in FAVORABLE_MEASURED_FIELDS:
-        stamp = str(row.get(field) or "")[:10]
+    for field_name in FAVORABLE_MEASURED_FIELDS:
+        stamp = str(row.get(field_name) or "")[:10]
         if stamp:
             return stamp
     return str(row.get(policy.clock_field) or "")[:10]
@@ -1675,12 +1675,12 @@ def _kind_policy(cells: Sequence[EvidenceCell]) -> dict[str, dict[str, Any]]:
     for kind, group in by_kind.items():
         first = group[0]
         shared: dict[str, Any] = {}
-        for field in names:
-            value = getattr(first, field)
-            if field in KIND_POLICY_FIELDS or all(
-                getattr(cell, field) == value for cell in group
+        for field_name in names:
+            value = getattr(first, field_name)
+            if field_name in KIND_POLICY_FIELDS or all(
+                getattr(cell, field_name) == value for cell in group
             ):
-                shared[field] = value
+                shared[field_name] = value
         out[kind] = shared
     return out
 
@@ -2207,7 +2207,7 @@ def bucketed_trade_r_cells(recent_rows: Iterable[Mapping[str, Any]]) -> list[tup
     """
     rows = [row for row in recent_rows or () if isinstance(row, Mapping)]
     cells = swing_trade_r_cells(rows)
-    return [(_text(row.get("priority_bucket")), cell) for row, cell in zip(rows, cells)]
+    return [(_text(row.get("priority_bucket")), cell) for row, cell in zip(rows, cells, strict=False)]
 
 
 def holdout_text(cell: Any, *, missing: str = HOLDOUT_NOT_IN_WINDOW) -> str:

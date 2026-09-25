@@ -270,14 +270,14 @@ def test_the_trades_table_gives_the_tags_column_the_slack_at_desk_width(trades_t
     sizes = _sizes(table)
     assert sizes[tags] >= 1000, (
         f"Tags is {sizes[tags]} px on a {DESK_WIDTH_PX} px desk; "
-        f"widths were {dict(zip(headers, sizes))}"
+        f"widths were {dict(zip(headers, sizes, strict=False))}"
     )
     for index, name in enumerate(headers):
         if index == tags:
             continue
         assert sizes[index] <= MAX_COLUMN_WIDTH, (
             f"{name} is {sizes[index]} px, over the {MAX_COLUMN_WIDTH} px cap; "
-            f"widths were {dict(zip(headers, sizes))}"
+            f"widths were {dict(zip(headers, sizes, strict=False))}"
         )
     assert _modes(table)[tags] == QHeaderView.ResizeMode.Stretch
     assert table.horizontalHeader().stretchLastSection() is False
@@ -478,7 +478,7 @@ def test_tag_week_and_missing_risk_tables_name_their_text_column(tag_week_page):
         sizes = _sizes(table)
         assert sizes[tag] >= 1000, (
             f"{names} Tag is {sizes[tag]} px on a {DESK_WIDTH_PX} px desk; "
-            f"widths were {dict(zip(names, sizes))}"
+            f"widths were {dict(zip(names, sizes, strict=False))}"
         )
         for index, name in enumerate(names):
             if index == tag:

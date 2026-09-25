@@ -870,7 +870,6 @@ def _weekly_top_focus_markdown(
             items.append(((0, 0, str(row.get("ticker") or "")), "WATCHLIST: " + _watchlist_earnings_line(row)[2:]))
 
     for event in _sort_events_for_display(_payload_rows(economic, "events")):
-        priority = str(event.get("priority") or "").upper()
         if _is_market_moving_macro_event(event):
             items.append(((1, *_event_display_sort_key(event)), "MACRO: " + _economic_event_line(event)[2:]))
 
