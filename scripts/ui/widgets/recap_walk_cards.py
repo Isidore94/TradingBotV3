@@ -125,11 +125,12 @@ def _words(value: Any) -> str:
 # ---------------------------------------------------------------------------
 def trade_r(trade: Mapping[str, Any]) -> float | None:
     """Net over planned risk; else price move over the planned stop distance."""
-    net = _float(trade.get("net_pnl"))
-    risk = _float(trade.get("planned_risk"))
-    if net is not None and risk:
-        return net / abs(risk)
-    entry = _float(trade.get("average_entry_price"))
+    from journal_analytics import trade_r_multiple
+
+    r_value = trade_r_multiple(trade)
+    if r_value is not None:
+        return r_value
+    entry =_float(trade.get("average_entry_price"))
     exit_ = _float(trade.get("average_exit_price"))
     stop = _float(trade.get("planned_stop"))
     sign = 1.0 if _side(trade.get("direction")) == "LONG" else -1.0 if _side(trade.get("direction")) == "SHORT" else 0.0

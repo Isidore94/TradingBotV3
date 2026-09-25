@@ -344,6 +344,8 @@ class AnalyticsTab(QFrame):
         self._exit_generation = 0
         self._exit_stale = False
         self._exit_worker = None
+        self._exit_again = False
+        self._closing = False
         #: Closed trades with a made-up entry: kept, but not in any total.
         self.not_counted_note = QLabel("")
         self.not_counted_note.setObjectName("CurrencyNote")
@@ -566,6 +568,11 @@ class AnalyticsTab(QFrame):
             self._exit_stale = True
             return
         self._exit_stale = False
+        if self._exit_worker is not None and self._exit_worker.isRunning():
+            # One live read: a newer reload queues one re-read for when it ends.
+            self._exit_again = True
+            return
+        self._exit_again = False
         from journal_truth import exit_scoreboard
         from journal_truth import measure_exits as measure_rows
         from ui.read_worker import ReadWorker
@@ -576,9 +583,18 @@ class AnalyticsTab(QFrame):
         _EXIT_READS.append(worker)
         worker.finished_with.connect(lambda result, g=generation: self._on_exits(g, result))
         worker.failed.connect(lambda message, g=generation: self._on_exits(g, {"lines": [f"Exits: unknown ({message})."]}))
-        worker.finished.connect(lambda w=worker: _EXIT_READS.remove(w) if w in _EXIT_READS else None)
+        worker.finished.connect(lambda w=worker: self._on_exit_read_done(w))
         self._exit_worker = worker
         worker.start()
+
+    def _on_exit_read_done(self, worker) -> None:
+        if worker in _EXIT_READS:
+            _EXIT_READS.remove(worker)
+        try:
+            if self._exit_again and not self._closing:
+                self.measure_exits()
+        except RuntimeError:  # the tab was closed while the read ran
+            logging.debug("The exit re-read was skipped: the tab closed.", exc_info=True)
 
     def _on_exits(self, generation: int, result) -> None:
         if generation != self._exit_generation:
@@ -746,7 +762,11 @@ class AnalyticsTab(QFrame):
     def shutdown(self) -> None:
         from ui.read_worker import join_worker
 
+        self._closing = True
+        self._exit_again = False
         join_worker(self._exit_worker)
+        for worker in list(_EXIT_READS):
+            join_worker(worker)
         self._shutdown_walkaway()
 
     def _shutdown_walkaway(self) -> None:

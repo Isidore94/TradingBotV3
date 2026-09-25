@@ -78,11 +78,28 @@ def test_setup_lines_count_confirmed_tags_only():
     ]
     lines = journal_truth.setup_lines(rows, "net_pnl_cad", "CAD")
     assert lines == [
-        "By setup (confirmed only): avwap band bounce, n 2, win 50%, expectancy +$30 CAD.",
+        "By setup (confirmed only): avwap band bounce, n 2, too few to tell.",
         "2 of 5 closed trades have a confirmed setup.",
     ]
     none = journal_truth.setup_lines([_trade("x", 1.0)], "net_pnl_cad", "CAD")
     assert none == ["By setup (confirmed only): none yet. 0 of 1 closed trade have a confirmed setup."]
+
+
+def test_setup_lines_follow_the_week_cards_n_floors():
+    """Review fix: n < 5 says too few to tell, n 5-9 is thin (n), n 10+ is plain."""
+    import journal_truth
+    import week_coach
+
+    assert (journal_truth.THIN_MIN_N, journal_truth.MIN_N) == (week_coach.THIN_MIN_N, week_coach.MIN_N)
+    one = [_trade("a0", 50.0, tags="orb")]
+    seven = [_trade(f"g{i}", 10.0 if i < 5 else -5.0, tags="gap") for i in range(7)]
+    ten = [_trade(f"f{i}", 20.0 if i < 6 else -10.0, tags="fade") for i in range(10)]
+    lines = journal_truth.setup_lines(one + seven + ten, "net_pnl_cad", "CAD")
+    assert lines[:3] == [
+        "By setup (confirmed only): fade, n 10, win 60%, expectancy +$8 CAD.",
+        "By setup (confirmed only): gap, n 7, win 71%, expectancy +$6 CAD, thin (7).",
+        "By setup (confirmed only): orb, n 1, too few to tell.",
+    ]
 
 
 def test_instrument_and_direction_are_breakdown_groups():
@@ -279,6 +296,22 @@ def test_the_bot_grade_needs_a_confirmed_setup_and_reads_the_underlying_side(tmp
     assert journal_truth.bot_grade(tagged, read)["grade"] == "D"
     provisional = {**tagged, "tag_status": "provisional"}
     assert journal_truth.bot_grade(provisional, read)["why"] == "no confirmed setup"
+
+
+def test_a_named_bucket_with_no_cell_is_no_grade_never_another_buckets(tmp_path):
+    """Review fix: the largest-cell fallback is only for a tag that names no bucket."""
+    import journal_truth
+
+    grades = _grades(swing=[
+        _cell("LONG|favorite_setup|avwape_to_1stdev", "PROVEN", n=354, family="avwape_to_1stdev", side="LONG"),
+    ])
+    read = journal_truth.grade_reader(_history(tmp_path, (datetime(2026, 9, 1, tzinfo=NY), grades)))
+    named = _trade("n", 10.0, tags="avwape_to_1stdev | near_favorite_zone", **SWING_CLOSE)
+    assert journal_truth.bot_grade(named, read) == {
+        "grade": "no grade", "why": "bucket not graded", "family": "avwape_to_1stdev", "written_at": "",
+    }
+    unnamed = _trade("u", 10.0, tags="avwape_to_1stdev", **SWING_CLOSE)
+    assert journal_truth.bot_grade(unnamed, read)["grade"] == "PROVEN"
 
 
 def test_a_day_trade_reads_the_bounce_type_cell_else_no_grade(tmp_path):
@@ -520,4 +553,48 @@ def test_the_analytics_tab_reads_the_exit_scoreboard_on_a_worker_once_shown(qapp
         )
     finally:
         tab.shutdown()
+        tab.deleteLater()
+
+
+def test_two_reloads_while_shown_leave_one_live_exit_worker(qapp, monkeypatch):
+    """Review fix: a reload during a running read queues one more; it never starts a second."""
+    import threading
+    import time
+
+    import journal_truth
+    from ui.models.journal import JournalTrade
+    from ui.panels.journal import analytics_tab as at
+    from ui.services import journal_feed
+
+    trades = [JournalTrade.from_mapping(row) for row in TRADES]
+    monkeypatch.setattr(journal_feed, "load_trades", lambda **_kw: trades)
+    release = threading.Event()
+    calls: list[int] = []
+
+    def slow_measure(rows, measure=None):
+        calls.append(len(rows))
+        release.wait(5)
+        return {}
+
+    monkeypatch.setattr(journal_truth, "measure_exits", slow_measure)
+    tab = at.AnalyticsTab(_Header())
+    try:
+        tab.show()
+        tab.reload()
+        tab.reload()
+        tab.reload()
+        live = [worker for worker in at._EXIT_READS if worker.isRunning()]
+        assert len(live) == 1 and live[0] is tab._exit_worker
+        release.set()
+        deadline = time.monotonic() + 5
+        while (len(calls) < 2 or tab._exit_worker.isRunning() or "Losers" not in tab.exit_note.text()) \
+                and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+        assert len(calls) == 2  # the running read, then one re-read for the newest reload
+        assert "Losers held past the stop" in tab.exit_note.text()
+    finally:
+        release.set()
+        tab.shutdown()
+        assert not any(worker.isRunning() for worker in at._EXIT_READS)
         tab.deleteLater()

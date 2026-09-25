@@ -22,6 +22,11 @@ import journal_analytics as ja
 STOCK, OPTION = "STK", "OPT"
 LONG, SHORT = "LONG", "SHORT"
 NO_GRADE = "no grade"
+#: The week card's floors (`week_coach.MIN_N` / `THIN_MIN_N`): under 5 is too
+#: few to tell, 5-9 is thin, 10+ is plain.
+MIN_N = 10
+THIN_MIN_N = 5
+TOO_FEW = "too few to tell"
 #: Grades at or below this are "D-or-worse" (D is the lowest on the ladder).
 WORST_GRADES = frozenset({"D"})
 
@@ -141,13 +146,15 @@ def setup_lines(trades: Iterable[Mapping[str, Any]], pnl_key: str, label: str = 
     lines = []
     for family, group in sorted(families.items(), key=lambda item: (-len(item[1]), item[0])):
         n = len(group)
+        head = f"By setup (confirmed only): {family.replace('_', ' ')}, n {n}"
+        if n < THIN_MIN_N:
+            lines.append(f"{head}, {TOO_FEW}.")
+            continue
         wins = sum(1 for row in group if (ja._coerce_float(row.get("net_pnl")) or 0.0) > 0)
         total = _sum(group, pnl_key)
         expectancy = money_text(total / n if total is not None else None, label)
-        lines.append(
-            f"By setup (confirmed only): {family.replace('_', ' ')}, n {n}, "
-            f"win {wins / n:.0%}, expectancy {expectancy}."
-        )
+        thin = f", thin ({n})" if n < MIN_N else ""
+        lines.append(f"{head}, win {wins / n:.0%}, expectancy {expectancy}{thin}.")
     lines.append(coverage)
     return lines
 
@@ -238,8 +245,12 @@ def bot_grade(
     else:
         lookup = setup_grades.swing_lookup(payload)
         bucket = confirmed_bucket(trade)
-        cell = lookup.get(setup_grades.swing_key(side, bucket, family)) if bucket else None
-        if cell is None:
+        if bucket:
+            # A named bucket reads only its own cell, never another bucket's grade.
+            cell = lookup.get(setup_grades.swing_key(side, bucket, family))
+            if cell is None:
+                return _no_grade("bucket not graded", family)
+        else:
             same = [
                 item for item in lookup.values()
                 if str(item.get("family") or "").lower() == family and str(item.get("side") or "").upper() == side
