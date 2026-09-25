@@ -85,9 +85,10 @@ from typing import Any, Mapping
 
 import journal_store
 
-#: The four material fields, in the order they are asked. `missing` is built in
+#: The four material fields, in the order they are asked: the stop first, then
+#: target, setup and thesis (P8 P2, trader 2026-09-25). `missing` is built in
 #: this order so a trade with nothing recorded reads the same way every morning.
-MATERIAL_FIELDS = ("thesis", "stop", "target", "setup")
+MATERIAL_FIELDS = ("stop", "target", "setup", "thesis")
 
 #: How each field is answered today, when it is answered at all. `target` has no
 #: column anywhere on the journal schema, which is WHY the four states exist:
@@ -886,6 +887,16 @@ def unexplained_exit_count(store: Any, session: str, *, askable_only: bool = Fal
     )
 
 
+def _stop_first(questions: Any) -> tuple[TradeQuestion, ...]:
+    """The same questions, trades with no stop first; otherwise order kept."""
+    return tuple(sorted(questions or (), key=lambda q: "stop" not in tuple(q.missing or ())))
+
+
+def stop_owed(task: Any) -> bool:
+    """Does `task` hold a trade whose stop is still missing (P8 P2)?"""
+    return any("stop" in tuple(q.missing or ()) for q in getattr(task, "trades", ()) or ())
+
+
 def build_task(store: Any, session: date, *, cap: int = TRADE_CAP_DEFAULT) -> TradeCheckTask:
     """The 09:00 question for the session before `session`.
 
@@ -903,7 +914,7 @@ def build_task(store: Any, session: date, *, cap: int = TRADE_CAP_DEFAULT) -> Tr
     # landed: the desk asks about what it has SEEN. Never gated on coverage -
     # today's statement does not exist yet, and waiting for it is exactly how
     # every live label came to be `recalled_after`.
-    today = tuple(
+    today = _stop_first(
         questions_for_session(store, session.isoformat(), include_asked=False) or ()
     )
     today_ids = tuple(question.trade_id for question in today)
@@ -937,7 +948,8 @@ def build_task(store: Any, session: date, *, cap: int = TRADE_CAP_DEFAULT) -> Tr
     # answers to both dates is listed ONCE: two sections for one trade is two
     # Save gates on the same fields.
     seen = {question.trade_id for question in questions}
-    asked = tuple(questions) + tuple(q for q in today if q.trade_id not in seen)
+    # A trade with no stop goes first (P8 P2); the order is otherwise kept.
+    asked = _stop_first(tuple(questions) + tuple(q for q in today if q.trade_id not in seen))
     return TradeCheckTask(
         reviewed_session=reviewed,
         journal_ready=True,
