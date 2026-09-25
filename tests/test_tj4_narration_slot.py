@@ -264,6 +264,10 @@ def test_the_day_story_is_on_the_weeknight_and_the_saturday_slate(tmp_path):
     for kind in ("weeknight", "saturday"):
         names = [slot.name for slot in runner.slots_for(kind)]
         assert SLOT in names, (kind, names)
+        if kind == "weeknight":
+            # the briefs are Saturday-only since 2026-09-24 (trader, WISHLIST P1-3 3b)
+            assert "ticker_briefs" not in names, names
+            continue
         assert names.index(SLOT) < names.index("ticker_briefs"), (kind, names)
 
     sunday = [

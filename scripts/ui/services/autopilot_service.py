@@ -2051,6 +2051,12 @@ class AutopilotService(QObject):
             except Exception:
                 logging.exception("Tracker write stamp unreadable; the report goes out without it.")
             try:
+                from operations_audit import ai_night_digest_line
+
+                payload["ai_night_line"] = ai_night_digest_line()
+            except Exception:
+                logging.exception("Night AI line unreadable; the report goes out without it.")
+            try:
                 payload = core.hide_sector_names(payload, pick_limit=10)
             except Exception:
                 # The view filter never costs the report; fall back to the cap alone.

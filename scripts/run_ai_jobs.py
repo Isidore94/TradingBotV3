@@ -319,6 +319,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(
                 f"unknown scope(s) {unknown}; known: {sorted(ai_summary.SCOPE_LABELS)}"
             )
+    budget_minutes = 0.0
     if args.slot:
         # TJ-13A review round. A TYPED slot is the operator's explicit choice
         # and resolves against every registered slot, not against tonight's
@@ -345,13 +346,23 @@ def main(argv: list[str] | None = None) -> int:
         # weeknight runs the deterministic stage plus the short narration;
         # Saturday night carries `ai_summary` and `weekly_synthesis`; Sunday
         # night is the backlog. Nothing needs typing for any of it.
+        kind = _night_kind_or_weeknight()
         slots = runner.slots_for(
-            _night_kind_or_weeknight(),
+            kind,
             summary_scopes=scopes or None,
             session_date=_session_date_or_blank(),
         )
+        # P1-3 3a: only the unattended slate is budgeted; a typed slot is not.
+        budget_minutes = runner.night_budget_for(kind)
+    from ai_jobs import ollama_probe
+
     report = runner.run_slots(
-        slots, force=args.force, only=args.slot, session_override=session_override
+        slots,
+        force=args.force,
+        only=args.slot,
+        session_override=session_override,
+        probe=ollama_probe.probe_local_model,
+        budget_minutes=budget_minutes,
     )
     logging.info("%s", report.summary())
 

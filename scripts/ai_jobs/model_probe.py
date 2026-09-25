@@ -807,6 +807,52 @@ def reserve_minutes_from_probe(
     return round(minutes, 1)
 
 
+#: Statuses whose `duration_seconds` is a real run of the slot.
+_RAN_STATUSES = frozenset(
+    {ledger.STATUS_OK, ledger.STATUS_DEGRADED, ledger.STATUS_FAILED, ledger.STATUS_MANUAL}
+)
+
+
+def measured_slot_minutes(
+    *,
+    ledger_path: Path | None = None,
+    rows: Sequence[Mapping[str, Any]] | None = None,
+    sample: int = 5,
+) -> dict[str, float]:
+    """Median minutes of each job's last ``sample`` real runs, from the ledger (P1-3 3a).
+
+    A job with no recorded run is absent: unmeasured, never zero.
+    """
+    if rows is None:
+        try:
+            target = (
+                Path(ledger_path) if ledger_path is not None else ledger.ledger_path(create=False)
+            )
+            rows = ledger._read_rows(target)
+        except Exception:  # noqa: BLE001 - no ledger means nothing measured
+            return {}
+    durations: dict[str, list[float]] = {}
+    for row in rows:
+        if str(row.get("status") or "") not in _RAN_STATUSES:
+            continue
+        try:
+            seconds = float(row.get("duration_seconds") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if seconds <= 0:
+            continue
+        durations.setdefault(str(row.get("job") or ""), []).append(seconds)
+    out: dict[str, float] = {}
+    for job, values in durations.items():
+        recent = sorted(values[-max(1, int(sample)) :])
+        middle = len(recent) // 2
+        median = (
+            recent[middle] if len(recent) % 2 else (recent[middle - 1] + recent[middle]) / 2.0
+        )
+        out[job] = round(median / 60.0, 2)
+    return out
+
+
 def describe_measurement(
     *, tier: str = "large", ledger_path: Path | None = None
 ) -> str:

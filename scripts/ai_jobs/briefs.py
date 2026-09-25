@@ -307,7 +307,13 @@ def run_daily_summary(
         reason = (
             f"summary for {session_date} from {counts.get('usable', 0)} usable source(s) "
             f"read as {stats.get('slices_read')} of {stats.get('slices_planned')} slice(s); "
-            f"completion={completion}"
+            + (
+                f"{stats.get('slices_capped')} slice(s) left out by the per-run cap of "
+                f"{stats.get('slice_cap')}; "
+                if stats.get("slices_capped")
+                else ""
+            )
+            + f"completion={completion}"
             # The CAUSE, verbatim from the exception, so "why was this not
             # synthesized" is answered in the ledger row rather than in a log.
             + (f" after {synthesis_error}" if synthesis_error else "")
@@ -1047,8 +1053,16 @@ def run_ticker_briefs(
     watchlist_paths: Mapping[str, Path] | None = None,
     output_root: Path | None = None,
     morning_path: Path | None = None,
+    week: Any = None,
+    name_cap: int | None = None,
 ) -> dict[str, Any]:
     """Publish validated medium-tier briefs, then one bounded home-folder file.
+
+    ``week`` (a :class:`ai_jobs.week_names.WeekNames`, P1-3 3b) restricts the
+    run to that week's picks, alerts and traded names, capped at ``name_cap``
+    (default: the ``ai_ticker_briefs_max_names`` setting), and reuses a brief
+    already written for the same (symbol, week) in the last 7 days. ``None``
+    briefs every watchlist name, as before.
 
     The runner is the sole caller/writer. The gate is repeated here, including
     before every model call, so a direct invocation or a long ticker batch can
@@ -1075,6 +1089,29 @@ def run_ticker_briefs(
     symbols = watchlists.symbols
     membership_by_symbol = watchlists.memberships
     root = Path(output_root) if output_root is not None else store.briefs_dir()
+    skip_note = ""
+    trustworthy_empty = watchlists.is_trustworthy_empty
+    if week is not None:
+        from ai_jobs import week_names
+
+        cap = week_names.max_names() if name_cap is None else int(name_cap)
+        wanted = list(week.ordered)
+        symbols = wanted[:cap] if cap > 0 else wanted
+        over_cap = len(wanted) - len(symbols)
+        outside = [name for name in watchlists.symbols if name not in week.reasons]
+        membership_by_symbol = {
+            name: list(watchlists.memberships.get(name, []))
+            + [{"list": f"week_{week.reasons[name]}", "path": ""}]
+            for name in symbols
+        }
+        skip_note = (
+            f"{len(outside)} watchlist name(s) skipped: not picked, alerted or traded "
+            f"in week {week.week}; {over_cap} week name(s) skipped: over the "
+            f"{cap}-name cap"
+        )
+        if week.unreadable:
+            skip_note += f"; unreadable week source(s): {', '.join(week.unreadable)}"
+        trustworthy_empty = not week.unreadable
     if not symbols:
         # "No tickers" is a real, publishable finding only when every source
         # was actually read. If any source was unreadable - or there was no
@@ -1083,10 +1120,11 @@ def run_ticker_briefs(
         # confirmation. Publishing here would overwrite the last verified
         # morning file with a claim derived from a folder that did not mount,
         # so this refuses instead and leaves that file exactly where it is.
-        if not watchlists.is_trustworthy_empty:
+        if not trustworthy_empty:
+            unreadable = week.unreadable if week is not None else watchlists.unreadable
             detail = (
-                "unreadable: " + ", ".join(watchlists.unreadable)
-                if watchlists.unreadable
+                "unreadable: " + ", ".join(unreadable)
+                if unreadable
                 else "no watchlist source was configured"
             )
             reason = (
@@ -1103,10 +1141,13 @@ def run_ticker_briefs(
             }
         content = render_morning_file(session_date, [], generated_at=now, total=0)
         published = atomic_publish_morning_file(content, path=morning_path)
+        reason = f"no Focus/watchlist tickers for {session_date}"
+        if week is not None:
+            reason = f"no picked, alerted or traded names in week {week.week}; {skip_note}"
         return {
             "status": ledger.STATUS_OK,
             "model": "",
-            "reason": f"no Focus/watchlist tickers for {session_date}",
+            "reason": reason,
             "outputs": [str(published)],
         }
     if not ai_summary.local_provider_enabled():
@@ -1133,7 +1174,15 @@ def run_ticker_briefs(
     outputs: list[str] = []
     calls = 0
     reused = 0
+    week_reused = 0
     early_stop = ""
+    cache_path: Path | None = None
+    cached: dict[str, dict[str, Any]] = {}
+    if week is not None:
+        from ai_jobs import week_names
+
+        cache_path = week_names.week_cache_path(root)
+        cached = week_names.read_week_cache(cache_path, week.week)
 
     def _publish_progress() -> None:
         """Re-render and republish the morning file from what is resolved now.
@@ -1186,6 +1235,13 @@ def run_ticker_briefs(
 
     for symbol in symbols:
         memberships = membership_by_symbol[symbol]
+        if symbol in cached:
+            # P1-3 3b: this week's brief for this symbol already exists.
+            entry = {key: value for key, value in cached[symbol].items() if key != "week"}
+            entries[symbol] = {**entry, "reused_from_week_cache": True}
+            reused += 1
+            week_reused += 1
+            continue
         evidence = build_ticker_evidence(
             base, symbol, memberships, budget_chars=ticker_budget
         )
@@ -1251,6 +1307,11 @@ def run_ticker_briefs(
         outputs.extend(exported)
         if str(entry.get("status") or "") == BRIEF_STATUS_BRIEFED:
             fresh.append(entry)
+            if cache_path is not None:
+                try:
+                    week_names.append_week_cache(cache_path, entry, week.week)
+                except OSError:
+                    logging.exception("Ticker briefs: week cache row for %s not written", symbol)
         _publish_progress()
 
     ordered = [entries[symbol] for symbol in symbols if symbol in entries]
@@ -1282,6 +1343,8 @@ def run_ticker_briefs(
         reason += ": " + ", ".join(str(entry.get("symbol")) for entry in failed)
     if early_stop:
         reason += f"; {early_stop}"
+    if week is not None:
+        reason += f"; {week_reused} reused from the week cache; {skip_note}"
     logging.info("Ticker briefs: %s", reason)
     return {
         "status": ledger.STATUS_OK if complete else ledger.STATUS_DEGRADED,
@@ -1292,10 +1355,25 @@ def run_ticker_briefs(
             "ticker_calls": calls,
             "tickers_resolved": len(resolved),
             "tickers_reused": reused,
+            **({"tickers_week_cache_reused": week_reused} if week is not None else {}),
             "tickers_failed": len(failed),
             **_summed_usage(fresh),
         },
     }
+
+
+def run_weekly_ticker_briefs(
+    *, session_date: str, now: datetime | None = None, **kwargs: Any
+) -> dict[str, Any]:
+    """The nightly slot (P1-3 3b): brief only the week's picks, alerts and traded names."""
+    from ai_jobs import week_names
+
+    return run_ticker_briefs(
+        session_date=session_date,
+        now=now,
+        week=week_names.load_week_names(session_date),
+        **kwargs,
+    )
 
 
 def _brief_one_symbol(

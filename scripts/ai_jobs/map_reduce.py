@@ -127,6 +127,47 @@ def chunk_chars(get_setting: Callable[..., Any] | None = None) -> int:
     return min(value, ai_summary.local_evidence_budget_ceiling_chars())
 
 
+#: P1-3 3c. Most slices one summary run reads; 0 or less means no cap.
+MAX_SLICES_SETTING_KEY = "ai_summary_max_slices"
+DEFAULT_MAX_SLICES = 24
+
+
+def max_slices(get_setting: Callable[..., Any] | None = None) -> int:
+    import ai_summary
+
+    getter = get_setting or ai_summary.get_local_setting
+    raw = getter(MAX_SLICES_SETTING_KEY, DEFAULT_MAX_SLICES)
+    if isinstance(raw, bool):
+        return DEFAULT_MAX_SLICES
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_SLICES
+
+
+def cap_chunks(chunks: Sequence["Chunk"], cap: int) -> tuple[list["Chunk"], int]:
+    """Keep at most ``cap`` slices, one per source per round, in plan order.
+
+    Returns (kept, number left out). Every source keeps its first slice before
+    any source gets a second one.
+    """
+    items = list(chunks)
+    if cap <= 0 or len(items) <= cap:
+        return items, 0
+    by_source: dict[str, list[int]] = {}
+    for position, chunk in enumerate(items):
+        by_source.setdefault(chunk.source_id, []).append(position)
+    picked: set[int] = set()
+    depth = 0
+    while len(picked) < cap:
+        for positions in by_source.values():
+            if depth < len(positions) and len(picked) < cap:
+                picked.add(positions[depth])
+        depth += 1
+    kept = [chunk for position, chunk in enumerate(items) if position in picked]
+    return kept, len(items) - len(kept)
+
+
 def _encoded(value: Any) -> str:
     return value if isinstance(value, str) else json.dumps(value, sort_keys=True, default=str)
 
@@ -538,12 +579,21 @@ def coverage_statement(
     failed: Sequence[str],
     sources: int,
     findings_dropped: int = 0,
+    capped: int = 0,
+    cap: int = 0,
 ) -> str:
     """The one line that keeps a partial read from reading as a whole one."""
-    text = (
-        f"Read in slices: {read} of {planned} slice(s) across {sources} source(s) were "
-        "read in full, so no source was reduced to a sample of its rows."
-    )
+    if int(capped or 0) > 0:
+        text = (
+            f"Read in slices: {read} of {planned} slice(s) across {sources} source(s) "
+            f"were read; {int(capped)} slice(s) were not read because one run reads at "
+            f"most {int(cap)} (every source kept its first slice)."
+        )
+    else:
+        text = (
+            f"Read in slices: {read} of {planned} slice(s) across {sources} source(s) were "
+            "read in full, so no source was reduced to a sample of its rows."
+        )
     if int(findings_dropped or 0) > 0:
         # TJ-13A item 3. The synthesis prompt has a ceiling, and a night that
         # produced more findings than fit has to say so here rather than
@@ -601,14 +651,20 @@ def run_map_reduce(
     chars: int | None = None,
     request: Callable[..., Any] | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
+    slice_cap: int | None = None,
 ) -> dict[str, Any]:
-    """Map every slice, then reduce. Returns a ``request_ai_summary``-shaped result."""
+    """Map every slice (up to the per-run cap), then reduce.
+
+    Returns a ``request_ai_summary``-shaped result.
+    """
     import ai_summary
 
     call = request or ai_summary.request_ai_summary
     size = chars if chars is not None else chunk_chars()
-    chunks = plan_chunks(evidence, chars=size)
-    planned = len(chunks)
+    cap = max_slices() if slice_cap is None else int(slice_cap)
+    all_chunks = plan_chunks(evidence, chars=size)
+    planned = len(all_chunks)
+    chunks, capped = cap_chunks(all_chunks, cap)
     started = time.time()
 
     collected: list[Mapping[str, Any]] = []
@@ -618,9 +674,10 @@ def run_map_reduce(
     #: slices had to shrink is a different night from one where a single tail
     #: chunk did, and the ledger can say which.
     retried: list[dict[str, str]] = []
+    to_read = len(chunks)
     for position, chunk in enumerate(chunks, start=1):
         if on_progress:
-            on_progress(position, planned, chunk.name)
+            on_progress(position, to_read, chunk.name)
         try:
             result = call(
                 provider="local",
@@ -646,11 +703,11 @@ def run_map_reduce(
             if ai_summary.is_endpoint_unreachable(exc):
                 raise RuntimeError(
                     f"the local AI endpoint was unreachable on slice {position} of "
-                    f"{planned}; giving up now rather than spending the window "
-                    f"discovering it {planned - position} more times: {exc}"
+                    f"{to_read}; giving up now rather than spending the window "
+                    f"discovering it {to_read - position} more times: {exc}"
                 ) from exc
             failed.append(f"{chunk.name}: {type(exc).__name__}")
-            _log.warning("map slice %s/%s (%s) failed: %s", position, planned, chunk.name, exc)
+            _log.warning("map slice %s/%s (%s) failed: %s", position, to_read, chunk.name, exc)
             continue
         summary = result.get("summary") if isinstance(result, Mapping) else None
         if isinstance(summary, Mapping):
@@ -738,6 +795,9 @@ def run_map_reduce(
             "slices_planned": planned,
             "slices_read": read,
             "slices_failed": failed,
+            # P1-3 3c: slices left out by the per-run cap, and the cap itself.
+            "slices_capped": int(capped),
+            "slice_cap": int(cap),
             "sources": sources,
             "chunk_chars": size,
             "synthesized": not synthesis_error,
@@ -775,6 +835,8 @@ def run_map_reduce(
                 failed=failed,
                 sources=sources,
                 findings_dropped=findings_dropped,
+                capped=capped,
+                cap=cap,
             ),
         },
     }

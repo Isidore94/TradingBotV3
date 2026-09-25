@@ -423,7 +423,8 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         # weeknight does not carry - so here it sits between the word tagger
         # and the briefs.
         "exit_note_fields",
-        "ticker_briefs",
+        # LEAD AMENDMENT 2026-09-24 (WISHLIST P1-3 3b, trader decision):
+        # `ticker_briefs` is Saturday-only, so it left this slate.
         # Econ morning brief (2026-09-24): a stage 2 model slot directly after
         # the briefs.
         "econ_brief",

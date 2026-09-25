@@ -392,7 +392,8 @@ def test_the_slot_is_registered_first_and_cheaply():
 
     slots = {slot.name: slot for slot in default_slots()}
     assert list(slots)[0] == "journal_import"
-    assert slots["journal_import"].reserve_minutes == 5.0
+    # P1-3 3d (2026-09-24): 5 min plus the ~7 min of IBKR Flex not-ready waits.
+    assert slots["journal_import"].reserve_minutes == 12.0
     assert slots["journal_import"].max_attempts == 3
     assert slots["journal_import"].enabled is True
 

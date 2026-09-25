@@ -454,6 +454,121 @@ def _ai_store_dir() -> Path | None:
         return None
 
 
+#: `ai_jobs.ollama_probe.PROBE_JOB`, spelled out so this module never imports `ai_jobs`.
+AI_PROBE_JOB = "ollama_probe"
+
+
+def _ai_ledger_rows(path: Path | None = None) -> list[dict[str, Any]]:
+    """Every readable AI job ledger row, or [] when the store is off or unreadable."""
+    if path is None:
+        store = _ai_store_dir()
+        if store is None:
+            return []
+        path = store / "logs" / AI_JOB_LEDGER_NAME
+    try:
+        from diagnostics.artifact_io import read_jsonl
+
+        return [row for row in read_jsonl(Path(path)) if isinstance(row, dict)]
+    except Exception:  # noqa: BLE001 - an unreadable ledger has no lines to show
+        return []
+
+
+def _short_ai_stamp(value: Any) -> str:
+    text = str(value or "").strip()
+    return text[:16].replace("T", " ") if text else "undated"
+
+
+def _one_line(value: Any, limit: int = 140) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def ai_probe_line(rows: list[dict[str, Any]]) -> str:
+    """"Ollama: ok/DOWN at <stamp> ..." from the newest probe row, or ""."""
+    for row in reversed(rows):
+        if str(row.get("job") or "") != AI_PROBE_JOB:
+            continue
+        stamp = _short_ai_stamp(row.get("started_at"))
+        if str(row.get("status") or "") == "ok":
+            return f"Ollama: ok at {stamp}"
+        detail = _one_line(row.get("error") or row.get("reason"))
+        return f"Ollama: DOWN at {stamp} ({detail}) - the night ran deterministic work only"
+    return ""
+
+
+def ai_budget_line(rows: list[dict[str, Any]]) -> str:
+    """"night budget <session>: skipped a, b" for the newest session with budget skips, or ""."""
+    session = ""
+    for row in reversed(rows):
+        if row.get("night_budget"):
+            session = str(row.get("session_date") or "")
+            break
+    if not session:
+        return ""
+    names: list[str] = []
+    for row in rows:
+        if row.get("night_budget") and str(row.get("session_date") or "") == session:
+            name = str(row.get("job") or "")
+            if name and name not in names:
+                names.append(name)
+    return f"night budget {session}: skipped {', '.join(names)}"
+
+
+def journal_import_line(rows: list[dict[str, Any]]) -> str:
+    """"journal import: last success <date>, last error <one line>" (P1-3 3d), or ""."""
+    runs = [row for row in rows if str(row.get("job") or "") == "journal_import"]
+    if not runs:
+        return ""
+    success = next(
+        (row for row in reversed(runs) if str(row.get("status") or "") in ("ok", "manual_test")),
+        None,
+    )
+    failure = next(
+        (row for row in reversed(runs) if str(row.get("status") or "") == "failed"), None
+    )
+    success_text = (
+        str(success.get("session_date") or "") or _short_ai_stamp(success.get("started_at"))
+        if success
+        else "never"
+    )
+    if failure:
+        error_text = (
+            f"{str(failure.get('session_date') or '')}: "
+            + _one_line(failure.get("error") or failure.get("reason"))
+        )
+    else:
+        error_text = "none"
+    return f"journal import: last success {success_text}, last error {error_text}"
+
+
+def ai_night_lines(path: Path | None = None) -> list[str]:
+    """The Health page's night-chain lines (P1-3), read from the AI job ledger."""
+    rows = _ai_ledger_rows(path)
+    lines = (ai_probe_line(rows), ai_budget_line(rows), journal_import_line(rows))
+    return [line for line in lines if line]
+
+
+def ai_night_digest_line(
+    path: Path | None = None, *, now: datetime | None = None, max_age_hours: float = 20.0
+) -> str:
+    """The phone digest line: said only when last night's newest probe failed."""
+    rows = _ai_ledger_rows(path)
+    line = ai_probe_line(rows)
+    if not line.startswith("Ollama: DOWN"):
+        return ""
+    newest = next(
+        (row for row in reversed(rows) if str(row.get("job") or "") == AI_PROBE_JOB), {}
+    )
+    try:
+        stamp = datetime.fromisoformat(str(newest.get("started_at") or ""))
+        moment = now or datetime.now().astimezone()
+        if stamp.tzinfo is None or (moment - stamp).total_seconds() > max_age_hours * 3600:
+            return ""
+    except (TypeError, ValueError):
+        return ""
+    return f"Night AI: {line}"
+
+
 def _master_scan_freshness_check(
     local_tz: tzinfo, manifest_path: Path, report_path: Path
 ) -> dict[str, Any]:

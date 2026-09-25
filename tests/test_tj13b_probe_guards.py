@@ -639,9 +639,16 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
     # reader, registered after `week_review_narration` - which a weeknight does
     # not carry - so on this slate it sits directly before the briefs and the
     # two-step chain becomes a three-step one.
-    assert slate[slate.index("ticker_briefs") - 3] == "day_review_narration"
-    assert slate[slate.index("ticker_briefs") - 2] == "observation_tags"
-    assert slate[slate.index("ticker_briefs") - 1] == "exit_note_fields"
+    # LEAD AMENDMENT 2026-09-24 (WISHLIST P1-3 3b, trader decision): the
+    # briefs are Saturday-only, so the chain is anchored on the exit-note reader
+    # and `econ_brief` now follows it directly.
+    assert "ticker_briefs" not in slate
+    assert slate[slate.index("exit_note_fields") - 2] == "day_review_narration"
+    assert slate[slate.index("exit_note_fields") - 1] == "observation_tags"
+    assert slate[slate.index("exit_note_fields") + 1] == "econ_brief"
+    pinned_at_e8c04f88 = tuple(
+        name for name in pinned_at_e8c04f88 if name != "ticker_briefs"
+    )
     set_aside = (
         "outcome_sweep",
         "day_review_facts",

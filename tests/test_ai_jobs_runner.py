@@ -433,7 +433,8 @@ def test_default_slate_runs_the_deterministic_stage_before_narration():
     assert by_name["ai_summary"].max_attempts == 3
     # Seconds of work, so it reserves almost nothing - and it is capped, because
     # a broker that is down stays down and should not spend the whole window.
-    assert by_name["journal_import"].reserve_minutes == 5.0
+    # P1-3 3d (2026-09-24): plus the ~7 min of IBKR Flex not-ready waits.
+    assert by_name["journal_import"].reserve_minutes == 12.0
     assert by_name["journal_import"].max_attempts == 3
 
 
