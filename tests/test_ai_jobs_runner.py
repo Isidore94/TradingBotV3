@@ -391,6 +391,9 @@ EXPECTED_SLOT_ORDER = (
     "journal_enrichment",
     "review_policy_draft",
     "setup_research",
+    # P1-4 4d (2026-09-25): Saturday-only setup-keys narration, inside stage 3
+    # and ahead of `improvement_ideas`, which stays last.
+    "setup_keys_narration",
     # TJ-6 (2026-09-20), appended LAST inside stage 3: it reads what the rest of
     # the night wrote and feeds nothing.
     "improvement_ideas",

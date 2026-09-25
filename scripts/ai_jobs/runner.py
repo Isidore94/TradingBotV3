@@ -877,6 +877,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         policy_draft,
         prediction_contrast,
         read_grades_mature,
+        setup_keys_narration,
         setup_research,
         theta_grading,
         week_review_narration,
@@ -1480,6 +1481,22 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             max_attempts=3,
             uses_model=True,
         ),
+        # P1-4 4d (2026-09-25): three cited sentences per setup family over the
+        # permutation report. Stage 3, after `setup_research` and before
+        # `improvement_ideas` (pinned last). SATURDAY ONLY via WEEKEND_ONLY_SLOTS:
+        # the report is weekly research. No deterministic half, so no
+        # `model_free_kwargs`; a missing report skips before any model load.
+        JobSlot(
+            name="setup_keys_narration",
+            run=setup_keys_narration.run_setup_keys_narration,
+            reserve_minutes=setup_keys_narration.RESERVE_MINUTES,
+            description=(
+                "Setup keys: three cited sentences per family from the "
+                "permutation report's facts (shadow only)"
+            ),
+            max_attempts=2,
+            uses_model=True,
+        ),
         # TJ-6 (2026-09-20), APPENDED LAST, inside stage 3.
         #
         # Last because it READS what the rest of the night wrote - the packs,
@@ -1530,7 +1547,10 @@ NIGHT_KINDS = (NIGHT_WEEKNIGHT, NIGHT_SATURDAY, NIGHT_SUNDAY)
 #:
 #: `ticker_briefs` joins it (trader, 2026-09-24, WISHLIST P1-3 3b): 66-139
 #: minutes a weeknight for briefs only the Saturday summary reads.
-WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration", "ticker_briefs")
+#:
+#: `setup_keys_narration` joins it (P1-4 4d, 2026-09-25): the permutation report
+#: is weekly research, narrated once on Saturday.
+WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration", "ticker_briefs", "setup_keys_narration")
 
 #: The deterministic stage (decision 0018 stage 1), which every night runs. It
 #: ENDS at `day_review_facts`, which closes that stage today; a later packet
