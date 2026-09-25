@@ -135,6 +135,11 @@ def format_auto_regime_reading(reading) -> tuple[str, str]:
             "(kept fresh even while scanning is paused).",
         )
     label = str(reading.get("label") or reading.get("env_key") or "?")
+    # P2-8 8b: a display-only second axis from the recorded internals.
+    axis = reading.get("internals_axis")
+    phrases = tuple(axis.get("phrases") or ()) if isinstance(axis, dict) else ()
+    if phrases:
+        label = " + ".join([label, *phrases[:2]])
     if reading.get("override_active"):
         chip = f"Manual: {reading.get('active_label')} (auto sees {label})"
     else:
@@ -172,6 +177,8 @@ def format_auto_regime_reading(reading) -> tuple[str, str]:
             f"Session too young for the VWAP read - day% rule applies "
             f"(+/-{strong_pct:.1f}% on the day = strong)."
         )
+    if phrases:
+        lines.append(f"Internals (display only): {' + '.join(phrases)}")
     if reading.get("override_active"):
         lines.append(
             f"Manual override active ({reading.get('active_label')}); auto keeps measuring - "
