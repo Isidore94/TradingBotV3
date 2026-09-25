@@ -9,12 +9,19 @@ Two populations, ONE ladder, never pooled:
 
 * **Swing** - a Setup Tracker family at its row grain ``(side, bucket, family)``,
   read off ``master_avwap_setup_type_recent_stats.csv`` (the tracker's lately
-  window, live namespace only - study groups are research, not picks).
+  window, live namespace only - study groups are research, not picks). The
+  ladder reads its WIN AGAINST THE TAPE when 30+ picks have one: the pick's
+  5-session side return beat SPY's same-side return over the same sessions
+  (`swing_tape_stats`). Under that it reads the plain win and says
+  ``tape: unknown``.
 * **Day trade** - an M5 alert type ``(bounce_type, side)`` over the lately
   window of the outcome log, judged as a bracket trade: did it reach **+1R before
   -1R**? A row that shows both for the first time is a LOSS (the adverse extreme
   first, as `real_miss` does). An alert that touched neither is undecided and
-  counted apart, never a zero.
+  counted apart, never a zero. SPY-relative does not apply to a bracket.
+
+PROVEN and A also need the family's cumulative R over the window to be >= 0
+(`cum_r_lately`, the sum of each pick's own R); unknown is not >= 0.
 
 Presentation only. Nothing here is read by a detector, a score, an alert
 decision, a watchlist, Focus, the review queue or ``review_policy.json``: the
@@ -27,7 +34,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Iterable, Mapping
 
-SCHEMA = "setup_grades_v1"
+SCHEMA = "setup_grades_v2"
 
 PROVEN, A, B, C, D, NEW = "PROVEN", "A", "B", "C", "D", "New"
 GRADES = (PROVEN, A, B, C, D, NEW)
@@ -47,11 +54,20 @@ B_MIN_LOW_BOUND = 0.50
 C_MIN_WIN_RATE = 0.50
 
 RULES_TEXT = (
-    "PROVEN: 100+ closed over 15+ sessions, win-rate low bound >= 60%, avg R > 0. "
-    "A: 30+ over 10+ sessions, low bound >= 55%, avg R > 0. "
+    "PROVEN: 100+ closed over 15+ sessions, win-rate low bound >= 60%, avg R > 0, "
+    "cum R >= 0. "
+    "A: 30+ over 10+ sessions, low bound >= 55%, avg R > 0, cum R >= 0. "
     "B: 30+, low bound >= 50%. C: 30+, win rate >= 50%. D: 30+, below 50%. "
-    "New: under 30."
+    "New: under 30. "
+    "Swing wins are wins vs SPY (the pick's 5-session side return beat SPY's) "
+    "when 30+ picks have one, else the plain win with 'tape: unknown'. "
+    "Day trade wins are +1R before -1R."
 )
+
+#: The swing tape horizon: the tracker's 5-session favorable-direction question.
+TAPE_HORIZON_SESSIONS = 5
+TAPE_OUTCOME_KIND = "favorable_direction_session_v2"
+TAPE_UNKNOWN = "tape: unknown"
 
 
 def wilson_lower_bound(wins: int, n: int) -> float | None:
@@ -62,29 +78,71 @@ def wilson_lower_bound(wins: int, n: int) -> float | None:
 
 
 def grade_for(
-    *, n: int, sessions: int, wins: int, avg_r: float | None
+    *,
+    n: int,
+    sessions: int,
+    wins: int,
+    avg_r: float | None,
+    cum_r_lately: float | None = None,
+    tape: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The ladder, once. Returns the grade with the numbers it was read from."""
+    """The ladder, once. Returns the grade with the numbers it was read from.
+
+    ``tape`` (swing only) is ``{"wins", "n", "sessions"}`` of wins vs SPY; when
+    its n meets the floor the ladder reads it instead of the plain win. PROVEN
+    and A need ``cum_r_lately >= 0``; None (unknown) blocks them.
+    """
     n = int(n or 0)
     wins = int(wins or 0)
     sessions = int(sessions or 0)
     win_rate = (wins / n) if n else None
     low = wilson_lower_bound(wins, n)
     positive = avg_r is not None and float(avg_r) > 0
+    cum_r = _float(cum_r_lately)
+    cum_ok = cum_r is not None and cum_r >= 0
+    extra: dict[str, Any] = {"cum_r_lately": cum_r}
+    ladder_sessions, ladder_rate, ladder_low, ladder_n = sessions, win_rate, low, n
+    if tape is not None:
+        tape_n = int(tape.get("n") or 0)
+        tape_wins = int(tape.get("wins") or 0)
+        tape_sessions = int(tape.get("sessions") or 0)
+        tape_rate = (tape_wins / tape_n) if tape_n else None
+        tape_low = wilson_lower_bound(tape_wins, tape_n)
+        on_tape = tape_n >= MIN_N
+        extra.update(
+            tape_n=tape_n,
+            tape_wins=tape_wins,
+            tape_sessions=tape_sessions,
+            tape_win_rate=tape_rate,
+            tape_low_bound=tape_low,
+            tape_unknown=int(tape.get("unknown") or 0),
+            grade_basis="tape" if on_tape else "plain",
+            tape_note="" if on_tape else TAPE_UNKNOWN,
+        )
+        if on_tape:
+            ladder_sessions, ladder_rate, ladder_low, ladder_n = (
+                tape_sessions, tape_rate, tape_low, tape_n
+            )
     if n < MIN_N:
         grade = NEW
     elif (
-        n >= PROVEN_MIN_N
-        and sessions >= PROVEN_MIN_SESSIONS
-        and (low or 0) >= PROVEN_MIN_LOW_BOUND
+        ladder_n >= PROVEN_MIN_N
+        and ladder_sessions >= PROVEN_MIN_SESSIONS
+        and (ladder_low or 0) >= PROVEN_MIN_LOW_BOUND
         and positive
+        and cum_ok
     ):
         grade = PROVEN
-    elif sessions >= A_MIN_SESSIONS and (low or 0) >= A_MIN_LOW_BOUND and positive:
+    elif (
+        ladder_sessions >= A_MIN_SESSIONS
+        and (ladder_low or 0) >= A_MIN_LOW_BOUND
+        and positive
+        and cum_ok
+    ):
         grade = A
-    elif (low or 0) >= B_MIN_LOW_BOUND:
+    elif (ladder_low or 0) >= B_MIN_LOW_BOUND:
         grade = B
-    elif (win_rate or 0) >= C_MIN_WIN_RATE:
+    elif (ladder_rate or 0) >= C_MIN_WIN_RATE:
         grade = C
     else:
         grade = D
@@ -96,7 +154,15 @@ def grade_for(
         "win_rate": win_rate,
         "low_bound": low,
         "avg_r": None if avg_r is None else float(avg_r),
+        **extra,
     }
+
+
+def ladder_low_bound(cell: Mapping[str, Any] | None) -> float:
+    """The low bound the grade was read from: the tape's when it was used."""
+    cell = cell or {}
+    key = "tape_low_bound" if cell.get("grade_basis") == "tape" else "low_bound"
+    return float(cell.get(key) or 0.0)
 
 
 def sort_rank(grade: str | None) -> int:
@@ -133,13 +199,129 @@ def swing_key(side: Any, bucket: Any, family: Any) -> str:
     )
 
 
-def swing_cells(recent_rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+WIN, LOSS, UNDECIDED, OPEN, UNKNOWN = "win", "loss", "undecided", "open", "unknown"
+
+
+def tape_result(
+    pick: Mapping[str, Any],
+    horizon_row: Mapping[str, Any] | None,
+    spy_closes: Mapping[str, float] | None,
+    *,
+    as_of: str = "",
+) -> str:
+    """WIN / LOSS vs SPY over the pick's 5 sessions, or UNKNOWN.
+
+    Long wins when its return beats SPY's; short wins when its short return
+    (-ret) beats SPY's short return (-spy_ret). ``side_return_pct`` is already
+    side-adjusted. A missing row, close or measurement, or a target after
+    ``as_of``, is UNKNOWN - never a win or a loss. SPY is read only on the
+    entry session (the scan date) and the target session.
+    """
+    row = horizon_row or {}
+    if str(row.get("measured") or "").strip().lower() != "true":
+        return UNKNOWN
+    if str(row.get("maturity") or "").strip().lower() != "mature":
+        return UNKNOWN
+    side_return = _float(row.get("side_return_pct"))
+    entry_day = str(row.get("scan_date") or "").strip()[:10]
+    target_day = str(row.get("target_session") or "").strip()[:10]
+    if side_return is None or not entry_day or not target_day:
+        return UNKNOWN
+    if as_of and target_day > str(as_of)[:10]:
+        return UNKNOWN
+    closes = spy_closes or {}
+    spy_entry, spy_target = _float(closes.get(entry_day)), _float(closes.get(target_day))
+    if spy_entry is None or spy_entry <= 0 or spy_target is None:
+        return UNKNOWN
+    spy_return = (spy_target / spy_entry - 1.0) * 100.0
+    side = str(pick.get("side") or row.get("side") or "").strip().upper()
+    if side not in {"LONG", "SHORT"}:
+        return UNKNOWN
+    spy_side_return = spy_return if side == "LONG" else -spy_return
+    return WIN if side_return > spy_side_return else LOSS
+
+
+def horizon_index(
+    horizon_rows: Iterable[Mapping[str, Any]] | None,
+    *,
+    horizon: int = TAPE_HORIZON_SESSIONS,
+) -> dict[tuple[str, str, str], Mapping[str, Any]]:
+    """``{(SYMBOL, SIDE, scan_date): row}`` for the 5-session v2 rows."""
+    index: dict[tuple[str, str, str], Mapping[str, Any]] = {}
+    for row in horizon_rows or ():
+        if str(row.get("outcome_kind") or "").strip() != TAPE_OUTCOME_KIND:
+            continue
+        if _int(row.get("horizon_sessions")) != int(horizon):
+            continue
+        key = (
+            str(row.get("symbol") or "").strip().upper(),
+            str(row.get("side") or "").strip().upper(),
+            str(row.get("scan_date") or "").strip()[:10],
+        )
+        index[key] = row
+    return index
+
+
+def swing_tape_stats(
+    picks: Iterable[Mapping[str, Any]] | None,
+    horizon_rows: Any,
+    spy_closes: Mapping[str, float] | None,
+    *,
+    as_of: str = "",
+) -> dict[str, dict[str, Any]]:
+    """Per swing key: wins vs SPY, their n and sessions, and the cum R.
+
+    ``picks`` are the tracker's selected episodes in the window
+    (`looking_back.swing_pick_results`: symbol, session = scan date, side,
+    bucket, family, r). ``horizon_rows`` is the horizon file's rows or a
+    `horizon_index`. ``cum_r_lately`` sums each closed pick's own R; None when
+    the key has no closed pick.
+    """
+    index = horizon_rows if isinstance(horizon_rows, Mapping) else horizon_index(horizon_rows)
+    stats: dict[str, dict[str, Any]] = {}
+    for pick in picks or ():
+        side = str(pick.get("side") or "").strip().upper()
+        key = swing_key(side, pick.get("bucket"), pick.get("family"))
+        cell = stats.setdefault(
+            key, {"wins": 0, "n": 0, "unknown": 0, "_sessions": set(), "_r": []}
+        )
+        r = _float(pick.get("r"))
+        if r is not None:
+            cell["_r"].append(r)
+        scan_day = str(pick.get("session") or "").strip()[:10]
+        row = index.get((str(pick.get("symbol") or "").strip().upper(), side, scan_day))
+        outcome = tape_result(pick, row, spy_closes, as_of=as_of)
+        if outcome == UNKNOWN:
+            cell["unknown"] += 1
+            continue
+        cell["n"] += 1
+        cell["wins"] += 1 if outcome == WIN else 0
+        cell["_sessions"].add(scan_day)
+    return {
+        key: {
+            "wins": cell["wins"],
+            "n": cell["n"],
+            "unknown": cell["unknown"],
+            "sessions": len(cell["_sessions"]),
+            "cum_r_lately": round(sum(cell["_r"]), 6) if cell["_r"] else None,
+        }
+        for key, cell in stats.items()
+    }
+
+
+def swing_cells(
+    recent_rows: Iterable[Mapping[str, Any]],
+    tape_stats: Mapping[str, Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """One graded cell per live tracker family row.
 
     Wins, losses and flats are COUNTS (never a recency-weighted rate), and a
     flat is not a win. Avg R is the representative (primary-stop) closed R,
     falling back to the cross-variant mean - the same preference as the tracker.
+    ``tape_stats`` is `swing_tape_stats` over the same window; a key it lacks
+    (or None) has its tape and cum R unknown.
     """
+    tape_stats = tape_stats or {}
     cells = []
     for row in recent_rows or ():
         if str(row.get("namespace") or "live").strip().lower() != "live":
@@ -149,7 +331,17 @@ def swing_cells(recent_rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]
         avg_r = _float(row.get("representative_closed_r"))
         if avg_r is None:
             avg_r = _float(row.get("avg_closed_r"))
-        cell = grade_for(n=n, sessions=_int(row.get("n_entry_sessions")), wins=wins, avg_r=avg_r)
+        tape = tape_stats.get(
+            swing_key(row.get("side"), row.get("priority_bucket"), row.get("setup_family"))
+        ) or {}
+        cell = grade_for(
+            n=n,
+            sessions=_int(row.get("n_entry_sessions")),
+            wins=wins,
+            avg_r=avg_r,
+            cum_r_lately=tape.get("cum_r_lately"),
+            tape=tape or {"wins": 0, "n": 0, "sessions": 0},
+        )
         cell.update(
             side=str(row.get("side") or "").strip().upper(),
             bucket=str(row.get("priority_bucket") or "").strip(),
@@ -163,8 +355,6 @@ def swing_cells(recent_rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]
 # ---------------------------------------------------------------------------
 # day trade: +1R before -1R
 # ---------------------------------------------------------------------------
-
-WIN, LOSS, UNDECIDED, OPEN = "win", "loss", "undecided", "open"
 
 
 def _flag(value: Any) -> bool:
@@ -246,7 +436,14 @@ def daytrade_cells(results: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]
     for (bounce_type, side), tally in tallies.items():
         n = tally["wins"] + tally["losses"]
         avg_r = (2 * tally["wins"] / n - 1) if n else None
-        cell = grade_for(n=n, sessions=len(tally["sessions"]), wins=tally["wins"], avg_r=avg_r)
+        cell = grade_for(
+            n=n,
+            sessions=len(tally["sessions"]),
+            wins=tally["wins"],
+            avg_r=avg_r,
+            # Each bracket alert is +1R or -1R.
+            cum_r_lately=float(tally["wins"] - tally["losses"]) if n else None,
+        )
         cell.update(
             bounce_type=bounce_type,
             side=side,
@@ -272,12 +469,13 @@ def build_payload(
     recent_rows: Iterable[Mapping[str, Any]] | None,
     outcome_rows: Iterable[Mapping[str, Any]] | None,
     as_of: str = "",
+    swing_tape: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema": SCHEMA,
         "as_of": str(as_of or ""),
         "rules": RULES_TEXT,
-        "swing": swing_cells(recent_rows or ()),
+        "swing": swing_cells(recent_rows or (), swing_tape),
         "daytrade": daytrade_cells(bracket_results(outcome_rows or ())),
     }
 
@@ -287,7 +485,7 @@ def _best_first(cells: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
         cells,
         key=lambda cell: (
             sort_rank(cell.get("grade")),
-            -(cell.get("low_bound") or 0.0),
+            -ladder_low_bound(cell),
             -(cell.get("n") or 0),
         ),
     )
@@ -317,7 +515,25 @@ def swing_sort_key(cell: Mapping[str, Any] | None) -> tuple:
     """Best first; a row with no graded family is New."""
     if not cell:
         return (UNGRADED_RANK, 0.0)
-    return (sort_rank(cell.get("grade")), -(cell.get("low_bound") or 0.0))
+    return (sort_rank(cell.get("grade")), -ladder_low_bound(cell))
+
+
+def daytrade_cell_for_alert(
+    payload_lookup: Mapping[str, Mapping[str, Any]], bounce_type: Any, side: Any
+) -> Mapping[str, Any] | None:
+    """The graded cell of the BEST-graded bounce type the alert carries, or None."""
+    from held_run_score import bounce_components
+
+    best: Mapping[str, Any] | None = None
+    for part in str(bounce_type or "").replace(";", "-").split("-"):
+        for component in bounce_components(part) or ():
+            cell = payload_lookup.get(daytrade_key(component, side))
+            if not cell:
+                continue
+            grade = str(cell.get("grade") or NEW)
+            if best is None or sort_rank(grade) < sort_rank(str(best.get("grade") or NEW)):
+                best = cell
+    return best
 
 
 def daytrade_grade_for_alert(
@@ -328,23 +544,43 @@ def daytrade_grade_for_alert(
     An alert whose types the log has never graded is New. A measured D stays D
     even though New sorts above it.
     """
-    from held_run_score import bounce_components
-
-    best: str | None = None
-    for part in str(bounce_type or "").replace(";", "-").split("-"):
-        for component in bounce_components(part) or ():
-            cell = payload_lookup.get(daytrade_key(component, side))
-            if not cell:
-                continue
-            grade = str(cell.get("grade") or NEW)
-            if best is None or sort_rank(grade) < sort_rank(best):
-                best = grade
-    return best or NEW
+    cell = daytrade_cell_for_alert(payload_lookup, bounce_type, side)
+    return str(cell.get("grade") or NEW) if cell else NEW
 
 
 def badge(grade: str | None) -> str:
     grade = str(grade or NEW)
     return "NEW" if grade == NEW else grade
+
+
+def _pct(value: Any) -> str:
+    return f"{float(value) * 100:.0f}%"
+
+
+def cell_line(cell: Mapping[str, Any] | None) -> str:
+    """One line: ``PROVEN · win vs SPY 62% (low 55%) · cum R +4.1 · n 114``.
+
+    A swing cell graded on the tape shows its win vs SPY and that n; one graded
+    on the plain win adds ``tape: unknown``. A day-trade cell shows its bracket
+    win. Unknown cum R prints as ``cum R unknown``.
+    """
+    if not cell:
+        return badge(NEW)
+    parts = [badge(cell.get("grade"))]
+    n = int(cell.get("n") or 0)
+    if cell.get("grade_basis") == "tape":
+        rate, low, label = cell.get("tape_win_rate"), cell.get("tape_low_bound"), "win vs SPY"
+        n = int(cell.get("tape_n") or 0)
+    else:
+        rate, low, label = cell.get("win_rate"), cell.get("low_bound"), "win"
+    if rate is not None:
+        parts.append(f"{label} {_pct(rate)}" + (f" (low {_pct(low)})" if low is not None else ""))
+    if cell.get("tape_note"):
+        parts.append(str(cell["tape_note"]))
+    cum_r = _float(cell.get("cum_r_lately"))
+    parts.append(f"cum R {cum_r:+.1f}" if cum_r is not None else "cum R unknown")
+    parts.append(f"n {n}")
+    return " · ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +591,8 @@ def badge(grade: str | None) -> str:
 NOT_IN_WINDOW = "none in this window"
 #: What the prior column says when the same key has no prior cell.
 NO_PRIOR = "no prior"
+#: The tape and cum-R numbers each hold-out row carries per window.
+HOLDOUT_FIELDS = ("tape_win_rate", "tape_low_bound", "tape_n", "cum_r_lately")
 
 
 def holdout_text(cell: Mapping[str, Any] | None, *, missing: str = NOT_IN_WINDOW) -> str:
@@ -372,6 +610,18 @@ def holdout_text(cell: Mapping[str, Any] | None, *, missing: str = NOT_IN_WINDOW
         parts.append(f"win {float(rate):.0%}" + (f" (low {float(low):.0%})" if low is not None else ""))
     if avg is not None:
         parts.append(f"avg {float(avg):+.2f}R")
+    if cell.get("grade_basis") == "tape" and cell.get("tape_win_rate") is not None:
+        tape_low = cell.get("tape_low_bound")
+        parts.append(
+            f"vs SPY {float(cell['tape_win_rate']):.0%}"
+            + (f" (low {float(tape_low):.0%})" if tape_low is not None else "")
+            + f" n={int(cell.get('tape_n') or 0)}"
+        )
+    elif cell.get("tape_note"):
+        parts.append(str(cell["tape_note"]))
+    cum_r = _float(cell.get("cum_r_lately"))
+    if cum_r is not None:
+        parts.append(f"cum {cum_r:+.1f}R")
     parts.append(f"n={n}")
     return " · ".join(parts)
 
@@ -398,6 +648,11 @@ def holdout_view(
             "prior_n": int((prior.get(key) or {}).get("n") or 0),
             "recent_text": holdout_text(recent.get(key)),
             "prior_text": holdout_text(prior.get(key), missing=NO_PRIOR),
+            **{
+                f"{window}_{field}": (cells.get(key) or {}).get(field)
+                for window, cells in (("recent", recent), ("prior", prior))
+                for field in HOLDOUT_FIELDS
+            },
         }
         for key in keys
     ]

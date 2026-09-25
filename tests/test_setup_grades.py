@@ -37,17 +37,17 @@ def _app():
 def test_the_ladder_uses_counts_sessions_the_low_bound_and_avg_r():
     # 29 closed is New however good it looks.
     assert sg.grade_for(n=29, sessions=20, wins=29, avg_r=1.0)["grade"] == sg.NEW
-    # 100+ closed, 15+ sessions, low bound >= 60%, avg R > 0 -> PROVEN.
-    proven = sg.grade_for(n=200, sessions=20, wins=150, avg_r=0.3)
+    # 100+ closed, 15+ sessions, low bound >= 60%, avg R > 0, cum R >= 0 -> PROVEN.
+    proven = sg.grade_for(n=200, sessions=20, wins=150, avg_r=0.3, cum_r_lately=60.0)
     assert proven["grade"] == sg.PROVEN
     assert proven["low_bound"] == pytest.approx(0.6857, abs=1e-3)
     # The same record with a non-positive avg R cannot be PROVEN or A.
-    assert sg.grade_for(n=200, sessions=20, wins=150, avg_r=0.0)["grade"] == sg.B
+    assert sg.grade_for(n=200, sessions=20, wins=150, avg_r=0.0, cum_r_lately=0.0)["grade"] == sg.B
     # Too few sessions for PROVEN, enough for A.
-    assert sg.grade_for(n=200, sessions=12, wins=150, avg_r=0.3)["grade"] == sg.A
+    assert sg.grade_for(n=200, sessions=12, wins=150, avg_r=0.3, cum_r_lately=60.0)["grade"] == sg.A
     # 60 closed at 70%: low bound ~0.57 -> A with 10+ sessions, B with fewer.
-    assert sg.grade_for(n=60, sessions=10, wins=42, avg_r=0.2)["grade"] == sg.A
-    assert sg.grade_for(n=60, sessions=9, wins=42, avg_r=0.2)["grade"] == sg.B
+    assert sg.grade_for(n=60, sessions=10, wins=42, avg_r=0.2, cum_r_lately=12.0)["grade"] == sg.A
+    assert sg.grade_for(n=60, sessions=9, wins=42, avg_r=0.2, cum_r_lately=12.0)["grade"] == sg.B
     # 55% on 100: low bound ~0.45, rate >= 50% -> C; 45% -> D.
     assert sg.grade_for(n=100, sessions=20, wins=55, avg_r=0.1)["grade"] == sg.C
     assert sg.grade_for(n=100, sessions=20, wins=45, avg_r=-0.1)["grade"] == sg.D
@@ -82,8 +82,10 @@ def _family_row(**overrides):
 
 
 def test_swing_cells_count_wins_and_leave_study_groups_out():
+    # P8-P6: PROVEN also needs a known cum R >= 0 (here with the tape unknown).
     cells = sg.swing_cells(
-        [_family_row(), _family_row(namespace="study", setup_family="hv_level_break")]
+        [_family_row(), _family_row(namespace="study", setup_family="hv_level_break")],
+        {"SHORT|near_favorite_zone|avwape_to_1stdev": {"cum_r_lately": 38.0}},
     )
     assert len(cells) == 1
     cell = cells[0]
@@ -327,6 +329,11 @@ def test_the_service_writes_the_grades_beside_the_snapshot(tmp_path, monkeypatch
     monkeypatch.setattr(svc, "read_held_run_summaries", lambda: None)
     monkeypatch.setattr(
         svc, "_outcome_rows", lambda: [_out("AAPL_long_20260921_09_45_00_vwap", 2, True, False)]
+    )
+    # P8-P6: the swing cell's cum R (PROVEN needs it >= 0), off the live stores.
+    monkeypatch.setattr(
+        svc, "read_swing_tape",
+        lambda *_a, **_k: {"SHORT|near_favorite_zone|avwape_to_1stdev": {"cum_r_lately": 38.0}},
     )
     service = svc.WorkingLatelyService(store_dir=tmp_path / "wl")
     payload = service.build_payload()
