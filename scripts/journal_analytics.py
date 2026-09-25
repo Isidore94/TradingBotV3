@@ -135,6 +135,50 @@ def _load_json(path: Path) -> Any:
         return None
 
 
+#: The tracker record fields the auto-tagger's context rows read.
+TRACKER_CONTEXT_FIELDS = (
+    "symbol",
+    "side",
+    "scan_date",
+    "entry_trade_date",
+    "setup_family",
+    "priority_bucket",
+    "favorite_zone",
+    "priority_score",
+    "retest_reference_level",
+    "mid_earnings_primary_trigger_level",
+    "compression_flag",
+)
+
+
+def _nan_as_none(value: Any) -> Any:
+    """NaN (at any depth) read as None: SQLite's JSON extraction turns NaN into null."""
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _nan_as_none(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_nan_as_none(item) for item in value]
+    return value
+
+
+def _tracker_context_row(record: dict[str, Any]) -> dict[str, Any]:
+    """One tracker setup (whole record or its projection) as a tagger context row."""
+    setup = {name: _nan_as_none(record.get(name)) for name in TRACKER_CONTEXT_FIELDS}
+    return {
+        "source": "setup_tracker",
+        "symbol": _normalize_symbol(setup.get("symbol")),
+        "side": _normalize_side(setup.get("side")),
+        "date": _parse_date(setup.get("scan_date") or setup.get("entry_trade_date")),
+        "setup_family": setup.get("setup_family") or "general",
+        "priority_bucket": setup.get("priority_bucket") or "",
+        "favorite_zone": setup.get("favorite_zone") or "",
+        "priority_score": _coerce_float(setup.get("priority_score")),
+        "retest": setup.get("retest_reference_level") or setup.get("mid_earnings_primary_trigger_level") or "",
+        "compression": bool(setup.get("compression_flag")),
+    }
+
+
 def _read_csv_rows(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -413,8 +457,11 @@ class AutoTagger:
         intraday_bounces_path: Path = INTRADAY_BOUNCES_FILE,
         lookback_calendar_days: int = DEFAULT_SWING_LOOKBACK_CALENDAR_DAYS,
         evidence: Any = None,
+        setup_tracker_db_path: Path | None = None,
     ) -> None:
         self.setup_tracker_path = Path(setup_tracker_path)
+        # None = the desk's tracker mirror (tracker_store.default_store_path).
+        self.setup_tracker_db_path = Path(setup_tracker_db_path) if setup_tracker_db_path is not None else None
         self.focus_path = Path(focus_path)
         self.avwap_signals_path = Path(avwap_signals_path)
         self.intraday_bounces_path = Path(intraday_bounces_path)
@@ -858,30 +905,26 @@ class AutoTagger:
         return rows
 
     def _load_tracker_rows(self) -> list[dict[str, Any]]:
+        # The SQLite mirror extracts just these fields; the JSON is parsed only
+        # when the mirror is not an exact copy of the file (reason logged).
+        try:
+            from tracker_store import load_fresh_projection
+
+            projected, reason = load_fresh_projection(
+                self.setup_tracker_path, TRACKER_CONTEXT_FIELDS, db_path=self.setup_tracker_db_path
+            )
+        except Exception as exc:
+            projected, reason = None, f"store reader unavailable: {exc}"
+        if projected is not None:
+            return [_tracker_context_row(setup) for setup in projected]
+        logging.warning("Journal auto-tagger read the setup tracker JSON, not the SQLite store: %s", reason)
         payload = _load_json(self.setup_tracker_path)
         if not isinstance(payload, dict):
             return []
         setups = payload.get("setups")
         if not isinstance(setups, dict):
             return []
-        rows = []
-        for setup in setups.values():
-            if not isinstance(setup, dict):
-                continue
-            rows.append(
-                {
-                    "source": "setup_tracker",
-                    "symbol": _normalize_symbol(setup.get("symbol")),
-                    "side": _normalize_side(setup.get("side")),
-                    "date": _parse_date(setup.get("scan_date") or setup.get("entry_trade_date")),
-                    "setup_family": setup.get("setup_family") or "general",
-                    "priority_bucket": setup.get("priority_bucket") or "",
-                    "favorite_zone": setup.get("favorite_zone") or "",
-                    "priority_score": _coerce_float(setup.get("priority_score")),
-                    "retest": setup.get("retest_reference_level") or setup.get("mid_earnings_primary_trigger_level") or "",
-                    "compression": bool(setup.get("compression_flag")),
-                }
-            )
+        rows = [_tracker_context_row(setup) for setup in setups.values() if isinstance(setup, dict)]
         # The parsed blob is 1.08 GB and the projection above is a few MB.
         # Dropping the references here rather than at the return statement
         # means the tagging that follows never runs alongside both.

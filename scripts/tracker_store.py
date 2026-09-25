@@ -26,13 +26,20 @@ there is a warning, never a failed save. No reader is moved. No detector,
 scoring or tracker logic changes - the payload is copied, not interpreted.
 Moving the readers and retiring the JSON is F3 step 2, gated on ``verify``
 reporting zero differences across a week of live saves.
+
+**Readers (P0-2 2d, decision 0017).** ``load_fresh_payload`` and
+``load_fresh_projection`` serve the store only when its source stamp matches
+the JSON file on disk (path, size, mtime); otherwise they return the reason and
+the caller reads the JSON. The JSON is still written first and stays the truth.
 """
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import logging
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -50,10 +57,45 @@ RECORD_SECTIONS = ("setups", "control_setups", "study_setups")
 HEADER_FIELDS = ("schema_version", "updated_at", "data_session", "saved_at", "saved_by")
 SECTION_FIELDS = ("daily_watchlists", "stats", "setup_type_stats", "attribute_registry")
 SHADOW_SETTING = "tracker_storage_shadow"
+#: Mirror format 2 (P0-2 2d): record text is encoded exactly as the JSON save
+#: encodes it (insertion order, the saver's ``default``), each section's key order
+#: is kept in ``meta``, and the mirror is stamped with the JSON file it copies.
+#: Readers use the store only when that stamp matches the file on disk.
+MIRROR_FORMAT = 2
+ORDER_META_PREFIX = "order:"
+SOURCE_META_KEYS = ("mirror_format", "source_path", "source_size", "source_mtime_ns")
 
 
 def _dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+def _encode(value: Any, json_default=None) -> str:
+    """The JSON save's own encoding: insertion order, compact, the saver's ``default``."""
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=json_default or str)
+
+
+def _normalized_source_path(path: Path | str) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def _source_stamp(path: Path | str) -> dict[str, str] | None:
+    """The JSON file's identity (path, size, mtime_ns); None when it cannot be stat'ed."""
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    return {
+        "mirror_format": str(MIRROR_FORMAT),
+        "source_path": _normalized_source_path(path),
+        "source_size": str(int(stat.st_size)),
+        "source_mtime_ns": str(int(stat.st_mtime_ns)),
+    }
+
+
+def file_stamp(path: Path | str) -> dict[str, str] | None:
+    """The stamp a mirror of ``path`` carries: take it when payload and file are known to match."""
+    return _source_stamp(path)
 
 
 def _digest(text: str) -> str:
@@ -130,8 +172,23 @@ class TrackerStore:
         return conn
 
     # -- writing ------------------------------------------------------------
-    def save_payload(self, payload: dict, *, now: datetime | None = None) -> SaveReport:
-        """Mirror ``payload`` into the store, rewriting only what changed."""
+    def save_payload(
+        self,
+        payload: dict,
+        *,
+        now: datetime | None = None,
+        source_path: Path | str | None = None,
+        source_stamp: dict | None = None,
+        json_default=None,
+    ) -> SaveReport:
+        """Mirror ``payload`` into the store, rewriting only what changed.
+
+        ``source_stamp`` is ``file_stamp(source_path)`` taken when ``payload``
+        and the file were known to match (right after the save, or before the
+        read). The mirror is stamped only if the file still has that stamp at
+        commit; otherwise, or without both arguments, the stamp is cleared and
+        readers use the JSON.
+        """
         started = datetime.now(timezone.utc)
         stamp = (now or started).isoformat(timespec="seconds")
         report = SaveReport(path=str(self.path))
@@ -141,10 +198,10 @@ class TrackerStore:
                 for name in HEADER_FIELDS:
                     conn.execute(
                         "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                        (name, _dumps(payload.get(name))),
+                        (name, _encode(payload.get(name), json_default)),
                     )
                 for name in SECTION_FIELDS:
-                    text = _dumps(payload.get(name))
+                    text = _encode(payload.get(name), json_default)
                     digest = _digest(text)
                     row = conn.execute("SELECT digest FROM sections WHERE name = ?", (name,)).fetchone()
                     if row is None or row[0] != digest:
@@ -165,7 +222,7 @@ class TrackerStore:
                         key = str(key)
                         seen.add(key)
                         report.records_seen += 1
-                        text = _dumps(value)
+                        text = _encode(value, json_default)
                         digest = _digest(text)
                         if known.get(key) == digest:
                             continue
@@ -186,6 +243,31 @@ class TrackerStore:
                             "DELETE FROM records WHERE section = ? AND key = ?", [(section, key) for key in gone]
                         )
                         report.records_deleted += len(gone)
+                    order_text = _encode([str(key) for key in records])
+                    order_key = ORDER_META_PREFIX + section
+                    row = conn.execute("SELECT value FROM meta WHERE key = ?", (order_key,)).fetchone()
+                    if row is None or row[0] != order_text:
+                        conn.execute(
+                            "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                            (order_key, order_text),
+                        )
+                stamp_meta = None
+                if source_path is not None and source_stamp is not None:
+                    stamp_meta = _source_stamp(source_path)
+                    if stamp_meta != source_stamp:
+                        logging.warning(
+                            "Setup tracker mirror left unstamped: %s changed between its save and the mirror "
+                            "(expected %s, found %s); readers will use the JSON.",
+                            source_path, source_stamp, stamp_meta,
+                        )
+                        stamp_meta = None
+                if stamp_meta is None:
+                    conn.executemany("DELETE FROM meta WHERE key = ?", [(key,) for key in SOURCE_META_KEYS])
+                else:
+                    conn.executemany(
+                        "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                        list(stamp_meta.items()),
+                    )
                 conn.execute(
                     "INSERT INTO meta (key, value) VALUES ('mirrored_at', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     (stamp,),
@@ -209,12 +291,7 @@ class TrackerStore:
             for name, text, _digest_ in conn.execute("SELECT name, payload, digest FROM sections"):
                 payload[name] = json.loads(text)
             for section in RECORD_SECTIONS:
-                payload[section] = {
-                    key: json.loads(text)
-                    for key, text in conn.execute(
-                        "SELECT key, payload FROM records WHERE section = ? ORDER BY rowid", (section,)
-                    )
-                }
+                payload[section] = _ordered_section(conn, meta, section)
         finally:
             conn.close()
         return payload
@@ -283,19 +360,157 @@ class TrackerStore:
         return report
 
 
+def _ordered_section(conn: sqlite3.Connection, meta: dict, section: str) -> dict:
+    """One record section as a dict, in the JSON's key order when the mirror kept it."""
+    rows = {
+        key: json.loads(text)
+        for key, text in conn.execute(
+            "SELECT key, payload FROM records WHERE section = ? ORDER BY rowid", (section,)
+        )
+    }
+    return _apply_order(rows, meta.get(ORDER_META_PREFIX + section))
+
+
+def _apply_order(rows: dict, order_text: str | None) -> dict:
+    if not order_text:
+        return rows
+    try:
+        order = json.loads(order_text)
+    except ValueError:
+        return rows
+    ordered = {key: rows.pop(key) for key in order if key in rows}
+    ordered.update(rows)
+    return ordered
+
+
+def _open_reader(path: Path) -> sqlite3.Connection:
+    """A connection that never creates tables, holding one read snapshot."""
+    conn = sqlite3.connect(str(path), timeout=30.0, isolation_level=None)
+    conn.execute("BEGIN")
+    return conn
+
+
+def _staleness_reason(meta: dict, json_path: Path) -> str:
+    """Empty when the store mirrors exactly the JSON file on disk, else why not."""
+    if str(meta.get("mirror_format") or "") != str(MIRROR_FORMAT):
+        return "store carries no format-2 source stamp (older mirror, or the last mirror had no source file)"
+    current = _source_stamp(json_path)
+    if current is None:
+        return f"tracker JSON {json_path} is missing"
+    if meta.get("source_path") != current["source_path"]:
+        return f"store mirrors {meta.get('source_path')}, not {current['source_path']}"
+    if (meta.get("source_size"), meta.get("source_mtime_ns")) != (
+        current["source_size"],
+        current["source_mtime_ns"],
+    ):
+        return "tracker JSON changed after the last mirror (size or mtime differ)"
+    return ""
+
+
+def load_fresh_payload(json_path: Path | str, db_path: Path | str | None = None) -> tuple[dict | None, str]:
+    """``(payload, "")`` from the store when it mirrors ``json_path`` exactly, else ``(None, reason)``.
+
+    The payload is the dict the JSON file holds (same keys, values and key
+    order); callers normalize it as they normalize the JSON. Never raises.
+    """
+    json_path = Path(json_path)
+    store_path = Path(db_path) if db_path is not None else default_store_path()
+    if not store_path.exists():
+        return None, f"no SQLite store at {store_path}"
+    try:
+        conn = _open_reader(store_path)
+        try:
+            meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
+            reason = _staleness_reason(meta, json_path)
+            if reason:
+                return None, reason
+            payload: dict = {}
+            for name in HEADER_FIELDS:
+                if name in meta:
+                    payload[name] = json.loads(meta[name])
+            for name, text in conn.execute("SELECT name, payload FROM sections"):
+                payload[name] = json.loads(text)
+            # ~18k json.loads calls build millions of containers; cyclic GC passes
+            # over them cost ~5 s on the live tracker and free nothing.
+            gc_was_enabled = gc.isenabled()
+            gc.disable()
+            try:
+                for section in RECORD_SECTIONS:
+                    payload[section] = _ordered_section(conn, meta, section)
+            finally:
+                if gc_was_enabled:
+                    gc.enable()
+        finally:
+            conn.close()
+    except Exception as exc:
+        return None, f"store unreadable: {type(exc).__name__}: {exc}"
+    return payload, ""
+
+
+def load_fresh_projection(
+    json_path: Path | str,
+    fields: Iterable[str],
+    *,
+    section: str = "setups",
+    db_path: Path | str | None = None,
+) -> tuple[list[dict] | None, str]:
+    """A few top-level fields of every dict record in ``section``, in the JSON's order.
+
+    SQLite extracts the fields, so no record is parsed whole in Python. A field
+    the record lacks is absent from its row, so ``row.get`` reads ``None`` as it
+    would on the JSON dict. ``(None, reason)`` unless the store mirrors
+    ``json_path`` exactly. Never raises.
+    """
+    names = [str(name) for name in fields]
+    json_path = Path(json_path)
+    store_path = Path(db_path) if db_path is not None else default_store_path()
+    if not store_path.exists():
+        return None, f"no SQLite store at {store_path}"
+    columns = ", ".join(["json_type(payload)"] + ["payload -> ?"] * len(names))
+    paths = ['$."' + name.replace('"', '""') + '"' for name in names]
+    try:
+        conn = _open_reader(store_path)
+        try:
+            meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
+            reason = _staleness_reason(meta, json_path)
+            if reason:
+                return None, reason
+            by_key: dict[str, dict] = {}
+            for row in conn.execute(
+                f"SELECT key, {columns} FROM records WHERE section = ? ORDER BY rowid", [*paths, section]
+            ):
+                if row[1] != "object":
+                    continue
+                by_key[row[0]] = {name: json.loads(text) for name, text in zip(names, row[2:]) if text is not None}
+        finally:
+            conn.close()
+    except Exception as exc:
+        return None, f"store unreadable: {type(exc).__name__}: {exc}"
+    return list(_apply_order(by_key, meta.get(ORDER_META_PREFIX + section)).values()), ""
+
+
 def default_store_path() -> Path:
     from project_paths import MASTER_AVWAP_SETUP_TRACKER_DB
 
     return Path(MASTER_AVWAP_SETUP_TRACKER_DB)
 
 
-def mirror_payload(payload: dict, *, path: Path | str | None = None) -> SaveReport | None:
+def mirror_payload(
+    payload: dict,
+    *,
+    path: Path | str | None = None,
+    source_path: Path | str | None = None,
+    source_stamp: dict | None = None,
+    json_default=None,
+) -> SaveReport | None:
     """The scanner's hook: mirror after the JSON save. Never raises."""
     if not shadow_enabled():
         return None
     try:
         store = TrackerStore(path or default_store_path())
-        report = store.save_payload(payload)
+        report = store.save_payload(
+            payload, source_path=source_path, source_stamp=source_stamp, json_default=json_default
+        )
         logging.info(
             "Setup tracker mirrored to %s: %d records seen, %d written, %d deleted, %d sections, %.1fs",
             report.path, report.records_seen, report.records_written, report.records_deleted,
@@ -501,9 +716,10 @@ def _main(argv: list[str] | None = None) -> int:
     if args.command == "counts":
         print(json.dumps({"path": str(store.path), "records": store.counts()}, indent=2))
         return 0
+    stamp_before_read = file_stamp(json_path)  # a rewrite during the read or mirror leaves it unstamped
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     if args.command == "mirror":
-        report = store.save_payload(payload)
+        report = store.save_payload(payload, source_path=json_path, source_stamp=stamp_before_read)
         print(json.dumps(report.__dict__, indent=2))
         return 0
     report = store.verify(payload)
