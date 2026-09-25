@@ -230,7 +230,7 @@ class MainWindow(QMainWindow):
         )
         self.settings_panel.stateChanged.connect(self._apply_state_changes)
         self.settings_panel.riskPerTradeChanged.connect(self.trading_panel.set_risk_per_trade)
-        self.health_panel = HealthPanel()
+        self.health_panel = HealthPanel(bot_provider=self.trading_panel.bounce_panel.service.current_bot)
         self.ai_summary_panel = AiSummaryPanel(bounce_service=self.trading_panel.bounce_panel.service)
         self._opening_latest_day_review = False
         self.ai_summary_panel.dailyReviewRequested.connect(self.show_latest_completed_day_review)
