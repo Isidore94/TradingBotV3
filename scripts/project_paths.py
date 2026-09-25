@@ -716,6 +716,10 @@ MASTER_AVWAP_TIER_OUTCOMES_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_ti
 MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE = (
     PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_session_horizon_outcomes.csv"
 )
+# P1-4 4c: the setup-permutation search report (shadow only). Written by
+# `setup_permutation_search.py --out`; read by Research -> Setup keys and the
+# Saturday `setup_keys_narration` slot. Nothing ranks, filters or alerts on it.
+SETUP_PERMUTATION_REPORT_FILE = PERSISTENT_RUNTIME_DATA_DIR / "permutation_report.json"
 # Packet WS-TH (2026-09-12). The theta picks graded forward: held above the sold
 # strike at the exact 5/10/20-session endpoints and at the option's own expiry,
 # maximum adverse excursion in ATR, and which support broke first. Written
