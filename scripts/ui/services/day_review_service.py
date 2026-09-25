@@ -96,6 +96,9 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     "day_type",
     "pnl_by_session",
     "glance",
+    # P8-P5: plain truth lines over the last 20 sessions (CAD) and the bot's
+    # grade of each of the day's trades as of its entry. Built on this worker.
+    "truth",
 )
 
 #: The benchmark whose tape the page draws. One name, the desk's own. The PAGE
@@ -228,6 +231,7 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         "market_axes": {},
         "pnl_by_session": (),
         "glance": {},
+        "truth": {},
     }
 
 
@@ -282,6 +286,8 @@ class DayReviewService:
         decisions: list[dict[str, Any]] = []
         claims: list[dict[str, Any]] = []
         stored: dict[str, Any] = {}
+        # The journal's full read, kept for the truth lines (None = not read).
+        journal_trades: list[dict[str, Any]] | None = None
 
         entries: list[dict[str, Any]] = []
         try:
@@ -444,6 +450,7 @@ class DayReviewService:
             # journal's full read, not the visible session-only trades table.
             from journal_store import JournalStore
             all_trades = list(JournalStore().list_trades())
+            journal_trades = all_trades
             payload["pnl_by_session"] = _pnl_by_session(
                 (*walkaway_day.earlier_sessions(session, count=4), session), all_trades
             )
@@ -626,9 +633,36 @@ class DayReviewService:
             payload["glance"] = day_report_card.glance(payload)
         except Exception:  # noqa: BLE001 - the strip never costs the day
             _log.debug("The Day Review glance could not be built.", exc_info=True)
+        try:
+            payload["truth"] = self._truth(session, journal_trades, payload["trades"])
+        except Exception as exc:  # noqa: BLE001 - the truth lines never cost the day
+            payload["truth"] = {"lines": [f"The truth lines could not be built: {exc}"], "grades": {}}
+            _log.debug("The Day Review truth lines could not be built.", exc_info=True)
         if problems:
             payload["error"] = " · ".join(problems)
         return payload
+
+    @staticmethod
+    def _truth(session: str, journal_trades, day_trades) -> dict[str, Any]:
+        """Stocks/options, longs/shorts and setups over the last 20 sessions, plus bot grades."""
+        from datetime import date as _date
+
+        import evidence_stats
+        import journal_truth
+        import walkaway_day
+
+        grades = journal_truth.bot_grades(day_trades or (), journal_truth.grade_reader())
+        if journal_trades is None:
+            return {"lines": ["The journal was not read, so the 20-session lines are unknown."], "grades": grades}
+        sessions = (
+            *walkaway_day.earlier_sessions(session, count=max(0, evidence_stats.LATELY_SESSIONS - 1)),
+            session,
+        )
+        first, last = _date.fromisoformat(sessions[0]), _date.fromisoformat(session)
+        window = journal_truth.in_window(journal_trades, first, last)
+        lines = [f"Last {len(sessions)} sessions ({sessions[0]} to {session}):"]
+        lines.extend(journal_truth.cad_truth_lines(window))
+        return {"lines": lines, "grades": grades}
 
     # -- the daily ruler ---------------------------------------------------
     @staticmethod

@@ -595,23 +595,10 @@ def save_risk_fields(
 
 
 def r_multiple(trade: JournalTrade) -> float | None:
-    """``net_pnl_cad / planned_risk``, or None when either half is missing.
+    """The journal's one R (`journal_analytics.trade_r_multiple`), or None."""
+    from journal_analytics import trade_r_multiple
 
-    Deliberately CAD: an R computed from a native P&L and a risk the trader
-    typed in dollars would silently mix currencies, which is the same defect B8
-    was about.
-    """
-    raw = trade.raw
-    risk = raw.get("planned_risk")
-    pnl = raw.get("net_pnl_cad")
-    try:
-        risk_value = float(risk)
-        pnl_value = float(pnl)
-    except (TypeError, ValueError):
-        return None
-    if abs(risk_value) < 1e-9:
-        return None
-    return pnl_value / abs(risk_value)
+    return trade_r_multiple(trade.raw)
 
 
 def _armed_alert_events() -> list[dict[str, Any]]:

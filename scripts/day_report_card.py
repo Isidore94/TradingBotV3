@@ -1685,7 +1685,7 @@ def glance(payload: Mapping[str, Any]) -> dict[str, Any]:
     Every value is either measured or ``None`` ("not measured"); nothing
     unknown is shown as a zero.
     """
-    from journal_analytics import has_invented_entry, not_counted_summary
+    from journal_analytics import has_invented_entry, not_counted_summary, trade_r_multiple
 
     trades = [row for row in (payload.get("trades") or ()) if isinstance(row, Mapping)]
     not_counted_line = not_counted_summary([dict(row) for row in trades])["line"]
@@ -1694,12 +1694,8 @@ def glance(payload: Mapping[str, Any]) -> dict[str, Any]:
     nets = [(row, _money(row.get("net_pnl"))) for row in trades if not has_invented_entry(dict(row))]
     known = [(row, net) for row, net in nets if net is not None]
     pnl = sum(net for _row, net in known) if known else None
-    risks = [_money(row.get("planned_risk")) for row, _net in known]
-    r_value = (
-        sum(net / risk for (_row, net), risk in zip(known, risks, strict=False))
-        if known and all(risk and risk > 0 for risk in risks)
-        else None
-    )
+    r_values = [trade_r_multiple(row) for row, _net in known]
+    r_value = sum(r_values) if known and all(r is not None for r in r_values) else None
     wins = sum(1 for _row, net in known if net > 0)
     losses = sum(1 for _row, net in known if net < 0)
     best = max(known, key=lambda pair: pair[1], default=None)

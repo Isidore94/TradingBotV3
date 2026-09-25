@@ -83,6 +83,13 @@ class WeekCoachCard(QFrame):
         self.leaks_label = self._block(columns, "Your leaks")
         self.repeats_label = self._block(columns, "Repeats")
         layout.addLayout(columns)
+        #: P8-P5: the journal's truth lines for the week and the 4-week rollup.
+        self.truth_label = QLabel("")
+        self.truth_label.setObjectName("TruthNote")
+        self.truth_label.setWordWrap(True)
+        self.truth_label.setTextFormat(Qt.PlainText)
+        self.truth_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self.truth_label)
 
         self.trend = QTableWidget(0, 4)
         self.trend.setHorizontalHeaderLabels(("Week", "P&L", "Rules kept", "Calls right"))
@@ -235,12 +242,51 @@ class WeekCoachCard(QFrame):
                 f"Rows need n {week_coach.MIN_N}+; {self._view.get('thin_rows', 0)} row(s) are "
                 f"{week_coach.TOO_FEW}. Unknown is not zero."
             )
-        none = f"No row has n {week_coach.MIN_N}+ yet ({week_coach.TOO_FEW})."
-        self.edge_label.setText("\n".join(week_coach.row_line(row) for row in self._view.get("edge") or ()) or none)
-        self.leaks_label.setText("\n".join(week_coach.row_line(row) for row in self._view.get("leaks") or ()) or none)
+        self.edge_label.setText(self._ranked_text("edge", positive=True))
+        self.leaks_label.setText(self._ranked_text("leaks", positive=False))
         self.repeats_label.setText(self._repeats_text())
+        self.truth_label.setText(self._truth_text())
         self._render_trend()
         self._render_questions()
+
+    def _ranked_text(self, key: str, *, positive: bool) -> str:
+        """Ranked rows (n 10+), then thin rows (n 5-9), for the view and its 4-week rollup."""
+        none = f"No row has n {week_coach.MIN_N}+ yet ({week_coach.TOO_FEW})."
+
+        def block(view: Mapping[str, Any]) -> list[str]:
+            lines = [week_coach.row_line(row) for row in view.get(key) or ()] or [none]
+            values = [(row, float(row.get("value") or 0.0)) for row in view.get("thin") or ()]
+            thin = [row for row, value in values if (value > 0 if positive else value < 0)]
+            lines.extend(week_coach.thin_line(row) for row in thin)
+            return lines
+
+        lines = block(self._view)
+        rollup = dict(self._view.get("rollup") or {})
+        weeks = list(rollup.get("weeks") or ())
+        if weeks:
+            lines.append(f"Last {len(weeks)} weeks ({weeks[0]} to {weeks[-1]}):")
+            lines.extend(block(rollup))
+        return "\n".join(lines)
+
+    def _truth_text(self) -> str:
+        truth = dict(self._view.get("truth") or {})
+        if truth.get("error"):
+            return f"In words: unknown ({truth['error']})."
+        if not truth:
+            return ""
+        month = str(self._view.get("month") or "")
+        lines = [f"Month {month}:" if month else "This week:"]
+        lines.extend(str(line) for line in truth.get("lines") or ())
+        if truth.get("worst_line"):
+            lines.append(str(truth["worst_line"]))
+        rollup = list(truth.get("rollup_weeks") or ())
+        if rollup:
+            lines.append(f"Last {len(rollup)} weeks ({rollup[0]} to {rollup[-1]}):")
+            lines.extend(str(line) for line in truth.get("rollup_lines") or ())
+            if truth.get("exit_lines"):
+                lines.append(f"Exits, last {len(rollup)} weeks:")
+                lines.extend(str(line) for line in truth.get("exit_lines") or ())
+        return "\n".join(lines)
 
     def _repeats_text(self) -> str:
         rep = dict(self._view.get("repeats") or {})

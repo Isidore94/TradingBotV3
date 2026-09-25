@@ -1354,6 +1354,17 @@ def trade_horizon(trade: dict[str, Any]) -> str:
     return "day" if bucket in DAY_HOLD_BUCKETS else "swing"
 
 
+def trade_instrument(trade: dict[str, Any]) -> str:
+    """`OPT` for an option (or future option / warrant), else `STK`."""
+    return "OPT" if _is_option_row(trade) else "STK"
+
+
+def trade_direction(trade: dict[str, Any]) -> str:
+    """The trade's own direction: `LONG`, `SHORT` or `unknown`."""
+    text = str(trade.get("direction") or "").strip().upper()
+    return text if text in ("LONG", "SHORT") else UNKNOWN_FIELD
+
+
 def derived_trade_fields(trade: dict[str, Any]) -> dict[str, Any]:
     """All derived fields for one trade: time_of_day, weekday, hold_minutes, hold_bucket, horizon."""
     return {
@@ -1371,6 +1382,8 @@ DERIVED_GROUPS = {
     "weekday": trade_weekday,
     "hold": trade_hold_bucket,
     "day vs swing": trade_horizon,
+    "instrument": trade_instrument,
+    "direction": trade_direction,
 }
 
 
@@ -1700,6 +1713,7 @@ def build_analytics_summary(
         "broker": lambda row: str(row.get("broker") or "unknown"),
         "symbol": lambda row: str(row.get("symbol") or "unknown"),
         "direction": lambda row: str(row.get("direction") or "unknown"),
+        "instrument": trade_instrument,
         "mid_term_regime": lambda row: str(row.get("mid_term_regime") or "unset"),
         "short_term_regime": lambda row: str(row.get("short_term_regime") or "unset"),
         "intraday_regime": lambda row: str(row.get("intraday_regime") or "unset"),
@@ -2241,10 +2255,13 @@ def close_order_key(row: dict[str, Any]) -> tuple[str, str]:
     return (stamp, str(row.get("trade_id") or ""))
 
 
-def trade_r_multiple(row: dict[str, Any]) -> float | None:
-    """`net_pnl_cad / |planned_risk|`, the journal's one R, or None."""
+def trade_r_multiple(row: Any) -> float | None:
+    """The journal's one R: native `net_pnl / |planned_risk|`, or None.
+
+    `planned_risk` is in the trade's own currency, so the P&L must be too.
+    """
     risk = _coerce_float(row.get("planned_risk"))
-    pnl = _coerce_float(row.get("net_pnl_cad"))
+    pnl = _coerce_float(row.get("net_pnl"))
     if risk is None or pnl is None or abs(risk) < 1e-9:
         return None
     return pnl / abs(risk)
