@@ -13,6 +13,11 @@ Alert Center's sound path, and logs every notice with `notice_records`.
 - AWAY / EVENING -> phone push; DESK -> desk sound + status line; any other
   mode (OFF, unknown) -> nothing. Hidden names (the Oil & Gas / Real Estate
   switch, the board's Hide for today) never count and never take a slot.
+- M5 watch (trader 2026-09-25): the same names, in DESK/AWAY/EVENING, become
+  `adoption_candidates` for the M5 Focus AUTO lane, but only when
+  `focus_adoption_gate` holds on the bar: long above the previous session's
+  high (durable daily bars) and above session VWAP, short below both. Unknown
+  levels never pass. `adopt_records` are the `kind: adopt` log rows.
 """
 
 from __future__ import annotations
@@ -22,6 +27,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable, Iterable, Mapping
 
+import focus_adoption_gate
+
 #: Names per list per notice.
 TOP_NEW = 3
 #: At most this many notices (push or desk) in any NOTICE_WINDOW_MINUTES.
@@ -30,6 +37,8 @@ NOTICE_WINDOW_MINUTES = 10
 #: Modes that push to the phone; the mode that sounds on the desk.
 PUSH_MODES = ("AWAY", "EVENING")
 DESK_MODE = "DESK"
+#: Modes whose notices also feed the M5 Focus watch (the bot watches either way).
+ADOPT_MODES = ("DESK", "AWAY", "EVENING")
 #: ntfy priority for a Movers line (never urgent).
 PUSH_PRIORITY = "default"
 CHANNEL_PUSH = "push"
@@ -199,7 +208,8 @@ class MoversNotifier:
             self._last_bar[list_key] = bar
             picked = tuple(
                 {"symbol": str(r.get("symbol") or "").upper(), "side": r.get("_side") or "long",
-                 "score": _score(r, list_key), "rvol": r.get("rvol")}
+                 "score": _score(r, list_key), "rvol": r.get("rvol"),
+                 "last": r.get("last"), "session_vwap": r.get("session_vwap")}
                 for r in fresh
             )
             out.append(MoversNotice(
@@ -231,4 +241,45 @@ def notice_records(notice: MoversNotice, *, pushed_at: datetime, result: str = "
          "pushed_at": pushed_at.isoformat(timespec="seconds"), "result": result,
          "score": row.get("score"), "rvol": row.get("rvol")}
         for row in notice.rows
+    ]
+
+
+def adoption_candidates(
+    notices: Iterable[MoversNotice],
+    levels: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Each noticed name with its level gate verdict for the M5 Focus AUTO lane.
+
+    `levels` is {symbol: {"prev_high", "prev_low"}} from the durable daily bars;
+    a missing symbol or level is UNKNOWN and never passes. Only DESK, AWAY and
+    EVENING notices count (OFF makes no notices at all)."""
+    out: list[dict[str, Any]] = []
+    for notice in notices:
+        if notice.mode not in ADOPT_MODES:
+            continue
+        for row in notice.rows:
+            symbol = str(row.get("symbol") or "").upper()
+            side = "short" if row.get("side") == "short" else "long"
+            level = levels.get(symbol) or {}
+            gate = {"prev_high": level.get("prev_high"), "prev_low": level.get("prev_low"),
+                    "vwap": row.get("session_vwap"), "last": row.get("last")}
+            state, reason = focus_adoption_gate.focus_adoption_gate_state(
+                side, gate["last"], gate["prev_high"], gate["prev_low"], gate["vwap"]
+            )
+            out.append({"symbol": symbol, "side": side, "list": notice.list_key,
+                        "label": notice.label, "state": notice.state, "mode": notice.mode,
+                        "bar": notice.bar, "level_gate": gate, "gate": state,
+                        "gate_reason": reason, "passes": state == focus_adoption_gate.OPEN})
+    return out
+
+
+def adopt_records(results: Iterable[Mapping[str, Any]], *, at: str) -> list[dict[str, Any]]:
+    """One `kind: adopt` log row per candidate, with what the M5 Focus lane did."""
+    return [
+        {"kind": "adopt", "session": str(c.get("bar") or "")[:10], "symbol": c.get("symbol"),
+         "side": c.get("side"), "list": c.get("list"), "state": c.get("state"),
+         "mode": c.get("mode"), "bar": c.get("bar"), "level_gate": dict(c.get("level_gate") or {}),
+         "gate": c.get("gate"), "gate_reason": c.get("gate_reason"),
+         "result": c.get("result") or "", "adopted_at": at}
+        for c in results
     ]

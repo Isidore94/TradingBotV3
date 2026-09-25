@@ -23,10 +23,13 @@ Each tick (once per 5-minute bar, 20 s after the boundary, regular hours only):
 6. announces the top new Pop / Dip-strong / Rip-weak names (`movers_notify`):
    a phone push in AWAY/EVENING (sent here, on the worker), `moversNotice` for
    the Alert Center's desk sound in DESK, nothing otherwise; each announced name
-   is a `kind: notice` row in its outcome log.
+   is a `kind: notice` row in its outcome log;
+7. in DESK/AWAY/EVENING hands those names, with their level gate (previous
+   session high/low from the durable daily bars, the board's session VWAP), to
+   `moversAdopt` for the Alert Center's M5 Focus AUTO lane (trader 2026-09-25).
 
 Zero IB historical or market-data traffic: the scanner client sends scanner
-subscriptions only, from the worker thread. No watchlist or Focus writes. A failed
+subscriptions only, from the worker thread. It writes no watchlist or Focus itself (step 7 is the Alert Center's). A failed
 tick keeps the last good board and says so in the status line.
 """
 
@@ -89,6 +92,15 @@ def default_push_sender(title: str, message: str) -> dict[str, Any]:
     import push_notify
 
     return push_notify.send_push(title, message, priority=movers_notify.PUSH_PRIORITY)
+
+
+def default_daily_levels(symbols: Iterable[str], session: date) -> dict[str, dict]:
+    """{symbol: {prev_high, prev_low}} from the durable daily store (cached; no fetch)."""
+    import autopilot_core
+
+    contexts = autopilot_core.load_daily_context(list(symbols), reference_date=session)
+    return {s: {"prev_high": c.get("prev_high"), "prev_low": c.get("prev_low")}
+            for s, c in contexts.items()}
 
 
 def default_earnings_names(today: date) -> set[str]:
@@ -265,6 +277,9 @@ class MoversService(QObject):
     statusChanged = Signal(str)
     #: A DESK-mode notice (`MoversNotice.to_dict()`), for the Alert Center's sound.
     moversNotice = Signal(dict)
+    #: {"candidates": [...], "log_paths": {"pop", "dip"}, "at"}: names for the
+    #: M5 Focus AUTO lane (Qt thread writes the store; see AlertCenterPanel).
+    moversAdopt = Signal(dict)
 
     def __init__(
         self,
@@ -285,6 +300,7 @@ class MoversService(QObject):
         push_sender: Callable[[str, str], Mapping[str, Any]] | None = None,
         hidden_provider: Callable[[], tuple[str, set[str]]] | None = None,
         sector_hidden: Callable[[str], bool] | None = None,
+        daily_levels_provider: Callable[[Iterable[str], date], Mapping[str, Mapping]] | None = None,
     ) -> None:
         super().__init__(parent)
         self._industry_provider = industry_provider or default_industry_map
@@ -312,6 +328,7 @@ class MoversService(QObject):
         self._push_sender = push_sender or default_push_sender
         self._hidden_provider = hidden_provider or default_hidden_keys
         self._sector_hidden = sector_hidden or default_sector_hidden
+        self._daily_levels_provider = daily_levels_provider or default_daily_levels
         self._industry: dict[str, str] = {}
         self._earnings: set[str] = set()
         self._tags_day: date | None = None
@@ -634,6 +651,27 @@ class MoversService(QObject):
                 )
             except Exception:
                 logging.warning("Movers notice log write failed", exc_info=True)
+        self._offer_adoptions(notices, board, now)
+
+    def _offer_adoptions(self, notices, board, now) -> None:
+        """Gate the noticed names on their levels and hand them to the M5 Focus lane."""
+        wanted = [n for n in notices if n.mode in movers_notify.ADOPT_MODES]
+        if not wanted:
+            return
+        symbols = sorted({row["symbol"] for n in wanted for row in n.rows})
+        session = now.astimezone(movers_scan.NY_TZ).date()
+        try:
+            levels = dict(self._daily_levels_provider(symbols, session) or {})
+        except Exception:
+            logging.warning("Movers: daily levels unavailable; nothing adopted", exc_info=True)
+            levels = {}
+        candidates = movers_notify.adoption_candidates(wanted, levels)
+        if candidates:
+            self.moversAdopt.emit({
+                "candidates": candidates,
+                "log_paths": {"pop": str(self._pop_outcomes_path), "dip": str(self._outcomes_path)},
+                "at": now.isoformat(timespec="seconds"),
+            })
 
     # ------------------------------------------------------------ IB scanner
     def _run_scanner(self) -> Mapping[str, list[str]]:
