@@ -874,6 +874,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         note_vocabulary_audit,
         observation_tags,
         outcome_sweep,
+        plan_review,
         policy_draft,
         prediction_contrast,
         read_grades_mature,
@@ -1468,6 +1469,23 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description="Draft review policy (ranks and annotates only; never the live file)",
             max_attempts=3,
             uses_model=True,
+        ),
+        # P1-7 7b (2026-09-25): the night argues with the trader's plan. Stage 3,
+        # after every facts slot; before `setup_research` because
+        # `improvement_ideas` is pinned last. Up to three challenges, each citing
+        # one plan line and one evidence id. Its deterministic half only reads
+        # the plan (and so snapshots a changed one).
+        JobSlot(
+            name="plan_review",
+            run=plan_review.run_plan_review,
+            reserve_minutes=plan_review.RESERVE_MINUTES,
+            description=(
+                "Up to three cited challenges to the trader's trading plan, "
+                "answered on the Mentor card"
+            ),
+            max_attempts=2,
+            uses_model=True,
+            model_free_kwargs={"ask": False},
         ),
         # SETUP DATABASE Phase 6.1, APPENDED last.  The deterministic layer
         # computes every number.  The medium local model only narrates after

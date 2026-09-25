@@ -390,6 +390,9 @@ EXPECTED_SLOT_ORDER = (
     # stage 3 - the model-gated slots, unchanged
     "journal_enrichment",
     "review_policy_draft",
+    # P1-7 7b (2026-09-25): challenges to the trader's plan. Stage 3, before
+    # `setup_research` because `improvement_ideas` is pinned last.
+    "plan_review",
     "setup_research",
     # TJ-6 (2026-09-20), appended LAST inside stage 3: it reads what the rest of
     # the night wrote and feeds nothing.

@@ -675,6 +675,8 @@ def test_the_scope_can_be_selected_on_demand():
         # `review_policy_draft.json`.
         "journal_enrichment",
         "review_policy_draft",
+        # P1-7 7b (2026-09-25): plan challenges, a stage 3 model slot.
+        "plan_review",
         "setup_research",
         # TJ-6 (2026-09-20), appended LAST inside stage 3.
         "improvement_ideas",

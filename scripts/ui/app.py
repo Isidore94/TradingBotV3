@@ -1549,6 +1549,7 @@ class MainWindow(QMainWindow):
                 trades.extend(store.list_trades(trade_date=day))
             except Exception:  # noqa: BLE001 - an unreadable day asks nothing
                 logging.debug("Mentor trade lane unreadable for %s.", day, exc_info=True)
+        plan_open, plan_closed = self._mentor_plan_lanes(slot.scheduled_at)
         return {
             "session": session,
             "now": slot.scheduled_at,
@@ -1590,14 +1591,37 @@ class MainWindow(QMainWindow):
             "exit_drafts": self._mentor_exit_drafts(store, session),
             # Day Recap coach: closed trades checked against today's rule.
             "rule_reflections": self._mentor_rule_lane(store, session, trades),
-            "answered": self._mentor_answered(
-                store,
-                (session, reviewed),
-                trade_ids=[str(row.get("trade_id") or "") for row in trades],
-            ),
+            # P1-7 7b: the night's open challenges to the trading plan.
+            "plan_challenges": plan_open,
+            "answered": {
+                **self._mentor_answered(
+                    store,
+                    (session, reviewed),
+                    trade_ids=[str(row.get("trade_id") or "") for row in trades],
+                ),
+                **plan_closed,
+            },
             "retired": self.trade_mentor_service.retired_subjects(),
             "carried": getattr(self, "_mentor_carried", ()),
         }
+
+    @staticmethod
+    def _mentor_plan_lanes(now) -> tuple[list, dict]:
+        """Open plan challenges, and the closed ones as `answered` keys (P1-7 7b).
+
+        Two small append-only files; never raises - a lane never costs the card.
+        """
+        try:
+            import plan_challenges
+
+            moment = now if getattr(now, "tzinfo", None) is not None else None
+            return (
+                plan_challenges.open_challenges(moment),
+                plan_challenges.closed_keys(moment),
+            )
+        except Exception:  # noqa: BLE001 - a lane never costs the card
+            logging.debug("Mentor plan-challenge lane unreadable.", exc_info=True)
+            return [], {}
 
     @staticmethod
     def _mentor_exit_drafts(store, session: str) -> list:
