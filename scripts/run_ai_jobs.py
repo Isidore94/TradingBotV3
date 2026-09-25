@@ -25,6 +25,7 @@ Usage:
     python scripts/run_ai_jobs.py --slot ticker_briefs
     python scripts/run_ai_jobs.py --force      # re-spend the caps + already-done
     python scripts/run_ai_jobs.py --probe-model large   # MEASURE the big model
+    python scripts/run_ai_jobs.py --retry-journal-import  # 07:00 PT, once
 
 Which slate runs is THE NIGHT'S decision, not the operator's (TJ-13A item 2):
 `runner.night_kind()` names the night on the exchange calendar and
@@ -272,6 +273,13 @@ def main(argv: list[str] | None = None) -> int:
              "already-done check are untouched, and the night-only rule still "
              "holds, so a forced daytime redo still records skipped.",
     )
+    parser.add_argument(
+        "--retry-journal-import",
+        action="store_true",
+        help="the 07:00 PT morning retry: run journal_import once more when the "
+             "night's import failed. Runs nothing else, never while the night "
+             "run holds the lock, and at most once per session.",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -305,6 +313,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.probe_model:
         return _run_model_probe(str(args.probe_model).strip(), force=args.force)
+
+    if args.retry_journal_import:
+        from ai_jobs import runner
+
+        outcome = runner.retry_journal_import()
+        logging.info("journal import morning retry [%s]: %s", outcome.get("status"), outcome.get("reason"))
+        return 1 if outcome.get("status") == "failed" else 0
 
     from ai_jobs import runner
 

@@ -94,4 +94,5 @@ def record_probe(
         reason=detail if answered else f"Ollama probe failed: {detail}; the night runs deterministic work only",
         error="" if answered else detail,
         path=path,
+        extra={"goal": "ops"},
     )

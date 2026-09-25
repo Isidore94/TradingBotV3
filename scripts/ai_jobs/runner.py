@@ -75,6 +75,9 @@ class JobSlot:
     #: A slot with no model-free half declares None and keeps being skipped:
     #: there is no summary without a model.
     model_free_kwargs: Mapping[str, Any] | None = None
+    #: Which trader goal this slot serves (one of `SLOT_GOALS`); every ledger
+    #: row the runner writes for the slot carries it as `goal`.
+    goal: str = ""
 
 
 @dataclass
@@ -121,6 +124,25 @@ RUNNER_LOCK_KEY = "ai_jobs_runner"
 #: The phrase `local_writer_lock` uses when the box has no exclusion primitive
 #: at all, as opposed to another process holding one.
 NO_PRIMITIVE_MARKER = "no machine-local exclusion primitive is available"
+
+#: The fixed goals a slot may serve (Plan to 8/10, P4). A slot declares one.
+SLOT_GOALS = (
+    "trade_identification",
+    "setup_quality",
+    "permutations",
+    "coaching",
+    "market_read",
+    "journal",
+    "ops",
+)
+
+
+def _slot_record(slot: JobSlot, **kwargs: Any) -> dict[str, Any]:
+    """`ledger.record` for one slot: the row also carries the slot's `goal`."""
+    extra = dict(kwargs.pop("extra", None) or {})
+    if slot.goal:
+        extra.setdefault("goal", slot.goal)
+    return ledger.record(extra=extra or None, **kwargs)
 
 
 def session_date_for(now: datetime | None = None) -> str:
@@ -196,6 +218,8 @@ MODEL_SLOT_PRIORITY = (
     "market_story_narration",
     "setup_research",
     "journal_enrichment",
+    "plan_review",
+    "improvement_ideas",
     "observation_tags",
 )
 LAST_PRIORITY_SLOT = "ticker_briefs"
@@ -441,7 +465,8 @@ def _run_slots_locked(
             ):
                 logging.debug("AI job %s: %s (already recorded).", slot.name, reason)
                 continue
-            row = ledger.record(
+            row = _slot_record(
+                slot,
                 job=slot.name,
                 status=ledger.STATUS_SKIPPED,
                 session_date=run_session,
@@ -476,6 +501,7 @@ def _run_slots_locked(
                     session_date=run_session,
                     reason=cap_reason,
                     path=ledger_path,
+                    extra={"goal": slot.goal} if slot.goal else None,
                 )
                 report.results.append(row)
                 logging.warning("AI job %s stopped for the session: %s", slot.name, cap_reason)
@@ -526,7 +552,8 @@ def _run_slots_locked(
                     "no local inference outside the night window"
                 )
         if not allowed:
-            row = ledger.record(
+            row = _slot_record(
+                slot,
                 job=slot.name,
                 status=ledger.STATUS_SKIPPED,
                 session_date=run_session,
@@ -563,7 +590,8 @@ def _run_slots_locked(
                 budget_cut = budget_reason
             elif budget_reason:
                 if not already_cut:
-                    row = ledger.record(
+                    row = _slot_record(
+                        slot,
                         job=slot.name,
                         status=ledger.STATUS_SKIPPED,
                         session_date=run_session,
@@ -592,7 +620,8 @@ def _run_slots_locked(
                     if not _already_flagged(
                         slot.name, run_session, MODEL_DOWN_FLAG, path=ledger_path
                     ):
-                        row = ledger.record(
+                        row = _slot_record(
+                            slot,
                             job=slot.name,
                             status=ledger.STATUS_SKIPPED,
                             session_date=run_session,
@@ -673,7 +702,8 @@ def _run_slots_locked(
                     f"{row_reason} [forced daytime run: deterministic facts only, "
                     "narration left out - local inference is night-only]"
                 ).strip()
-            row = ledger.record(
+            row = _slot_record(
+                slot,
                 job=slot.name,
                 status=status,
                 session_date=run_session,
@@ -699,7 +729,8 @@ def _run_slots_locked(
                 row["reason"] or "ok",
             )
         except Exception as exc:
-            row = ledger.record(
+            row = _slot_record(
+                slot,
                 job=slot.name,
                 status=ledger.STATUS_FAILED,
                 session_date=run_session,
@@ -815,6 +846,108 @@ def _failure_reason(job: str, status: str, outcome: Mapping[str, Any]) -> str:
     )
 
 
+#: Ledger flag on the one `journal_import` row the 07:00 PT morning retry writes.
+MORNING_RETRY_FLAG = "morning_retry"
+JOURNAL_IMPORT_JOB = "journal_import"
+
+
+def _morning_retry_due(session_date: str, ledger_path=None) -> str:
+    """"" when the night's import failed and has not been retried, else why not."""
+    target = ledger_path if ledger_path is not None else ledger.ledger_path(create=False)
+    try:
+        rows = ledger._read_rows(target)
+    except (OSError, ValueError) as exc:
+        return f"ledger unreadable ({exc})"
+    runs = [
+        row for row in rows
+        if str(row.get("job") or "") == JOURNAL_IMPORT_JOB
+        and str(row.get("session_date") or "") == session_date
+    ]
+    if any(row.get(MORNING_RETRY_FLAG) for row in runs):
+        return f"already retried for {session_date}"
+    if JOURNAL_IMPORT_JOB in ledger.completed_jobs(session_date, path=target):
+        return f"the night import for {session_date} did not fail"
+    if not any(str(row.get("status") or "") == ledger.STATUS_FAILED for row in runs):
+        return f"no failed night import for {session_date}"
+    return ""
+
+
+def retry_journal_import(
+    *,
+    now: datetime | None = None,
+    ledger_path=None,
+    run: Callable[..., Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """The 07:00 PT morning retry of a failed night `journal_import` (P3).
+
+    Runs once per session, only when the night's import failed and never
+    succeeded, and never while the night runner holds the machine lock. It
+    writes its own `journal_import` row, reason prefixed "morning retry".
+    Returns ``{"status", "reason"}``; "skipped" writes no ledger row.
+    """
+    from market_calendar import SessionCalendarError
+    from local_writer_lock import LocalLockUnavailable, local_writer_lock
+
+    moment = window.market_now(now)
+    try:
+        session_date = session_date_for(moment)
+    except SessionCalendarError as exc:
+        return {"status": ledger.STATUS_SKIPPED, "reason": f"session calendar cannot answer: {exc}"}
+    store_ok, store_reason = store.store_available()
+    if not store_ok:
+        return {"status": ledger.STATUS_SKIPPED, "reason": f"AI store unavailable: {store_reason}"}
+
+    def _locked() -> dict[str, Any]:
+        why_not = _morning_retry_due(session_date, ledger_path)
+        if why_not:
+            return {"status": ledger.STATUS_SKIPPED, "reason": why_not}
+        job = run
+        if job is None:
+            from journal_runner import run_nightly_journal_import as job
+        started = datetime.now().astimezone()
+        extra = {MORNING_RETRY_FLAG: True, "goal": "journal"}
+        try:
+            outcome = dict(job(trigger="morning_retry") or {})
+        except Exception as exc:  # noqa: BLE001 - a crash is a failed retry, recorded
+            row = ledger.record(
+                job=JOURNAL_IMPORT_JOB,
+                status=ledger.STATUS_FAILED,
+                session_date=session_date,
+                started_at=started,
+                reason="morning retry: crashed",
+                error=f"{type(exc).__name__}: {exc}",
+                path=ledger_path,
+                extra=extra,
+            )
+            return {"status": row["status"], "reason": row["reason"]}
+        status = str(outcome.get("status") or ledger.STATUS_OK).strip().lower()
+        if status not in (ledger.STATUS_OK, ledger.STATUS_FAILED):
+            status = ledger.STATUS_FAILED
+        reason = _failure_reason(JOURNAL_IMPORT_JOB, status, outcome)
+        row = ledger.record(
+            job=JOURNAL_IMPORT_JOB,
+            status=status,
+            session_date=session_date,
+            started_at=started,
+            reason=f"morning retry: {reason}" if reason else "morning retry",
+            path=ledger_path,
+            extra=extra,
+        )
+        return {"status": row["status"], "reason": row["reason"]}
+
+    try:
+        with local_writer_lock(RUNNER_LOCK_KEY, timeout_seconds=0.0):
+            return _locked()
+    except LocalLockUnavailable as exc:
+        if NO_PRIMITIVE_MARKER in str(exc):
+            logging.warning("AI jobs: no cross-process lock available (%s); retrying unguarded.", exc)
+            return _locked()
+        return {
+            "status": ledger.STATUS_SKIPPED,
+            "reason": "the night run is still in progress; morning retry not started",
+        }
+
+
 def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobSlot]:
     """The nightly slate, in THREE STAGES (decision 0018, 2026-09-04).
 
@@ -826,7 +959,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
     slot for no reason other than having been written first. On 2026-09-01 the
     run took six hours, and a reservation that cannot fit inside what is left
     of the window records SKIPPED. That put the cheap, deterministic, no-model
-    work - the cohort grades, the vocabulary audit, the preference join, the
+    work - the cohort grades, the preference join, the
     evidence report, the fact pack - behind the two jobs most likely to spend
     the night. **No deterministic slot reads either narration slot's output**,
     so the dependency that would have justified the old position does not
@@ -835,8 +968,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
     So the slate is:
 
     1. **the deterministic stage** - ``journal_import``, ``journal_auto_tag``,
-       the cohort grades, ``note_vocabulary_audit``,
-       ``preference_trade_outcomes``, ``outcome_sweep``, ``evidence_report``,
+       the cohort grades, ``preference_trade_outcomes``, ``outcome_sweep``, ``evidence_report``,
        ``daily_digest`` and ``day_review_facts``.
        Their RELATIVE order is unchanged; it is the appended-only order this
        docstring used to describe and the comments below still argue for each
@@ -871,7 +1003,6 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         market_story_narration,
         measured_report_publish,
         miss_contrast,
-        note_vocabulary_audit,
         observation_tags,
         outcome_sweep,
         plan_review,
@@ -895,6 +1026,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # ------------------------------------------------------------------
         JobSlot(
             name="journal_import",
+            goal="journal",
             run=lambda **kwargs: run_nightly_journal_import(trigger="nightly"),
             # 5 minutes of import plus the Flex not-ready waits (P1-3 3d).
             reserve_minutes=5.0 + sum(NIGHTLY_FLEX_NOT_READY_WAITS) / 60.0,
@@ -913,6 +1045,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # journal one.
         JobSlot(
             name="journal_auto_tag",
+            goal="journal",
             run=journal_auto_tag.run_journal_auto_tag,
             reserve_minutes=5.0,
             description=(
@@ -937,6 +1070,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # attempt budget rather than the briefs'.
         JobSlot(
             name="veto_cohort_grading",
+            goal="setup_quality",
             run=cohorts.run_veto_cohort_grading,
             reserve_minutes=5.0,
             description="Forward-grade the trader's veto cohort (deterministic, no model)",
@@ -948,6 +1082,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # only the first half had ever been graded.
         JobSlot(
             name="like_cohort_grading",
+            goal="setup_quality",
             run=cohorts.run_like_cohort_grading,
             reserve_minutes=5.0,
             description="Forward-grade the trader's LIKE cohort (deterministic, no model)",
@@ -962,6 +1097,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # Later phases append; they never reorder. Deterministic, no model.
         JobSlot(
             name="sidecar_completion",
+            goal="ops",
             run=cohorts.run_sidecar_completion,
             reserve_minutes=5.0,
             description="Finish yesterday's capture sidecars to the close (deterministic, no model)",
@@ -972,6 +1108,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # has a forward record: veto, like, pass, not-today and dislike.
         JobSlot(
             name="pass_cohort_grading",
+            goal="setup_quality",
             run=cohorts.run_pass_cohort_grading,
             reserve_minutes=5.0,
             description="Forward-grade day-trade PASSES (deterministic, no model)",
@@ -979,24 +1116,10 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         ),
         JobSlot(
             name="rejection_cohort_grading",
+            goal="setup_quality",
             run=cohorts.run_rejection_cohort_grading,
             reserve_minutes=5.0,
             description="Forward-grade NOT-TODAY and DISLIKE (deterministic, no model)",
-            max_attempts=3,
-        ),
-        # P10 A4, APPENDED after the cohort slots. It reads the annotation log
-        # and nothing the cohorts produce, so its position among them carries no
-        # dependency - but it belongs with them because it is the same KIND of
-        # job: deterministic, cheap, no model, its own ledger row and its own
-        # failure isolation. Later phases append; they never reorder.
-        JobSlot(
-            name="note_vocabulary_audit",
-            run=note_vocabulary_audit.run_note_vocabulary_audit,
-            reserve_minutes=5.0,
-            description=(
-                "What the trader wrote that no code says - listed, never coded "
-                "(deterministic, no model)"
-            ),
             max_attempts=3,
         ),
         # P6, APPENDED after the cohort slots and BEFORE the evidence report,
@@ -1004,6 +1127,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # paper half of each row. Later phases append; they never reorder.
         JobSlot(
             name="preference_trade_outcomes",
+            goal="journal",
             run=run_preference_trade_outcomes,
             reserve_minutes=5.0,
             description=(
@@ -1022,6 +1146,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # that it is scaffolding rather than a finding.
         JobSlot(
             name="outcome_sweep",
+            goal="ops",
             run=outcome_sweep.run_outcome_sweep,
             reserve_minutes=5.0,
             description="Finalize pending M5 outcomes before reports read them (deterministic, no model)",
@@ -1029,6 +1154,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         ),
         JobSlot(
             name="evidence_report",
+            goal="ops",
             run=evidence_report.run_evidence_report,
             reserve_minutes=5.0,
             description="Deterministic nightly evidence report (no model)",
@@ -1052,6 +1178,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # edited).
         JobSlot(
             name="daily_digest",
+            goal="market_read",
             run=digest.run_daily_digest,
             reserve_minutes=10.0,
             description="Deterministic daily fact pack, plus medium-tier narration",
@@ -1080,6 +1207,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # `journal_import`'s attempt budget rather than the briefs'.
         JobSlot(
             name="theta_pick_grading",
+            goal="setup_quality",
             run=theta_grading.run_theta_pick_grading,
             reserve_minutes=5.0,
             description="Grade the recorded theta picks at 5/10/20 sessions and at expiry (deterministic, no model)",
@@ -1124,6 +1252,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # not supersede a `pending` row (plan.md sec 5).
         JobSlot(
             name="read_grades_mature",
+            goal="market_read",
             run=read_grades_mature.run_read_grades_mature,
             reserve_minutes=2.0,
             description=(
@@ -1134,6 +1263,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         ),
         JobSlot(
             name="miss_contrast",
+            goal="setup_quality",
             run=miss_contrast.run_miss_contrast,
             reserve_minutes=5.0,
             description=(
@@ -1165,6 +1295,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # Hence `journal_import`'s attempt budget rather than the briefs'.
         JobSlot(
             name="prediction_contrast",
+            goal="market_read",
             run=prediction_contrast.run_prediction_contrast,
             reserve_minutes=5.0,
             description=(
@@ -1186,6 +1317,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # attempt budget rather than the briefs'.
         JobSlot(
             name="market_story_rollups",
+            goal="market_read",
             run=run_market_story_rollups,
             reserve_minutes=5.0,
             description=(
@@ -1206,6 +1338,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # hence `journal_import`'s attempt budget rather than the briefs'.
         JobSlot(
             name="measured_report",
+            goal="ops",
             run=measured_report_publish.run_measured_report,
             reserve_minutes=5.0,
             description=(
@@ -1216,6 +1349,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         ),
         JobSlot(
             name="day_review_facts",
+            goal="coaching",
             run=day_review_facts.run_day_review_facts,
             reserve_minutes=5.0,
             description="Refresh current and recent Day Review facts (no model)",
@@ -1238,6 +1372,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # ------------------------------------------------------------------
         JobSlot(
             name="ai_summary",
+            goal="ops",
             # ``summary_scopes`` is an OPERATOR override for a manual run, not
             # a configuration knob: the nightly path passes nothing and gets
             # briefs.DEFAULT_SCOPES, so an opt-in scope stays opt-in and
@@ -1283,6 +1418,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # verified story.
         JobSlot(
             name="day_review_narration",
+            goal="coaching",
             run=day_review_narration.run_day_review_narration,
             reserve_minutes=10.0,
             description=(
@@ -1308,6 +1444,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # last verified file stands.
         JobSlot(
             name="observation_tags",
+            goal="coaching",
             run=observation_tags.run_observation_tags,
             reserve_minutes=15.0,
             description=(
@@ -1338,6 +1475,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # strip is TJ-5 change 3, it lives on the page and it calls nothing.
         JobSlot(
             name="week_review_narration",
+            goal="coaching",
             run=week_review_narration.run_week_review_narration,
             reserve_minutes=week_review_narration.reserve_minutes(),
             description=(
@@ -1368,6 +1506,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # and a rejected reply publishes nothing.
         JobSlot(
             name="exit_note_fields",
+            goal="coaching",
             run=exit_note_fields.run_exit_note_fields,
             reserve_minutes=15.0,
             description=(
@@ -1380,6 +1519,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         ),
         JobSlot(
             name="ticker_briefs",
+            goal="coaching",
             # Saturday only, for the week's picks, alerts and traded names (P1-3 3b).
             run=briefs.run_weekly_ticker_briefs,
             reserve_minutes=120.0,
@@ -1396,6 +1536,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # is pinned directly after `market_story_narration`.
         JobSlot(
             name="econ_brief",
+            goal="market_read",
             run=econ_brief_narration.run_econ_brief,
             reserve_minutes=10.0,
             description=(
@@ -1410,6 +1551,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # and a failure preserves the last verified narration.
         JobSlot(
             name="market_story_narration",
+            goal="market_read",
             run=market_story_narration.run_market_story_narration,
             reserve_minutes=15.0,
             description=(
@@ -1426,6 +1568,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # by day; the model half answers pending questions with cited claims.
         JobSlot(
             name="week_questions",
+            goal="coaching",
             run=week_questions.run_week_questions,
             reserve_minutes=week_questions.RESERVE_MINUTES,
             description=(
@@ -1449,6 +1592,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # the trader, and this pass writes its own table instead.
         JobSlot(
             name="journal_enrichment",
+            goal="journal",
             run=enrichment.run_journal_enrichment,
             reserve_minutes=20.0,
             description="Advisory summaries and setup tags for the night's journal rows (gated)",
@@ -1465,6 +1609,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # can resolve it.
         JobSlot(
             name="review_policy_draft",
+            goal="ops",
             run=policy_draft.run_review_policy_draft,
             reserve_minutes=10.0,
             description="Draft review policy (ranks and annotates only; never the live file)",
@@ -1478,6 +1623,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # the plan (and so snapshots a changed one).
         JobSlot(
             name="plan_review",
+            goal="coaching",
             run=plan_review.run_plan_review,
             reserve_minutes=plan_review.RESERVE_MINUTES,
             description=(
@@ -1495,6 +1641,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # `model_free_kwargs`; a missing report skips before any model load.
         JobSlot(
             name="setup_keys_narration",
+            goal="permutations",
             run=setup_keys_narration.run_setup_keys_narration,
             reserve_minutes=setup_keys_narration.RESERVE_MINUTES,
             description=(
@@ -1509,6 +1656,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # the evidence floor is met and can never write a live policy.
         JobSlot(
             name="setup_research",
+            goal="setup_quality",
             run=setup_research.run_setup_research,
             reserve_minutes=20.0,
             description="Stop/target recipe research with five-timeframe market context",
@@ -1532,6 +1680,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # the ideas store, and a KEEP is the trader's own click on the card.
         JobSlot(
             name="improvement_ideas",
+            goal="coaching",
             run=improvement_ideas.run_improvement_ideas,
             reserve_minutes=improvement_ideas.RESERVE_MINUTES,
             description=(
@@ -1756,6 +1905,7 @@ def optional_slots() -> list[JobSlot]:
     return [
         JobSlot(
             name="weekly_synthesis",
+            goal="coaching",
             run=synthesis.run_weekly_synthesis,
             reserve_minutes=15.0,
             description="Weekly rollup over both graded cohorts (gated; medium tier only)",

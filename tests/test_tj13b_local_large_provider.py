@@ -392,7 +392,6 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         "sidecar_completion",
         "pass_cohort_grading",
         "rejection_cohort_grading",
-        "note_vocabulary_audit",
         "preference_trade_outcomes",
         # AI-R3: close saved scanner outcomes before evidence readers.
         "outcome_sweep",

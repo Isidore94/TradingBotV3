@@ -52,6 +52,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -539,7 +540,29 @@ def journal_import_line(rows: list[dict[str, Any]]) -> str:
         )
     else:
         error_text = "none"
-    return f"journal import: last success {success_text}, last error {error_text}"
+    line = f"journal import: last success {success_text}, last error {error_text}"
+    return line + _journal_counts_text(runs[-1])
+
+
+def _journal_counts_text(row: dict[str, Any]) -> str:
+    """"; last run <session>: unresolved self-heal N, position mismatches M" or "".
+
+    Read from the newest import row's reason line; a count it does not state is
+    "unknown", and a row stating neither adds nothing.
+    """
+    reason = str(row.get("reason") or "")
+    unresolved = re.search(r"self-heal repaired \d+, unresolved (\d+)", reason)
+    mismatches = re.search(r"reconciled \d+ position\(s\), (\d+) mismatch\(es\)", reason)
+    if not unresolved and not mismatches:
+        return ""
+    label = str(row.get("session_date") or "") or _short_ai_stamp(row.get("started_at"))
+    if row.get("morning_retry"):
+        label += " (morning retry)"
+    return (
+        f"; last run {label}: unresolved self-heal "
+        f"{unresolved.group(1) if unresolved else 'unknown'}, position mismatches "
+        f"{mismatches.group(1) if mismatches else 'unknown'}"
+    )
 
 
 def ai_night_lines(path: Path | None = None) -> list[str]:

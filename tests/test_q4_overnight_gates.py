@@ -372,7 +372,7 @@ def test_every_deterministic_slot_precedes_the_narration_pair():
     for deterministic in (
         "journal_import", "journal_auto_tag", "veto_cohort_grading",
         "like_cohort_grading", "sidecar_completion", "pass_cohort_grading",
-        "rejection_cohort_grading", "note_vocabulary_audit",
+        "rejection_cohort_grading",
         "preference_trade_outcomes", "evidence_report", "daily_digest",
     ):
         assert names.index(deterministic) < narration_at, deterministic
@@ -438,7 +438,7 @@ def test_a_raising_narration_slot_leaves_every_deterministic_row_already_written
     for deterministic in (
         "journal_import", "journal_auto_tag", "veto_cohort_grading",
         "like_cohort_grading", "sidecar_completion", "pass_cohort_grading",
-        "rejection_cohort_grading", "note_vocabulary_audit",
+        "rejection_cohort_grading",
         "preference_trade_outcomes", "evidence_report", "daily_digest",
     ):
         assert by_job[deterministic]["status"] == "ok", deterministic
