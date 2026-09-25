@@ -40,6 +40,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPicture, QPen
 
 from rvol import daily_rvol_series
 from ui import bar_integrity, theme
+from swallowed import note_swallowed
 
 
 _CANDLE_HALF_WIDTH = 0.27
@@ -1688,8 +1689,8 @@ class CandleChart(pg.PlotWidget):
                 continue
             try:
                 plot.removeItem(item)
-            except Exception:
-                pass
+            except Exception as exc:
+                note_swallowed("crosshair item already removed from the plot", exc, quiet=True)
 
     def hideEvent(self, event) -> None:  # noqa: N802 (Qt override)
         # A hidden chart cannot be hovered, so this is the natural deterministic

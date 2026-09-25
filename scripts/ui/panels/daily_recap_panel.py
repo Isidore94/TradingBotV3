@@ -61,6 +61,7 @@ from PySide6.QtWidgets import (
 import daily_recap_schedule
 from ui import theme
 from ui.widgets.data_table import apply_width_rule_to_table_widget
+from swallowed import note_swallowed
 
 #: How often the page asks whether its automatic read is due. A minute is the
 #: Trade Mentor's cadence for the same question; the answer is a function of
@@ -1020,8 +1021,8 @@ class DailyRecapPanel(QFrame):
     def shutdown(self) -> None:
         try:
             self._auto_timer.stop()
-        except RuntimeError:  # pragma: no cover - already torn down
-            pass
+        except RuntimeError as exc:  # pragma: no cover - already torn down
+            note_swallowed("daily recap timer already torn down", exc, quiet=True)
         worker = self._worker
         if worker is not None and worker.isRunning():
             worker.wait(2000)

@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QPlainTextEdit, QToolButton, QVBoxLayout, QWidget
+from swallowed import note_swallowed
 
 PLAN_OBJECT_NAME = "TradingPlanView"
 LOADING_TEXT = "Reading your trading plan..."
@@ -77,8 +78,8 @@ class TradingPlanView(QWidget):
             from ui.read_worker import join_worker
 
             join_worker(self._worker)
-        except Exception:  # noqa: BLE001 - shutdown must not raise
-            pass
+        except Exception as exc:  # noqa: BLE001 - shutdown must not raise
+            note_swallowed("trading plan worker join failed at shutdown", exc, quiet=True)
 
     def _read(self):
         if self._loader is not None:

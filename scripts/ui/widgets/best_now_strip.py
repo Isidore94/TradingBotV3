@@ -20,6 +20,7 @@ from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import QFrame, QLabel, QSizePolicy, QVBoxLayout
 
 import best_now
+from swallowed import note_swallowed
 
 BAR_SECONDS = 300
 #: After the bar closes, give the bot's cache and the Movers tick a moment.
@@ -191,8 +192,8 @@ class BestNowStrip(QFrame):
             entries = None
         try:
             self._entriesReady.emit(generation, entries)
-        except RuntimeError:  # widget already destroyed at shutdown
-            pass
+        except RuntimeError as exc:  # widget already destroyed at shutdown
+            note_swallowed("best-now result after the widget was destroyed", exc, quiet=True)
 
     def _on_entries(self, generation: int, entries: Any) -> None:
         self._busy = False

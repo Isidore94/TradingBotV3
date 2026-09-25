@@ -384,8 +384,8 @@ class _AiStateCompressionWorker(QThread):
             import setup_key_labels
 
             changed = bool(setup_key_labels.warm_cache()) or changed
-        except Exception:  # noqa: BLE001 - a label never costs the table
-            pass
+        except Exception as exc:  # noqa: BLE001 - a label never costs the table
+            note_swallowed("setup key label warm failed", exc, quiet=True)
         self.done.emit(changed)
 
 
@@ -838,8 +838,8 @@ class MasterAvwapPanel(QWidget):
     def _on_show_vetoed_toggled(self, checked: bool) -> None:
         try:
             save_local_setting(SETTING_SHOW_VETOED, bool(checked))
-        except Exception:  # noqa: BLE001 - a preference never costs the table
-            pass
+        except Exception as exc:  # noqa: BLE001 - a preference never costs the table
+            note_swallowed("show-vetoed setting write failed", exc)
         self.proxy.set_filters(show_rejected=bool(checked))
         self._refresh_show_vetoed_label()
 
@@ -865,8 +865,8 @@ class MasterAvwapPanel(QWidget):
     def _on_hide_sector_toggled(self, checked: bool) -> None:
         try:
             sector_exclusion.set_hide_enabled(bool(checked))
-        except Exception:  # noqa: BLE001 - a preference never costs the table
-            pass
+        except Exception as exc:  # noqa: BLE001 - a preference never costs the table
+            note_swallowed("hide-sector setting write failed", exc)
         self.proxy.set_filters(hide_excluded_sectors=bool(checked))
         self._refresh_hide_sector_label()
 
@@ -927,8 +927,8 @@ class MasterAvwapPanel(QWidget):
 
             project_paths.save_local_setting(setup_points.LEARNED_SETTING_KEY, bool(checked))
             project_paths.invalidate_local_settings_cache()
-        except Exception:  # noqa: BLE001 - a preference never costs the table
-            pass
+        except Exception as exc:  # noqa: BLE001 - a preference never costs the table
+            note_swallowed("learned-weights setting write failed", exc)
         self._apply_points_weights()
 
     def _apply_points_weights(self) -> None:
@@ -1029,8 +1029,8 @@ class MasterAvwapPanel(QWidget):
 
             project_paths.save_local_setting(setup_points.SETTING_KEY, bool(checked))
             project_paths.invalidate_local_settings_cache()
-        except Exception:  # noqa: BLE001 - a preference never costs the table
-            pass
+        except Exception as exc:  # noqa: BLE001 - a preference never costs the table
+            note_swallowed("points setting write failed", exc)
         source = getattr(self, "_working_lately_source_rows", None)
         if source:
             self.set_rows(list(source))
@@ -1063,8 +1063,8 @@ class MasterAvwapPanel(QWidget):
             import setup_points
 
             self._learned_weights_action.setChecked(setup_points.learned_weights_enabled())
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            note_swallowed("learned-weights state unreadable for the menu", exc, quiet=True)
         self._learned_weights_action.setToolTip(
             "Let the proposed multipliers (from how higher-point rows actually performed) "
             "apply to the Points column. OFF = the default weights."

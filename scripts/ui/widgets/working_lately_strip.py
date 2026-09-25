@@ -27,6 +27,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel
 
 import working_lately
+from swallowed import note_swallowed
 
 
 class WorkingLatelyStrip(QFrame):
@@ -128,8 +129,8 @@ class WorkingLatelyStrip(QFrame):
 
             project_paths.save_local_setting("prioritise_working_lately", bool(checked))
             project_paths.invalidate_local_settings_cache()
-        except Exception:  # noqa: BLE001 - a preference never costs the desk
-            pass
+        except Exception as exc:  # noqa: BLE001 - a preference never costs the desk
+            note_swallowed("prioritise working-lately setting write failed", exc)
         self.prioritiseToggled.emit(bool(checked))
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt's name

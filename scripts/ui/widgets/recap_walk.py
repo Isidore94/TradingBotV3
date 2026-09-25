@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 
 from ui import theme
 from ui.widgets import recap_walk_cards as cards_lib
+from swallowed import note_swallowed
 
 #: Local-settings key: `{session: {"index": int, "finished": bool}}`.
 WALK_SETTING_KEY = "qt_day_review_walk_v1"
@@ -516,8 +517,8 @@ class RecapWalk(QFrame):
                 if flow.marker.is_active():
                     flow.set_active(False)
                     left = True
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                note_swallowed("clue mode could not be left for one chart", exc, quiet=True)
         for button in self._clue_buttons.values():
             button.setChecked(False)
         return left
@@ -685,8 +686,8 @@ class RecapWalk(QFrame):
         button.toggled.connect(lambda on, f=flow: f.set_active(on))
         try:
             flow.marker.activeChanged.connect(button.setChecked)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            note_swallowed("clue mode button not linked to its marker", exc, quiet=True)
         self._clue_buttons[index] = button
         row = QHBoxLayout()
         row.addWidget(button)

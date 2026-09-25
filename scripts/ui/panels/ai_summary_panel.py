@@ -40,6 +40,7 @@ from project_paths import (
     save_local_setting,
 )
 from ui.widgets.section_header import SectionHeader
+from swallowed import note_swallowed
 
 
 class AiSummaryPanel(QFrame):
@@ -187,10 +188,10 @@ class AiSummaryPanel(QFrame):
             }
         try:
             self._gatesLoaded.emit(payload)
-        except RuntimeError:
+        except RuntimeError as swallowed_exc:
             # The panel was deleted while this read was in flight; there is
             # nothing left to update. See the same guard in the tracker panel.
-            pass
+            note_swallowed("phase gates read finished after the panel was deleted", swallowed_exc, quiet=True)
 
     def _on_gates_loaded(self, payload: object) -> None:
         data = payload if isinstance(payload, dict) else {}

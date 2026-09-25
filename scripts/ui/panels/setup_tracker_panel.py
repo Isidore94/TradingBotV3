@@ -50,6 +50,7 @@ from ui.widgets.data_table import DataTable
 from ui.widgets.kpi_tile import KpiTile
 from ui.widgets.section_header import SectionHeader
 from ui.widgets.setup_detail_view import SetupDetailView
+from swallowed import note_swallowed
 
 
 SETUP_TYPE_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
@@ -1237,10 +1238,10 @@ class SetupTrackerPanel(QFrame):
             payload["message"] = f"Attribute leaderboard unreadable: {exc}"
         try:
             self._attributesLoaded.emit(payload)
-        except RuntimeError:
+        except RuntimeError as swallowed_exc:
             # The panel was deleted while the read was in flight; nothing left
             # to update, so the payload is dropped rather than raised.
-            pass
+            note_swallowed("attribute leaderboard read finished after the panel was deleted", swallowed_exc, quiet=True)
 
     def _on_attributes_loaded(self, payload: object) -> None:
         data = payload if isinstance(payload, dict) else {}

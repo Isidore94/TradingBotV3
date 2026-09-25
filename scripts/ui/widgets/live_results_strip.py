@@ -31,6 +31,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
 
 import entry_state as es
 import live_alert_results as lar
+from swallowed import note_swallowed
 
 REFRESH_MS = 60_000
 
@@ -89,8 +90,8 @@ class LiveResultsStrip(QFrame):
 
             if is_regime_pause_alert(alert):
                 return
-        except Exception:  # noqa: BLE001 - a display strip never costs the desk
-            pass
+        except Exception as exc:  # noqa: BLE001 - a display strip never costs the desk
+            note_swallowed("regime pause check failed for a live result", exc, quiet=True)
         received_at = self._clock()
         latest = lar.entry_from_alert(alert, received_at)
         if latest is not None:
@@ -159,8 +160,8 @@ class LiveResultsStrip(QFrame):
             results = None
         try:
             self._resultsReady.emit(generation, results)
-        except RuntimeError:  # widget already destroyed at shutdown
-            pass
+        except RuntimeError as exc:  # widget already destroyed at shutdown
+            note_swallowed("live results after the widget was destroyed", exc, quiet=True)
 
     @staticmethod
     def _bars_for(bars_by_symbol: dict[str, Any], entry, provider) -> list:

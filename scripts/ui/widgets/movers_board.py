@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 import movers_scan
 from ui import theme
 from ui.timer_utils import SignalCoalescer
+from swallowed import note_swallowed
 
 #: Same floor as the Strength page it sits above (alert column budget: 360 px).
 MIN_BOARD_WIDTH = 170
@@ -627,8 +628,8 @@ class MoversBoard(QWidget):
             from project_paths import save_local_setting
 
             save_local_setting(key, value)
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("movers board setting write failed", exc)
 
     def _load_hidden(self) -> tuple[str, set[str]]:
         saved = self._setting(MOVERS_HIDDEN_SETTING, {})

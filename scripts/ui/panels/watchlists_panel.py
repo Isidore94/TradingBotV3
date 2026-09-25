@@ -32,6 +32,7 @@ from project_paths import (
 )
 from watchlist_utils import extract_watchlist_symbols
 from ui.widgets.section_header import SectionHeader
+from swallowed import note_swallowed
 
 # WS-5D. The names are literals here and the module is imported lazily at the
 # seam, so a missing or broken evidence module can never stop the Watchlists
@@ -283,8 +284,8 @@ class AutoWatchlistViewerPanel(QFrame):
             if self.path.exists():
                 stamp = datetime.fromtimestamp(self.path.stat().st_mtime)
                 written_at = f" | written {stamp.strftime('%H:%M:%S')}"
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("watchlist file stamp unreadable", exc, quiet=True)
         label = "symbol" if len(symbols) == 1 else "symbols"
         self.status_label.setText(f"{self.path.name} | {len(symbols)} {label}{written_at} | {self.path}")
 

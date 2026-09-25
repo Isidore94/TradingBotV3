@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
 
 from ui import theme
 from ui.widgets.candle_chart import CandleChart
+from swallowed import note_swallowed
 
 #: How many D1 charts the page shows. Six is the trader's own number.
 CHART_COUNT = 6
@@ -663,8 +664,8 @@ class MarketJournalPanel(QFrame):
             ):
                 self._save()
                 return True
-        except Exception:  # noqa: BLE001 - a key handler never breaks the page
-            pass
+        except Exception as exc:  # noqa: BLE001 - a key handler never breaks the page
+            note_swallowed("market journal key handler raised", exc)
         return super().eventFilter(watched, event)
 
     def _sync_after_the_fact(self) -> None:

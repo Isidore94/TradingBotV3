@@ -26,6 +26,7 @@ from ui.timer_utils import start_staggered
 from ui.widgets.data_table import measure_column_widths
 from ui.widgets.kpi_tile import KpiTile
 from ui.widgets.section_header import SectionHeader
+from swallowed import note_swallowed
 
 #: Warehouse tile status -> this page's four-status vocabulary. OFF is UNKNOWN,
 #: not green: "no research store configured" is an unmeasured dimension, and
@@ -407,10 +408,10 @@ class HealthPanel(QFrame):
             }
         try:
             self._audit_ready.emit(payload)
-        except RuntimeError:
+        except RuntimeError as swallowed_exc:
             # The panel's C++ half was deleted while the audit ran (app
             # shutdown). Nothing to update, nothing to leak.
-            pass
+            note_swallowed("health audit finished after the panel was deleted", swallowed_exc, quiet=True)
 
     def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().showEvent(event)

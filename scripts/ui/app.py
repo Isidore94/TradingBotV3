@@ -719,8 +719,8 @@ class MainWindow(QMainWindow):
 
             for worker in list((getattr(self, "_rule_size_workers", None) or {}).values()):
                 join_worker(worker)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            note_swallowed("rule size baseline worker join failed at shutdown", exc, quiet=True)
 
     def _set_technical_integrity(self, snapshot) -> None:
         self._technical_integrity_snapshot = snapshot if isinstance(snapshot, dict) else {}
@@ -867,8 +867,8 @@ class MainWindow(QMainWindow):
                     page_tab_row.set_page_visible(index, show)
         try:
             self.trading_panel.alert_center.apply_unused_tab_visibility(show)
-        except Exception:  # noqa: BLE001 - a hidden tab is never worth a broken desk
-            pass
+        except Exception as exc:  # noqa: BLE001 - a hidden tab is never worth a broken desk
+            note_swallowed("unused alert-center tab visibility not applied", exc)
 
     def _start_tag_review_badge(self) -> None:
         """Count the trades awaiting tag review, off-thread, once at startup.
@@ -907,8 +907,8 @@ class MainWindow(QMainWindow):
             from ui.read_worker import join_worker
 
             join_worker(worker)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            note_swallowed("tag review badge worker join failed at shutdown", exc, quiet=True)
 
     def _apply_tag_review_badge(self, payload: object) -> None:
         """"Journal (12 to review)". Zero leaves the label exactly as it was."""
@@ -2103,8 +2103,8 @@ class MainWindow(QMainWindow):
 
             for chip in self.findChildren(RuleChip):
                 chip.shutdown()
-        except Exception:  # noqa: BLE001 - shutdown must not raise
-            pass
+        except Exception as swallowed_exc:  # noqa: BLE001 - shutdown must not raise
+            note_swallowed("rule chip shutdown failed", swallowed_exc)
         self._join_rule_size_baseline()
         for panel in (
             self.trading_panel,
@@ -2124,46 +2124,46 @@ class MainWindow(QMainWindow):
         ):
             try:
                 panel.shutdown()
-            except Exception:
-                pass
+            except Exception as swallowed_exc:
+                note_swallowed("page shutdown failed", swallowed_exc)
         # The strength board's service is owned by the window rather than by a
         # panel (its surface is a section inside the Alert Center), so it is
         # not in the loop above and needs stopping here. Its timer is the only
         # thing it holds.
         try:
             self.strength_board_service.shutdown()
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("strength board service shutdown failed", swallowed_exc)
         try:
             self.movers_service.shutdown()
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("movers service shutdown failed", swallowed_exc)
         # Same reason, same list: the Working-lately service is owned by the
         # window (four surfaces read it) and holds one timer and one bounded
         # reader. ST6.3.
         try:
             self.working_lately_service.shutdown()
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("working lately service shutdown failed", swallowed_exc)
         # Same list, same reason (WISHLIST 10J): one timer, owned here.
         try:
             self.trade_mentor_service.shutdown()
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("trade mentor service shutdown failed", swallowed_exc)
         try:
             self.econ_reminder_service.shutdown()
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("econ reminder service shutdown failed", swallowed_exc)
         try:
             self.trade_mentor_context_service.shutdown(timeout_ms=250)
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("trade mentor context service shutdown failed", swallowed_exc)
         # TJ-9 item 6: the morning retry's worker, when one was ever built.
         try:
             if self._journal_importer is not None:
                 self._journal_importer.shutdown()
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("journal importer shutdown failed", swallowed_exc)
         # Backstop for the shared writer lease: AutopilotService.shutdown
         # normally releases it, but a panel that failed to shut down must not
         # leave the lease held. Releasing twice is a no-op, and a lease this
@@ -2172,8 +2172,8 @@ class MainWindow(QMainWindow):
             import autopilot_core as core
 
             core.release_away_report_lease()
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("away report lease release failed at shutdown", exc)
         super().closeEvent(event)
 
 

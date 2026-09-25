@@ -53,6 +53,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QToolTip,
 )
+from swallowed import note_swallowed
 
 #: The floor and ceiling `fit_columns` has always applied. Kept: the rule
 #: changes which column absorbs the slack, not how wide a measured column may
@@ -394,8 +395,8 @@ class DataTable(QTableView):
                 try:
                     if not predicate(index):
                         continue
-                except Exception:  # noqa: BLE001 - see the docstring
-                    pass
+                except Exception as exc:  # noqa: BLE001 - see the docstring
+                    note_swallowed("row action visibility predicate raised; action offered", exc, quiet=True)
             offered.append((label, callback))
         return offered
 
