@@ -77,6 +77,16 @@ def _answer_every_field(card, trade_id: str) -> None:
 
     for combo, _text in card._answer_inputs[trade_id].values():
         combo.setCurrentIndex(combo.findData(check.ANSWER_NOT_REMEMBERED))
+    _pick_a_setup(card, trade_id)
+
+
+def _pick_a_setup(card, trade_id: str) -> str:
+    """The trader picks a name in the setup list, as a click would."""
+    box = card.setup_choice_box(trade_id)
+    index = next(i for i in range(box.count()) if box.itemData(i))
+    box.setCurrentIndex(index)
+    card._setup_hand_picked(trade_id)
+    return str(box.itemData(index))
 
 
 def test_one_answered_trade_is_stored_while_the_other_is_still_open(two_trades):
@@ -91,7 +101,8 @@ def test_one_answered_trade_is_stored_while_the_other_is_still_open(two_trades):
 
     card._trade_save_buttons[first].click()
 
-    assert check.answered_fields(store, first) == set(check.MATERIAL_FIELDS)
+    assert check.answered_fields(store, first) == set(tuple(name for name in check.MATERIAL_FIELDS if name != "setup"))
+    assert store.annotation_state(first)["tag_status"] == "confirmed", "Save kept the pick"
     assert check.answered_fields(store, second) == set()
     assert list(card._answer_inputs) == [second], "the stored trade left the card alone"
     asked = [question.trade_id for question in check.build_task(store, SESSION).trades]
@@ -129,40 +140,26 @@ def test_words_typed_beside_a_blank_dropdown_are_an_answer(two_trades):
     assert card.save_trade_check(first)["ok"] is True
 
     rows = {row["field"]: row for row in check.recalled_fields(store, first)}
-    assert set(rows) == set(check.MATERIAL_FIELDS)
+    assert set(rows) == set(tuple(name for name in check.MATERIAL_FIELDS if name != "setup"))
     assert {row["state"] for row in rows.values()} == {check.ANSWER_NOT_SUPPLIED}
     assert rows["stop"]["text"] == "my stop"
     assert rows["stop"]["value"] is None, "typed words are never coerced to a number"
 
 
-def test_one_raw_note_is_stored_verbatim_and_local_ai_fills_the_blanks(two_trades):
-    """The raw note is no longer a placeholder answer for every field: it is
-    stored verbatim, and the blank fields go to the local model to fill."""
-    import trade_mentor_trade_check as check
+def test_each_trade_asks_setup_thesis_stop_target_once(two_trades):
+    """Trader 2026-09-25: no catch-all note and no second setup row - the setup
+    list, then thesis (optional), stop and target, each asked once."""
+    from PySide6.QtWidgets import QPlainTextEdit, QPushButton
 
-    store, card, first, _second = two_trades
-    started = []
-    card._start_ai_fill = lambda store, trade_id, words, blank, question, moment: started.append(
-        (trade_id, words, blank)
-    )
-    note = "Bounce off the 1st dev. Stop under the low. No target, trailed it."
-    card._raw_trade_inputs[first].setPlainText(note)
+    _store, card, first, _second = two_trades
+    block = card._trade_blocks[first]
 
-    assert card._trade_save_buttons[first].isEnabled() is True
-    assert card.save_trade_check(first)["ok"] is True
-
-    raw = store.list_opportunity_events(trade_id=first, event_type=check.EVENT_RECALLED_RAW)
-    assert [row["payload"]["raw_text"] for row in raw] == [note]
-    assert check.recalled_fields(store, first) == [], "no placeholder answers"
-    assert started == [(first, note, tuple(card_missing(store, first)))]
-    assert first not in [q.trade_id for q in check.build_task(store, SESSION).trades]
-
-
-def card_missing(store, trade_id):
-    import trade_mentor_trade_check as check
-
-    trade = store.get_trade(trade_id)
-    return check.missing_fields(trade, set())
+    assert list(card._answer_inputs[first]) == ["thesis", "stop", "target"]
+    assert card.setup_choice_box(first) is not None
+    texts = [button.text() for button in block.findChildren(QPushButton)]
+    assert not any("local AI" in text for text in texts)
+    boxes = block.findChildren(QPlainTextEdit)
+    assert all(box is card.exit_note_box(first) for box in boxes), "only the exit box"
 
 
 def test_an_untouched_card_still_files_nothing(two_trades):

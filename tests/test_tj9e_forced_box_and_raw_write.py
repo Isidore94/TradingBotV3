@@ -180,8 +180,7 @@ def test_the_note_survives_an_entry_answer_that_fails(tmp_path, monkeypatch):
     card = _card(tmp_path)
     card.set_trade_check(task, store=store)
     card.exit_note_box(ids[fx.DAY_TRADE]).setPlainText(fx.EXIT_NOTE)
-    for name in check.MATERIAL_FIELDS:
-        combo = card._answer_inputs[ids[fx.DAY_TRADE]][name][0]
+    for combo, _text in card._answer_inputs[ids[fx.DAY_TRADE]].values():
         combo.setCurrentIndex(combo.findData(check.ANSWER_NOT_REMEMBERED))
 
     def _boom(*_args, **_kwargs):
@@ -266,8 +265,8 @@ def test_the_exit_ask_is_one_prompt_and_carries_no_chips_or_dropdowns(tmp_path):
 def test_the_entry_half_of_a_row_is_untouched_by_the_exit_box(tmp_path):
     """STATED GUARD for *"entrys are good the way they are"*.
 
-    DAYT carries both halves. Hand-counted: 4 entry combos, in `MATERIAL_FIELDS`
-    order. ASKED ONCE (2026-09-23): answering them opens Save on its own - the
+    DAYT carries both halves. Hand-counted: 3 entry combos, in `MATERIAL_FIELDS`
+    order; the setup is the list above them (trader 2026-09-25). ASKED ONCE (2026-09-23): answering them opens Save on its own - the
     exit box is optional - and the exit words are filed beside them.
     """
     import trade_mentor_trade_check as check
@@ -280,8 +279,9 @@ def test_the_entry_half_of_a_row_is_untouched_by_the_exit_box(tmp_path):
     card.set_trade_check(task, store=store)
 
     fields = card._answer_inputs[trade_id]
-    assert tuple(fields) == check.MATERIAL_FIELDS, tuple(fields)
-    for name in check.MATERIAL_FIELDS:
+    assert tuple(fields) == tuple(name for name in check.MATERIAL_FIELDS if name != "setup"), tuple(fields)
+    assert card.setup_choice_box(trade_id) is not None
+    for name in fields:
         combo = fields[name][0]
         combo.setCurrentIndex(combo.findData(check.ANSWER_NOT_REMEMBERED))
 

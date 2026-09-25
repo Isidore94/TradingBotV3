@@ -149,33 +149,6 @@ def _previous_by_timeframe(previous: Any) -> dict[str, Mapping[str, Any]]:
     return answer
 
 
-class _MentorAIWorkerSignals(QObject):
-    ready = Signal(str, object)
-    failed = Signal(str, str)
-
-
-class _MentorAIWorker(QRunnable):
-    """One bounded local-model call, always outside the Qt thread."""
-
-    def __init__(self, trade_id: str, raw_text: str, missing: tuple[str, ...], trade: dict):
-        super().__init__()
-        self.trade_id = trade_id
-        self.raw_text = raw_text
-        self.missing = missing
-        self.trade = trade
-        self.signals = _MentorAIWorkerSignals()
-
-    def run(self) -> None:
-        try:
-            from trade_mentor_ai import extract_draft
-
-            draft = extract_draft(self.raw_text, self.missing, self.trade)
-        except Exception as exc:  # noqa: BLE001 - raw answer already survived
-            self.signals.failed.emit(self.trade_id, str(exc))
-            return
-        self.signals.ready.emit(self.trade_id, draft)
-
-
 class _MentorAIFillWorker(QRunnable):
     """ASKED ONCE: fill a filed trade's blank fields from its words, and store them.
 
@@ -376,15 +349,9 @@ class TradeMentorCard(QWidget):
         #: trader has already touched, and drop one that is no longer owed,
         #: without rebuilding a single widget that already has a value in it.
         self._trade_blocks: dict[str, QWidget] = {}
-        self._raw_trade_inputs: dict[str, QPlainTextEdit] = {}
-        self._ai_draft_buttons: dict[str, QPushButton] = {}
-        self._ai_drafts: dict[str, dict[str, dict[str, Any]]] = {}
         #: trade_id -> that trade's OWN Save. A trade the trader has answered is
         #: filed on its own and never waits for the other trades on the card.
         self._trade_save_buttons: dict[str, QPushButton] = {}
-        #: trade_id -> the raw note already stored verbatim, so Save never
-        #: files the same words twice.
-        self._raw_saved: dict[str, str] = {}
         #: trade_id -> (words, state) of the exit note already filed from this
         #: card, so a retry after a later failed write never files it twice.
         self._exit_saved: dict[str, tuple[str, str]] = {}
@@ -397,6 +364,8 @@ class TradeMentorCard(QWidget):
         #: trade_ids whose setup the trader confirmed on THIS card. The combo
         #: for that field disappears, so the Save gate must stop waiting on it.
         self._setup_confirmed: set[str] = set()
+        #: trade_ids whose setup list the trader moved by hand; Save files it.
+        self._setup_picked: set[str] = set()
         # TJ-9E. The exit half of a row: ONE free-text box per trade, the two
         # answer states it may carry instead of words, and the night's draft
         # line with its two verbs. Kept in their own maps so a trade's exit
@@ -1371,16 +1340,13 @@ class TradeMentorCard(QWidget):
         kept = set(self._draft_question_rows)
         self._answer_inputs = {}
         self._trade_questions = {}
-        self._raw_trade_inputs = {}
-        self._ai_draft_buttons = {}
-        self._ai_drafts = {}
         self._trade_save_buttons = {}
-        self._raw_saved = {}
         self._exit_saved = {}
         self._trade_fields_filed = 0
         self._setup_confirm_buttons = {}
         self._setup_choice_boxes = {}
         self._setup_confirmed = set()
+        self._setup_picked = set()
         self._trade_blocks = {}
         self._trade_headings = {}
         self._exit_boxes = {}
@@ -1429,11 +1395,7 @@ class TradeMentorCard(QWidget):
             block.deleteLater()
         self._answer_inputs.pop(key, None)
         self._trade_questions.pop(key, None)
-        self._raw_trade_inputs.pop(key, None)
-        self._ai_draft_buttons.pop(key, None)
-        self._ai_drafts.pop(key, None)
         self._trade_save_buttons.pop(key, None)
-        self._raw_saved.pop(key, None)
         self._exit_saved.pop(key, None)
         self._setup_confirm_buttons.pop(key, None)
         self._setup_choice_boxes.pop(key, None)
@@ -1454,6 +1416,7 @@ class TradeMentorCard(QWidget):
         ):
             getattr(self, name).pop(key, None)
         self._setup_confirmed.discard(key)
+        self._setup_picked.discard(key)
         if key in self._draft_question_rows:
             # Its exit widgets belong to a waiting-reading row in the questions
             # area, which this block does not own and must not take with it.
@@ -1664,26 +1627,13 @@ class TradeMentorCard(QWidget):
         heading.setObjectName("MutedLabel")
         block_layout.addWidget(heading)
         self._trade_headings[trade_id] = heading
+        # One ask per thing: the setup list, then thesis / stop / target rows.
+        # No catch-all note box and no second setup row (trader 2026-09-25).
         self._add_setup_confirm(question, block, block_layout)
-        raw_box = QPlainTextEdit(block)
-        raw_box.setMaximumHeight(72)
-        raw_box.setPlaceholderText(
-            "Tell me in one note: why, stop/invalidation, target, and setup. "
-            "Your exact words are saved before local AI fills the draft."
-        )
-        # Words typed here ARE an answer (trader 2026-09-21): they open this
-        # trade's Save, so the gate listens to the note as well as the combos.
-        raw_box.textChanged.connect(self._refresh_save_gate)
-        block_layout.addWidget(raw_box)
-        ai_button = QPushButton("Fill missing fields with local AI", block)
-        ai_button.clicked.connect(
-            lambda _checked=False, trade_id=trade_id: self._start_ai_draft(trade_id)
-        )
-        block_layout.addWidget(ai_button)
-        self._raw_trade_inputs[trade_id] = raw_box
-        self._ai_draft_buttons[trade_id] = ai_button
         fields: dict[str, tuple[QComboBox, QLineEdit]] = {}
         for name in question.missing:
+            if name == "setup" and trade_id in self._setup_choice_boxes:
+                continue
             row = QWidget(block)
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
@@ -1700,7 +1650,10 @@ class TradeMentorCard(QWidget):
             # rather than counting clicks.
             combo.currentIndexChanged.connect(self._refresh_save_gate)
             text_input = QLineEdit(row)
-            text_input.setPlaceholderText("in your own words - typing here is an answer")
+            text_input.setPlaceholderText(
+                "optional - in your own words" if name == "thesis"
+                else "in your own words - typing here is an answer"
+            )
             text_input.textChanged.connect(self._refresh_save_gate)
             row_layout.addWidget(combo)
             row_layout.addWidget(text_input, 1)
@@ -2417,6 +2370,9 @@ class TradeMentorCard(QWidget):
         choice.currentIndexChanged.connect(
             lambda _index, box=choice, btn=button: btn.setEnabled(bool(box.currentData()))
         )
+        choice.activated.connect(
+            lambda _index, trade_id=str(question.trade_id): self._setup_hand_picked(trade_id)
+        )
         evidence = str(getattr(question, "setup_guess_evidence", "") or "")
         button.setToolTip(
             ("The machine's best guess" if guess else "No machine guess - pick one")
@@ -2436,6 +2392,19 @@ class TradeMentorCard(QWidget):
         layout.addWidget(row)
         self._setup_confirm_buttons[str(question.trade_id)] = button
         self._setup_choice_boxes[str(question.trade_id)] = choice
+
+    def _setup_hand_picked(self, trade_id: str) -> None:
+        """The trader moved the setup list: Save this trade will confirm it."""
+        self._setup_picked.add(str(trade_id))
+        self._refresh_save_gate()
+
+    def _picked_setup(self, trade_id: str) -> str:
+        """The setup the trader picked by hand and has not confirmed, or ``""``."""
+        key = str(trade_id)
+        if key in self._setup_confirmed or key not in self._setup_picked:
+            return ""
+        choice = self._setup_choice_boxes.get(key)
+        return str(choice.currentData() or "") if choice is not None else ""
 
     def trade_heading_text(self, trade_id: str) -> str:
         """What ONE trade's block says it is - symbol, side and its session."""
@@ -2527,9 +2496,8 @@ class TradeMentorCard(QWidget):
         * words typed beside a combo left on "-". That is `not supplied` by its
           own definition - it was never written down, and here is what it was.
 
-        The trade's raw note is NOT a field answer any more (2026-09-23): it is
-        stored verbatim, and the local model fills from it only the fields it
-        can quote. A field nobody answered writes no row - blank stays blank.
+        A field nobody answered writes no row; the local model may later fill
+        it only from words typed in the other fields.
         """
         import trade_mentor_trade_check as check
 
@@ -2551,11 +2519,15 @@ class TradeMentorCard(QWidget):
 
     def _blank_fields(self, trade_id: str) -> list[str]:
         """ONE trade's listed material fields that hold no answer, in card order."""
-        confirmed = str(trade_id) in self._setup_confirmed
-        return [
+        key = str(trade_id)
+        confirmed = key in self._setup_confirmed
+        setup_open = (
+            key in self._setup_choice_boxes and not confirmed and not self._picked_setup(key)
+        )
+        return (["setup"] if setup_open else []) + [
             name
-            for name in self._answer_inputs.get(str(trade_id), {})
-            if not (name == "setup" and confirmed) and not self._field_answer(trade_id, name)
+            for name in self._answer_inputs.get(key, {})
+            if not (name == "setup" and confirmed) and not self._field_answer(key, name)
         ]
 
     def _exit_words(self, trade_id: str) -> str:
@@ -2572,14 +2544,11 @@ class TradeMentorCard(QWidget):
     def _has_answer(self, trade_id: str) -> bool:
         """Has the trader said ANYTHING about this trade on the card?
 
-        Asked once (2026-09-23): Save opens on any answer - the raw note, one
-        field, the exit words or an exit state, or a setup confirmed here.
+        Asked once (2026-09-23): Save opens on any answer - one field, the exit
+        words or an exit state, or a setup picked or confirmed here.
         """
         key = str(trade_id)
-        if key in self._setup_confirmed:
-            return True
-        raw_box = self._raw_trade_inputs.get(key)
-        if raw_box is not None and raw_box.toPlainText().strip():
+        if key in self._setup_confirmed or self._picked_setup(key):
             return True
         if any(self._field_answer(key, name) for name in self._answer_inputs.get(key, {})):
             return True
@@ -2608,89 +2577,6 @@ class TradeMentorCard(QWidget):
             self.save_answers_button.setEnabled(bool(answered))
         except RuntimeError:  # pragma: no cover - widget already torn down
             pass
-
-    def _start_ai_draft(self, trade_id: str) -> None:
-        """Save raw words, then let the local model prepare editable controls."""
-        import trade_mentor_trade_check as check
-
-        question = self._trade_questions.get(trade_id)
-        raw_box = self._raw_trade_inputs.get(trade_id)
-        button = self._ai_draft_buttons.get(trade_id)
-        body = raw_box.toPlainText() if raw_box is not None else ""
-        if question is None or not body.strip() or self._trade_store is None:
-            self._set_status("Type your answer first. Nothing was sent.")
-            return
-        try:
-            check.save_raw_reply(
-                self._trade_store,
-                trade_id,
-                body,
-                missing=tuple(question.missing),
-                now=self._now(),
-            )
-        except Exception as exc:  # noqa: BLE001 - journal writes fail loudly
-            self._set_status(f"Your words were NOT saved: {exc}")
-            return
-        self._raw_saved[trade_id] = body
-        if button is not None:
-            button.setEnabled(False)
-            button.setText("Local AI is filling the draft…")
-        trade = {
-            "trade_id": trade_id,
-            "symbol": str(question.symbol or ""),
-            "direction": str(question.direction or ""),
-        }
-        worker = _MentorAIWorker(trade_id, body, tuple(question.missing), trade)
-        worker.signals.ready.connect(self._apply_ai_draft)
-        worker.signals.failed.connect(self._ai_draft_failed)
-        QThreadPool.globalInstance().start(worker)
-        self._set_status("Your exact words are saved. Local AI is making an editable draft.")
-
-    def _apply_ai_draft(self, trade_id: str, payload: object) -> None:
-        draft = dict(payload) if isinstance(payload, Mapping) else {}
-        fields = self._answer_inputs.get(trade_id, {})
-        kept: dict[str, dict[str, Any]] = {}
-        conflicts: list[str] = []
-        for answer in draft.get("answers") or []:
-            if not isinstance(answer, Mapping):
-                continue
-            name = str(answer.get("field") or "")
-            controls = fields.get(name)
-            if controls is None:
-                continue
-            combo, text_input = controls
-            if combo.currentData() or text_input.text().strip():
-                conflicts.append(name)
-                continue
-            state = str(answer.get("state") or "")
-            index = combo.findData(state)
-            if index < 0:
-                continue
-            combo.setCurrentIndex(index)
-            text_input.setText(str(answer.get("text") or answer.get("source_span") or ""))
-            kept[name] = dict(answer)
-        self._ai_drafts[trade_id] = kept
-        button = self._ai_draft_buttons.get(trade_id)
-        if button is not None:
-            button.setEnabled(True)
-            button.setText("Refill from a new raw answer")
-        follow_up = str(draft.get("follow_up") or "").strip()
-        message = f"Draft filled for {len(kept)} field(s). Check it, then Save answers."
-        if conflicts:
-            message += " I kept your existing " + ", ".join(conflicts) + "."
-        if follow_up:
-            message += " One question: " + follow_up
-        self._set_status(message)
-
-    def _ai_draft_failed(self, trade_id: str, reason: str) -> None:
-        button = self._ai_draft_buttons.get(trade_id)
-        if button is not None:
-            button.setEnabled(True)
-            button.setText("Try local AI again")
-        self._set_status(
-            "Your exact words are safe. Local AI could not fill the draft. "
-            "You can use the fields by hand. " + str(reason or "")
-        )
 
     # -- TJ-9E: the trader's two clicks on a waiting draft ------------------
     def _start_exit_write(self, trade_id: str, call: Callable[[], Any], busy: str) -> bool:
@@ -2905,8 +2791,8 @@ class TradeMentorCard(QWidget):
     ) -> dict[str, Any]:
         """File ONE trade exactly as it stands, then mark it asked once.
 
-        RAW FIRST (TJ-9E): the exit note, then the trade's raw note, then the
-        typed fields - the trader's own sentence must never be lost to a
+        A setup picked by hand is confirmed first. Then RAW FIRST (TJ-9E):
+        the exit note, then the typed fields - the trader's own sentence must never be lost to a
         failure in a later write. A field left blank writes NO row. Then the
         `MENTOR_ASKED` marker, which is what stops every later card asking.
 
@@ -2915,39 +2801,20 @@ class TradeMentorCard(QWidget):
         """
         key = str(trade_id)
         question = self._trade_questions.get(key)
+        picked = self._picked_setup(key)
+        if picked and question is not None:
+            if check.confirm_setup(store, question, now=moment, setup=picked).get("ok"):
+                self._setup_confirmed.add(key)
         confirmed = key in self._setup_confirmed
         notes = self._save_exit_note_of(check, store, key, moment)
         answers: dict[str, dict[str, Any]] = {}
-        for name, (_combo, text_input) in self._answer_inputs.get(key, {}).items():
+        for name in self._answer_inputs.get(key, {}):
             if name == "setup" and confirmed:
                 continue
             answer = self._field_answer(key, name)
             if not answer:
                 continue
-            ai_answer = self._ai_drafts.get(key, {}).get(name, {})
-            if (
-                ai_answer
-                and str(ai_answer.get("state") or "") == answer["state"]
-                and str(ai_answer.get("text") or ai_answer.get("source_span") or "").strip()
-                == text_input.text().strip()
-            ):
-                answer.update(
-                    value=ai_answer.get("value"),
-                    unit=str(ai_answer.get("unit") or ""),
-                    source_span=str(ai_answer.get("source_span") or ""),
-                )
             answers[name] = answer
-        raw_box = self._raw_trade_inputs.get(key)
-        body = raw_box.toPlainText() if raw_box is not None else ""
-        if body.strip() and self._raw_saved.get(key) != body:
-            check.save_raw_reply(
-                store,
-                key,
-                body,
-                missing=tuple(getattr(question, "missing", ()) or ()),
-                now=moment,
-            )
-            self._raw_saved[key] = body
         if answers:
             check.save_answers(store, key, answers, now=moment)
         blank = self._blank_fields(key)
@@ -2963,15 +2830,15 @@ class TradeMentorCard(QWidget):
             blank_fields=blank + (["exit"] if exit_blank else []),
             now=moment,
         )
-        words = self._words_for_ai(key, body)
+        words = self._words_for_ai(key)
         if blank and words:
             self._start_ai_fill(store, key, words, tuple(blank), question, moment)
         return {"fields": len(answers), "notes": notes, "blank": blank}
 
-    def _words_for_ai(self, trade_id: str, raw_note: str) -> str:
-        """The trader's words the local model may quote: the raw note, then each
-        typed field as ``name: words``."""
-        parts = [str(raw_note or "").strip()]
+    def _words_for_ai(self, trade_id: str) -> str:
+        """The trader's words the local model may quote: each typed field as
+        ``name: words``."""
+        parts: list[str] = []
         for name, (_combo, text_input) in self._answer_inputs.get(str(trade_id), {}).items():
             text = text_input.text().strip()
             if text:

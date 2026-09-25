@@ -101,7 +101,8 @@ def test_filing_one_trade_writes_its_exit_note_and_leaves_the_other_alone(card_w
     notes = check.exit_notes(store, first)
     assert len(notes) == 1, notes
     assert WORDS in str(notes[0]), "the trader's own words are what was stored"
-    assert check.answered_fields(store, first) == set(check.MATERIAL_FIELDS)
+    # The setup is the list, not a text row (trader 2026-09-25).
+    assert check.answered_fields(store, first) == set(tuple(name for name in check.MATERIAL_FIELDS if name != "setup"))
     assert check.exit_notes(store, second) == [], "an untouched trade files nothing"
     assert first not in card._answer_inputs, "the filed trade left the card"
     assert card.exit_note_box(first) is None, "and took its exit box with it"

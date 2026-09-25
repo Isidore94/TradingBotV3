@@ -104,7 +104,7 @@ def test_skipping_the_card_also_retires_the_trade(one_trade):
     assert check.asked_state(store, trade_id)[0] is True
 
 
-def test_the_raw_note_goes_to_local_ai_for_the_blank_fields_only(one_trade):
+def test_typed_words_go_to_local_ai_for_the_blank_fields_only(one_trade):
     import trade_mentor_trade_check as check
 
     store, card, trade_id = one_trade
@@ -114,15 +114,15 @@ def test_the_raw_note_goes_to_local_ai_for_the_blank_fields_only(one_trade):
     )
     stop_combo = card._answer_inputs[trade_id]["stop"][0]
     stop_combo.setCurrentIndex(stop_combo.findData(check.ANSWER_NOT_APPLICABLE))
-    card._raw_trade_inputs[trade_id].setPlainText("Bought the bounce off VWAP.")
+    card._answer_inputs[trade_id]["thesis"][1].setText("Bought the bounce off VWAP.")
 
     card.show_slot(slot_at(SESSION, 10))
 
-    assert check.answered_fields(store, trade_id) == {"stop"}
+    assert check.answered_fields(store, trade_id) == {"stop", "thesis"}
     assert len(started) == 1
     tid, words, blank = started[0]
-    assert tid == trade_id and "Bought the bounce off VWAP." in words
-    assert "stop" not in blank and "thesis" in blank
+    assert tid == trade_id and "thesis: Bought the bounce off VWAP." in words
+    assert "stop" not in blank and "thesis" not in blank and "target" in blank
 
 
 def test_local_ai_answers_are_stored_and_labelled_as_machine_filled(tmp_path):
@@ -198,12 +198,12 @@ def test_a_failed_journal_write_writes_no_marker_and_keeps_the_trade(one_trade, 
     import trade_mentor_trade_check as check
 
     store, card, trade_id = one_trade
-    card._raw_trade_inputs[trade_id].setPlainText("my words")
+    card._answer_inputs[trade_id]["thesis"][1].setText("my words")
 
     def _boom(*_args, **_kwargs):
         raise RuntimeError("disk full")
 
-    monkeypatch.setattr(check, "save_raw_reply", _boom)
+    monkeypatch.setattr(check, "save_answers", _boom)
     card.show_slot(slot_at(SESSION, 10))
 
     assert check.asked_state(store, trade_id)[0] is False, "asked again, never lost"

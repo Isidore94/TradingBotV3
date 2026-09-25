@@ -236,3 +236,33 @@ def test_a_trade_with_its_setup_answered_gets_no_list(tmp_path):
     card._add_setup_confirm(check.TradeQuestion("T1", "AAA", "LONG", ("thesis",)))
 
     assert card.setup_choice_box("T1") is None
+
+
+def test_an_untouched_guess_is_not_an_answer_and_a_hand_pick_is(tmp_path):
+    """Save files the setup list only when the trader moved it by hand; the
+    preselected machine guess stays a suggestion."""
+    import os
+
+    import pytest
+
+    pytest.importorskip("PySide6", reason="the Mentor card is Qt")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    import trade_mentor_trade_check as check
+    from ui.widgets.trade_mentor_card import TradeMentorCard
+
+    QApplication.instance() or QApplication([])
+    card = TradeMentorCard(drafts_path=tmp_path / "drafts.json")
+    question = check.TradeQuestion("T1", "AAA", "LONG", ("setup",), setup_guess="new_5d_high")
+    card._add_setup_confirm(question)
+
+    assert card._picked_setup("T1") == ""
+    assert card._has_answer("T1") is False
+    assert card._blank_fields("T1") == ["setup"]
+
+    card._setup_hand_picked("T1")
+
+    assert card._picked_setup("T1") == "new_5d_high"
+    assert card._has_answer("T1") is True
+    assert card._blank_fields("T1") == []
