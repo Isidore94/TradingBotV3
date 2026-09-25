@@ -761,6 +761,11 @@ MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE = (
 SETUP_PERMUTATION_REPORT_FILE = PERSISTENT_RUNTIME_DATA_DIR / "permutation_report.json"
 # The same report, under the name the `plan_review` slot reads.
 PERMUTATION_REPORT_FILE = SETUP_PERMUTATION_REPORT_FILE
+# P12: every Saturday's report, one `<date>.json` per run (unchanged content
+# skipped, 600-day prune), and the weak-variant / promotion-candidate verdicts
+# read from the newest two. Both rank and annotate only.
+SETUP_PERMUTATION_REPORT_HISTORY_DIR = PERSISTENT_RUNTIME_DATA_DIR / "permutation_report_history"
+SETUP_PERMUTATION_VERDICTS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "permutation_verdicts.json"
 # P1-4 4d: the Saturday slot's cited sentences per family over that report.
 SETUP_KEYS_NARRATION_FILE = PERSISTENT_RUNTIME_DATA_DIR / "setup_keys_narration.json"
 # Packet WS-TH (2026-09-12). The theta picks graded forward: held above the sold

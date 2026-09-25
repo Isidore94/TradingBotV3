@@ -1937,6 +1937,30 @@ class MasterAvwapPanel(QWidget):
             )
         ]
 
+    def _weak_variants_last(self, rows: list[SetupRow]) -> list[SetupRow]:
+        """P12: a weak-variant row goes after its family peers with the same grade.
+
+        Last step of the display order, under the same priority switch. Stable,
+        in memory only; the same rows come back and none is hidden.
+        """
+        import setup_key_labels
+        import working_lately
+
+        if len(rows) < 2 or not any(setup_key_labels.is_weak_variant(row) for row in rows):
+            return list(rows)
+        if not working_lately.prioritise_enabled():
+            return list(rows)
+
+        def group(row: SetupRow) -> tuple[str, str, str]:
+            cell = self.model.grade_cell_for(row) or {}
+            return (
+                str(getattr(row, "side", "") or "").strip().upper(),
+                str((getattr(row, "raw", None) or {}).get("setup_family") or "").strip().lower(),
+                str(cell.get("grade") or ""),
+            )
+
+        return setup_key_labels.weak_variants_last(rows, group)
+
     def _push_plan_context(self, *, reset: bool = True) -> None:
         """P1-6: hand the model the in-memory scan levels and the fixed risk. No file read."""
         try:
@@ -1966,9 +1990,9 @@ class MasterAvwapPanel(QWidget):
         # order) hand the scan's rows back here and the claims are merged
         # afresh - which is also how a dropped claim leaves the table.
         self._working_lately_source_rows = list(rows)
-        rows = self._by_points(
+        rows = self._weak_variants_last(self._by_points(
             self._prioritised(self._merge_active_claims(self._working_lately_source_rows))
-        )
+        ))
         self._push_plan_context(reset=False)
         self.model.set_rows(rows)
         self._refresh_bucket_filter(rows)

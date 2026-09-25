@@ -257,9 +257,9 @@ class SetupTableModel(QAbstractTableModel):
 
     def has_setup_keys(self) -> bool:
         """True when any row carries a stamped setup-key label (P1-5 5a)."""
-        from setup_key_labels import row_label
+        from setup_key_labels import display_label
 
-        return any(row_label(row) for row in self._rows)
+        return any(display_label(row) for row in self._rows)
 
     def set_family_records(self, records) -> None:
         """The per-family swing record, built OFF this thread by the panel."""
@@ -362,9 +362,10 @@ class SetupTableModel(QAbstractTableModel):
         if key == "points":
             return self.points_for(row).text()
         if key == "setup_key":
-            from setup_key_labels import row_label
+            from setup_key_labels import display_label
 
-            return row_label(row)
+            # P12: "(weak variant)" / "(candidate)" chips beside the label.
+            return display_label(row)
         if key in self.PLAN_COLUMNS:
             import entry_plan
 
@@ -644,12 +645,16 @@ def _tooltip(row: SetupRow, key: str) -> str:
         return "Weighted D1 excess return versus the displayed industry board composite." + detail
     if key in {"setup_tags", "setup_key"}:
         # P1-5 5a: the compact profile hides the key column, so the tags tooltip carries it.
-        from setup_key_labels import row_label
+        from setup_key_labels import display_label, verdict_tooltip
 
-        label = row_label(row)
+        label = display_label(row)
         text = row.tags_text if key == "setup_tags" else ""
         if label:
             text = f"{text}\nSetup key: {label}" if text else f"Setup key: {label}"
+        # P12: the verdict's citation (two report dates, two hold-out numbers).
+        cited = verdict_tooltip(row)
+        if cited:
+            text = f"{text}\n{cited}" if text else cited
         return text
     if key == "bucket":
         return row.bucket_display

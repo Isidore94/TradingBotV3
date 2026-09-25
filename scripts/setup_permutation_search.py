@@ -21,6 +21,8 @@ side: a baseline, then single facets, pairs and triples, never deeper.
   facet; a deeper key must beat its best parent on hold-out or it is not
   reported.
 - "no key found" is a first-class answer.
+- Each run also keeps a dated copy in `permutation_report_history/` and writes
+  `permutation_verdicts.json` (P12, `setup_permutation_verdicts.py`), both beside --out.
 
 Shadow only: the report ranks and annotates. Nothing reads it for a score, a
 filter or an alert.
@@ -33,11 +35,12 @@ import hashlib
 import json
 import math
 import os
+import re
 import statistics
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from itertools import combinations
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -66,6 +69,9 @@ AUTHORIZATION = "WISHLIST.md P1-4 4c (trader 2026-09-24: 'keep going in order, f
 VERDICT_KEY = "key_found"
 VERDICT_NONE = "no_key_found"
 VERDICT_THIN = "too_little_data"
+#: Beside the report, so a scratch --out never writes into the live history.
+HISTORY_DIR_NAME = "permutation_report_history"
+VERDICTS_FILE_NAME = "permutation_verdicts.json"
 
 Cell = tuple[tuple[str, str], ...]
 
@@ -430,6 +436,8 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source
                 "families": families,
             }
         report["populations"][population] = {"horizons": horizons_out}
+    data_day = report_data_date(report)
+    report["data_date"] = data_day.isoformat() if data_day else ""
     return report
 
 
@@ -448,15 +456,103 @@ def write_report(report: Mapping[str, Any], out: Path) -> Path:
     return target
 
 
+# --- report history (P12): one file per data date, read by setup_permutation_verdicts
+
+HISTORY_KEEP_DAYS = 600
+_HISTORY_FILE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.json$")
+
+
+def _content_hash(report: Mapping[str, Any]) -> str:
+    """Hash of the report without its run stamp, so a rerun on the same data matches."""
+    body = {key: value for key, value in report.items() if key != "generated_at"}
+    text = json.dumps(body, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def history_files(history_dir: Path) -> list[tuple[date, Path]]:
+    """`(data date, path)` for every history file, oldest first."""
+    out: list[tuple[date, Path]] = []
+    try:
+        entries = list(Path(history_dir).iterdir())
+    except OSError:
+        return out
+    for entry in entries:
+        match = _HISTORY_FILE_RE.match(entry.name)
+        if not match:
+            continue
+        try:
+            out.append((date.fromisoformat(match.group(1)), entry))
+        except ValueError:
+            continue
+    out.sort()
+    return out
+
+
+def report_data_date(report: Mapping[str, Any]) -> date | None:
+    """The last session the search used: `data_date`, else the newest hold-out window end."""
+    candidates = [str(report.get("data_date") or "")]
+    for block in ((report.get("populations") or {}).values()):
+        for hz in ((block or {}).get("horizons") or {}).values():
+            window = (hz or {}).get("holdout_window") or []
+            candidates.append(str(window[-1] if window else ""))
+    days = []
+    for text in candidates:
+        try:
+            days.append(date.fromisoformat(text[:10]))
+        except ValueError:
+            continue
+    return max(days) if days else None
+
+
+def append_history(report: Mapping[str, Any], history_dir: Path, *, today: date | None = None) -> Path | None:
+    """Copy the report to `<history_dir>/<data date>.json` unless it matches the newest copy.
+
+    Named by the report's data date (the run date only when it has none), so a
+    rerun on the same data REPLACES that date's file instead of adding a report.
+    Returns the file written, or None when the content is unchanged. Files older
+    than HISTORY_KEEP_DAYS are pruned. Raises on I/O failure; the report itself
+    is already written by then.
+    """
+    folder = Path(history_dir)
+    run_day = today or datetime.now().astimezone().date()
+    data_day = report_data_date(report) or run_day
+    digest = _content_hash(report)
+    existing = history_files(folder)
+    if existing:
+        try:
+            newest = json.loads(existing[-1][1].read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            newest = None
+        if isinstance(newest, dict) and _content_hash(newest) == digest:
+            return None
+    target = write_report(report, folder / f"{data_day.isoformat()}.json")
+    cutoff = run_day - timedelta(days=HISTORY_KEEP_DAYS)
+    for day, path in history_files(folder):
+        if day >= cutoff:
+            break
+        path.unlink(missing_ok=True)
+    return target
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--outcomes", required=True, type=Path)
     parser.add_argument("--ledger-root", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--history-dir", type=Path, default=None,
+                        help="default: permutation_report_history/ beside --out")
+    parser.add_argument("--verdicts-out", type=Path, default=None,
+                        help="default: permutation_verdicts.json beside --out")
     args = parser.parse_args(argv)
     rows = read_outcomes(args.outcomes)
     report = build_report(rows, ledger_root=args.ledger_root, source=str(args.outcomes))
     write_report(report, args.out)
+    history_dir = args.history_dir or Path(args.out).parent / HISTORY_DIR_NAME
+    append_history(report, history_dir)
+    # P12: the verdicts over the newest two reports, in the same run (never the Qt thread).
+    import setup_permutation_verdicts
+
+    setup_permutation_verdicts.publish(history_dir, args.verdicts_out or Path(args.out).parent / VERDICTS_FILE_NAME)
     found = sum(
         len(fam["keys"])
         for pop in report["populations"].values()
