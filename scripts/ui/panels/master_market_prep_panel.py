@@ -31,6 +31,7 @@ from ui.services.market_prep_feed import (
     section_copy_text,
     section_symbol_count,
 )
+from ui.widgets.market_read_banner import MarketReadBanner
 from ui.widgets.rule_chip import RuleChip
 from ui.widgets.section_header import SectionHeader
 
@@ -57,6 +58,8 @@ class MasterMarketPrepPanel(QFrame):
         self._loaded_once = False
         # Day Recap coach: "Today's rule: ... (streak N)", read on a worker.
         self.rule_banner = RuleChip(self, banner=True)
+        # P2-8: SPY state, breadth and internals from the last close, read on a worker.
+        self.market_read_banner = MarketReadBanner(self)
         self._build_layout()
         self._configure_watcher()
 
@@ -73,6 +76,7 @@ class MasterMarketPrepPanel(QFrame):
             return
         self._loaded_once = True
         self.rule_banner.start()
+        self.market_read_banner.refresh()
         self.refresh()
 
     def _build_layout(self) -> None:
@@ -114,6 +118,7 @@ class MasterMarketPrepPanel(QFrame):
         layout.setSpacing(8)
         layout.addWidget(header)
         layout.addWidget(self.rule_banner)
+        layout.addWidget(self.market_read_banner)
         layout.addWidget(self.status_label)
         layout.addWidget(self._build_human_picks_panel())
         layout.addLayout(body, 1)

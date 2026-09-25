@@ -20,6 +20,7 @@ TILES: tuple[tuple[str, str], ...] = (
     ("planned", "planned / unplanned"),
     ("calls", "calls right / wrong / flat"),
     ("day_type", "day type"),
+    ("market_axes", "market read right / wrong"),
     ("biggest_win", "biggest win"),
     ("biggest_miss", "biggest miss"),
 )
@@ -104,6 +105,8 @@ def tile_texts(glance: Mapping[str, Any] | None) -> dict[str, tuple[str, str]]:
         else ("not labelled", "The desk stored no market environment label for this session.")
     )
 
+    out["market_axes"] = _market_axes_tile(data.get("market_axes"))
+
     win = data.get("biggest_win")
     out["biggest_win"] = (
         (f"{win.get('symbol', '')} {_money(float(win.get('net_pnl') or 0.0))}",
@@ -120,6 +123,28 @@ def tile_texts(glance: Mapping[str, Any] | None) -> dict[str, tuple[str, str]]:
         else ("none", "No real miss was measured on this session.")
     )
     return out
+
+
+def _market_axes_tile(axes: Any) -> tuple[str, str]:
+    """The morning's SPY / breadth / internals read, graded against SPY (P2-8)."""
+    if not isinstance(axes, Mapping) or not axes.get("grades"):
+        return (NOT_MEASURED, "No market read was recorded for the morning of this session.")
+    summary = axes.get("summary") if isinstance(axes.get("summary"), Mapping) else {}
+    right, wrong = int(summary.get("right") or 0), int(summary.get("wrong") or 0)
+    flat, pending = int(summary.get("flat") or 0), int(summary.get("pending") or 0)
+    if not (right or wrong or flat) and pending:
+        value = "pending"
+    elif not (right or wrong or flat):
+        value = "no call"
+    else:
+        value = f"{right} / {wrong}"
+    lines = [str(axes.get("line") or "").strip()]
+    for grade in axes.get("grades") or ():
+        move = grade.get("move_atr")
+        moved = f" (SPY {float(move):+.2f} ATR)" if isinstance(move, (int, float)) else ""
+        lines.append(f"{grade.get('axis')}: {str(grade.get('verdict') or '').replace('_', ' ')}{moved}")
+    lines.append("Graded close to close against SPY; a move inside 0.25 ATR is flat.")
+    return (value, "\n".join(line for line in lines if line))
 
 
 class Sparkline(QWidget):

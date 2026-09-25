@@ -351,15 +351,17 @@ def latest_morning_read(now: datetime | None = None) -> dict[str, Any]:
 
 def day_axes(session: str, now: datetime) -> dict[str, Any]:
     """Day Review: the morning read going INTO `session`, and its grade."""
+    import d1_environment_store
     import market_calendar
-    import market_read_grades as grader
 
     day = date.fromisoformat(str(session)[:10])
     basis = market_calendar.previous_session(day).isoformat()
     read = morning_read_for(basis)
+    # SPY from the machine daily cache the D1 labels are built from (the
+    # grader's loader falls back to it too; the durable store has no SPY file).
     grades = grade_axes(
         read,
-        spy_daily_bars=grader.daily_bars_for_symbol("SPY"),
+        spy_daily_bars=d1_environment_store._cached_daily_bars("SPY"),
         target_session=day.isoformat(),
         now=now,
     )

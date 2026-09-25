@@ -298,6 +298,7 @@ GLANCE_TARGETS: dict[str, str] = {
     "planned": "trades",
     "calls": "said",
     "day_type": "story",
+    "market_axes": "story",
     "biggest_win": "trades",
     "biggest_miss": "miss",
     "sparkline": "trades",
