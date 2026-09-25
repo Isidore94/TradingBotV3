@@ -3,6 +3,10 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #256 Desk boot (P2-11e): after the restart the desk opens with no stall, `trading_bot.log` keeps getting lines from the desk, the first scan and first chart open work with no ImportError or crash, and Focus chips show the same colours (BOUNCE gold, RS/RW tint, side-coloured x) in light and dark [trader + lead]
+- #255 Secrets moved (P2-11d): after the restart `market_prep_openai_api_key` (and `push_ntfy_token` if set) are blank in local_settings.json and present in Credential Manager under `TradingBotV3`; the market-prep AI brief still works and a test push arrives [trader]
+- #254 Health rows (P2-11c): System Health shows "Universe vs floor" with the universe count and 500, and "IB connection" green with TWS up, red after TWS is closed, UNKNOWN with the bot stopped; the page never stalls [trader]
+- #253 Swallowed failures logged (P2-11a): after one session `trading_bot.log` holds `swallowed ...` lines only for real failures (a locked file, a failed refresh), each reason at most once per 5 minutes, and no desk behaviour changed [lead]
 - #250 Rule lane off the Qt thread (P2-10): on a day whose rule is "size down in chop", the Mentor card opens with no stall and a trade sized over your usual in chop gets the size reflection [trader]
 - #249 Gap days from a statement (P2-10): desk closed, `journal_questrade_gaps.py --statement <portal export>` lists the FAILED days it covers and writes nothing; with `--apply --i-am-the-trader` those days leave the FAILED list, a second run adds no fills, and the "missing fills - not counted" line shrinks [trader]
 - #248 Made-up entries out of totals (P2-10): Day Review's P&L tile and sparkline, the Weekend Prep week line and the night day record leave a "needs missing fills" trade out of the sum but still list it [trader + lead]
