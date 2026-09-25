@@ -10,6 +10,8 @@ the journal it was wrong.
 
 from __future__ import annotations
 
+import threading
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
@@ -384,10 +386,15 @@ class TradesTab(QFrame):
 
     statusChanged = Signal(str)
     dataChanged = Signal()
+    #: P1-6 6c: (trade_id, excursion result) from the MFE/MAE worker.
+    _excursionReady = Signal(str, object)
 
-    def __init__(self, header, parent: QWidget | None = None) -> None:
+    def __init__(self, header, parent: QWidget | None = None, *, threaded: bool = True) -> None:
         super().__init__(parent)
         self._header = header
+        #: False runs the MFE/MAE read inline (tests); the desk always threads it.
+        self._threaded = bool(threaded)
+        self._excursionReady.connect(self._on_excursion)
         self._trades: list[JournalTrade] = []
         #: The subset the tag-review filter is showing. The table's row
         #: indexes address THIS list, never `_trades` (P6a).
@@ -482,6 +489,17 @@ class TradesTab(QFrame):
         self.planned_stop = _MoneyBox()
         self.planned_risk = _MoneyBox(1_000_000.0)
         self.r_readout = QLabel("R: -")
+        # P1-6 6c: the entry grade (from the plan) and MFE/MAE (read off the Qt thread).
+        self.entry_grade_label = QLabel("Entry grade: -")
+        self.entry_grade_label.setToolTip(
+            "(actual entry - planned entry) / (planned entry - planned stop). "
+            "Positive = paid up; negative = a better fill than the plan."
+        )
+        self.excursion_label = QLabel("MFE / MAE: -")
+        self.excursion_label.setToolTip(
+            "Most the trade went for you (MFE) and against you (MAE) while held: "
+            "cached M5 bars for a day trade, daily bars for a swing. Unknown when the bars are missing."
+        )
         self.prefill_button = QPushButton("Prefill from alert")
         self.prefill_button.clicked.connect(self._prefill_risk)
         self.save_risk_button = QPushButton("Save plan")
@@ -614,6 +632,8 @@ class TradesTab(QFrame):
         layout.addWidget(QLabel("Plan and R"))
         layout.addLayout(risk_form)
         layout.addLayout(risk_row)
+        layout.addWidget(self.entry_grade_label)
+        layout.addWidget(self.excursion_label)
         layout.addWidget(QLabel("Legs"))
         layout.addWidget(self.legs_table)
         layout.addWidget(QLabel("My tags"))
@@ -825,6 +845,7 @@ class TradesTab(QFrame):
         self.planned_risk.setValue(float(raw.get("planned_risk") or 0.0))
         r_value = journal_feed.r_multiple(trade)
         self.r_readout.setText(f"R: {r_value:.2f}" if r_value is not None else "R: - (needs risk and a booked FX rate)")
+        self._show_entry_plan_readouts(trade)
 
         legs = journal_feed.trade_legs(trade.trade_id)
         self.legs_table.setRowCount(len(legs))
@@ -912,6 +933,49 @@ class TradesTab(QFrame):
             self.adjustments_list.addItem(
                 f"{record.get('created_at')} {record.get('action')}{superseded} - {record.get('reason')}"
             )
+
+    def _show_entry_plan_readouts(self, trade: JournalTrade) -> None:
+        """P1-6 6c: entry grade now; MFE/MAE from a worker (it reads parquet)."""
+        import entry_plan
+        import journal_excursion
+
+        raw = dict(trade.raw)
+        grade = entry_plan.entry_grade(
+            raw.get("average_entry_price"), raw.get("planned_entry"), raw.get("planned_stop")
+        )
+        self.entry_grade_label.setText(entry_plan.entry_grade_text(grade))
+        self.excursion_label.setText(journal_excursion.excursion_text(None))
+        trade_id = str(trade.trade_id)
+        if not self._threaded:
+            self._on_excursion(trade_id, self._measure_excursion(raw))
+            return
+        threading.Thread(
+            target=self._excursion_worker, args=(trade_id, raw), name="journal-excursion", daemon=True
+        ).start()
+
+    @staticmethod
+    def _measure_excursion(raw: dict):
+        import journal_excursion
+
+        try:
+            return journal_excursion.measure_trade(raw)
+        except Exception as exc:  # noqa: BLE001 - a readout; unknown, never an error dialog
+            return {"state": journal_excursion.UNKNOWN, "reason": f"could not read bars: {exc}"}
+
+    def _excursion_worker(self, trade_id: str, raw: dict) -> None:
+        result = self._measure_excursion(raw)
+        try:
+            self._excursionReady.emit(trade_id, result)
+        except RuntimeError:  # the tab was destroyed while the bars loaded
+            pass
+
+    def _on_excursion(self, trade_id: str, result) -> None:
+        """Show the result only if that trade is still the one on screen."""
+        import journal_excursion
+
+        if self._current is None or str(self._current.trade_id) != trade_id:
+            return
+        self.excursion_label.setText(journal_excursion.excursion_text(result))
 
     def _show_note_lane(self, raw: dict) -> None:
         """Print the note lane's verdict for this trade (WS-10E item 3).

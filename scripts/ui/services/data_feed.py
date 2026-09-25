@@ -511,6 +511,13 @@ def enrich_setup_rows_for_display(
         return rows
     merge_compression_from_ai_state(rows)
     try:
+        # P1-5 5a: setup-key labels from the warm cache only (never a file read here).
+        import setup_key_labels
+
+        setup_key_labels.attach_labels(rows)
+    except Exception as exc:  # noqa: BLE001 - a label never costs the table
+        logging.warning("Could not attach setup key labels: %s", exc)
+    try:
         from ui.services.setup_group_context import (
             enrich_setup_group_context,
             write_unmapped_setup_classification_report,

@@ -69,7 +69,22 @@ class SetupTableModel(QAbstractTableModel):
         # row's own fields and the injected family record - this model still
         # never reads a file.
         ("points", "Points"),
+        # P1-5 5a: the scan's short setup-key label (P1-4), blank when unstamped.
+        ("setup_key", "Setup key"),
+        # P1-6 6b/6c: the detail pane's plan as cells (entry reference, stop,
+        # TP1 and its R, shares at the trader's fixed risk). Full profile only;
+        # the key-level tooltip carries the same line in the compact profile.
+        ("plan_entry", "Entry"),
+        ("plan_stop", "Stop"),
+        ("plan_tp1", "TP1"),
+        ("plan_r", "TP1 R"),
+        ("plan_shares", "Shares"),
+        # P1-6 6d: an armed or fired Pullback alert on this name, read only.
+        ("timing", "Timing"),
     )
+
+    #: The P1-6 plan columns, hidden together (compact profile, or no plan).
+    PLAN_COLUMNS = ("plan_entry", "plan_stop", "plan_tp1", "plan_r", "plan_shares")
 
     def __init__(self, rows: list[SetupRow] | None = None, parent=None) -> None:
         super().__init__(parent)
@@ -83,6 +98,13 @@ class SetupTableModel(QAbstractTableModel):
         #: (PROVEN/A/B/C/D/New) for a row's family. Injected; `{}` = no grades
         #: yet, and then the Bucket cell reads exactly as it always did.
         self._grades: dict[str, dict] = {}
+        #: P1-6: `{symbol: levels}` from the ai_state cache (handed in, never read
+        #: here), the fixed risk in dollars, and the per-row plans built from them.
+        self._plan_levels: dict[str, dict] = {}
+        self._risk_dollars: float | None = None
+        self._plans: dict[int, dict | None] = {}
+        #: P1-6 6d: `entry_timing.build_timing` map, built on the panel's worker.
+        self._timing: dict = {}
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows)
@@ -113,6 +135,7 @@ class SetupTableModel(QAbstractTableModel):
                 "d1_vs_industry",
                 "family_win_rate",
                 "points",
+                *self.PLAN_COLUMNS,
             }:
                 return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -130,6 +153,8 @@ class SetupTableModel(QAbstractTableModel):
                 value = getattr(row, key)
                 if value is not None and value != 0:
                     return QColor(theme.color("long" if value > 0 else "short"))
+            if key == "plan_r" and (self.plan_for(row) or {}).get("stale"):
+                return QColor(theme.color("caution"))
             return None
         if role == Qt.ItemDataRole.ToolTipRole:
             if key == "points":
@@ -138,6 +163,21 @@ class SetupTableModel(QAbstractTableModel):
                 cell = self.grade_cell_for(row)
                 if cell is not None:
                     return _grade_tooltip(cell)
+            if key == "key_level" or key in self.PLAN_COLUMNS:
+                # P1-6: the plan line rides the key level, which both profiles show.
+                import entry_plan
+
+                line = entry_plan.plan_line(self.plan_for(row), self._risk_dollars)
+                if key != "key_level":
+                    return line or "No plan: the last scan has no level data for this symbol."
+                timing = self.timing_text(row)
+                lines = [text for text in (_tooltip(row, key), line, timing) if text]
+                return "\n".join(lines)
+            if key == "timing":
+                return (
+                    "Entry timing from your Pullback alert on this name: the last trigger "
+                    "that fired and its bar time, or 'armed' while it waits. Read only."
+                )
             return _tooltip(row, key)
         return None
 
@@ -149,7 +189,74 @@ class SetupTableModel(QAbstractTableModel):
     def set_rows(self, rows: list[SetupRow]) -> None:
         self.beginResetModel()
         self._rows = list(rows)
+        self._plans = {}
         self.endResetModel()
+
+    def set_plan_context(self, levels=None, risk_dollars=None, *, reset: bool = True) -> None:
+        """P1-6: the scan's per-symbol levels and the fixed risk. Plans rebuild lazily."""
+        import entry_plan
+
+        levels = dict(levels or {})
+        risk = entry_plan.parse_risk_dollars(risk_dollars)
+        if levels == self._plan_levels and risk == self._risk_dollars:
+            return
+        if reset:
+            self.beginResetModel()
+        self._plan_levels = levels
+        self._risk_dollars = risk
+        self._plans = {}
+        if reset:
+            self.endResetModel()
+
+    def risk_dollars(self) -> float | None:
+        return self._risk_dollars
+
+    def plan_levels(self) -> dict[str, dict]:
+        return self._plan_levels
+
+    def plan_for(self, row: SetupRow) -> dict | None:
+        """The detail pane's plan for this row, built once per rows/levels change."""
+        key = id(row)
+        if key not in self._plans:
+            import entry_plan
+
+            try:
+                self._plans[key] = entry_plan.plan_for_setup_row(row, self._plan_levels)
+            except Exception:  # noqa: BLE001 - a plan cell never costs the table
+                self._plans[key] = None
+        return self._plans[key]
+
+    def set_entry_timing(self, mapping) -> bool:
+        """P1-6 6d: the timing chips. Returns True when anything changed."""
+        mapping = dict(mapping or {})
+        if mapping == self._timing:
+            return False
+        self.beginResetModel()
+        self._timing = mapping
+        self.endResetModel()
+        return True
+
+    def timing_text(self, row: SetupRow) -> str:
+        """`timing: H1 15-EMA held 10:30`, `timing: pullback armed`, or ''."""
+        if not self._timing:
+            return ""
+        import entry_timing
+
+        chip = entry_timing.timing_for(self._timing, row.symbol, row.side)
+        return str(chip.get("text") or "") if chip else ""
+
+    def has_timing(self) -> bool:
+        return bool(self._timing) and any(self.timing_text(row) for row in self._rows)
+
+    def has_plans(self) -> bool:
+        """True when any row has a plan (the scan's level data has landed)."""
+        return bool(self._plan_levels) and any(self.plan_for(row) for row in self._rows)
+
+    def has_setup_keys(self) -> bool:
+        """True when any row carries a stamped setup-key label (P1-5 5a)."""
+        from setup_key_labels import row_label
+
+        return any(row_label(row) for row in self._rows)
 
     def set_family_records(self, records) -> None:
         """The per-family swing record, built OFF this thread by the panel."""
@@ -251,6 +358,16 @@ class SetupTableModel(QAbstractTableModel):
             return format_win_rate(record) if record else "-"
         if key == "points":
             return self.points_for(row).text()
+        if key == "setup_key":
+            from setup_key_labels import row_label
+
+            return row_label(row)
+        if key in self.PLAN_COLUMNS:
+            import entry_plan
+
+            return entry_plan.plan_cells(self.plan_for(row), self._risk_dollars)[key]
+        if key == "timing":
+            return self.timing_text(row).removeprefix("timing: ")
         return ""
 
     def _sort_value(self, row: SetupRow, key: str) -> Any:
@@ -279,6 +396,16 @@ class SetupTableModel(QAbstractTableModel):
             return float(bound) if bound is not None else -1.0
         if key == "points":
             return float(self.points_for(row).total)
+        if key in self.PLAN_COLUMNS:
+            plan = self.plan_for(row) or {}
+            field = {"plan_entry": "entry", "plan_stop": "stop", "plan_tp1": "tp1", "plan_r": "tp1_r"}.get(key)
+            if field is not None:
+                value = None if (key == "plan_r" and plan.get("stale")) else plan.get(field)
+                return float(value) if value is not None else -999999.0
+            import entry_plan
+
+            shares = entry_plan.plan_shares(self.plan_for(row), self._risk_dollars)
+            return float(shares) if shares is not None else -1.0
         return self._display_value(row, key)
 
 
@@ -509,8 +636,15 @@ def _tooltip(row: SetupRow, key: str) -> str:
         source = row.industry_classification_source.replace("_", " ")
         detail = f" Classification: {source}." if source else ""
         return "Weighted D1 excess return versus the displayed industry board composite." + detail
-    if key == "setup_tags":
-        return row.tags_text
+    if key in {"setup_tags", "setup_key"}:
+        # P1-5 5a: the compact profile hides the key column, so the tags tooltip carries it.
+        from setup_key_labels import row_label
+
+        label = row_label(row)
+        text = row.tags_text if key == "setup_tags" else ""
+        if label:
+            text = f"{text}\nSetup key: {label}" if text else f"Setup key: {label}"
+        return text
     if key == "bucket":
         return row.bucket_display
     return ""

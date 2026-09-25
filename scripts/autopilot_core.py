@@ -42,6 +42,7 @@ import focus_adoption_gate
 import opening_regime_history
 import prev_day_gate
 import sector_exclusion
+import setup_key_labels
 from evidence_stats import SWING_HORIZON_SESSIONS
 from market_session import get_market_session_window, normalize_market_local_datetime
 from project_paths import (
@@ -77,7 +78,8 @@ AUTOPILOT_WATCHLIST_CAP = 40  # per side; protects BounceBot's IB pacing
 # every session since 07-10 while pick quality held up, so the cap - not the
 # gap/RS gates - was the binding constraint. Raise further only after a live
 # session confirms the pacing governor stays quiet at this size.)
-AUTOPILOT_OPEN_SCAN_MAX_SYMBOLS = 1200
+# P1-5 5c: above universe_all.txt's healthy size (~1,470), so the sweep reads all of it.
+AUTOPILOT_OPEN_SCAN_MAX_SYMBOLS = 2500
 AUTOPILOT_OPEN_SCAN_CHUNK_SIZE = 150
 
 # Near-HOD/LOD adds during regime pauses.
@@ -780,6 +782,67 @@ def merge_autopilot_watchlist(
     return {"symbols": merged, "manual_kept": manual_kept}
 
 
+def typed_watchlist_names(
+    current_longs: Iterable[str],
+    current_shorts: Iterable[str],
+    written: Mapping[str, Iterable[str]] | None,
+) -> set[str]:
+    """Names in longs.txt/shorts.txt that Auto Pilot did not write: the trader's own."""
+    written = written or {}
+    auto = {
+        str(symbol or "").strip().upper()
+        for side in ("longs", "shorts")
+        for symbol in (written.get(side) or ())
+    }
+    return {
+        symbol
+        for symbol in (str(item or "").strip().upper() for item in [*current_longs, *current_shorts])
+        if symbol and symbol not in auto
+    }
+
+
+def plan_watchlist_write(
+    auto_longs: Iterable[str],
+    auto_shorts: Iterable[str],
+    current_longs: Iterable[str],
+    current_shorts: Iterable[str],
+    written: Mapping[str, Iterable[str]] | None,
+) -> dict[str, Any]:
+    """What the open-scan build writes, with every typed name kept as the trader's.
+
+    A typed name (in either file, not written by Auto Pilot) is never an auto
+    pick on either side and never recorded in `autopilot_written`, so a later
+    merge can never drop it or flip its side.
+    """
+    auto_longs = list(auto_longs or ())
+    auto_shorts = list(auto_shorts or ())
+    current_longs = list(current_longs or ())
+    current_shorts = list(current_shorts or ())
+    written = written or {}
+    typed =typed_watchlist_names(current_longs, current_shorts, written)
+
+    def clean(symbols: Iterable[str]) -> list[str]:
+        out: list[str] = []
+        for symbol in symbols or ():
+            symbol = str(symbol or "").strip().upper()
+            if symbol and symbol not in typed and symbol not in out:
+                out.append(symbol)
+        return out
+
+    longs = clean(auto_longs)
+    shorts = clean(auto_shorts)
+    merged_longs = merge_autopilot_watchlist(longs, current_longs, written.get("longs", []))
+    merged_shorts = merge_autopilot_watchlist(shorts, current_shorts, written.get("shorts", []))
+    return {
+        "longs": longs,
+        "shorts": shorts,
+        "merged_longs": merged_longs,
+        "merged_shorts": merged_shorts,
+        "typed_skipped": sorted(typed & {str(s or "").strip().upper() for s in [*auto_longs, *auto_shorts]}),
+        "written": {"longs": list(longs), "shorts": list(shorts)},
+    }
+
+
 def read_scorecard_inputs(
     candidates_path, outcomes_path, today: str
 ) -> tuple[list[dict], list[dict]]:
@@ -1059,22 +1122,49 @@ def build_watchlists_from_moves(
     }
 
 
-def load_universe_pool(max_symbols: int = AUTOPILOT_OPEN_SCAN_MAX_SYMBOLS) -> list[str]:
-    """Candidate pool for the open scan: the self-built universe lists."""
+def load_universe_pool(
+    max_symbols: int = AUTOPILOT_OPEN_SCAN_MAX_SYMBOLS,
+    *,
+    priority: Iterable[str] = (),
+) -> list[str]:
+    """Candidate pool for the open scan (yfinance only, no IB).
+
+    P1-5 5c: `priority` names (Focus and typed) first and never cut by the cap,
+    then all of `universe_all.txt`, then any long/short universe extras.
+    """
     symbols: list[str] = []
     seen: set[str] = set()
-    for path in (UNIVERSE_LONGS_FILE, UNIVERSE_SHORTS_FILE, UNIVERSE_ALL_FILE):
+
+    def add(symbol: Any) -> None:
+        symbol = str(symbol or "").strip().upper()
+        if symbol and symbol not in seen:
+            seen.add(symbol)
+            symbols.append(symbol)
+
+    for symbol in priority or ():
+        add(symbol)
+    keep = max(int(max_symbols), len(symbols))
+    for path in (UNIVERSE_ALL_FILE, UNIVERSE_LONGS_FILE, UNIVERSE_SHORTS_FILE):
+        if len(symbols) >= keep:
+            break
         try:
             for symbol in read_watchlist_symbols(Path(path)):
-                symbol = str(symbol or "").strip().upper()
-                if symbol and symbol not in seen:
-                    seen.add(symbol)
-                    symbols.append(symbol)
+                add(symbol)
         except Exception:
             continue
-        if len(symbols) >= max_symbols:
-            break
-    return symbols[:max_symbols]
+    return symbols[:keep]
+
+
+def prioritise_pool(priority: Iterable[str], pool: Iterable[str]) -> list[str]:
+    """`priority` names first, then the pool, each name once. Nothing is dropped."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for symbol in [*(priority or ()), *(pool or ())]:
+        symbol = str(symbol or "").strip().upper()
+        if symbol and symbol not in seen:
+            seen.add(symbol)
+            out.append(symbol)
+    return out
 
 
 def _default_downloader(symbols: list[str], *, period: str, interval: str):
@@ -3794,6 +3884,69 @@ def order_swing_picks(
     return [ordered[index] for index in order], SWING_ORDER_POINTS
 
 
+# P1-5 5a: the digest's top ten, spread across setups. Display and ranking only.
+DIGEST_TOP_PICKS = 10
+DIGEST_PER_GROUP_CAP = 3
+DIGEST_TOP_RULE = (
+    f"top {DIGEST_TOP_PICKS}: max {DIGEST_PER_GROUP_CAP} per family+side, then filled in rank order"
+)
+
+
+def digest_pick_group(pick: Mapping[str, Any]) -> tuple[str, str]:
+    """The (family, side) a digest pick is capped under."""
+    return (
+        normalize_family_key(pick.get("family")),
+        str(pick.get("side") or "").strip().upper(),
+    )
+
+
+def cap_ranked_items(
+    items: Sequence[Any],
+    group_of: Callable[[Any], Any],
+    *,
+    limit: int | None = DIGEST_TOP_PICKS,
+    per_group: int = DIGEST_PER_GROUP_CAP,
+) -> list[Any]:
+    """Take ranked items in order, at most `per_group` per group; then fill by the same order.
+
+    Pure. Nothing is re-ranked: the capped pass keeps rank order, and the fill
+    pass appends the skipped items in rank order until `limit` (None = keep all).
+    """
+    items = list(items)
+    cap = max(1, int(per_group))
+    counts: dict[Any, int] = {}
+    first: list[Any] = []
+    skipped: list[Any] = []
+    for item in items:
+        group = group_of(item)
+        if counts.get(group, 0) < cap:
+            counts[group] = counts.get(group, 0) + 1
+            first.append(item)
+        else:
+            skipped.append(item)
+    chosen = first + skipped
+    if limit is None:
+        return chosen
+    limit = max(0, int(limit))
+    if len(first) >= limit:
+        return first[:limit]
+    return chosen[:limit]
+
+
+def rank_digest_picks(
+    picks: Iterable[Mapping[str, Any]],
+    records: Mapping[str, Any] | None,
+    *,
+    limit: int | None = DIGEST_TOP_PICKS,
+) -> tuple[list[Mapping[str, Any]], str]:
+    """The digest's order (Wilson, or points when the switch is on), then the family+side cap."""
+    indexed = [(index, pick) for index, pick in enumerate(picks or ()) if isinstance(pick, Mapping)]
+    indexed.sort(key=lambda item: (swing_pick_rank(item[1], records), item[0]))
+    indexed, order_label = order_swing_picks(indexed, records)
+    capped = cap_ranked_items(indexed, lambda item: digest_pick_group(item[1]), limit=limit)
+    return [pick for _index, pick in capped], order_label
+
+
 # The swing PUSH starts later than the report it rides on. The digest keeps
 # publishing hourly from AUTOPILOT_AWAY_REPORT_START_HOUR (07:00); the phone
 # just stays quiet until the setups behind it are worth reading. Trader call
@@ -4148,6 +4301,10 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     # buckets are re-ordered by the point system with that order as the
     # tiebreak. Off, this is the identity and the digest is unchanged.
     indexed_picks, swing_order_label = order_swing_picks(indexed_picks, records)
+    # P1-5 5a: at most three per (family, side) first, then the rest in rank order.
+    indexed_picks = cap_ranked_items(
+        indexed_picks, lambda item: digest_pick_group(item[1]), limit=None
+    )
 
     picks_lines = []
     picks_symbols: list[str] = []
@@ -4173,6 +4330,9 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         family_text = f" | {family}" if family else ""
         key_level = str(pick.get("key_level") or "").strip()
         level_text = f" @ {key_level}" if key_level else ""
+        # P1-5 5a: the setup key's short label, only when the scan stamped one.
+        setup_key = setup_key_labels.row_label(pick)
+        key_text = f" | key {setup_key}" if setup_key else ""
         # WS-WS (WISHLIST 9): a LONG under its current AVWAPE, or a SHORT over
         # it, says so right after its name. The tag is the ONLY thing it
         # changes - the pick is in the same place in the same list with the same
@@ -4184,7 +4344,7 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         picks_symbols.append(symbol)
         picks_lines.append(
             f"{len(picks_symbols)}. {symbol}{wrong_text} ({side})"
-            f"{bucket_text}{expected_text}{family_text}{level_text}"
+            f"{bucket_text}{expected_text}{family_text}{level_text}{key_text}"
         )
     if wrong_side_rows:
         picks_lines.append(
@@ -4225,9 +4385,9 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     if picks_lines:
         swing_lines = [
             *swing_lines,
-            f"Ranked on: {record_line} | {swing_order_label}"
+            f"Ranked on: {record_line} | {swing_order_label} | {DIGEST_TOP_RULE}"
             if record_line
-            else f"Ranked on: {swing_order_label}",
+            else f"Ranked on: {swing_order_label} | {DIGEST_TOP_RULE}",
         ]
 
     def _tv_line(items: Iterable[str]) -> str:
