@@ -156,7 +156,7 @@ ORIGIN_PROMPT_CAVEAT = (
 #: The three answers to "is the thesis still intact?".
 OPEN_POSITION_OPTIONS = ("thesis_intact", "weakening", "exit_planned")
 
-#: `Followed the plan:` - the session's last card only.
+#: The whole-day plan question - the session's last card only.
 KIND_DAY_CLOSE = "day_close"
 DAY_CLOSE_OPTIONS = ("yes", "partly", "no")
 
@@ -646,7 +646,7 @@ def _trigger_day_close(state: Mapping[str, Any]) -> list[Subject]:
             kind="day_close",
             subject_id=session.isoformat(),
             options=_with_answer_states(*DAY_CLOSE_OPTIONS),
-            prompt="Followed the plan?",
+            prompt="Today overall: did you stick to your trading plan?",
             detail={"session": session.isoformat()},
         )
     ]
