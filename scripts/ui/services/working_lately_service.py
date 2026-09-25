@@ -168,6 +168,117 @@ def read_setup_grades(recent_rows: Any) -> dict[str, Any] | None:
         return None
 
 
+#: The looking-back reading (P2-9): pick equity curves and the hold-out window.
+#: Its own file, so the snapshot and the grades files stay byte-identical.
+LOOKING_BACK_FILE_NAME = "looking_back_latest.json"
+
+#: Results that cannot change inside a session, keyed by what they were read
+#: from: `{name: (key, value)}`. Small derived values only, never the raw rows.
+_LOOKING_BACK_CACHE: dict[str, tuple[Any, Any]] = {}
+
+
+def _cached(name: str, key: Any, build) -> Any:
+    hit = _LOOKING_BACK_CACHE.get(name)
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    value = build()
+    _LOOKING_BACK_CACHE[name] = (key, value)
+    return value
+
+
+def _file_key(path: Path) -> tuple[str, int, int]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return (str(path), 0, 0)
+    return (str(path), int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def _scoring_snapshot_path() -> Path:
+    from project_paths import MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE
+
+    return Path(MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE)
+
+
+def _scoring_setups() -> dict[str, Any]:
+    """The tracker's compact scoring snapshot `setups`, `{}` when unreadable."""
+    try:
+        payload = json.loads(_scoring_snapshot_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    setups = payload.get("setups") if isinstance(payload, dict) else None
+    return setups if isinstance(setups, dict) else {}
+
+
+def _stream_outcome_rows(window: tuple[str, str]) -> list[dict]:
+    """The outcome log's rows inside `window`, streamed in one pass."""
+    from project_paths import INTRADAY_BOUNCE_OUTCOMES_FILE
+
+    path = Path(INTRADAY_BOUNCE_OUTCOMES_FILE)
+    if not path.exists():
+        return []
+    rows: list[dict] = []
+    with path.open("r", newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            stamp = str(row.get("trade_date") or "").strip()
+            if stamp and window[0] <= stamp <= window[1]:
+                rows.append(dict(row))
+    return rows
+
+
+def _prior_m5(prior: tuple[str, str]) -> dict[str, Any]:
+    """The prior window's M5 results. Read once per window, never per build."""
+    import looking_back
+
+    def build() -> dict[str, Any]:
+        rows = _stream_outcome_rows(prior)
+        return {"results": looking_back.m5_alert_results(rows)}
+
+    return _cached("prior_m5", tuple(prior), build)
+
+
+def read_looking_back() -> dict[str, Any] | None:
+    """Pick equity curves per population, or None when it could not be built.
+
+    THE WORKER SIDE. The recent M5 rows are this build's shared window
+    (`_outcome_rows`); the prior window's results are cached per window; the
+    swing picks are cached on the scoring snapshot's mtime.
+    """
+    try:
+        import looking_back
+
+        windows = looking_back.split_windows()
+        swing = _cached(
+            "swing_picks",
+            _file_key(_scoring_snapshot_path()),
+            lambda: looking_back.swing_pick_results(_scoring_setups()),
+        )
+        recent_m5 = looking_back.m5_alert_results(
+            row
+            for row in (_outcome_rows() or ())
+            if looking_back.in_window(row.get("trade_date"), windows["recent"])
+        )
+        prior_m5 = _prior_m5(windows["prior"])["results"]
+        return looking_back.build_payload(
+            swing_results=swing,
+            m5_results=list(prior_m5) + list(recent_m5),
+            as_of=_last_completed_session().isoformat(),
+        )
+    except Exception:  # noqa: BLE001 - a display reading, never fatal
+        logging.warning("Looking-back build failed", exc_info=True)
+        return None
+
+
+def read_persisted_looking_back(store_dir: Any = None) -> dict[str, Any]:
+    """The last published looking-back reading, `{}` when absent."""
+    path = Path(store_dir) if store_dir is not None else default_store_dir()
+    try:
+        payload = json.loads((path / LOOKING_BACK_FILE_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def read_persisted_grades(store_dir: Any = None) -> dict[str, Any]:
     """The last published grades, `{}` when absent."""
     path = Path(store_dir) if store_dir is not None else default_store_dir()
@@ -367,6 +478,7 @@ class WorkingLatelyService(QObject):
                 previous_verdicts=self.previous_verdicts(),
             )
             grades = read_setup_grades(recent_rows)
+            looking = read_looking_back()
         finally:
             _OUTCOME_ROWS_THIS_BUILD = None
         self.publish(snapshot)
@@ -377,7 +489,24 @@ class WorkingLatelyService(QObject):
             grades = read_persisted_grades(self._dir) or None
         if grades:
             payload["setup_grades"] = grades
+        if looking is not None:
+            self._write_json(LOOKING_BACK_FILE_NAME, looking)
+        else:
+            looking = read_persisted_looking_back(self._dir) or None
+        if looking:
+            payload["looking_back"] = looking
         return payload
+
+    def _write_json(self, name: str, value: Mapping[str, Any]) -> None:
+        """Temp-and-rename; a failed write keeps the last good file."""
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            target = self._dir / name
+            temp = target.with_suffix(".json.tmp")
+            temp.write_text(json.dumps(value, default=str), encoding="utf-8")
+            os.replace(temp, target)
+        except OSError:
+            logging.warning("Writing %s failed", name, exc_info=True)
 
     def _write_grades(self, grades: Mapping[str, Any]) -> None:
         try:
