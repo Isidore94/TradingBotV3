@@ -3,6 +3,10 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #241 Plan rule copy (P1-7 7d): after the next Day Recap sets a rule for tomorrow, `trading_plan.md` has one `- Recap rule for <next session>: <rule>` line under What I am testing and your own lines there are unchanged [trader]
+- #240 Plan in the research pack (P1-7 7c): `research_pack.py export --out <scratch>` writes `trading_plan.md` and `plan_challenges.json`, and the manifest's `trading_plan` block says `ok` [lead]
+- #239 Plan challenges (P1-7 7b): once the plan has lines, the next night's ledger has a `plan_review` row (ok with a count, or skipped with a reason); a stored challenge shows on a Mentor card, Accept adds a dated line under Decisions and a reject is not asked again [trader + lead]
+- #238 Trading plan (P1-7 7a): opening Day Review makes `C:\TradingBotData\trading_plan.md` with the six headings (only if missing) and shows it read-only; after you edit and save it, the next Day Review or Week Review refresh shows the edit and `trading_plan_history\` gains one file [trader]
 - #221 Tracker reads SQLite (P0-2 2d): after the next close slot, trading_bot.log shows `Setup tracker mirrored to` and, on the close slot after it, `Setup tracker read from the SQLite store` (a `read from JSON, not the SQLite store: <reason>` line instead means it fell back - send the reason); a Corrections OK in the Journal logs no `auto-tagger read the setup tracker JSON` line [lead]
 - #220 Night journal import (P1-3 3d): after the next weeknight, Health's top line shows `journal import: last success <session>, last error <session>: <one line>`; a night that met "Statement could not be generated/retrieved" logs "IBKR Flex not ready" retry lines in the AI jobs log and ends `ok` or fails only after the waits [trader + lead]
 - #219 Summary slice cap (P1-3 3c): the next Saturday's `ai_summary` ledger reason says "N slice(s) left out by the per-run cap of 24" (or reads all slices) and the row finishes in under ~2 hours [lead]
