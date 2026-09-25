@@ -215,6 +215,16 @@ class SetupDetailView(QTextBrowser):
             pct = plan.get("risk_pct_of_price")
             pct_text = f" ({pct:.1f}% of price)" if isinstance(pct, (int, float)) else ""
             parts.append(f"<div><b>3. Risk per share (1R):</b> {_price(risk)}{pct_text}</div>")
+            # P1-6 6c: size at the trader's fixed risk (never an order).
+            import entry_plan
+
+            risk_dollars = entry_plan.risk_per_trade_dollars()
+            shares = entry_plan.shares_for(risk_dollars, plan.get("entry_reference"), plan.get("stop_price"))
+            if shares is not None:
+                parts.append(
+                    f"<div><b>Shares at ${risk_dollars:,.2f} risk:</b> {shares} "
+                    f"<span style='color:{muted}'>(risk ÷ (entry − stop), rounded down)</span></div>"
+                )
         else:
             parts.append(
                 f"<div style='color:{short_c}'>Price is already beyond the stop level — the plan is stale; "

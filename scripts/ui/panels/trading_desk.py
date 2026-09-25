@@ -229,6 +229,10 @@ class TradingDeskPanel(QWidget):
         self.alert_center.m5AlertsDayRolled.connect(self.live_results_strip.clear_day)
         # P1-6 6a: the strip's worker also measures each row's entry state.
         self.live_results_strip.entryStatesChanged.connect(self.m5_alert_bar.set_entry_states)
+        # P1-6 6c: shares at the trader's fixed risk on each M5 row.
+        import entry_plan
+
+        self.m5_alert_bar.set_risk_per_trade(entry_plan.risk_per_trade_dollars())
 
         # P1-5 5b: "Best right now" - one ranked list under "Working now".
         # Display only; it reads the strip's results, the Movers board and the
@@ -629,6 +633,11 @@ class TradingDeskPanel(QWidget):
         board = service.board()
         if board:
             self.best_now_strip.set_movers_board(board)
+
+    def set_risk_per_trade(self, value) -> None:
+        """P1-6 6c: the Settings page saved `risk_per_trade_dollars` (None = off)."""
+        self.m5_alert_bar.set_risk_per_trade(value)
+        self.master_panel.set_risk_per_trade(value)
 
     def _push_swing_context(self) -> None:
         """Hand the M5 bar which names+sides are D1 swing setups. Display only."""

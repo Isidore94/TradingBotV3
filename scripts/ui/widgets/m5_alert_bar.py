@@ -131,6 +131,7 @@ def row_text(
     grade: str | None = None,
     swing: str = "",
     entry: str = "",
+    shares: int | None = None,
 ) -> str:
     """One line: grade, time, side, ticker, what fired, and take context.
 
@@ -148,7 +149,9 @@ def row_text(
     and side are not a D1 swing setup.
 
     ``entry`` is the P1-6 entry chip (``valid`` / ``improved`` / ``gone``),
-    blank until the state has been measured.
+    blank until the state has been measured. ``shares`` is the P1-6 size at the
+    trader's fixed risk (``· 120 sh``), blank when sizing is off or the alert
+    has no stop. A size, never an order.
     """
     time_text = str(getattr(alert, "time_text", "") or "")[:5]
     side = str(getattr(alert, "side", "") or "")
@@ -162,6 +165,8 @@ def row_text(
         line += f"  {swing}"
     if entry:
         line += f"  · {entry}"
+    if shares is not None:
+        line += f"  · {shares} sh"
     if repeats > 1:
         line += f"  ×{repeats}"
     probability = take_probability(alert)
@@ -205,6 +210,8 @@ class M5AlertBar(QWidget):
         self._swing_context: dict = {}
         #: `{(SYMBOL, SIDE): entry_state dict}` from the Working-now worker (6a).
         self._entry_states: dict = {}
+        #: P1-6 6c: fixed risk per trade in dollars; None = sizing off.
+        self._risk_dollars: float | None = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
@@ -351,6 +358,32 @@ class M5AlertBar(QWidget):
             if old.get(key) != mapping.get(key):
                 self._write_item(item, alert, int(item.data(_REPEAT_ROLE) or 1))
 
+    def set_risk_per_trade(self, value) -> None:
+        """`risk_per_trade_dollars` changed (None = off). Rewrites every row."""
+        import entry_plan
+
+        risk = entry_plan.parse_risk_dollars(value)
+        if risk == self._risk_dollars:
+            return
+        self._risk_dollars = risk
+        for item in self._arrival:
+            alert = item.data(_ALERT_ROLE)
+            if alert is not None:
+                self._write_item(item, alert, int(item.data(_REPEAT_ROLE) or 1))
+
+    def _shares_for(self, alert: Any) -> int | None:
+        """Shares at the fixed risk from this alert's own entry and stop, or None."""
+        if self._risk_dollars is None:
+            return None
+        import entry_plan
+
+        payload = getattr(alert, "payload", None)
+        feedback = payload.get("feedback") if isinstance(payload, dict) else None
+        feedback = feedback if isinstance(feedback, dict) else {}
+        return entry_plan.shares_for(
+            self._risk_dollars, feedback.get("entry_price"), feedback.get("stop_price")
+        )
+
     @staticmethod
     def _entry_key(alert: Any) -> tuple[str, str]:
         symbol = str(getattr(alert, "symbol", "") or "").strip().upper()
@@ -465,6 +498,7 @@ class M5AlertBar(QWidget):
                 grade=self._grade_for(alert),
                 swing=swing_context.suffix(swing),
                 entry=entry_state.chip_text(state) if state is not None else "",
+                shares=self._shares_for(alert),
             )
         )
         item.setData(_ALERT_ROLE, alert)
