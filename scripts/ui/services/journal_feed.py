@@ -8,21 +8,60 @@ from journal_analytics import split_tags
 from ui.models.journal import JournalTrade
 
 
+#: The owner's slot. Only `JournalStoreOwner` writes it (tests may patch it).
 _STORE = None
 
 
-def _store():
-    """Lazily create a shared JournalStore (also initializes the sqlite schema)."""
-    global _STORE
-    if _STORE is None:
-        from journal_store import JournalStore
+class JournalStoreOwner:
+    """The one owner of the feed's shared JournalStore.
 
-        _STORE = JournalStore(journal_db_path())
-    return _STORE
+    Opening is lock-guarded, so two workers asking at once get ONE store and
+    one schema migration. `install` and `reset` are the only other writers.
+    """
+
+    def __init__(self) -> None:
+        import threading
+
+        self._lock = threading.RLock()
+
+    def current(self):
+        """The open store, or None. Never opens one."""
+        return _STORE
+
+    def open(self):
+        """The shared store, opening it (and migrating its schema) on first use."""
+        global _STORE
+        store = _STORE
+        if store is not None:
+            return store
+        with self._lock:
+            if _STORE is None:
+                from journal_store import JournalStore
+
+                _STORE = JournalStore(journal_db_path())
+            return _STORE
+
+    def install(self, store) -> None:
+        """Use this store from now on (a test double or an already-open store)."""
+        global _STORE
+        with self._lock:
+            _STORE = store
+
+    def reset(self) -> None:
+        """Forget the store; the next `open` opens a fresh one."""
+        self.install(None)
+
+
+STORE_OWNER = JournalStoreOwner()
+
+
+def _store():
+    """The shared JournalStore, from its owner (also initializes the sqlite schema)."""
+    return STORE_OWNER.open()
 
 
 def store_is_initialized() -> bool:
-    return _STORE is not None
+    return STORE_OWNER.current() is not None
 
 
 def store_needs_preparation() -> bool:

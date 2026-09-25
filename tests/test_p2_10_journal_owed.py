@@ -302,3 +302,62 @@ def test_journal_store_names_every_half_exited_spelling_readers_accept():
     assert journal_store.is_partly_closed(" partially_closed ")
     assert not journal_store.is_partly_closed("CLOSED")
     assert not journal_store.is_partly_closed(None)
+
+
+# ---------------------------------------------------------------------------
+# step 5: one owner for the journal feed's shared store
+# ---------------------------------------------------------------------------
+def test_two_threads_asking_at_once_open_exactly_one_store(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    import journal_store
+    from ui.services import journal_feed
+
+    opened = []
+
+    class SlowStore:
+        def __init__(self, path):
+            opened.append(path)
+            time.sleep(0.2)  # a migration in progress
+            self.db_path = path
+
+    monkeypatch.setattr(journal_store, "JournalStore", SlowStore)
+    monkeypatch.setattr(journal_feed, "_STORE", None)
+    monkeypatch.setattr(journal_feed, "journal_db_path", lambda: tmp_path / "j.sqlite3")
+
+    got = []
+    threads = [threading.Thread(target=lambda: got.append(journal_feed._store())) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(opened) == 1  # before: two stores, two migrations at once
+    assert got[0] is got[1]
+
+
+def test_the_store_owner_opens_installs_and_resets(tmp_path, monkeypatch):
+    import journal_store
+    from ui.services import journal_feed
+
+    class FakeStore:
+        def __init__(self, path):
+            self.db_path = path
+
+    monkeypatch.setattr(journal_store, "JournalStore", FakeStore)
+    monkeypatch.setattr(journal_feed, "_STORE", None)
+    monkeypatch.setattr(journal_feed, "journal_db_path", lambda: tmp_path / "j.sqlite3")
+    owner = journal_feed.STORE_OWNER
+
+    assert owner.current() is None and not journal_feed.store_is_initialized()
+    first = owner.open()
+    assert owner.open() is first is journal_feed._store()
+    assert journal_feed.store_is_initialized()
+
+    replacement = FakeStore(tmp_path / "other.sqlite3")
+    owner.install(replacement)
+    assert journal_feed._store() is replacement
+
+    owner.reset()
+    assert owner.current() is None and journal_feed._STORE is None
