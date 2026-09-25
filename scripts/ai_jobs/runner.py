@@ -846,6 +846,108 @@ def _failure_reason(job: str, status: str, outcome: Mapping[str, Any]) -> str:
     )
 
 
+#: Ledger flag on the one `journal_import` row the 07:00 PT morning retry writes.
+MORNING_RETRY_FLAG = "morning_retry"
+JOURNAL_IMPORT_JOB = "journal_import"
+
+
+def _morning_retry_due(session_date: str, ledger_path=None) -> str:
+    """"" when the night's import failed and has not been retried, else why not."""
+    target = ledger_path if ledger_path is not None else ledger.ledger_path(create=False)
+    try:
+        rows = ledger._read_rows(target)
+    except (OSError, ValueError) as exc:
+        return f"ledger unreadable ({exc})"
+    runs = [
+        row for row in rows
+        if str(row.get("job") or "") == JOURNAL_IMPORT_JOB
+        and str(row.get("session_date") or "") == session_date
+    ]
+    if any(row.get(MORNING_RETRY_FLAG) for row in runs):
+        return f"already retried for {session_date}"
+    if JOURNAL_IMPORT_JOB in ledger.completed_jobs(session_date, path=target):
+        return f"the night import for {session_date} did not fail"
+    if not any(str(row.get("status") or "") == ledger.STATUS_FAILED for row in runs):
+        return f"no failed night import for {session_date}"
+    return ""
+
+
+def retry_journal_import(
+    *,
+    now: datetime | None = None,
+    ledger_path=None,
+    run: Callable[..., Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """The 07:00 PT morning retry of a failed night `journal_import` (P3).
+
+    Runs once per session, only when the night's import failed and never
+    succeeded, and never while the night runner holds the machine lock. It
+    writes its own `journal_import` row, reason prefixed "morning retry".
+    Returns ``{"status", "reason"}``; "skipped" writes no ledger row.
+    """
+    from market_calendar import SessionCalendarError
+    from local_writer_lock import LocalLockUnavailable, local_writer_lock
+
+    moment = window.market_now(now)
+    try:
+        session_date = session_date_for(moment)
+    except SessionCalendarError as exc:
+        return {"status": ledger.STATUS_SKIPPED, "reason": f"session calendar cannot answer: {exc}"}
+    store_ok, store_reason = store.store_available()
+    if not store_ok:
+        return {"status": ledger.STATUS_SKIPPED, "reason": f"AI store unavailable: {store_reason}"}
+
+    def _locked() -> dict[str, Any]:
+        why_not = _morning_retry_due(session_date, ledger_path)
+        if why_not:
+            return {"status": ledger.STATUS_SKIPPED, "reason": why_not}
+        job = run
+        if job is None:
+            from journal_runner import run_nightly_journal_import as job
+        started = datetime.now().astimezone()
+        extra = {MORNING_RETRY_FLAG: True, "goal": "journal"}
+        try:
+            outcome = dict(job(trigger="morning_retry") or {})
+        except Exception as exc:  # noqa: BLE001 - a crash is a failed retry, recorded
+            row = ledger.record(
+                job=JOURNAL_IMPORT_JOB,
+                status=ledger.STATUS_FAILED,
+                session_date=session_date,
+                started_at=started,
+                reason="morning retry: crashed",
+                error=f"{type(exc).__name__}: {exc}",
+                path=ledger_path,
+                extra=extra,
+            )
+            return {"status": row["status"], "reason": row["reason"]}
+        status = str(outcome.get("status") or ledger.STATUS_OK).strip().lower()
+        if status not in (ledger.STATUS_OK, ledger.STATUS_FAILED):
+            status = ledger.STATUS_FAILED
+        reason = _failure_reason(JOURNAL_IMPORT_JOB, status, outcome)
+        row = ledger.record(
+            job=JOURNAL_IMPORT_JOB,
+            status=status,
+            session_date=session_date,
+            started_at=started,
+            reason=f"morning retry: {reason}" if reason else "morning retry",
+            path=ledger_path,
+            extra=extra,
+        )
+        return {"status": row["status"], "reason": row["reason"]}
+
+    try:
+        with local_writer_lock(RUNNER_LOCK_KEY, timeout_seconds=0.0):
+            return _locked()
+    except LocalLockUnavailable as exc:
+        if NO_PRIMITIVE_MARKER in str(exc):
+            logging.warning("AI jobs: no cross-process lock available (%s); retrying unguarded.", exc)
+            return _locked()
+        return {
+            "status": ledger.STATUS_SKIPPED,
+            "reason": "the night run is still in progress; morning retry not started",
+        }
+
+
 def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobSlot]:
     """The nightly slate, in THREE STAGES (decision 0018, 2026-09-04).
 
