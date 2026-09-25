@@ -42,7 +42,6 @@ from datetime import date, datetime, time as _time, timedelta
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from swallowed import note_swallowed
 
 __all__ = [
     "CAPTURE_MODE_BACKFILL",
@@ -73,6 +72,15 @@ __all__ = [
 # backfill from a missing field.
 CAPTURE_MODE_LIVE = "live"
 CAPTURE_MODE_BACKFILL = "backfill"
+
+
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
 
 
 def row_capture_mode(row) -> str:

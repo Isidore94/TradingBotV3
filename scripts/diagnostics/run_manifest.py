@@ -16,10 +16,18 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from swallowed import note_swallowed
 
 SCHEMA_VERSION = "run_manifest_v1"
 DEFAULT_KEEP = 90
+
+
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
 
 
 def default_manifest_dir() -> Path:

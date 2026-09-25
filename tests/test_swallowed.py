@@ -77,3 +77,33 @@ def test_focus_store_write_failure_is_logged_not_raised(tmp_path, monkeypatch, c
     focus_picks._atomic_json_write(tmp_path / "sidecar.json", {"a": 1})
     messages = [r.getMessage() for r in caplog.records]
     assert any("focus store JSON write failed" in m and "locked by AV scan" in m for m in messages)
+
+
+def test_modules_imported_as_scripts_dot_x_do_not_need_scripts_on_sys_path(tmp_path):
+    """`from scripts import earnings_history` (and friends) must keep working
+    without scripts/ on sys.path: those modules import the helper lazily."""
+    import os
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    code = (
+        "import sys\n"
+        f"sys.path[:] = [{str(root)!r}] + [p for p in sys.path if p and 'scripts' not in p]\n"
+        "from scripts import earnings_history, project_paths, trading_plan\n"
+        "from scripts.diagnostics import artifact_io, run_manifest\n"
+        "from scripts.research_warehouse import schemas, outcomes\n"
+        "print('ok')\n"
+    )
+    env = dict(os.environ)
+    env.update(
+        {
+            "TRADINGBOTV3_DATA_DIR": str(tmp_path / "data"),
+            "LOCALAPPDATA": str(tmp_path / "local"),
+            "PYTHONPATH": "",
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120, cwd=str(tmp_path)
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert "ok" in result.stdout

@@ -15,7 +15,6 @@ import logging
 import sys
 import threading
 from typing import Any, Callable, Iterable
-from swallowed import note_swallowed
 
 try:
     from ibapi.client import EClient
@@ -54,6 +53,15 @@ CLIENT_ID_IN_USE = 326
 #: Farm/connection status notices, not failures.
 _INFO_CODES = {2103, 2104, 2105, 2106, 2107, 2108, 2119, 2157, 2158, 165}
 _CONNECTION_LOST = {504, 1100, 1300, 502}
+
+
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
 
 
 class ScannerError(RuntimeError):

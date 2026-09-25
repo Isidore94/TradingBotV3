@@ -26,7 +26,6 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from swallowed import note_swallowed
 
 REGISTRY_VERSION = "candidate_registry_v1"
 
@@ -62,6 +61,15 @@ _STAGE_POOL_PRIORITY = {
     "HOLDING": 3,
     "DEVELOPING": 4,
 }
+
+
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
 
 
 class StaleWriterError(RuntimeError):

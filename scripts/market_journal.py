@@ -33,7 +33,6 @@ import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
-from swallowed import note_swallowed
 
 #: Schema NAME (ground rule 5).
 SCHEMA_MARKET_JOURNAL_ENTRY = "market_journal_entry_v1"
@@ -110,6 +109,15 @@ HORIZON_FOR_TIMEFRAME = {
     TIMEFRAME_M5: HORIZON_REST_OF_DAY,
     TIMEFRAME_D1: HORIZON_NEXT_5_SESSIONS,
 }
+
+
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
 
 
 class PredictionTimeframeError(ValueError):

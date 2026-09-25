@@ -21,7 +21,6 @@ import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
-from swallowed import note_swallowed
 
 _log = logging.getLogger(__name__)
 
@@ -68,6 +67,15 @@ _BULLET = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
 _RECAP_LINE = re.compile(r"^- Recap rule for \d{4}-\d{2}-\d{2}: \S")
 #: How long a desk plan write waits for another desk plan write.
 LOCK_TIMEOUT_SECONDS = 5.0
+
+
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
 
 
 def slug(heading: str) -> str:

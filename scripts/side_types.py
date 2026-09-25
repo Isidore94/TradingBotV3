@@ -12,12 +12,20 @@ from __future__ import annotations
 
 import logging
 from enum import Enum
-from swallowed import note_swallowed
 
 _LONG_ALIASES = {"LONG", "L", "BUY", "BULL", "BULLISH"}
 _SHORT_ALIASES = {"SHORT", "S", "SELL", "BEAR", "BEARISH"}
 
 _warned_values: set[str] = set()
+
+
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
 
 
 class Side(str, Enum):

@@ -14,7 +14,15 @@ import time
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from swallowed import note_swallowed
+
+
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
 
 
 class SafeRotatingFileHandler(logging.handlers.RotatingFileHandler):

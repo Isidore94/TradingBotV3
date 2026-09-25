@@ -41,7 +41,6 @@ from __future__ import annotations
 
 import threading
 from collections import Counter
-from swallowed import note_swallowed
 
 SCHEMA_VERSION = 2
 
@@ -87,6 +86,15 @@ _run_open = False
 _run_generation = 0
 _capture_errors = 0
 _orphan_events_last_run = 0
+
+
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
 
 
 def begin_run() -> int:

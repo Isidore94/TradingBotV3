@@ -22,12 +22,20 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from swallowed import note_swallowed
 
 _log = logging.getLogger(__name__)
 
 #: Sides the outcome math can grade. Matches ``veto_cohort._SIDES``.
 GRADEABLE_SIDES = ("LONG", "SHORT")
+
+
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
 
 
 def _read_pick_rows(path: Path) -> list[dict[str, str]]:

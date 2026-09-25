@@ -8,7 +8,6 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from swallowed import note_swallowed
 
 try:
     from project_paths import EARNINGS_CALENDAR_HISTORY_FILE
@@ -22,6 +21,15 @@ CONFIRMED_SESSIONS = {"BMO", "AMC"}
 SOURCE_PRIORITY = {"yfinance": 1, "nasdaq": 2, "manual": 3}
 CONFIDENCE_PRIORITY = {"unknown": 0, "supplemental": 1, "inferred": 2, "confirmed": 3}
 ACTIVE_FUTURE_SUPERSESSION_WINDOW_DAYS = 120
+
+
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
 
 
 def normalize_release_session(value: Any) -> str:

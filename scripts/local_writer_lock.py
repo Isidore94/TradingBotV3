@@ -93,7 +93,6 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from swallowed import note_swallowed
 
 __all__ = [
     "LocalLockInfo",
@@ -105,6 +104,15 @@ __all__ = [
 DEFAULT_TIMEOUT_SECONDS = 20.0
 _MUTEX_PREFIX = "Local\\TradingBotV3-writer-"
 _POLL_SECONDS = 0.005
+
+
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
 
 
 class LocalLockUnavailable(RuntimeError):

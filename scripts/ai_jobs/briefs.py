@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from swallowed import note_swallowed
 
 #: The scopes a hands-off nightly review should cover. Journal review is
 #: deliberately included: it is the trader's own revealed preference and the
@@ -100,6 +99,15 @@ INCOMPLETE_RUN_NOTE = "Run in progress at the time of writing; counts above may 
 #: faults -- NAS asleep, endpoint still loading -- still self-heal; the
 #: all-night grind of 11 consecutive failures does not survive.
 TICKER_BRIEFS_MAX_ATTEMPTS = 3
+
+
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
 
 
 def _summary_dir(session_date: str) -> Path:

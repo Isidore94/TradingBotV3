@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
-from swallowed import note_swallowed
 
 
 LEVEL_STORE_SCHEMA_VERSION = 1
@@ -31,6 +30,15 @@ CLOUD_FLAT_MIN_BARS = 8
 CLOUD_TOL_ATR_FRACTION = 0.02
 CLOUD_TOL_PCT = 0.0005
 CLOUD_LEVEL_WEIGHT = 1.0
+
+
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
 
 
 def _coerce_float(value) -> float | None:

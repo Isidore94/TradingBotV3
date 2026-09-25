@@ -50,7 +50,6 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any
-from swallowed import note_swallowed
 
 BASE_CURRENCY = "CAD"
 
@@ -59,6 +58,15 @@ EPSILON = 1e-7
 
 #: Leg roles that mean the journal invented the fill rather than importing it.
 INVENTED_ROLES = frozenset({"SYNTHETIC_OPEN", "SYNTHETIC_CLOSE"})
+
+
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
 
 
 @dataclass

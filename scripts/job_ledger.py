@@ -17,7 +17,6 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from swallowed import note_swallowed
 
 LEDGER_SCHEMA = "job_ledger_v1"
 
@@ -34,6 +33,15 @@ DEFAULT_RETRY_BUDGET = {
     "bad_local_state": 1,
     "unexpected": 2,
 }
+
+
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
 
 
 def job_key(market_date: str, job_type: str, slot: str, config_hash: str = "") -> str:
