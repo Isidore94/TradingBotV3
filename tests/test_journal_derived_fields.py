@@ -73,7 +73,9 @@ def test_group_summary_buckets_by_a_derived_field():
         _trade("2026-09-10T10:45:00-04:00", "2026-09-10T11:30:00-04:00", net_pnl=-20.0),
         _trade("2026-09-08T10:00:00-04:00", "2026-09-11T10:00:00-04:00", net_pnl=100.0),
     ]
-    assert set(DERIVED_GROUPS) == {"time of day", "weekday", "hold", "day vs swing"}
+    assert set(DERIVED_GROUPS) == {
+        "time of day", "weekday", "hold", "day vs swing", "instrument", "direction",  # P8-P5 adds two
+    }
 
     rows = derived_group_summary(trades, "day vs swing")
 

@@ -316,7 +316,7 @@ STORY_MIN_HEIGHT_PX = 120
 #: The trade line's columns. Read-only: the Journal page is still where a trade
 #: is tagged and corrected (decision 0021 consequences).
 TRADE_COLUMNS: tuple[str, ...] = (
-    "Time", "Symbol", "Direction", "Qty", "Whole trade net", "Status",
+    "Time", "Symbol", "Direction", "Qty", "Whole trade net", "Status", "Bot grade",
 )
 
 #: What a cell reads when nobody measured it. Never a 0.00.
@@ -941,6 +941,12 @@ class DayReviewPanel(QFrame):
             button.clicked.connect(lambda _checked=False, name=key: self._open_card_target(name))
             body.addWidget(button)
             self._report_card_lines[key] = button
+        # P8-P5: plain truth lines over the last 20 sessions, built on the worker.
+        self.truth_note = QLabel("")
+        self.truth_note.setObjectName("TruthNote")
+        self.truth_note.setWordWrap(True)
+        self.truth_note.setTextFormat(Qt.PlainText)
+        body.addWidget(self.truth_note)
         # The full sentences live under "Details"; the glance strip leads.
         self.report_card_section.setVisible(False)
 
@@ -2009,6 +2015,9 @@ class DayReviewPanel(QFrame):
         # built. `render` formats - it never calls `day_report_card.build` or
         # `how_fresh`, which are worker work inside the ONE payload.
         self._render_report_card(payload.get("report_card"))
+        truth = payload.get("truth") if isinstance(payload.get("truth"), Mapping) else {}
+        self.truth_note.setText("\n".join(str(line) for line in truth.get("lines") or ()))
+        self._bot_grades = dict(truth.get("grades") or {})
         # The glance strip heads the page. The worker builds it; a hand-built
         # payload without one gets the same pure projection here (a few sums).
         if not payload.get("glance"):
@@ -2777,9 +2786,15 @@ class DayReviewPanel(QFrame):
                 self._number(quantity, decimals=0),
                 self._number(row.get("net_pnl"), signed=True),
                 str(row.get("status") or ""),
+                self._bot_grade_cell(row.get("trade_id")),
             )
             for column, text in enumerate(values):
                 self.trades_table.setItem(index, column, QTableWidgetItem(str(text)))
+
+    def _bot_grade_cell(self, trade_id: Any) -> str:
+        """The bot's grade of this trade's setup as of the entry (worker-built), or a dash."""
+        grade = (getattr(self, "_bot_grades", {}) or {}).get(str(trade_id or ""))
+        return str(grade.get("grade") or "") if isinstance(grade, Mapping) else UNMEASURED
 
     def _render_calls(self, rows) -> None:
         calls = [row for row in rows if isinstance(row, Mapping)]
@@ -2935,6 +2950,12 @@ class DayReviewPanel(QFrame):
             lines.append("Exit reading: not confirmed")
         if detail.get("label_provenance"):
             lines.append(f"Label source: {detail['label_provenance']}")
+        grade = (getattr(self, "_bot_grades", {}) or {}).get(trade_id)
+        if isinstance(grade, Mapping):
+            import journal_truth
+
+            why = str(grade.get("why") or "")
+            lines.append(f"Bot grade: {grade.get('grade') or journal_truth.NO_GRADE}" + (f" ({why})" if why else ""))
         self.trade_detail.setPlainText("\n".join(lines))
 
     @staticmethod

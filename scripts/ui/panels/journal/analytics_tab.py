@@ -15,6 +15,7 @@ a lie in the shape a chart makes easy to believe.
 from __future__ import annotations
 
 import csv
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -298,6 +299,11 @@ class _WalkawayWorker(QThread):
             self.failed.emit(str(exc))
 
 
+#: Exit reads still running, kept referenced until they finish (a dropped
+#: running QThread is a crash, not a leak).
+_EXIT_READS: list = []
+
+
 class AnalyticsTab(QFrame):
     statusChanged = Signal(str)
 
@@ -324,6 +330,22 @@ class AnalyticsTab(QFrame):
         self.evidence_note = QLabel("")
         self.evidence_note.setObjectName("MutedLabel")
         self.evidence_note.setWordWrap(True)
+        #: P8-P5: stocks vs options, longs vs shorts, confirmed setups, in words.
+        self.truth_note = QLabel("")
+        self.truth_note.setObjectName("TruthNote")
+        self.truth_note.setWordWrap(True)
+        self.truth_note.setTextFormat(Qt.PlainText)
+        #: P8-P5: the exit scoreboard (MFE/MAE per trade), read on a worker.
+        self.exit_note = QLabel("")
+        self.exit_note.setObjectName("TruthNote")
+        self.exit_note.setWordWrap(True)
+        self.exit_note.setTextFormat(Qt.PlainText)
+        self._exit_rows: list[dict] = []
+        self._exit_generation = 0
+        self._exit_stale = False
+        self._exit_worker = None
+        self._exit_again = False
+        self._closing = False
         #: Closed trades with a made-up entry: kept, but not in any total.
         self.not_counted_note = QLabel("")
         self.not_counted_note.setObjectName("CurrencyNote")
@@ -427,6 +449,8 @@ class AnalyticsTab(QFrame):
         layout.addWidget(self.not_counted_note)
         layout.addWidget(cards_host)
         layout.addWidget(self.evidence_note)
+        layout.addWidget(self.truth_note)
+        layout.addWidget(self.exit_note)
         layout.addWidget(curve_host)
         layout.addLayout(picker_row)
         layout.addWidget(self.group_note)
@@ -511,6 +535,14 @@ class AnalyticsTab(QFrame):
         )
         self.evidence_note.setVisible(bool(coverage_line or headline_line))
 
+        # P8-P5: in memory over the rows already loaded, in this tab's currency.
+        from journal_truth import truth_lines
+
+        self.truth_note.setText("\n".join(truth_lines(raw, pnl_key, currency if pnl_key else "")))
+        self._exit_rows = [dict(row) for row in raw]
+        self._exit_generation += 1
+        self.measure_exits()
+
         points = journal_feed.equity_curve(trades, mode)
         if PYQTGRAPH_AVAILABLE:
             self.curve.clear()
@@ -529,6 +561,54 @@ class AnalyticsTab(QFrame):
         self._summary = summary
         self._sync_group_picker(summary["groups"])
         self._on_group_picked()
+
+    def measure_exits(self) -> None:
+        """Read the exit scoreboard on a worker; waits for the tab to be shown."""
+        if not self.isVisible():
+            self._exit_stale = True
+            return
+        self._exit_stale = False
+        if self._exit_worker is not None and self._exit_worker.isRunning():
+            # One live read: a newer reload queues one re-read for when it ends.
+            self._exit_again = True
+            return
+        self._exit_again = False
+        from journal_truth import exit_scoreboard
+        from journal_truth import measure_exits as measure_rows
+        from ui.read_worker import ReadWorker
+
+        rows, generation = list(self._exit_rows), self._exit_generation
+        self.exit_note.setText("Exits: measuring...")
+        worker = ReadWorker(lambda: exit_scoreboard(rows, measure_rows(rows)))
+        _EXIT_READS.append(worker)
+        worker.finished_with.connect(lambda result, g=generation: self._on_exits(g, result))
+        worker.failed.connect(lambda message, g=generation: self._on_exits(g, {"lines": [f"Exits: unknown ({message})."]}))
+        worker.finished.connect(lambda w=worker: self._on_exit_read_done(w))
+        self._exit_worker = worker
+        worker.start()
+
+    def _on_exit_read_done(self, worker) -> None:
+        if worker in _EXIT_READS:
+            _EXIT_READS.remove(worker)
+        try:
+            if self._exit_again and not self._closing:
+                self.measure_exits()
+        except RuntimeError:  # the tab was closed while the read ran
+            logging.debug("The exit re-read was skipped: the tab closed.", exc_info=True)
+
+    def _on_exits(self, generation: int, result) -> None:
+        if generation != self._exit_generation:
+            return
+        try:
+            lines = list((result or {}).get("lines") or ())
+            self.exit_note.setText("\n".join(str(line) for line in lines))
+        except RuntimeError:  # the tab was closed while the read ran
+            logging.debug("The exit scoreboard arrived after the tab closed.", exc_info=True)
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().showEvent(event)
+        if self._exit_stale:
+            self.measure_exits()
 
     def _on_group_picked(self) -> None:
         self._draw_group_chart()
@@ -680,6 +760,16 @@ class AnalyticsTab(QFrame):
         self.statusChanged.emit(f"exported {path}")
 
     def shutdown(self) -> None:
+        from ui.read_worker import join_worker
+
+        self._closing = True
+        self._exit_again = False
+        join_worker(self._exit_worker)
+        for worker in list(_EXIT_READS):
+            join_worker(worker)
+        self._shutdown_walkaway()
+
+    def _shutdown_walkaway(self) -> None:
         worker = self._worker
         if worker is not None and worker.isRunning():
             worker.wait(2000)
