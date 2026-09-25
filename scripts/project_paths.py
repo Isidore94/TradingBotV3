@@ -947,6 +947,25 @@ def save_local_settings(values: dict) -> None:
         invalidate_local_settings_cache()
 
 
+def blank_local_setting_if_equal(key: str, expected: str) -> bool:
+    """Blank ``key`` only if it still holds ``expected``; one locked read-modify-write.
+
+    The secret migration uses this, so a value the trader saved after the copy
+    was taken is never blanked. Returns True when it blanked the field.
+    """
+    with _local_settings_write_lock:
+        invalidate_local_settings_cache()  # compare against disk, not a cached copy
+        payload = _load_local_settings()
+        if str(payload.get(key) or "") != str(expected):
+            return False
+        payload[key] = ""
+        tmp = LOCAL_SETTINGS_FILE.with_name(LOCAL_SETTINGS_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp, LOCAL_SETTINGS_FILE)
+        invalidate_local_settings_cache()
+        return True
+
+
 def open_path_in_file_manager(path: Path) -> None:
     target = Path(path).expanduser()
     if sys.platform == "win32":

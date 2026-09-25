@@ -45,17 +45,35 @@ def read_keyring_secret(name: str) -> str:
         return ""
 
 
+def delete_keyring_secret(name: str) -> None:
+    """Remove the stored secret, if any. Never raises."""
+    backend = _keyring()
+    if backend is None:
+        return
+    try:
+        backend.delete_password(KEYRING_SERVICE, name)
+    except Exception:  # nothing stored is the same as deleted
+        _LOG.debug("No stored %s to delete.", name)
+
+
 def write_keyring_secret(name: str, value: str) -> bool:
-    """Store ``value`` and confirm it reads back exactly. Never raises."""
+    """Store ``value`` and confirm it reads back exactly. Never raises.
+
+    On any failure the entry is deleted, so a half-written or wrong value can
+    never shadow the JSON copy that readers fall back to.
+    """
     backend = _keyring()
     if backend is None:
         return False
     try:
         backend.set_password(KEYRING_SERVICE, name, value)
-        return str(backend.get_password(KEYRING_SERVICE, name) or "") == value
+        if str(backend.get_password(KEYRING_SERVICE, name) or "") == value:
+            return True
+        _LOG.warning("Credential store read-back mismatch for %s; entry removed.", name)
     except Exception as exc:
         _LOG.warning("Credential store write failed for %s: %s", name, type(exc).__name__)
-        return False
+    delete_keyring_secret(name)
+    return False
 
 
 def read_secret_setting(name: str, default: str = "") -> str:
@@ -84,14 +102,9 @@ def save_secret_setting(name: str, value: str) -> str:
         if str(get_local_setting(name, "") or ""):
             save_local_setting(name, "")
         return "keyring"
-    if not value:
-        # Clearing: blank both so neither store resurrects an old secret.
-        backend = _keyring()
-        if backend is not None:
-            try:
-                backend.delete_password(KEYRING_SERVICE, name)
-            except Exception:  # nothing stored is the same as deleted
-                _LOG.debug("No stored %s to delete.", name)
+    # JSON it is (or clearing). Drop any older stored entry first: readers try
+    # the store first, and an old token there would win over the new one.
+    delete_keyring_secret(name)
     save_local_setting(name, value)
     return "json"
 
@@ -100,10 +113,11 @@ def migrate_secrets_to_keyring(names: tuple[str, ...] = SECRET_SETTING_KEYS) -> 
     """Move each non-empty JSON secret into the credential store; never loses one.
 
     Per key: "migrated", "empty" (nothing in JSON), "kept_in_json" (store
-    unavailable or read-back mismatch; JSON untouched), or "blank_failed"
+    unavailable or read-back mismatch; JSON untouched), "changed_meanwhile"
+    (the JSON value changed after the copy; left as it is), or "blank_failed"
     (stored and verified, but the JSON field could not be blanked).
     """
-    from project_paths import get_local_setting, save_local_setting
+    from project_paths import blank_local_setting_if_equal, get_local_setting
 
     results: dict[str, str] = {}
     for name in names:
@@ -121,10 +135,16 @@ def migrate_secrets_to_keyring(names: tuple[str, ...] = SECRET_SETTING_KEYS) -> 
             results[name] = "kept_in_json"
             continue
         try:
-            save_local_setting(name, "")
+            # Compare-and-blank under the settings write lock: a value saved
+            # after the copy was taken is never blanked.
+            blanked = blank_local_setting_if_equal(name, value)
         except Exception as exc:
             _LOG.warning("Secret migration: %s is stored, but the JSON copy was not blanked: %s", name, exc)
             results[name] = "blank_failed"
+            continue
+        if not blanked:
+            _LOG.warning("Secret migration: %s changed in local_settings.json during the copy; left as it is.", name)
+            results[name] = "changed_meanwhile"
             continue
         _LOG.info("Secret migration: %s moved to the credential store.", name)
         results[name] = "migrated"
