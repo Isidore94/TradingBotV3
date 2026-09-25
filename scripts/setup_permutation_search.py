@@ -33,11 +33,12 @@ import hashlib
 import json
 import math
 import os
+import re
 import statistics
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from itertools import combinations
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -66,6 +67,8 @@ AUTHORIZATION = "WISHLIST.md P1-4 4c (trader 2026-09-24: 'keep going in order, f
 VERDICT_KEY = "key_found"
 VERDICT_NONE = "no_key_found"
 VERDICT_THIN = "too_little_data"
+#: Beside the report, so a scratch --out never writes into the live history.
+HISTORY_DIR_NAME = "permutation_report_history"
 
 Cell = tuple[tuple[str, str], ...]
 
@@ -448,15 +451,78 @@ def write_report(report: Mapping[str, Any], out: Path) -> Path:
     return target
 
 
+# --- report history (P12): one file per run date, read by setup_permutation_verdicts
+
+HISTORY_KEEP_DAYS = 600
+_HISTORY_FILE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.json$")
+
+
+def _content_hash(report: Mapping[str, Any]) -> str:
+    """Hash of the report without its run stamp, so a rerun on the same data matches."""
+    body = {key: value for key, value in report.items() if key != "generated_at"}
+    text = json.dumps(body, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def history_files(history_dir: Path) -> list[tuple[date, Path]]:
+    """`(run date, path)` for every history file, oldest first."""
+    out: list[tuple[date, Path]] = []
+    try:
+        entries = list(Path(history_dir).iterdir())
+    except OSError:
+        return out
+    for entry in entries:
+        match = _HISTORY_FILE_RE.match(entry.name)
+        if not match:
+            continue
+        try:
+            out.append((date.fromisoformat(match.group(1)), entry))
+        except ValueError:
+            continue
+    out.sort()
+    return out
+
+
+def append_history(report: Mapping[str, Any], history_dir: Path, *, today: date | None = None) -> Path | None:
+    """Copy the report to `<history_dir>/<today>.json` unless it matches the newest copy.
+
+    Returns the file written, or None when the content is unchanged. Files older
+    than HISTORY_KEEP_DAYS are pruned. Raises on I/O failure; the report itself
+    is already written by then.
+    """
+    folder = Path(history_dir)
+    run_day = today or datetime.now().astimezone().date()
+    digest = _content_hash(report)
+    existing = history_files(folder)
+    if existing:
+        try:
+            newest = json.loads(existing[-1][1].read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            newest = None
+        if isinstance(newest, dict) and _content_hash(newest) == digest:
+            return None
+    target = write_report(report, folder / f"{run_day.isoformat()}.json")
+    cutoff = run_day - timedelta(days=HISTORY_KEEP_DAYS)
+    for day, path in history_files(folder):
+        if day >= cutoff:
+            break
+        path.unlink(missing_ok=True)
+    return target
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--outcomes", required=True, type=Path)
     parser.add_argument("--ledger-root", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--history-dir", type=Path, default=None,
+                        help="default: permutation_report_history/ beside --out")
     args = parser.parse_args(argv)
     rows = read_outcomes(args.outcomes)
     report = build_report(rows, ledger_root=args.ledger_root, source=str(args.outcomes))
     write_report(report, args.out)
+    history_dir = args.history_dir or Path(args.out).parent / HISTORY_DIR_NAME
+    append_history(report, history_dir)
     found = sum(
         len(fam["keys"])
         for pop in report["populations"].values()
