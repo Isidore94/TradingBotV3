@@ -52,6 +52,27 @@ def _side_text(value: Any) -> str:
     return text if text in {"LONG", "SHORT"} else ""
 
 
+def covered(session: Any, coverage_start: str | None) -> bool:
+    """True when ``session`` is on or after the source's first logged session.
+
+    Before a source's first event the source did not exist yet, so "nothing
+    logged" there is unknown - never a confirmed "no trigger" / "no M5 alert".
+    """
+    start = _session_text(coverage_start)
+    return bool(start) and _session_text(session) >= start
+
+
+def watch_fired_coverage_start(events: Iterable[Mapping[str, Any]] | None) -> str | None:
+    """The first session with a logged ``watch_fired``, or None when there is none."""
+    days = [
+        _session_text(event.get("trade_date"))
+        for event in events or ()
+        if isinstance(event, Mapping) and str(event.get("action") or "") == "watch_fired"
+        and _session_text(event.get("trade_date"))
+    ]
+    return min(days) if days else None
+
+
 # --- discovery slot
 
 
@@ -232,11 +253,24 @@ def load_m5_bounce_types(session: Any, *, path: Path | None = None) -> dict[tupl
     try:
         if not target.is_file():
             return None
+        if not covered(wanted, m5_coverage_start(target)):
+            return None
         rows = _tail_rows_for_session(target, wanted)
     except (OSError, csv.Error):
         logging.debug("setup permutations: M5 outcome log unreadable", exc_info=True)
         return None
     return m5_bounce_types(rows, wanted)
+
+
+def m5_coverage_start(path: Path) -> str | None:
+    """The first logged ``trade_date`` of the (append-ordered) M5 log, or None when it has no row."""
+    with Path(path).open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            day = _session_text(row.get("trade_date"))
+            if day:
+                return day
+    return None
 
 
 # --- D1 environment
@@ -275,6 +309,9 @@ class SessionContext:
     @classmethod
     def load(cls, session: Any, **paths: Any) -> "SessionContext":
         events = load_review_events(path=paths.get("review_events_path"))
+        # Before the first logged watch_fired the log could not have held one: unknown, not "none".
+        if events is not None and not covered(session, watch_fired_coverage_start(events)):
+            events = None
         return cls(
             slots=load_discovery_slots(session, reports_dir=paths.get("reports_dir")),
             triggers=entry_triggers(events, session) if events is not None else None,
@@ -305,8 +342,9 @@ def stamp_scan_rows(
 ) -> int:
     """Write the permutation stamp onto each feature row in place. Returns rows stamped.
 
-    Shadow only: adds the three stamp columns and nothing else. Any failure
-    leaves the rows unstamped and the scan untouched.
+    Shadow only: adds the stamp columns and ``perm_weekly_ema8_hold_weeks`` (the
+    scan's own streak under a name no legacy reader knows) and nothing else. Any
+    failure leaves the rows unstamped and the scan untouched.
     """
     rows = [row for row in feature_rows or () if isinstance(row, MutableMapping)]
     if not rows:
@@ -318,6 +356,8 @@ def stamp_scan_rows(
         lookups = SessionContext()
     stamped = 0
     for row in rows:
+        if sp.WEEKLY_STREAK_COLUMN not in row and "weekly_ema8_hold_weeks" in row:
+            row[sp.WEEKLY_STREAK_COLUMN] = row.get("weekly_ema8_hold_weeks")
         view = dict(row)
         view.setdefault("run_date", _session_text(session))
         try:
@@ -332,6 +372,9 @@ def stamp_scan_rows(
 
 __all__ = [
     "CHECKPOINT_SLOTS",
+    "covered",
+    "m5_coverage_start",
+    "watch_fired_coverage_start",
     "NO_ENTRY_TRIGGER",
     "SessionContext",
     "discovery_slots",

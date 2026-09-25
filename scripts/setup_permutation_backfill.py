@@ -190,6 +190,8 @@ class ContextStores:
     _m5: dict[str, dict] | None = field(default=None, repr=False)
     _labels: dict[str, str] | None = field(default=None, repr=False)
     _trigger_times: dict[str, dict] | None = field(default=None, repr=False)
+    _triggers_start: str | None = field(default=None, repr=False)
+    _m5_start: str | None = field(default=None, repr=False)
     _cache: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def paths(self) -> list[Path | None]:
@@ -218,11 +220,17 @@ class ContextStores:
             self._trigger_times = {
                 day: spc.entry_trigger_checkpoints(rows, day) for day, rows in by_session.items()
             }
+            self._triggers_start = spc.watch_fired_coverage_start(events)
         if self.m5_outcomes is not None and self._m5 is None:
             by_session = {}
+            first_day = None
             for row in _read_rows(Path(self.m5_outcomes)):
+                day = _text(row.get("trade_date"))[:10]
+                if day and (first_day is None or day < first_day):
+                    first_day = day
                 if _text(row.get("event_type")) == "registered":
-                    by_session.setdefault(_text(row.get("trade_date"))[:10], []).append(row)
+                    by_session.setdefault(day, []).append(row)
+            self._m5_start = first_day
             self._m5 = {day: spc.m5_bounce_types(rows, day) for day, rows in by_session.items()}
         if self.environment is not None and self._labels is None:
             import d1_environment_store
@@ -240,14 +248,15 @@ class ContextStores:
             if self.reports_dir is not None
             else None
         )
+        # Before a source's first logged session its silence is unknown, never "none".
+        triggers_known = self._triggers is not None and spc.covered(session, self._triggers_start)
+        m5_known = self._m5 is not None and spc.covered(session, self._m5_start)
         context = spc.SessionContext(
             slots=slots,
-            triggers=(self._triggers or {}).get(session, {}) if self._triggers is not None else None,
-            m5=(self._m5 or {}).get(session, {}) if self._m5 is not None else None,
+            triggers=(self._triggers or {}).get(session, {}) if triggers_known else None,
+            m5=(self._m5 or {}).get(session, {}) if m5_known else None,
             environment=(self._labels or {}).get(session, sp.UNKNOWN) if self._labels is not None else sp.UNKNOWN,
-            trigger_times=(
-                (self._trigger_times or {}).get(session, {}) if self._trigger_times is not None else None
-            ),
+            trigger_times=(self._trigger_times or {}).get(session, {}) if triggers_known else None,
         )
         self._cache[session] = context
         return context

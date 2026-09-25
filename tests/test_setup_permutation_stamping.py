@@ -50,9 +50,9 @@ def _row(**overrides):
 
 def test_ma_distance_columns_use_the_warehouse_sign():
     got = sp.ma_distance_columns(100.0, 2.0, {"sma20": 99.0, "ema8": 101.0})
-    assert got["dist_sma20_atr"] == 0.5  # MA below price: positive
-    assert got["dist_ema8_atr"] == -0.5  # MA above price: negative
-    assert got["dist_sma200_atr"] is None  # missing MA: blank, never 0
+    assert got["perm_dist_sma20_atr"] == 0.5  # MA below price: positive
+    assert got["perm_dist_ema8_atr"] == -0.5  # MA above price: negative
+    assert got["perm_dist_sma200_atr"] is None  # missing MA: blank, never 0
     assert list(got) == list(sp.MA_DISTANCE_COLUMNS)
 
 
@@ -68,14 +68,14 @@ def test_the_written_distances_feed_ma_support_and_ma_order():
 
 
 def test_scan_row_columns_are_the_appended_set_in_order():
-    assert sp.SCAN_ROW_COLUMNS == (*sp.MA_DISTANCE_COLUMNS, "weekly_ema8_hold_weeks", *sp.STAMP_COLUMNS)
+    assert sp.SCAN_ROW_COLUMNS == (*sp.MA_DISTANCE_COLUMNS, "perm_weekly_ema8_hold_weeks", *sp.STAMP_COLUMNS)
 
 
 # --- the honest input view
 
 
 def test_trend_alignment_false_is_unknown_when_its_mas_were_missing():
-    row = _row(dist_ema15_atr=None)
+    row = _row(perm_dist_ema15_atr=None)
     assert sp.facets_for_row(row).get("trend_ma_alignment") == "ema15_sma20_not_aligned"
     view = sp.scan_row_view(row, has_ma_columns=True)
     assert sp.facets_for_row(view).get("trend_ma_alignment") == sp.UNKNOWN
@@ -106,7 +106,7 @@ def test_previous_day_break_false_is_unknown_without_the_side_level():
 
 
 def test_the_view_never_mutates_the_row():
-    row = _row(dist_ema15_atr=None)
+    row = _row(perm_dist_ema15_atr=None)
     before = dict(row)
     sp.scan_row_view(row, has_ma_columns=True)
     assert row == before
@@ -312,3 +312,47 @@ def test_an_old_header_history_file_widens_and_old_readers_still_parse(tmp_path,
     old_key = sp.facets_for_row(sp.scan_row_view(frame.iloc[0].to_dict(), has_ma_columns=False))
     assert old_key.get("ma_support") == sp.UNKNOWN
     assert old_key.get("trend_ma_alignment") == "ema15_sma20_aligned"
+
+
+# --- review blocker 2: a source's silence before its first logged event is unknown
+
+
+def _write_jsonl(path, rows):
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    return path
+
+
+def test_live_ctx_is_unknown_before_each_source_s_first_logged_session(tmp_path):
+    events = _write_jsonl(tmp_path / "alert_review_events.jsonl", [
+        {"action": "watch_fired", "trade_date": "2026-07-31", "ts": "2026-07-31T10:00:00-04:00",
+         "symbol": "XYZ", "side": "LONG", "detail": {"kind": "band_bounce"}},
+    ])
+    m5 = tmp_path / "intraday_bounce_outcomes.csv"
+    with m5.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["event_id", "event_type", "trade_date", "symbol", "direction",
+                                                    "entry_time"])
+        writer.writeheader()
+        writer.writerow({"event_id": "XYZ_long_20260801_07_00_00_ema_8", "event_type": "registered",
+                         "trade_date": "2026-08-01", "symbol": "XYZ", "direction": "long",
+                         "entry_time": "2026-08-01T07:00:00"})
+    paths = {"review_events_path": events, "m5_outcomes_path": m5, "reports_dir": tmp_path / "none",
+             "environment_path": tmp_path / "none.jsonl"}
+    before = spc.SessionContext.load("2026-04-24", **paths).ctx_for("ABC", "LONG")
+    key = sp.facets_for_row(_row(), before).as_dict()
+    assert key["entry_trigger"] == sp.UNKNOWN  # the log did not exist yet: not "no_trigger"
+    assert key["m5_confirmation"] == sp.UNKNOWN
+    after = spc.SessionContext.load("2026-08-03", **paths).ctx_for("ABC", "LONG")
+    key = sp.facets_for_row(_row(), after).as_dict()
+    assert key["entry_trigger"] == "no_trigger"
+    assert key["m5_confirmation"] == "no_m5_confirmation"
+    assert spc.covered("2026-07-31", "2026-07-31") and not spc.covered("2026-07-30", "2026-07-31")
+    assert not spc.covered("2026-08-03", None)
+
+
+def test_the_shadow_columns_are_never_contrasted():
+    from ai_jobs import miss_contrast
+
+    row = {"symbol": "ABC", "run_id": "r", "relvol": 1.2, "perm_dist_sma50_atr": 0.4,
+           "perm_weekly_ema8_hold_weeks": 3, "permutation_key": "k", "permutation_label": "l",
+           "permutation_rule_version": "v"}
+    assert miss_contrast._feature_mapping(row) == {"relvol": 1.2}

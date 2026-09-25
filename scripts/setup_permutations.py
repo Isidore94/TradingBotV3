@@ -14,7 +14,8 @@ the live CSV header. Sign conventions on the row:
 - ``distance_from_current_<level>`` = close - level (positive: price above).
 - ``hv_level_nearest_distance_atr`` / ``cloud_level_nearest_distance_atr`` =
   (level - price) / ATR (positive: level above price), from ``levels.levels_near``.
-- ``dist_<ma>_atr`` (written by the enrichment step since 4a) follows the research warehouse:
+- ``perm_dist_<ma>_atr`` (written by the enrichment step since 4a; ``dist_<ma>_atr`` is read as a
+  fallback) follows the research warehouse:
   (close - ma) / ATR (positive: price above the MA).
 - ``current_band_zone`` is "A to B" with the order flipped for shorts, so the zone
   is normalised to low-to-high band order before it becomes a value.
@@ -278,13 +279,15 @@ def _lower1_distance(row, ctx, side):
 
 # --- D1 structure: moving averages
 
-#: The support-side MA set. Each needs ``dist_<ma>_atr`` on the row; ``ema21`` can
+#: The support-side MA set. Each needs ``perm_dist_<ma>_atr`` (or ``dist_<ma>_atr``) on the row; ``ema21`` can
 #: also be derived from the ``ema21`` / ``last_close`` / ``atr20`` columns.
 SUPPORT_MAS = ("sma20", "sma50", "sma100", "sma200", "ema8", "ema15", "ema21")
 
 
 def _ma_distance_atr(row: Mapping[str, Any], ma: str) -> float | None:
-    distance = _num(row.get(f"dist_{ma}_atr"))
+    distance = _num(row.get(f"perm_dist_{ma}_atr"))
+    if distance is None:
+        distance = _num(row.get(f"dist_{ma}_atr"))
     if distance is not None:
         return distance
     level = _num(row.get(ma))
@@ -330,7 +333,7 @@ def _price_vs_ema21(row, ctx, side):
 
 @facet("ma_order", "ma_stack", in_label=False)
 def _ma_order(row, ctx, side):
-    # Needs dist_sma50_atr and dist_sma200_atr (or sma50/sma200 values) on the row.
+    # Needs the SMA50 and SMA200 distances (or sma50/sma200 values) on the row.
     distances = {"ema21": _ma_distance_atr(row, "ema21"), "sma50": _ma_distance_atr(row, "sma50"),
                  "sma200": _ma_distance_atr(row, "sma200")}
     if any(value is None for value in distances.values()):
@@ -360,8 +363,10 @@ def _weekly_sma50_retest(row, ctx, side):
 
 @facet("weekly_ema8_streak", "weekly", quiet=("weekly_ema8_hold_0w",))
 def _weekly_ema8_streak(row, ctx, side):
-    # `weekly_ema8_hold_weeks` is computed by the scan but not written to d1_features_history yet.
-    weeks = _num(row.get("weekly_ema8_hold_weeks"))
+    # The scan's streak, written as `perm_weekly_ema8_hold_weeks` since 4a (LONG rows only).
+    weeks = _num(row.get("perm_weekly_ema8_hold_weeks"))
+    if weeks is None:
+        weeks = _num(row.get("weekly_ema8_hold_weeks"))
     if weeks is None or weeks < 0:
         return UNKNOWN
     return _band(weeks, (1.0, 3.0, 6.0), ("weekly_ema8_hold_0w", "weekly_ema8_hold_1_2w",
@@ -663,12 +668,15 @@ def _entry_trigger_time(row, ctx, side):
 
 # --- stamping (4a): the scan-row columns and the honest input view
 
-#: `dist_<ma>_atr` columns the enrichment step writes: (close - ma) / ATR20.
-MA_DISTANCE_COLUMNS = tuple(f"dist_{ma}_atr" for ma in SUPPORT_MAS)
+#: `perm_dist_<ma>_atr` columns the enrichment step writes: (close - ma) / ATR20. The `perm_`
+#: prefix keeps them out of every legacy reader (`dist_sma50/200_atr` are scan-factor fields).
+MA_DISTANCE_COLUMNS = tuple(f"perm_dist_{ma}_atr" for ma in SUPPORT_MAS)
+#: The weekly EMA8 hold streak, copied from the scan's own feature-row value under a new name.
+WEEKLY_STREAK_COLUMN = "perm_weekly_ema8_hold_weeks"
 #: The compact key (unknown facets omitted), its short label and its rule version, as written on a row.
 STAMP_COLUMNS = ("permutation_key", "permutation_label", "permutation_rule_version")
 #: Every column 4a appends to `d1_features_history.csv`, in order.
-SCAN_ROW_COLUMNS = (*MA_DISTANCE_COLUMNS, "weekly_ema8_hold_weeks", *STAMP_COLUMNS)
+SCAN_ROW_COLUMNS = (*MA_DISTANCE_COLUMNS, WEEKLY_STREAK_COLUMN, *STAMP_COLUMNS)
 
 _WEEKLY_TOP_PATTERN_FLAGS = (
     "top_pattern_weekly_ema15_hold",
@@ -678,7 +686,7 @@ _WEEKLY_TOP_PATTERN_FLAGS = (
 
 
 def ma_distance_columns(close: Any, atr: Any, levels: Mapping[str, Any] | None) -> dict[str, float | None]:
-    """``dist_<ma>_atr`` for every support MA; None when close, ATR or the MA is missing."""
+    """``perm_dist_<ma>_atr`` for every support MA; None when close, ATR or the MA is missing."""
     close_value = _num(close)
     atr_value = _num(atr)
     source = levels if isinstance(levels, Mapping) else {}
@@ -686,9 +694,9 @@ def ma_distance_columns(close: Any, atr: Any, levels: Mapping[str, Any] | None) 
     for ma in SUPPORT_MAS:
         level = _num(source.get(ma))
         if close_value is None or level is None or not atr_value or atr_value <= 0:
-            out[f"dist_{ma}_atr"] = None
+            out[f"perm_dist_{ma}_atr"] = None
         else:
-            out[f"dist_{ma}_atr"] = round((close_value - level) / atr_value, 6)
+            out[f"perm_dist_{ma}_atr"] = round((close_value - level) / atr_value, 6)
     return out
 
 
@@ -697,14 +705,14 @@ def scan_row_view(row: Mapping[str, Any], *, has_ma_columns: bool) -> dict[str, 
 
     The CSV keeps those False values (legacy readers take ``bool(value)`` and NaN
     is truthy); only the key's input is made honest. ``has_ma_columns`` says the
-    row was written with the ``dist_<ma>_atr`` columns, so a blank one means the
+    row was written with the ``perm_dist_<ma>_atr`` columns, so a blank one means the
     MA was really missing rather than "row older than the column".
     """
     view = dict(row)
     if has_ma_columns and (
         _num(row.get("last_close")) is None
-        or _num(row.get("dist_ema15_atr")) is None
-        or _num(row.get("dist_sma20_atr")) is None
+        or _num(row.get("perm_dist_ema15_atr")) is None
+        or _num(row.get("perm_dist_sma20_atr")) is None
     ):
         view["trend_ma_alignment"] = None
     # The weekly flags are only computed when the TOP weekly structure holds; the ratio says so.

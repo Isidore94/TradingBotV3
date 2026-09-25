@@ -239,3 +239,22 @@ def test_ctx_facets_come_from_the_copied_stores_for_the_row_s_own_session(fixtur
     assert other_day["f_entry_trigger"] == "no_trigger"
     assert other_day["f_m5_confirmation"] == "no_m5_confirmation"
     assert other_day["f_discovery_slot"] == sp.UNKNOWN  # no scan reports copied: unknown
+
+
+def test_backfill_ctx_before_a_source_s_first_event_is_unknown_not_none(fixture_files, tmp_path):
+    """The reviewer's repro: watch_fired starts 2026-07-31 while the history starts earlier."""
+    first = SESSIONS[6].isoformat()
+    events = tmp_path / "review_events.jsonl"
+    events.write_text(json.dumps({"action": "watch_fired", "trade_date": first, "ts": f"{first}T08:00:00",
+                                  "symbol": "S02", "side": "LONG", "detail": {"kind": "band_bounce"}}) + "\n",
+                      encoding="utf-8")
+    stores = bf.ContextStores(review_events=events, m5_outcomes=fixture_files["m5"])
+    result = bf.build_permutation_outcomes(fixture_files["features"], horizons=fixture_files["horizons"],
+                                           stores=stores, last_completed=SESSIONS[-1])
+    rows = {(row["symbol"], row["session"]): row for row in result.rows if row["horizon"] == 1}
+    early = rows[("S01", SESSIONS[2].isoformat())]
+    assert early["f_entry_trigger"] == sp.UNKNOWN  # before the review log's first watch_fired
+    assert early["f_m5_confirmation"] == sp.UNKNOWN  # before the M5 log's first session (SESSIONS[5])
+    late = rows[("S01", SESSIONS[7].isoformat())]
+    assert late["f_entry_trigger"] == "no_trigger"
+    assert late["f_m5_confirmation"] == "no_m5_confirmation"

@@ -116,8 +116,10 @@ def test_populations_horizons_and_sides_are_never_pooled(tmp_path):
     m5 = _families(report, "m5", "0")["ema_15 LONG"]
     swing_long = _families(report)["avwap_band_bounce LONG"]
     selection_n = sum(1 for row in _population() if row["session"] not in HOLDOUT)
-    assert m5["baseline"]["n"] == selection_n
-    assert swing_long["baseline"]["n"] == selection_n
+    assert m5["baseline"]["n"] == selection_n  # horizon 0: nothing embargoed
+    # Horizon 1: the last selection session's outcome lands in the hold-out, so it is embargoed.
+    embargoed = sum(1 for row in _population() if row["session"] == SESSIONS[39])
+    assert swing_long["baseline"]["n"] == selection_n - embargoed
     assert report["populations"]["swing"]["horizons"]["1"]["holdout_window"] == [SESSIONS[40], SESSIONS[-1]]
 
 
@@ -173,3 +175,25 @@ def test_wilson_matches_the_desk_one(wins, n):
     from swing_headline import wilson_lower_bound
 
     assert search.wilson_lower_bound(wins, n) == pytest.approx(wilson_lower_bound(wins, n))
+
+
+def test_selection_rows_whose_outcome_reaches_the_holdout_are_embargoed(tmp_path):
+    """A 5-session outcome scanned 3 sessions before the hold-out is measured inside it."""
+    assert search.embargoed_sessions(_population(horizon=5), HOLDOUT, 5) == set(SESSIONS[35:40])
+    assert search.embargoed_sessions(_population(horizon=0), HOLDOUT, 0) == set()
+    # Plant a leak: the embargoed sessions win every time, but only the hold-out can see why.
+    rows = _population(planted=False, horizon=5, seed=5)
+    for row in rows:
+        if row["session"] in SESSIONS[35:40]:
+            row["win"] = True
+            row["f_leak"] = "leaky"
+        else:
+            row["f_leak"] = "clean"
+    report = search.build_report(rows, ledger_root=tmp_path)
+    block = report["populations"]["swing"]["horizons"]["5"]
+    assert block["embargoed_sessions"] == SESSIONS[35:40]
+    family = block["families"]["avwap_band_bounce LONG"]
+    selection_n = sum(1 for row in rows if row["session"] not in HOLDOUT and row["session"] not in SESSIONS[35:40])
+    assert family["baseline"]["n"] == selection_n
+    assert all(key["facets"].get("leak") != "leaky" for key in family["keys"])
+    assert all(cell["facets"].get("leak") != "leaky" for cell in family["top_rejected"])

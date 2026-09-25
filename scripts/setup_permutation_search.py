@@ -11,7 +11,8 @@ side: a baseline, then single facets, pairs and triples, never deeper.
 - Floors as in `setup_grades`: n >= 30 and sessions >= 10 in the selection
   window. Floors are counts, not outcomes, so each depth's grid is fixed
   before any outcome is read.
-- Hold-out: the population's last 20 sessions, never used for selection.
+- Hold-out: the population's last 20 sessions, never used for selection; the
+  selection sessions whose outcome window reaches into it are embargoed too.
 - Every grid (one per population x horizon x family x side x depth) is
   registered in `research_warehouse.trial_ledger` BEFORE its outcomes are read.
   A grid of more than 10 cells (the k > 10 rule) must pass hold-out on the 99%
@@ -366,6 +367,20 @@ def split_sessions(rows: Sequence[Mapping[str, Any]]) -> tuple[set[str], tuple[s
     return holdout, sel_window, hold_window
 
 
+def embargoed_sessions(rows: Sequence[Mapping[str, Any]], holdout: set[str], horizon: int) -> set[str]:
+    """Selection sessions whose outcome window (session + horizon) reaches into the hold-out.
+
+    Counted in the population's own scan sessions, so a missing day only makes
+    the embargo longer, never shorter. Horizon 0 (M5, same session) embargoes nothing.
+    """
+    sessions = sorted({str(row.get("session") or "") for row in rows if row.get("session")})
+    if not holdout or horizon <= 0:
+        return set()
+    first_holdout = min(sessions.index(day) for day in holdout if day in sessions)
+    return {day for index, day in enumerate(sessions)
+            if day not in holdout and index + int(horizon) >= first_holdout}
+
+
 def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source: str = "") -> dict[str, Any]:
     by_population: dict[str, dict[int, list]] = defaultdict(lambda: defaultdict(list))
     for row in rows:
@@ -388,12 +403,15 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source
         for horizon in sorted(by_population[population]):
             population_rows = by_population[population][horizon]
             holdout_days, sel_window, hold_window = split_sessions(population_rows)
+            # Embargo: a selection row whose outcome is measured inside the hold-out leaks it.
+            embargo = embargoed_sessions(population_rows, holdout_days, horizon)
             groups: dict[tuple[str, str], list] = defaultdict(list)
             for row in population_rows:
                 groups[(str(row.get("family") or sp.UNKNOWN), str(row.get("side") or sp.UNKNOWN))].append(row)
             families: dict[str, Any] = {}
             for (family, side), members in sorted(groups.items()):
-                selection = [row for row in members if row.get("session") not in holdout_days]
+                selection = [row for row in members
+                             if row.get("session") not in holdout_days and row.get("session") not in embargo]
                 holdout = [row for row in members if row.get("session") in holdout_days]
 
                 def register(depth, cells, *, _family=family, _side=side):
@@ -405,6 +423,7 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source
                 result = search_group(selection, holdout, names=names, register=register)
                 families[f"{family} {side}"] = {"family": family, "side": side, **result}
             horizons_out[str(horizon)] = {
+                "embargoed_sessions": sorted(embargo),
                 "selection_window": list(sel_window),
                 "holdout_window": list(hold_window),
                 "families": families,

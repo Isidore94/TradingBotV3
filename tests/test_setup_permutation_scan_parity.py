@@ -157,8 +157,8 @@ def test_the_scan_writes_the_permutation_columns_and_a_key(runs):
     assert header[-len(sp.SCAN_ROW_COLUMNS):] == list(sp.SCAN_ROW_COLUMNS), "4a columns append last"
     assert row["permutation_rule_version"] == sp.PERMUTATION_RULE_VERSION
     assert row["permutation_key"].startswith(f"{sp.PERMUTATION_RULE_VERSION}|")
-    assert row["dist_ema21_atr"] not in ("", None)
-    assert row["dist_sma200_atr"] not in ("", None)
+    assert row["perm_dist_ema21_atr"] not in ("", None)
+    assert row["perm_dist_sma200_atr"] not in ("", None)
     # 260 sessions of bars is enough for every support MA, so ma_support is known.
     key = dict(part.split("=", 1) for part in row["permutation_key"].split("|")[3].split(";"))
     assert key["ma_support"] != sp.UNKNOWN
@@ -174,5 +174,4 @@ def test_detector_and_scoring_output_are_identical_with_and_without_the_stamp(ru
     for on_row, off_row in zip(stamped["history"], plain["history"]):
         assert _strip(on_row) == _strip(off_row)
     # With the hooks off the appended columns are present and blank: nothing else moved.
-    assert all(plain["history"][-1][column] == "" for column in sp.SCAN_ROW_COLUMNS
-               if column != "weekly_ema8_hold_weeks")
+    assert all(plain["history"][-1][column] == "" for column in sp.SCAN_ROW_COLUMNS)
