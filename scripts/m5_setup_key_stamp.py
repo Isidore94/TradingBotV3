@@ -170,7 +170,7 @@ class ScanKeyLookup:
         for index, (symbol, side, rep_session) in representatives.items():
             if rep_session != session:
                 continue
-            row = dict(zip(fieldnames, parse(lines[index])))
+            row = dict(zip(fieldnames, parse(lines[index]), strict=False))
             key = bf.key_scan_row(row, symbol, side, session, context)
             keys[(symbol, side)] = {
                 "permutation_key": key.compact_key,

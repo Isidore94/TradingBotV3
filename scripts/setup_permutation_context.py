@@ -326,7 +326,7 @@ def _tail_rows_for_session(
         path, session, date_columns=date_columns, stamp_columns=stamp_columns, max_bytes=max_bytes
     )
     body = b"\n".join(lines).decode("utf-8", errors="replace")
-    return [dict(zip(fieldnames, values)) for values in csv.reader(io.StringIO(body))]
+    return [dict(zip(fieldnames, values, strict=False)) for values in csv.reader(io.StringIO(body))]
 
 
 _M5_COLUMNS = ("trade_date", "event_id", "direction", "symbol", "entry_time")
