@@ -76,16 +76,25 @@ def _key(label, rate, n=40, passed=False):
     return entry
 
 
-def _saturday(passes=(), fails=(), baseline=0.5):
-    """One report: swing, horizon 5, one family; `passes` are keys, `fails` are top_rejected."""
+def _saturday(passes=(), fails=(), baseline=0.5, data_date=None, horizon="5"):
+    """One report: swing, one horizon, one family; `passes` are keys, `fails` are top_rejected."""
     family = {
         "family": "avwap_band_bounce", "side": "LONG", "verdict": "key_found" if passes else "no_key_found",
         "holdout_baseline": {"win_rate": baseline},
         "keys": [_key(label, rate, passed=True) for label, rate in passes],
         "top_rejected": [_key(label, rate) for label, rate in fails],
     }
-    return {"schema": search.REPORT_SCHEMA, "populations": {
-        "swing": {"horizons": {"5": {"families": {FAMILY: family}}}}}}
+    block = {"families": {FAMILY: family}}
+    if data_date:
+        block["holdout_window"] = ["2026-08-01", data_date]
+    return {"schema": search.REPORT_SCHEMA, "populations": {"swing": {"horizons": {horizon: block}}}}
+
+
+def _two_horizons(first, second):
+    """One report holding both reports' swing horizons."""
+    merged = json.loads(json.dumps(first))
+    merged["populations"]["swing"]["horizons"].update(second["populations"]["swing"]["horizons"])
+    return merged
 
 
 def _by_label(payload):
@@ -146,14 +155,40 @@ def test_the_search_writes_history_then_verdicts_beside_its_out(tmp_path, monkey
     out = tmp_path / "permutation_report.json"
     history = tmp_path / search.HISTORY_DIR_NAME
     history.mkdir()
-    (history / "2026-09-19.json").write_text(json.dumps(_saturday(fails=[("band_zone=vwap", 0.4)])),
-                                             encoding="utf-8")
+    (history / "2026-09-18.json").write_text(
+        json.dumps(_saturday(fails=[("band_zone=vwap", 0.4)], data_date="2026-09-18")), encoding="utf-8")
     monkeypatch.setattr(search, "read_outcomes", lambda _path: [])
-    monkeypatch.setattr(search, "build_report", lambda *_a, **_k: _saturday(fails=[("band_zone=vwap", 0.3)]))
+    monkeypatch.setattr(search, "build_report",
+                        lambda *_a, **_k: _saturday(fails=[("band_zone=vwap", 0.3)], data_date="2026-09-25"))
     assert search.main(["--outcomes", "x", "--ledger-root", str(tmp_path / "lake"), "--out", str(out)]) == 0
+    assert (history / "2026-09-25.json").is_file()  # named by the data date, not the run date
     payload = json.loads((tmp_path / search.VERDICTS_FILE_NAME).read_text(encoding="utf-8"))
     assert [v["verdict"] for v in payload["verdicts"]] == [verdicts.WEAK]
-    assert len(payload["reports_read"]) == 2
+    assert payload["reports_compared"] == ["2026-09-25", "2026-09-18"]
+
+
+def test_a_rerun_on_the_same_data_date_replaces_the_report_and_gives_no_verdict(tmp_path):
+    folder = tmp_path / search.HISTORY_DIR_NAME
+    first = _saturday(fails=[("band_zone=vwap", 0.3)], data_date="2026-09-25")
+    rerun = _saturday(fails=[("band_zone=vwap", 0.31)], data_date="2026-09-25")
+    assert search.append_history(first, folder, today=date(2026, 9, 26)) == folder / "2026-09-25.json"
+    assert search.append_history(rerun, folder, today=date(2026, 9, 30)) == folder / "2026-09-25.json"
+    assert [path.name for _day, path in search.history_files(folder)] == ["2026-09-25.json"]
+    assert search.report_data_date(json.loads((folder / "2026-09-25.json").read_text("utf-8"))) == date(2026, 9, 25)
+    assert verdicts.build_verdicts(verdicts.read_history(folder))["verdicts"] == []
+
+
+def test_two_reports_count_only_when_their_data_dates_are_five_sessions_apart():
+    def run(day, rate):
+        return (day, _saturday(fails=[("band_zone=vwap", rate)], data_date=day))
+
+    # Thursday then Friday: two data dates, one session apart - not two reports.
+    assert verdicts.build_verdicts([run("2026-09-24", 0.3), run("2026-09-25", 0.3)])["verdicts"] == []
+    # A report five sessions before the newest is the pair; the one in between is skipped.
+    payload = verdicts.build_verdicts([run("2026-09-18", 0.35), run("2026-09-24", 0.3), run("2026-09-25", 0.32)])
+    assert payload["reports_compared"] == ["2026-09-25", "2026-09-18"]
+    cited = [c["report_date"] for c in payload["verdicts"][0]["citations"]]
+    assert cited == ["2026-09-18", "2026-09-25"]
 
 
 # --- 3. show it -------------------------------------------------------------
@@ -206,11 +241,11 @@ def test_rows_carry_the_verdict_of_a_key_their_facets_contain(tmp_path):
             _row("OWN", raw={"permutation_key": WEAK_KEY, "permutation_label": "vwap"})]
     setup_key_labels.attach_labels(rows, allow_read=True, path=features)
     assert [setup_key_labels.display_label(row) for row in rows] == [
-        "vwap|sma20_support (weak variant)",
-        "lower_1|sma50_support (candidate)",
+        "vwap|sma20_support (weak variant h5)",
+        "lower_1|sma50_support (candidate h5)",
         "lower_1|sma20_support",
         "vwap",  # a SHORT row never takes a LONG family's verdict
-        "vwap (weak variant)",  # the row's own stamped key is enough
+        "vwap (weak variant h5)",  # the row's own stamped key is enough
     ]
     tip = setup_key_labels.verdict_tooltip(rows[0])
     assert "2026-09-19 41%" in tip and "2026-09-26 39%" in tip
@@ -224,18 +259,48 @@ def test_the_setups_table_shows_the_chip_and_the_citation():
     from ui.models.setup import SetupRow
     from ui.models.setup_table_model import SetupTableModel
 
-    weak = {"verdict": verdicts.WEAK, "citation": "failed hold-out 2026-09-19 41% and 2026-09-26 39%"}
+    weak = {"verdict": verdicts.WEAK, "horizon": "5", "primary": True,
+            "citation": "failed hold-out 2026-09-19 41% and 2026-09-26 39%"}
     row = SetupRow(symbol="WEAK", side="LONG", raw={"permutation_label": "vwap", "permutation_verdicts": [weak]})
     model = SetupTableModel([row])
     key_col = [key for key, _label in SetupTableModel.COLUMNS].index("setup_key")
     tags_col = [key for key, _label in SetupTableModel.COLUMNS].index("setup_tags")
-    assert model.data(model.index(0, key_col)) == "vwap (weak variant)"
+    assert model.data(model.index(0, key_col)) == "vwap (weak variant h5)"
     tip = model.data(model.index(0, tags_col), Qt.ItemDataRole.ToolTipRole)
-    assert "Setup key: vwap (weak variant)" in tip and "2026-09-26 39%" in tip
+    assert "Setup key: vwap (weak variant h5)" in tip and "2026-09-26 39%" in tip
 
 
 def _weak(raw):
-    return {**raw, "permutation_verdicts": [{"verdict": verdicts.WEAK, "citation": "x"}]}
+    return {**raw, "permutation_verdicts": [{"verdict": verdicts.WEAK, "horizon": "5", "primary": True,
+                                             "citation": "x"}]}
+
+
+def test_one_horizon_drives_the_chip_and_the_sort_and_the_others_stay_in_the_tooltip(tmp_path):
+    weak_h5 = _saturday(fails=[("band_zone=vwap", 0.3)])
+    cand_h20 = _saturday(passes=[("band_zone=vwap", 0.7)], horizon="20")
+    reports = [("2026-09-18", _two_horizons(weak_h5, cand_h20)), ("2026-09-25", _two_horizons(weak_h5, cand_h20))]
+    payload = verdicts.build_verdicts(reports)
+    assert {(v["horizon"], v["verdict"], v["primary"]) for v in payload["verdicts"]} == {
+        ("5", verdicts.WEAK, True), ("20", verdicts.CANDIDATE, False)}
+    features = _write_features_and_verdicts(tmp_path)
+    (tmp_path / setup_key_labels.VERDICTS_FILE_NAME).write_text(json.dumps(payload), encoding="utf-8")
+    rows = [_row("WEAK"), _row("A1")]
+    setup_key_labels.attach_labels(rows, allow_read=True, path=features)
+    assert setup_key_labels.row_chips(rows[0]) == ["weak variant h5"]
+    tip = setup_key_labels.verdict_tooltip(rows[0])
+    assert "weak variant h5" in tip and "candidate h20" in tip
+    assert [r.symbol for r in setup_key_labels.weak_variants_last(rows, lambda r: 0)] == ["A1", "WEAK"]
+    # The mirror case: candidate at h5, weak at h20 -> the candidate chip, and no demotion.
+    flipped = [(day, _two_horizons(_saturday(passes=[("band_zone=vwap", 0.7)]),
+                                   _saturday(fails=[("band_zone=vwap", 0.3)], horizon="20")))
+               for day in ("2026-09-18", "2026-09-25")]
+    (tmp_path / setup_key_labels.VERDICTS_FILE_NAME).write_text(
+        json.dumps(verdicts.build_verdicts(flipped)), encoding="utf-8")
+    setup_key_labels.reset_cache_for_tests()
+    rows = [_row("WEAK"), _row("A1")]
+    setup_key_labels.attach_labels(rows, allow_read=True, path=features)
+    assert setup_key_labels.row_chips(rows[0]) == ["candidate h5"]
+    assert [r.symbol for r in setup_key_labels.weak_variants_last(rows, lambda r: 0)] == ["WEAK", "A1"]
 
 
 def test_a_weak_variant_sorts_after_its_family_peers_with_the_same_grade_and_is_never_hidden():
@@ -286,17 +351,21 @@ def test_the_away_digest_says_weak_variant_in_the_text():
         {"symbol": "WEAK", "side": "LONG", "bucket": "Favorite", "family": "avwap_band_bounce",
          "expected_r": 1.0, "raw": _weak({"permutation_label": "vwap"})},
         {"symbol": "CAND", "side": "LONG", "bucket": "Favorite", "family": "avwap_band_bounce",
-         "expected_r": 1.0, "raw": {"permutation_label": "lower_1",
-                                    "permutation_verdicts": [{"verdict": verdicts.CANDIDATE}]}},
+         "expected_r": 1.0, "raw": {"permutation_label": "lower_1", "permutation_verdicts": [
+             {"verdict": verdicts.CANDIDATE, "horizon": "5", "primary": True}]}},
+        {"symbol": "NOKEY", "side": "LONG", "bucket": "Favorite", "family": "avwap_band_bounce",
+         "expected_r": 1.0, "raw": _weak({})},
         {"symbol": "BARE", "side": "LONG", "bucket": "Favorite", "family": "avwap_band_bounce",
          "expected_r": 1.0, "raw": {}},
     ]
     text = core.render_away_report({"auto_mode": "AWAY", "swing_picks": picks})
     line = {sym: next(ln for ln in text.splitlines() if f" {sym} " in ln and "(LONG)" in ln)
-            for sym in ("WEAK", "CAND", "BARE")}
-    assert line["WEAK"].endswith("| key vwap (weak variant)")
-    assert line["CAND"].endswith("| key lower_1 (candidate)")
-    assert "(weak variant)" not in line["BARE"] and "(candidate)" not in line["BARE"]
+            for sym in ("WEAK", "CAND", "NOKEY", "BARE")}
+    assert line["WEAK"].endswith("| key vwap (weak variant h5)")
+    assert line["CAND"].endswith("| key lower_1 (candidate h5)")
+    # No key: the chip is its own "|" field, so the line stays parseable.
+    assert line["NOKEY"].endswith("| weak variant h5") and "| key" not in line["NOKEY"]
+    assert "weak variant" not in line["BARE"] and "candidate" not in line["BARE"]
 
 
 def test_the_setup_keys_panel_has_a_verdict_column_and_shows_weak_variants():

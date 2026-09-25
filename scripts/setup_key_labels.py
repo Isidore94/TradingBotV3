@@ -32,6 +32,8 @@ VERDICTS_FILE_NAME = "permutation_verdicts.json"
 WEAK = "weak_variant"
 CANDIDATE = "promotion_candidate"
 CHIPS = {WEAK: "weak variant", CANDIDATE: "candidate"}
+#: Swing primary horizon when a verdict does not say (`setup_permutation_verdicts.PRIMARY_HORIZONS`).
+PRIMARY_HORIZON = "5"
 #: Longest label shown in a cell or a digest line; longer ones end in "..".
 SHORT_LABEL_MAX = 40
 
@@ -108,6 +110,7 @@ def read_verdicts(path: Path) -> list[dict[str, Any]]:
             "facets": {str(k): str(v) for k, v in dict(verdict["facets"]).items()},
             "label": str(verdict.get("label") or ""),
             "horizon": str(verdict.get("horizon") or ""),
+            "primary": bool(verdict.get("primary", str(verdict.get("horizon")) == PRIMARY_HORIZON)),
             "citation": str(verdict.get("citation") or ""),
         })
     return out
@@ -120,7 +123,8 @@ def matching_verdicts(compact_key: Any, verdicts: Sequence[Mapping[str, Any]]) -
         return []
     family, side, facets = parsed
     return [
-        {"verdict": v["verdict"], "label": v["label"], "horizon": v["horizon"], "citation": v["citation"]}
+        {"verdict": v["verdict"], "label": v["label"], "horizon": v["horizon"],
+         "primary": v.get("primary", False), "citation": v["citation"]}
         for v in verdicts
         if v["family"] == family and v["side"] == side
         and all(facets.get(name) == value for name, value in v["facets"].items())
@@ -256,14 +260,22 @@ def row_verdicts(row: Any) -> list[dict[str, Any]]:
     return [v for v in value if isinstance(v, Mapping)] if isinstance(value, list) else []
 
 
+def _primary(row: Any) -> list[dict[str, Any]]:
+    """The row's verdicts at the primary horizon: the only ones a chip or the sort uses."""
+    return [v for v in row_verdicts(row) if v.get("primary")]
+
+
 def row_chips(row: Any) -> list[str]:
-    """Chip texts for this row, weak first: "weak variant", "candidate"."""
-    kinds = {str(v.get("verdict") or "") for v in row_verdicts(row)}
-    return [CHIPS[kind] for kind in (WEAK, CANDIDATE) if kind in kinds]
+    """Chip texts at the primary horizon, weak first, e.g. "weak variant h5"."""
+    out = []
+    for kind in (WEAK, CANDIDATE):
+        horizons = sorted({str(v.get("horizon") or "") for v in _primary(row) if v.get("verdict") == kind})
+        out.extend(f"{CHIPS[kind]} h{horizon}" for horizon in horizons)
+    return out
 
 
 def is_weak_variant(row: Any) -> bool:
-    return any(v.get("verdict") == WEAK for v in row_verdicts(row))
+    return any(v.get("verdict") == WEAK for v in _primary(row))
 
 
 def display_label(row: Any) -> str:
@@ -272,9 +284,10 @@ def display_label(row: Any) -> str:
 
 
 def verdict_tooltip(row: Any) -> str:
-    """One citation line per verdict the row carries."""
+    """One citation line per verdict the row carries, every horizon."""
     return "\n".join(
-        f"{CHIPS.get(str(v.get('verdict')), '')}: {v.get('citation', '')}" for v in row_verdicts(row)
+        f"{CHIPS.get(str(v.get('verdict')), '')} h{v.get('horizon', '')}: {v.get('citation', '')}"
+        for v in row_verdicts(row)
     )
 
 

@@ -4333,9 +4333,13 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         level_text = f" @ {key_level}" if key_level else ""
         # P1-5 5a: the setup key's short label, only when the scan stamped one.
         setup_key = setup_key_labels.row_label(pick)
-        key_text = f" | key {setup_key}" if setup_key else ""
-        # P12: "(weak variant)" / "(candidate)" beside the key; annotation only.
-        key_text += "".join(f" ({chip})" for chip in setup_key_labels.row_chips(pick))
+        # P12: "(weak variant h5)" / "(candidate h5)" beside the key, or its own
+        # "| weak variant h5" field when there is no key; annotation only.
+        chips = setup_key_labels.row_chips(pick)
+        if setup_key:
+            key_text = f" | key {setup_key}" + "".join(f" ({chip})" for chip in chips)
+        else:
+            key_text = "".join(f" | {chip}" for chip in chips)
         # WS-WS (WISHLIST 9): a LONG under its current AVWAPE, or a SHORT over
         # it, says so right after its name. The tag is the ONLY thing it
         # changes - the pick is in the same place in the same list with the same

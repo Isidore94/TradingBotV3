@@ -2,8 +2,11 @@
 
     python scripts/setup_permutation_verdicts.py --history-dir <dir> --out <path>/permutation_verdicts.json
 
-Reads the newest reports in `permutation_report_history/` (one per Saturday)
-and, per population x horizon x family x side x facet key:
+Reads the newest reports in `permutation_report_history/` (one per data date;
+a rerun on the same data replaces that date's file). "The newest two reports"
+are the newest and the newest one whose data date is at least
+MIN_SESSIONS_APART exchange sessions earlier. Per population x horizon x
+family x side x facet key:
 
 - `weak_variant`: the key FAILED hold-out in each of the newest two reports -
   it was shown both times (a rejected key in `top_rejected`), measured on at
@@ -14,7 +17,9 @@ and, per population x horizon x family x side x facet key:
   anything beyond the chip is ask-first.
 - otherwise no verdict (absent from one report, mixed, or too few episodes).
 
-Each verdict cites the two report dates and the two hold-out numbers.
+Each verdict cites the two report dates and the two hold-out numbers. A
+verdict at the population's primary horizon (`primary: true`) drives the row
+chip and the setups sort; the others are shown in tooltips and the panel only.
 
 Rank and annotate only: nothing reads a verdict for a detector, a score, an
 alert, Focus, the queue or `review_policy.json`, and no row is ever hidden.
@@ -25,7 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -40,8 +45,12 @@ CANDIDATE = "promotion_candidate"
 CHIPS = {WEAK: "weak variant", CANDIDATE: "candidate"}
 #: Fewer hold-out episodes than this is not a result (same floor as the search).
 HOLDOUT_MIN_N = 10
-#: Reports read: the newest pair decides; older ones only lengthen the streak.
+#: Reports read: the newest spaced pair decides; older ones only lengthen the streak.
 LOOKBACK = 8
+#: Two reports count as consecutive only when their data dates are this many sessions apart.
+MIN_SESSIONS_APART = 5
+#: The horizon a row's chip and the setups sort use when the report names none.
+PRIMARY_HORIZONS = {"swing": "5", "m5": "0"}
 NOTE = (
     "Rank and annotate only. A verdict never hides a row and never feeds a detector, "
     "a score, an alert, Focus, the queue or review_policy.json."
@@ -107,19 +116,56 @@ def citation_text(verdict: Mapping[str, Any]) -> str:
     )
 
 
+def sessions_apart(older: str, newer: str) -> int | None:
+    """Exchange sessions after `older` up to `newer`; None when the calendar cannot say."""
+    try:
+        import market_calendar
+
+        return market_calendar.trading_days_between(date.fromisoformat(older), date.fromisoformat(newer))
+    except Exception:  # noqa: BLE001 - an unknown gap is never a verdict
+        return None
+
+
+def spaced_chain(days: Sequence[str]) -> list[int]:
+    """Indexes into sorted `days`, newest first, each MIN_SESSIONS_APART before the last taken."""
+    if not days:
+        return []
+    chain = [len(days) - 1]
+    for index in range(len(days) - 2, -1, -1):
+        gap = sessions_apart(days[index], days[chain[-1]])
+        if gap is not None and gap >= MIN_SESSIONS_APART:
+            chain.append(index)
+    return chain
+
+
+def primary_horizon(report: Mapping[str, Any], population: str) -> str:
+    """The horizon chips and the sort use: the report's own, else PRIMARY_HORIZONS."""
+    block = ((report or {}).get("populations") or {}).get(population) or {}
+    return str(block.get("primary_horizon") or PRIMARY_HORIZONS.get(population, "5"))
+
+
 def build_verdicts(dated_reports: Sequence[tuple[str, Mapping[str, Any]]]) -> dict[str, Any]:
-    """Pure: `[(report_date, report), ...]` in any order -> the verdicts payload."""
-    ordered = sorted(dated_reports, key=lambda item: item[0])[-LOOKBACK:]
-    read = [(day, outcomes(report)) for day, report in ordered]
+    """Pure: `[(data_date, report), ...]` in any order -> the verdicts payload.
+
+    One report per data date (a later entry for a date replaces an earlier one).
+    The two reports compared are the newest and the newest one at least
+    MIN_SESSIONS_APART sessions before it.
+    """
+    by_day = {day: report for day, report in sorted(dated_reports, key=lambda item: item[0])}
+    ordered = sorted(by_day.items())[-LOOKBACK:]
+    days = [day for day, _report in ordered]
+    chain = spaced_chain(days)
+    read = [(days[index], outcomes(ordered[index][1])) for index in chain]  # newest first
+    newest_report = ordered[-1][1] if ordered else {}
     verdicts: list[dict[str, Any]] = []
     if len(read) >= 2:
-        (old_day, older), (new_day, newest) = read[-2], read[-1]
+        (new_day, newest), (old_day, older) = read[0], read[1]
         for ident in sorted(newest):
             now, before = newest[ident], older.get(ident)
             if before is None or now["passed"] is None or before["passed"] is not now["passed"]:
                 continue
             streak = 0
-            for _day, table in reversed(read):
+            for _day, table in read:
                 entry = table.get(ident)
                 if entry is None or entry["passed"] is not now["passed"]:
                     break
@@ -127,6 +173,7 @@ def build_verdicts(dated_reports: Sequence[tuple[str, Mapping[str, Any]]]) -> di
             population, horizon, name, label = ident
             verdict = {
                 "population": population, "horizon": horizon, "family_key": name,
+                "primary": horizon == primary_horizon(newest_report, population),
                 "family": now["family"], "side": now["side"], "label": label, "facets": now["facets"],
                 "verdict": CANDIDATE if now["passed"] else WEAK, "streak": streak,
                 "citations": [
@@ -140,7 +187,8 @@ def build_verdicts(dated_reports: Sequence[tuple[str, Mapping[str, Any]]]) -> di
     return {
         "schema": SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "reports_read": [day for day, _report in ordered],
+        "reports_read": days,
+        "reports_compared": [day for day, _table in read[:2]],
         "note": NOTE,
         "verdicts": verdicts,
     }

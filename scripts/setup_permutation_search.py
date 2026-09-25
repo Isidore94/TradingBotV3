@@ -436,6 +436,8 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source
                 "families": families,
             }
         report["populations"][population] = {"horizons": horizons_out}
+    data_day = report_data_date(report)
+    report["data_date"] = data_day.isoformat() if data_day else ""
     return report
 
 
@@ -454,7 +456,7 @@ def write_report(report: Mapping[str, Any], out: Path) -> Path:
     return target
 
 
-# --- report history (P12): one file per run date, read by setup_permutation_verdicts
+# --- report history (P12): one file per data date, read by setup_permutation_verdicts
 
 HISTORY_KEEP_DAYS = 600
 _HISTORY_FILE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.json$")
@@ -468,7 +470,7 @@ def _content_hash(report: Mapping[str, Any]) -> str:
 
 
 def history_files(history_dir: Path) -> list[tuple[date, Path]]:
-    """`(run date, path)` for every history file, oldest first."""
+    """`(data date, path)` for every history file, oldest first."""
     out: list[tuple[date, Path]] = []
     try:
         entries = list(Path(history_dir).iterdir())
@@ -486,15 +488,34 @@ def history_files(history_dir: Path) -> list[tuple[date, Path]]:
     return out
 
 
-def append_history(report: Mapping[str, Any], history_dir: Path, *, today: date | None = None) -> Path | None:
-    """Copy the report to `<history_dir>/<today>.json` unless it matches the newest copy.
+def report_data_date(report: Mapping[str, Any]) -> date | None:
+    """The last session the search used: `data_date`, else the newest hold-out window end."""
+    candidates = [str(report.get("data_date") or "")]
+    for block in ((report.get("populations") or {}).values()):
+        for hz in ((block or {}).get("horizons") or {}).values():
+            window = (hz or {}).get("holdout_window") or []
+            candidates.append(str(window[-1] if window else ""))
+    days = []
+    for text in candidates:
+        try:
+            days.append(date.fromisoformat(text[:10]))
+        except ValueError:
+            continue
+    return max(days) if days else None
 
+
+def append_history(report: Mapping[str, Any], history_dir: Path, *, today: date | None = None) -> Path | None:
+    """Copy the report to `<history_dir>/<data date>.json` unless it matches the newest copy.
+
+    Named by the report's data date (the run date only when it has none), so a
+    rerun on the same data REPLACES that date's file instead of adding a report.
     Returns the file written, or None when the content is unchanged. Files older
     than HISTORY_KEEP_DAYS are pruned. Raises on I/O failure; the report itself
     is already written by then.
     """
     folder = Path(history_dir)
     run_day = today or datetime.now().astimezone().date()
+    data_day = report_data_date(report) or run_day
     digest = _content_hash(report)
     existing = history_files(folder)
     if existing:
@@ -504,7 +525,7 @@ def append_history(report: Mapping[str, Any], history_dir: Path, *, today: date 
             newest = None
         if isinstance(newest, dict) and _content_hash(newest) == digest:
             return None
-    target = write_report(report, folder / f"{run_day.isoformat()}.json")
+    target = write_report(report, folder / f"{data_day.isoformat()}.json")
     cutoff = run_day - timedelta(days=HISTORY_KEEP_DAYS)
     for day, path in history_files(folder):
         if day >= cutoff:
