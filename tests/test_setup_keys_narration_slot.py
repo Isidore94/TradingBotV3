@@ -70,9 +70,10 @@ GOOD = [
 # --- where it sits
 
 
-def test_the_slot_is_stage_three_saturday_only_and_before_the_ideas():
+def test_the_slot_is_stage_three_saturday_only_and_before_setup_research():
     names = [slot.name for slot in runner.default_slots()]
-    assert names.index(SLOT) == names.index("setup_research") + 1
+    assert names.index(SLOT) == names.index("setup_research") - 1
+    assert names.index(SLOT) > names.index("review_policy_draft")
     assert names[-1] == "improvement_ideas"
     assert SLOT in runner.WEEKEND_ONLY_SLOTS
     by_name = {slot.name: slot for slot in runner.default_slots()}

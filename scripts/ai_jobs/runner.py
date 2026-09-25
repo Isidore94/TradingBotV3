@@ -1470,20 +1470,9 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             max_attempts=3,
             uses_model=True,
         ),
-        # SETUP DATABASE Phase 6.1, APPENDED last.  The deterministic layer
-        # computes every number.  The medium local model only narrates after
-        # the evidence floor is met and can never write a live policy.
-        JobSlot(
-            name="setup_research",
-            run=setup_research.run_setup_research,
-            reserve_minutes=20.0,
-            description="Stop/target recipe research with five-timeframe market context",
-            max_attempts=3,
-            uses_model=True,
-        ),
         # P1-4 4d (2026-09-25): three cited sentences per setup family over the
-        # permutation report. Stage 3, after `setup_research` and before
-        # `improvement_ideas` (pinned last). SATURDAY ONLY via WEEKEND_ONLY_SLOTS:
+        # permutation report. Stage 3, directly BEFORE `setup_research`: two pins
+        # say only `improvement_ideas` may follow `setup_research`. SATURDAY ONLY via WEEKEND_ONLY_SLOTS:
         # the report is weekly research. No deterministic half, so no
         # `model_free_kwargs`; a missing report skips before any model load.
         JobSlot(
@@ -1495,6 +1484,17 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
                 "permutation report's facts (shadow only)"
             ),
             max_attempts=2,
+            uses_model=True,
+        ),
+        # SETUP DATABASE Phase 6.1, APPENDED last.  The deterministic layer
+        # computes every number.  The medium local model only narrates after
+        # the evidence floor is met and can never write a live policy.
+        JobSlot(
+            name="setup_research",
+            run=setup_research.run_setup_research,
+            reserve_minutes=20.0,
+            description="Stop/target recipe research with five-timeframe market context",
+            max_attempts=3,
             uses_model=True,
         ),
         # TJ-6 (2026-09-20), APPENDED LAST, inside stage 3.

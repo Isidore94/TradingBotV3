@@ -2,8 +2,8 @@
 
 A Saturday slot. It hands the local model the permutation report as FACTS
 ONLY - each fact a short line with an id - and asks for at most three
-sentences per family, each citing fact ids of that family. The pattern is
-`improvement_ideas`:
+sentences per family, each citing fact ids of that family. The pattern is the
+nightly ideas slot's (TJ-6):
 
 * The JSON schema is a grammar hint; :func:`check_narration` re-checks every
   bound against the input after the answer comes back and rejects the answer

@@ -118,7 +118,9 @@ def test_stamp_fields_are_the_key_label_and_version():
     assert fields["permutation_rule_version"] == sp.PERMUTATION_RULE_VERSION
     assert fields["permutation_key"].startswith(f"{sp.PERMUTATION_RULE_VERSION}|avwap_band_bounce|LONG|")
     assert "slot_1000" in fields["permutation_label"].split("|")
-    assert "weekly_ema15_hold=unknown" in fields["permutation_key"]
+    # Compact form: an unknown facet is simply absent from the stored key.
+    assert "weekly_ema15_hold=" not in fields["permutation_key"]
+    assert "ma_support=multiple_ma_support" in fields["permutation_key"]
 
 
 # --- ctx from other stores
@@ -229,7 +231,7 @@ def test_stamp_scan_rows_never_raises(monkeypatch):
     monkeypatch.setattr(spc.SessionContext, "load", classmethod(lambda cls, session, **k: boom()))
     rows = [_row()]
     assert spc.stamp_scan_rows(rows, session="2026-09-24") == 1
-    assert "discovery_slot=unknown" in rows[0]["permutation_key"]
+    assert "discovery_slot=" not in rows[0]["permutation_key"]
     monkeypatch.setattr(sp, "stamp_fields", boom)
     fresh = [_row()]
     assert spc.stamp_scan_rows(fresh, session="2026-09-24", context=spc.SessionContext()) == 0

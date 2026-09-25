@@ -86,6 +86,12 @@ class PermutationKey:
         return f"{self.permutation_rule_version}|{self.family}|{self.side}|{body}"
 
     @property
+    def compact_key(self) -> str:
+        """The key with unknown facets left out (absent means unknown); what a row stores."""
+        body = ";".join(f"{name}={value}" for name, value in self.facets if value != UNKNOWN)
+        return f"{self.permutation_rule_version}|{self.family}|{self.side}|{body}"
+
+    @property
     def label(self) -> str:
         """Short display label, e.g. ``sma100_support|weekly_ema15_hold``."""
         parts = []
@@ -659,7 +665,7 @@ def _entry_trigger_time(row, ctx, side):
 
 #: `dist_<ma>_atr` columns the enrichment step writes: (close - ma) / ATR20.
 MA_DISTANCE_COLUMNS = tuple(f"dist_{ma}_atr" for ma in SUPPORT_MAS)
-#: The key, its short label and its rule version, as written on a row.
+#: The compact key (unknown facets omitted), its short label and its rule version, as written on a row.
 STAMP_COLUMNS = ("permutation_key", "permutation_label", "permutation_rule_version")
 #: Every column 4a appends to `d1_features_history.csv`, in order.
 SCAN_ROW_COLUMNS = (*MA_DISTANCE_COLUMNS, "weekly_ema8_hold_weeks", *STAMP_COLUMNS)
@@ -721,7 +727,8 @@ def stamp_fields(
     """The three stamp columns for one scan row, through the honest input view."""
     key = facets_for_row(scan_row_view(row, has_ma_columns=has_ma_columns), ctx)
     return {
-        "permutation_key": key.key,
+        # Compact: ~1 KB per row saved on a file that grows by thousands of rows a day.
+        "permutation_key": key.compact_key,
         "permutation_label": key.label,
         "permutation_rule_version": key.permutation_rule_version,
     }
