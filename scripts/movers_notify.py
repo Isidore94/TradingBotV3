@@ -110,8 +110,18 @@ def _bar_clock(bar: str, local_tz=None) -> str:
         return ""
     end = start + timedelta(minutes=BAR_MINUTES)
     if end.tzinfo is not None:
-        end = end.astimezone(local_tz) if local_tz is not None else end.astimezone()
+        end = end.astimezone(local_tz if local_tz is not None else desk_zone())
     return end.strftime("%H:%M")
+
+
+def desk_zone():
+    """The desk's one display clock (Day Review's `market_session` zone); None = system."""
+    try:
+        from market_session import get_market_local_timezone
+
+        return get_market_local_timezone()[0]
+    except Exception:
+        return None
 
 
 def format_line(label: str, rows: Iterable[Mapping[str, Any]], list_key: str, clock: str) -> str:

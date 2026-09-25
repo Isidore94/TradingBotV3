@@ -325,3 +325,33 @@ def test_attach_wires_the_service_notice_to_the_sound_path(panel, monkeypatch):
     panel.attach_movers_service(service)
     service.moversNotice.emit({"line": "Pop: NVDA"})
     assert heard == [{"line": "Pop: NVDA"}]
+
+
+# ------------------------------------------------------------------ desk clock
+def _ten_oh_five_close_board():
+    return _board(bar_minute=0, pop_long=[("NVDA", 1.2)])  # 10:00 ET bar closes 10:05 ET
+
+
+@pytest.mark.parametrize("zone, expected", [(LA, "07:05"), (NY, "10:05")])
+def test_line_time_is_the_desk_clock_by_default(monkeypatch, zone, expected):
+    import market_session
+
+    monkeypatch.setattr(market_session, "get_market_local_timezone",
+                        lambda *_a, **_k: (zone, zone.key))
+    notice = mn.MoversNotifier().decide(_ten_oh_five_close_board(), mode="AWAY", now=T0)[0]
+    assert notice.line.endswith(f"· {expected}")
+
+
+@pytest.mark.parametrize("zone, expected", [(LA, "07:05"), (NY, "10:05")])
+def test_service_line_time_is_the_desk_clock(service_factory, monkeypatch, zone, expected):
+    import market_session
+
+    svc, make = service_factory
+    monkeypatch.setattr(market_session, "get_market_local_timezone",
+                        lambda *_a, **_k: (zone, zone.key))
+    monkeypatch.setattr(svc, "_market_local_tz", lambda: zone)
+    service, pushes = make("AWAY")
+    monkeypatch.setattr(svc.movers_scan, "build_movers_board",
+                        lambda *a, **k: _ten_oh_five_close_board())
+    service._publish({}, [], T0, {"long": [], "short": []}, zone, final=True)
+    assert pushes[0][1].endswith(f"· {expected}")
