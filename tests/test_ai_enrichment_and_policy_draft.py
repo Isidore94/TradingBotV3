@@ -449,3 +449,41 @@ def test_neither_module_reaches_into_live_decision_code():
                 ("bounce_bot", "autopilot_core", "master_avwap", "technical_integrity",
                  "price_alert", "d1_level_feed")
             ), f"{module.__name__} reached into live decision code: {name}"
+
+
+def _fake_enrich_request(monkeypatch):
+    import ai_summary
+
+    monkeypatch.setattr(ai_summary, "local_provider_enabled", lambda: True)
+    monkeypatch.setattr(ai_summary, "local_model", lambda tier="medium": "local-test")
+    monkeypatch.setattr(
+        ai_summary,
+        "request_ai_summary",
+        lambda **_kw: {
+            "model": "local-test",
+            "summary": {"summary": "A long.", "tags": ["avwap_reclaim"], "confidence": "medium",
+                        "sources": [], "unknowns": []},
+        },
+    )
+
+
+def test_tags_with_no_evidence_behind_them_are_dropped(monkeypatch):
+    """2026-09-24: SMH was tagged 'bands; sma_breakout_retest' with no review row and no note."""
+    _fake_enrich_request(monkeypatch)
+    trade = {"symbol": "SMH", "direction": "LONG"}
+    result = enrichment._enrich_one(
+        trade=trade, vocabulary=("avwap_reclaim",), review_rows=[], session_date="2026-09-24"
+    )
+    assert result["tags"] == []
+    assert result["dropped_tags"] == ["avwap_reclaim"]
+    assert result["summary"] == "A long."
+
+
+def test_tags_with_a_review_row_behind_them_are_kept(monkeypatch):
+    _fake_enrich_request(monkeypatch)
+    trade = {"symbol": "SMH", "direction": "LONG"}
+    rows = [{"symbol": "SMH", "side": "LONG", "trade_date": "2026-09-24", "review_record_id": "r1", "action": "like"}]
+    result = enrichment._enrich_one(
+        trade=trade, vocabulary=("avwap_reclaim",), review_rows=rows, session_date="2026-09-24"
+    )
+    assert result["tags"] == ["avwap_reclaim"]

@@ -535,10 +535,11 @@ def _enrich_one(
     if not ai_summary.local_provider_enabled():
         raise RuntimeError("local AI provider is not configured (ai_local_endpoint_url unset)")
 
+    links = _evidence_links(trade, review_rows)
+    note_lane = _note_lane_section(trade, tagger)
     evidence = _evidence_package(
         trade=trade, vocabulary=vocabulary,
-        links=_evidence_links(trade, review_rows), session_date=session_date,
-        note_lane=_note_lane_section(trade, tagger),
+        links=links, session_date=session_date, note_lane=note_lane,
     )
     result = ai_summary.request_ai_summary(
         provider="local",
@@ -555,13 +556,16 @@ def _enrich_one(
     summary = result.get("summary") or {}
     proposed = _proposed_tags(summary)
     kept, dropped = filter_tags(proposed, vocabulary=vocabulary)
+    # A tag needs a review row or a trader note behind it; the trade's fills alone name no setup.
+    if not links and not note_lane.get("trader_notes"):
+        kept, dropped = [], dropped + kept
     return {
         "summary": _summary_text(summary),
         "tags": kept,
         "dropped_tags": dropped,
         "confidence": _confidence_text(summary),
         "unknowns": _unknowns_text(summary),
-        "evidence": _evidence_links(trade, review_rows),
+        "evidence": links,
         "model": result.get("model", ""),
         "prompt_version": str(result.get("prompt_version") or ENRICHMENT_PROMPT_VERSION),
     }
