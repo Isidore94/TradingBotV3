@@ -196,6 +196,8 @@ MODEL_SLOT_PRIORITY = (
     "market_story_narration",
     "setup_research",
     "journal_enrichment",
+    "plan_review",
+    "improvement_ideas",
     "observation_tags",
 )
 LAST_PRIORITY_SLOT = "ticker_briefs"
