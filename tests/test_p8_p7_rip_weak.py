@@ -197,3 +197,131 @@ def test_rip_lists_get_persistence_and_group_tags():
     assert "rip:short" in memory["lists"]
     ms.apply_group_tags(board, {"SINK": "Semiconductors", "LAG": "Semiconductors"})
     assert "rip" in board["groups"]
+
+
+# ------------------------------------------------------------------ board widget
+@pytest.fixture(scope="module")
+def app():
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
+def _row(symbol, **values):
+    base = {"symbol": symbol, "move15_pct": 1.0, "move30_pct": 1.5, "day_pct": 2.0,
+            "rvol": 2.0, "vs_spy15_pct": 0.8, "pop_score": 1.0, "dip_score": None,
+            "since_start_pct": None, "note": "", "stale": False}
+    base.update(values)
+    return base
+
+
+def _rally_widget_board(start="2026-09-22T10:30:00-04:00"):
+    state = {"state": "up_day", "pullback": False, "bounce": False, "rally": True,
+             "extreme_time": "10:30", "start_dt": start, "spy_from_extreme_pct": 0.38,
+             "spy_day_pct": 0.9}
+    return {
+        "as_of": "2026-09-22T11:00:00-04:00",
+        "state": state,
+        "pop": {"long": [_row("AAA")], "short": []},
+        "dip": {"long": [], "short": []},
+        "rip": {"long": [_row("LEAD", dip_score=1.1, since_start_pct=1.5)],
+                "short": [_row("SINK", dip_score=-1.4, since_start_pct=-1.0, streak=1,
+                               rank_change=None),
+                          _row("LAG", dip_score=-0.6, since_start_pct=0.0)]},
+        "mine": {"long": [], "short": []},
+    }
+
+
+def _widget(app):
+    from ui.widgets.movers_board import MoversBoard
+
+    board = MoversBoard(persist=False)
+    board.resize(420, 400)
+    return board
+
+
+def _names(section):
+    return [row["symbol"] for row in section.visible_rows()]
+
+
+def test_rally_shows_rip_tables_under_pop_with_a_rally_banner(app):
+    widget = _widget(app)
+    widget.update_board(_rally_widget_board())
+    widget.flush_pending_refresh()
+    assert not widget.strong.isHidden() and not widget.weak.isHidden()
+    assert widget.dip_hint.isHidden()
+    assert _names(widget.strong) == ["LEAD"]
+    assert _names(widget.weak) == ["SINK", "LAG"]
+    assert widget.strong.title_label.text().startswith("Rip-strong")
+    assert widget.weak.title_label.text().startswith("Rip-weak")
+    assert "low" in widget.weak.title_label.text()
+    banner = widget.banner.text()
+    assert "RALLY" in banner and "+0.38%" in banner and "low" in banner
+    assert "●" in widget.mode_buttons["pop"].text()
+
+
+def test_rip_weak_rows_are_shorts_and_sort_hide_plus_focus_and_new_cell_work(app):
+    from PySide6.QtCore import Qt
+
+    widget = _widget(app)
+    widget.update_board(_rally_widget_board())
+    widget.flush_pending_refresh()
+    clicked, asked = [], []
+    widget.symbolActivated.connect(lambda s, side: clicked.append((s, side)))
+    widget.focusAddRequested.connect(lambda s, side: asked.append((s, side)))
+    widget._on_clicked(widget.weak.proxy.index(0, 0))
+    assert clicked == [("SINK", "SHORT")]
+    # The first tick on the list tints the Sym cell.
+    assert widget.weak.model.data(widget.weak.model.index(0, 0),
+                                  Qt.ItemDataRole.BackgroundRole) is not None
+    # Header click sorts (xSPY biggest first flips the weak list), third click restores.
+    column = [k for k, _h in widget.weak.columns()].index("dip_score")
+    widget.weak._on_header_clicked(column)
+    assert _names(widget.weak) == ["LAG", "SINK"]
+    widget.weak._on_header_clicked(column)
+    widget.weak._on_header_clicked(column)
+    assert _names(widget.weak) == ["SINK", "LAG"]
+    widget.weak.table.selectRow(0)
+    widget.add_focus_button.click()
+    assert asked == [("SINK", "short")]
+    widget._hide_selected()
+    assert _names(widget.weak) == ["LAG"]
+
+
+def test_a_rally_does_not_pull_the_trader_off_my_names(app):
+    widget = _widget(app)
+    widget.set_mode("mine")
+    widget.update_board(_rally_widget_board())
+    widget.flush_pending_refresh()
+    assert widget.mode == "mine"
+
+
+def test_no_turn_hint_names_the_rally_too(app):
+    widget = _widget(app)
+    widget.update_board({"state": {"state": "up_day"}, "pop": {}, "dip": {}, "rip": {},
+                         "mine": {}})
+    widget.flush_pending_refresh()
+    assert "rally" in widget.dip_hint.text()
+
+
+def test_plus_focus_on_a_rip_only_row_goes_through_the_gate(tmp_path, app):
+    from ui.panels.alert_center_panel import AlertCenterPanel
+
+    class Focus:
+        def __init__(self):
+            self.added = []
+
+        def add(self, symbol, side, category="m5", *, origin="", context=""):
+            self.added.append((symbol, side))
+            return True
+
+    panel = AlertCenterPanel(review_events_path=tmp_path / "events.jsonl")
+    panel.focus_service = Focus()
+    board = _rally_widget_board()
+    board["rip"]["short"][0].update(last=95.0, prev_high=101.0, prev_low=97.0,
+                                    session_vwap=96.0)
+    panel.movers_board.update_board(board)
+    panel.movers_board.flush_pending_refresh()
+    panel.movers_board.focusAddRequested.emit("SINK", "short")
+    assert "no longer on the board" not in panel.movers_board.status_label.text()
+    assert panel.focus_service.added == [("SINK", "short")]
