@@ -141,12 +141,19 @@ def stream_feature_rows(
             return
 
 
+#: P1-4 shadow columns (the setup-permutation key and its inputs). Never contrasted:
+#: the key restates other columns and would count them twice.
+SHADOW_COLUMN_PREFIXES: tuple[str, ...] = ("perm_", "permutation_")
+
+
 def _feature_mapping(row: Mapping[str, Any]) -> dict[str, Any]:
-    """One scan row with its identity columns removed."""
+    """One scan row with its identity and shadow columns removed."""
     return {
         str(key): value
         for key, value in row.items()
-        if str(key) not in IDENTITY_COLUMNS and str(key or "").strip()
+        if str(key) not in IDENTITY_COLUMNS
+        and str(key or "").strip()
+        and not str(key).startswith(SHADOW_COLUMN_PREFIXES)
     }
 
 
@@ -912,6 +919,7 @@ def run_miss_contrast(
 
 __all__ = [
     "IDENTITY_COLUMNS",
+    "SHADOW_COLUMN_PREFIXES",
     "PACK_SCHEMA",
     "build_pack",
     "pack_path",

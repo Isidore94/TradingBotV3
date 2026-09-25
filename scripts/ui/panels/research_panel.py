@@ -8,6 +8,7 @@ from ui.panels.move_forensics_panel import MoveForensicsPanel
 from ui.panels.price_alerts_panel import PriceAlertsPanel
 from ui.panels.research_results_panel import ResearchResultsPanel
 from ui.panels.setup_docs_panel import SetupDocsPanel
+from ui.panels.setup_keys_panel import SetupKeysPanel
 from ui.panels.setup_tracker_panel import SetupTrackerPanel
 from ui.panels.ticker_lookup_panel import TickerLookupPanel
 from ui.panels.warehouse_readout_panel import WarehouseReadoutPanel
@@ -37,6 +38,7 @@ class ResearchPanel(QFrame):
         self.daytrade_tracker_panel = DaytradeTrackerPanel()
         self.ticker_lookup_panel = TickerLookupPanel()
         self.warehouse_readout_panel = WarehouseReadoutPanel()
+        self.setup_keys_panel = SetupKeysPanel()
         self.price_alerts_panel = PriceAlertsPanel(
             price_alert_service,
             read_only=price_alert_read_only,
@@ -50,6 +52,7 @@ class ResearchPanel(QFrame):
         tabs.addTab(self.ticker_lookup_panel, "Ticker Lookup")
         tabs.addTab(self.price_alerts_panel, "Price Alerts")
         tabs.addTab(self.warehouse_readout_panel, "Research Warehouse")
+        tabs.addTab(self.setup_keys_panel, "Setup keys")
         # Held so the Working-lately strip's click-through can raise the one
         # tab it points at (ST6.4). A named reference rather than a walk over
         # `findChildren`, which would find the first QTabWidget on the page and
@@ -106,6 +109,7 @@ class ResearchPanel(QFrame):
         self.ticker_lookup_panel.shutdown()
         self.price_alerts_panel.shutdown()
         self.warehouse_readout_panel.shutdown()
+        self.setup_keys_panel.shutdown()
         # R1: it grew a reader thread in P4 B1 and was not on this list - the
         # exact failure the comment above already describes, one panel later.
         self.setup_tracker_panel.shutdown()

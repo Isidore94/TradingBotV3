@@ -157,6 +157,8 @@ class Sources:
     ai_store_root: Path | None = None
     #: Extra roots to refuse writing under (tests; other machines).
     protected: tuple = ()
+    #: P1-4 4d: the setup-permutation report, copied into the pack as-is (facts only).
+    setup_keys_report: Path | None = None
 
 
 def _pp():
@@ -194,6 +196,7 @@ def resolve_sources() -> Sources:
             "alert_review_events": (Path(paths.ALERT_REVIEW_EVENTS_DIR), "trade_date"),
         },
         ai_store_root=ai_root,
+        setup_keys_report=Path(paths.SETUP_PERMUTATION_REPORT_FILE),
     )
 
 
@@ -1133,6 +1136,13 @@ def export_pack(sources: Sources, out_dir: Path | None = None, *, as_of: datetim
         tables[name] = info
     summary_info = _write_table(cells, target, "setup_summary", "csv")
     tables["setup_summary"] = summary_info
+    # P1-4 4d: the setup-keys report travels whole; a missing one is said, not faked.
+    if _exists(sources.setup_keys_report):
+        copied = target / "setup_permutation_report.json"
+        copied.write_bytes(Path(sources.setup_keys_report).read_bytes())
+        tables["setup_permutation_report"] = {"status": "ok", "rows": None, "file": copied.name}
+    else:
+        tables["setup_permutation_report"] = {"status": "missing", "rows": None, "file": None}
 
     def _count(rows, column):
         return sum(1 for row in rows or [] if row.get(column))

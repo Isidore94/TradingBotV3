@@ -390,6 +390,9 @@ EXPECTED_SLOT_ORDER = (
     # stage 3 - the model-gated slots, unchanged
     "journal_enrichment",
     "review_policy_draft",
+    # P1-4 4d (2026-09-25): Saturday-only setup-keys narration, inside stage 3,
+    # directly before `setup_research` (only `improvement_ideas` may follow it).
+    "setup_keys_narration",
     "setup_research",
     # TJ-6 (2026-09-20), appended LAST inside stage 3: it reads what the rest of
     # the night wrote and feeds nothing.

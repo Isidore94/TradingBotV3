@@ -450,6 +450,10 @@ def test_the_trial_ledger_has_exactly_one_production_writer():
         # It must stay a direct, read-only reader rather than becoming a second
         # registration path or an outcome-aware ledger writer.
         "scripts/entry_comparison.py": "reader",
+        # P1-4 4c (2026-09-25, lead's brief): the setup-permutation search is the
+        # SECOND writer, on purpose - it registers each grid before reading its
+        # outcomes, and `register` still refuses a trial_id already declared.
+        "scripts/setup_permutation_search.py": "writer",
     }
 
     # IMPORT-shaped, not any mention: P8's authorization block in `outcomes.py`
@@ -465,7 +469,8 @@ def test_the_trial_ledger_has_exactly_one_production_writer():
     # The module does not import itself, so the names here are the whole set.
     assert importers == set(ALLOWED), importers
     assert [name for name, role in ALLOWED.items() if role == "writer"] == [
-        "scripts/research_warehouse/cli.py"
+        "scripts/research_warehouse/cli.py",
+        "scripts/setup_permutation_search.py",
     ]
 
     for name, role in ALLOWED.items():
