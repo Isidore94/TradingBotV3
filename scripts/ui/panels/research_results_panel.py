@@ -51,8 +51,12 @@ from ui import theme
 from ui.models.tracker_table_model import ROW_ROLE, TrackerTableModel
 from ui.read_worker import ReadWorker, join_worker
 from ui.services.journal_feed import load_trades
-from ui.services.working_lately_service import read_persisted_snapshot
+from ui.services.working_lately_service import (
+    read_persisted_looking_back,
+    read_persisted_snapshot,
+)
 from ui.widgets.data_table import DataTable, apply_width_rule_to_table_widget
+from ui.widgets.looking_back_view import LookingBackView
 from ui.widgets.research_explanation_view import ResearchExplanationView
 from ui.widgets.section_header import SectionHeader
 
@@ -389,6 +393,8 @@ class ResearchResultsPanel(QFrame):
         self.shortlist.setShowGrid(False)
         self.shortlist.clicked.connect(self._on_row_clicked)
         self.explanation_view = ResearchExplanationView(self)
+        # P2-9: the pick equity curve for the chosen horizon (Bot setups only).
+        self.looking_back_view = LookingBackView(self)
 
         self._build_measured_report()
         self._build_layout()
@@ -493,6 +499,7 @@ class ResearchResultsPanel(QFrame):
         self.detail_splitter.setStretchFactor(0, 3)
         self.detail_splitter.setStretchFactor(1, 2)
         layout.addWidget(self.detail_splitter, 1)
+        layout.addWidget(self.looking_back_view)
         # TJ-1 item 6(a): the Daily Recap's Review tab, as a section at the FOOT
         # of this page. Under the four populations, because it is the desk's own
         # published readout rather than a cut of them.
@@ -640,6 +647,7 @@ class ResearchResultsPanel(QFrame):
             current = (*self._selection, self._environment)
             if isinstance(payload, dict) and payload.get("selection") == current:
                 self._render(payload["view"])
+                self._render_looking_back(payload.get("looking_back"))
         finally:
             self._drain()
 
@@ -692,6 +700,15 @@ class ResearchResultsPanel(QFrame):
             )
         self._fill_shortlist(view, sections)
         self._reshow_or_clear_explanation()
+
+    def _render_looking_back(self, reading: Any) -> None:
+        """The Bot pages' pick curve for the chosen horizon. My trades has none."""
+        population, horizon = self._selection[0], self._selection[1]
+        self.looking_back_view.setVisible(population == "bot")
+        if population == "bot":
+            self.looking_back_view.set_reading(
+                reading if isinstance(reading, Mapping) else None, horizon
+            )
 
     def _fill_shortlist(self, view, sections) -> None:
         columns = (
@@ -1204,7 +1221,13 @@ def _read(selection, window, payload) -> dict[str, Any]:
         # asserting a conversion the journal never made.
         currency_mode=None,
     )
-    return {"selection": tuple(selection), "view": view}
+    # The looking-back reading rides on the pushed payload, else its own small
+    # file; the working-lately build is its one writer (P2-9).
+    looking: Any = None
+    if population == "bot":
+        pushed = (payload or {}).get("looking_back") if isinstance(payload, Mapping) else None
+        looking = pushed if isinstance(pushed, Mapping) else (read_persisted_looking_back() or None)
+    return {"selection": tuple(selection), "view": view, "looking_back": looking}
 
 
 def _as_of(snapshot: Mapping[str, Any]) -> date:

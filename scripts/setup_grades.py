@@ -345,3 +345,59 @@ def daytrade_grade_for_alert(
 def badge(grade: str | None) -> str:
     grade = str(grade or NEW)
     return "NEW" if grade == NEW else grade
+
+
+# ---------------------------------------------------------------------------
+# hold-out view (P2-9 9b) - read-only, beside the cells above
+# ---------------------------------------------------------------------------
+
+#: What a window with no cell for a key says.
+NOT_IN_WINDOW = "none in this window"
+#: What the prior column says when the same key has no prior cell.
+NO_PRIOR = "no prior"
+
+
+def holdout_text(cell: Mapping[str, Any] | None, *, missing: str = NOT_IN_WINDOW) -> str:
+    """One graded cell as the hold-out column prints it. Under the floor says so."""
+    if not cell:
+        return missing
+    n = int(cell.get("n") or 0)
+    if n < MIN_N:
+        return f"n<{MIN_N} (n={n})"
+    rate = cell.get("win_rate")
+    low = cell.get("low_bound")
+    avg = cell.get("avg_r")
+    parts = [badge(cell.get("grade"))]
+    if rate is not None:
+        parts.append(f"win {float(rate):.0%}" + (f" (low {float(low):.0%})" if low is not None else ""))
+    if avg is not None:
+        parts.append(f"avg {float(avg):+.2f}R")
+    parts.append(f"n={n}")
+    return " · ".join(parts)
+
+
+def holdout_view(
+    recent_cells: Iterable[Mapping[str, Any]] | None,
+    prior_cells: Iterable[Mapping[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Each key's recent cell beside the prior window's, recent best first.
+
+    Both sides are the SAME ladder (`swing_cells` / `daytrade_cells`) over two
+    date windows; nothing here recomputes a grade.
+    """
+    recent = {str(cell.get("key")): cell for cell in recent_cells or ()}
+    prior = {str(cell.get("key")): cell for cell in prior_cells or ()}
+    keys = [str(cell.get("key")) for cell in _best_first(recent.values())]
+    keys += [key for key in (str(cell.get("key")) for cell in _best_first(prior.values())) if key not in recent]
+    return [
+        {
+            "key": key,
+            "recent_grade": (recent.get(key) or {}).get("grade"),
+            "prior_grade": (prior.get(key) or {}).get("grade"),
+            "recent_n": int((recent.get(key) or {}).get("n") or 0),
+            "prior_n": int((prior.get(key) or {}).get("n") or 0),
+            "recent_text": holdout_text(recent.get(key)),
+            "prior_text": holdout_text(prior.get(key), missing=NO_PRIOR),
+        }
+        for key in keys
+    ]
