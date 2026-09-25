@@ -73,11 +73,24 @@ def test_a_failed_read_keeps_the_last_text(app):
         view.shutdown()
 
 
+def test_a_collapsed_view_opens_on_its_title(app):
+    from ui.widgets.trading_plan_view import TradingPlanView
+
+    view = TradingPlanView(loader=lambda: {"text": "## Rules\n- one\n"}, collapsed=True)
+    try:
+        view.show()
+        assert not view.text.isVisible()
+        view.title.click()
+        assert view.text.isVisible()
+    finally:
+        view.shutdown()
+
+
 def test_day_review_and_week_review_carry_the_plan_view():
     """Static: both pages build the view and refresh it with their own read."""
     day = (SCRIPTS / "ui" / "panels" / "day_review_panel.py").read_text(encoding="utf-8")
     week = (SCRIPTS / "ui" / "panels" / "weekend_prep_panel.py").read_text(encoding="utf-8")
     for source in (day, week):
-        assert "TradingPlanView(self)" in source
+        assert "TradingPlanView(self" in source
         assert "self.plan_view.refresh()" in source
         assert "self.plan_view.shutdown()" in source

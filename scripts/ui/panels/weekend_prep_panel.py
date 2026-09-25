@@ -671,7 +671,7 @@ class WeekReviewPage(_StepPage):
         # P1-7: the trader's plan, read-only, read on its own worker.
         from ui.widgets.trading_plan_view import TradingPlanView
 
-        self.plan_view = TradingPlanView(self)
+        self.plan_view = TradingPlanView(self, collapsed=True)
         self._layout.addWidget(self.plan_view)
         self._layout.addWidget(self.summary, 1)
         self._finish_layout()

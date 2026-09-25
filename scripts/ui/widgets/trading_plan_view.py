@@ -11,14 +11,17 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
-from PySide6.QtWidgets import QLabel, QPlainTextEdit, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLabel, QPlainTextEdit, QToolButton, QVBoxLayout, QWidget
 
 PLAN_OBJECT_NAME = "TradingPlanView"
 LOADING_TEXT = "Reading your trading plan..."
 
 
 class TradingPlanView(QWidget):
-    def __init__(self, parent=None, *, loader: Callable[[], Any] | None = None) -> None:
+    def __init__(
+        self, parent=None, *, loader: Callable[[], Any] | None = None, collapsed: bool = False
+    ) -> None:
         super().__init__(parent)
         self.setObjectName(PLAN_OBJECT_NAME)
         self._loader = loader
@@ -27,16 +30,30 @@ class TradingPlanView(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        self.title = QLabel("My trading plan", self)
+        # The title is a toggle; `collapsed` starts it closed so a page with no
+        # spare height (Week Review at 2160 px) does not grow.
+        self.title = QToolButton(self)
+        self.title.setText("My trading plan")
+        self.title.setCheckable(True)
+        self.title.setChecked(not collapsed)
+        self.title.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.title.setArrowType(Qt.ArrowType.DownArrow if not collapsed else Qt.ArrowType.RightArrow)
+        self.title.toggled.connect(self._set_open)
         self.note = QLabel("", self)
         self.note.setWordWrap(True)
         self.text = QPlainTextEdit(self)
         self.text.setReadOnly(True)
         self.text.setPlaceholderText(LOADING_TEXT)
-        self.text.setMinimumHeight(160)
+        self.text.setMinimumHeight(0 if collapsed else 160)
         layout.addWidget(self.title)
         layout.addWidget(self.note)
         layout.addWidget(self.text)
+        self._set_open(not collapsed)
+
+    def _set_open(self, opened: bool) -> None:
+        self.title.setArrowType(Qt.ArrowType.DownArrow if opened else Qt.ArrowType.RightArrow)
+        self.note.setVisible(bool(opened))
+        self.text.setVisible(bool(opened))
 
     def refresh(self) -> None:
         """Start one read; a read already running is followed by one more."""
