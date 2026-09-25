@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #257 Night AI fixes: the next weeknight ledger has `improvement_ideas` ok (not "cited ... which tonight does not carry"); `setup_research` either says "narrated K of N" with numbers in its statements or "narration absent: ... quoted no number"; enrichment rows with empty evidence carry no tags; no low-memory event 2004 in the System log that night [lead]
 - #256 Desk boot (P2-11e): after the restart the desk opens with no stall, `trading_bot.log` keeps getting lines from the desk, the first scan and first chart open work with no ImportError or crash, and Focus chips show the same colours (BOUNCE gold, RS/RW tint, side-coloured x) in light and dark [trader + lead]
 - #255 Secrets moved (P2-11d): after the restart `market_prep_openai_api_key` (and `push_ntfy_token` if set) are blank in local_settings.json and present in Credential Manager under `TradingBotV3`; the market-prep AI brief still works and a test push arrives [trader]
 - #254 Health rows (P2-11c): System Health shows "Universe vs floor" with the universe count and 500, and "IB connection" green with TWS up, red after TWS is closed, UNKNOWN with the bot stopped; the page never stalls [trader]
