@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import time
 import math
 import os
 import sys
 from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -232,3 +234,259 @@ def test_log_path_is_a_project_paths_constant():
     import project_paths
 
     assert Path(project_paths.OPTIONS_CHASE_LOG_FILE).name == "options_chase_log.jsonl"
+
+
+# ---------------------------------------------------------------- the service (fake IB)
+def _svc():
+    from ui.services import options_chase_service as ocs
+
+    return ocs
+
+
+def _pop_row(symbol, score, rvol, last=25.0):
+    return {"symbol": symbol, "pop_score": score, "rvol": rvol, "last": last, "atr": 0.2,
+            "move15_pct": 2.0}
+
+
+def _movers_board():
+    return {"pop": {
+        "long": [_pop_row("AAA", 3.0, 3.0), _pop_row("CCC", 4.0, 1.5),
+                 _pop_row("BBB", 2.5, 2.5), _pop_row("DDD", 1.0, 2.1)],
+        "short": [_pop_row("EEE", -2.0, 4.0)],
+    }}
+
+
+class FakeClient:
+    def __init__(self, error=None):
+        self.calls = []
+        self.error = error
+        self.closed = False
+
+    def fetch_chain(self, symbol, *, side, last, hv, today):
+        self.calls.append((symbol, side))
+        if self.error is not None:
+            raise self.error
+        return _chain()
+
+    def close(self):
+        self.closed = True
+
+
+class Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+def _service(tmp_path, client, clock=None):
+    ocs = _svc()
+    return ocs.OptionsChaseService(
+        client_factory=lambda: client, hv_provider=lambda _s, _d: 0.41,
+        log_path=tmp_path / "options_chase_log.jsonl", monotonic=clock or Clock())
+
+
+def test_service_chases_top_three_rvol2_pop_names_and_caches_five_minutes(tmp_path):
+    ocs = _svc()
+    assert ocs.OPTIONS_CHASE_MAX_PER_TICK == 3 and ocs.OPTIONS_CHASE_CACHE_SECONDS == 300
+    client, clock = FakeClient(), Clock()
+    service = _service(tmp_path, client, clock)
+    results = service.run(_movers_board(), {"AAA": 25.0}, now=NOW)
+    # CCC has the biggest move but RVOL 1.5: never chased; DDD is fourth.
+    assert client.calls == [("AAA", "long"), ("BBB", "long"), ("EEE", "short")]
+    assert set(results) == {"AAA|long", "BBB|long", "EEE|short"}
+    assert results["AAA|long"]["status"] == "candidate" and results["EEE|short"]["right"] == "P"
+    clock.t += 299
+    service.run(_movers_board(), {}, now=NOW)
+    assert len(client.calls) == 3  # cached
+    clock.t += 2
+    service.run(_movers_board(), {}, now=NOW)
+    assert len(client.calls) == 6  # expired: fetched again
+    board = service.annotate(_movers_board())
+    texts = {r["symbol"]: oc.cell_text(r["opt"]) for r in board["pop"]["long"]}
+    assert texts["AAA"] == "27C 10/02 · 0.85x0.95 · 11% · IV 62 (HV 41)"
+    assert texts["CCC"] == "—" and texts["DDD"] == "—"
+    flags = [r for r in oc.load_records(tmp_path / "options_chase_log.jsonl") if r["kind"] == "flag"]
+    assert len(flags) == 3  # one flag per answer, not per tick
+
+
+def test_annotate_never_mutates_the_board_it_was_given(tmp_path):
+    service = _service(tmp_path, FakeClient())
+    service.run(_movers_board(), {}, now=NOW)
+    original = _movers_board()
+    out = service.annotate(original)
+    assert "opt" not in original["pop"]["long"][0]
+    assert out["pop"]["long"][0]["opt"]["symbol"] == "AAA"
+
+
+def test_not_connected_says_so_once_and_every_pop_row_reads_no_option_data(tmp_path, caplog):
+    ocs = _svc()
+    client = FakeClient(ocs.OptionDataError("IB not connected", connection=True))
+    service = _service(tmp_path, client)
+    with caplog.at_level("WARNING"):
+        service.run(_movers_board(), {}, now=NOW)
+        service.run(_movers_board(), {}, now=NOW)
+    assert len(client.calls) == 2  # one connect attempt per tick, not per name
+    assert sum("no option data this session" in r.message for r in caplog.records) == 1
+    board = service.annotate(_movers_board())
+    for row in board["pop"]["long"] + board["pop"]["short"]:
+        assert oc.cell_text(row["opt"]) == "no option data (IB not connected)"
+    assert not (tmp_path / "options_chase_log.jsonl").exists()  # no data is never logged
+
+
+def _fake_app_class(mode):
+    """A fake IB app: the real callbacks; the socket methods answer from a script."""
+    ocs = _svc()
+
+    class FakeApp(ocs._OptionApp):
+        def __init__(self):
+            super().__init__()
+            self.connected = False
+            self.requests = []
+            self.cancelled = []
+            self.data_types = []
+
+        def connect(self, host, port, clientId):  # noqa: N803
+            self.requests.append(("connect", host, port, clientId))
+            self.connected = True
+
+        def isConnected(self):  # noqa: N802
+            return self.connected
+
+        def run(self):
+            self.nextValidId(1)
+            while self.connected:
+                time.sleep(0.005)
+
+        def disconnect(self):
+            self.connected = False
+
+        def reqMarketDataType(self, kind):  # noqa: N802
+            self.data_types.append(kind)
+
+        def reqContractDetails(self, reqId, contract):  # noqa: N802,N803
+            self.requests.append(("details", contract.symbol))
+            self.contractDetails(reqId, SimpleNamespace(contract=SimpleNamespace(conId=123)))
+            self.contractDetailsEnd(reqId)
+
+        def reqSecDefOptParams(self, reqId, symbol, exchange, sec_type, con_id):  # noqa: N802,N803
+            self.requests.append(("secdef", symbol, con_id))
+            strikes = {20 + 0.5 * i for i in range(40)}
+            self.securityDefinitionOptionParameter(reqId, "CBOE", 123, "ABC", "100",
+                                                   {"20261002"}, {25.0})
+            self.securityDefinitionOptionParameter(reqId, "SMART", 123, "ABC", "100",
+                                                   {"20260930", "20261002", "20261009"}, strikes)
+            self.securityDefinitionOptionParameterEnd(reqId)
+
+        def reqMktData(self, reqId, contract, generic, snapshot, regulatory, options):  # noqa: N802,N803
+            self.requests.append(("mkt", contract.strike, contract.right,
+                                  contract.lastTradeDateOrContractMonth, snapshot, regulatory))
+            if mode == "denied":
+                self.error(reqId, 354, "Requested market data is not subscribed.")
+                return
+            delta = max(0.02, 0.5 - 0.18 * (contract.strike - 25.0))
+            self.tickPrice(reqId, 1, 0.50, None)
+            self.tickPrice(reqId, 2, 0.54, None)
+            self.tickOptionComputation(reqId, 13, 0, 0.7, delta, 0.52, 0, 0, 0, 0, 25.0)
+            self.tickSnapshotEnd(reqId)
+
+        def cancelMktData(self, reqId):  # noqa: N802,N803
+            self.cancelled.append(reqId)
+
+    return FakeApp
+
+
+def _client(mode):
+    ocs = _svc()
+    apps = []
+
+    def factory():
+        apps.append(_fake_app_class(mode)())
+        return apps[-1]
+
+    client = ocs.IBOptionChainClient(host="127.0.0.1", port=7496, client_id=9145,
+                                     app_factory=factory, connect_timeout_s=1.0,
+                                     quote_timeout_s=0.5, request_gap_s=0)
+    return client, apps
+
+
+def test_ib_client_fetches_chain_and_snapshot_quotes_on_its_own_client_id():
+    client, apps = _client("ok")
+    try:
+        chain = client.fetch_chain("ABC", side="long", last=25.0, hv=0.41, today=TODAY)
+    finally:
+        client.close()
+    app = apps[0]
+    assert app.requests[0] == ("connect", "127.0.0.1", 7496, 9145)
+    assert app.data_types == [1]
+    mkt = [r for r in app.requests if r[0] == "mkt"]
+    assert 0 < len(mkt) <= oc.QUOTE_STRIKES
+    assert all(r[2] == "C" and r[3] == "20261002" and r[4] is True and r[5] is False for r in mkt)
+    assert len(app.cancelled) == len(mkt)
+    result = oc.pick_candidate(_pop(), chain, today=TODAY, hv=0.41)
+    assert result["status"] == "candidate" and result["expiry"] == "2026-10-02"
+    assert oc.DELTA_MIN <= result["delta"] <= oc.DELTA_MAX
+    assert result["mid"] == pytest.approx(0.52)
+
+
+def test_no_option_permission_stops_requests_for_the_session(tmp_path, caplog):
+    ocs = _svc()
+    client, apps = _client("denied")
+    service = ocs.OptionsChaseService(
+        client_factory=lambda: client, hv_provider=lambda _s, _d: 0.41,
+        log_path=tmp_path / "log.jsonl")
+    try:
+        with caplog.at_level("WARNING"):
+            first = service.run(_movers_board(), {}, now=NOW)
+            requests = len(apps[0].requests)
+            second = service.run(_movers_board(), {}, now=NOW)
+    finally:
+        client.close()
+    reason = "no option market-data permission (IB 354)"
+    assert all(r["status"] == "no_data" and r["reason"] == reason for r in first.values())
+    assert all(r["reason"] == reason for r in second.values())
+    assert len(apps[0].requests) == requests  # nothing more asked of IB this session
+    assert sum("no option data this session" in r.message for r in caplog.records) == 1
+    board = service.annotate(_movers_board())
+    assert oc.cell_text(board["pop"]["long"][1]["opt"]) == f"no option data ({reason})"
+
+
+def test_movers_service_runs_the_chase_after_the_final_board_and_republishes(tmp_path):
+    from ui.services import movers_service as ms
+
+    chase = _service(tmp_path, FakeClient())
+    service = ms.MoversService(autostart=False, options_chase=chase, clock=lambda: NOW)
+    emitted = []
+    service.moversChanged.connect(emitted.append)
+    service._board = _movers_board()
+    service._run_options_chase({"AAA": [{"close": 25.1}]}, NOW)
+    assert emitted and emitted[-1]["pop"]["long"][0]["opt"]["status"] == "candidate"
+    assert service.board()["pop"]["long"][0]["opt"]["strike"] == 27.0
+
+
+def test_a_failing_chase_leaves_the_board_alone():
+    from ui.services import movers_service as ms
+
+    class Broken:
+        def run(self, *a, **k):
+            raise RuntimeError("boom")
+
+        def annotate(self, board):
+            return dict(board)
+
+        def close(self):
+            pass
+
+    service = ms.MoversService(autostart=False, options_chase=Broken(), clock=lambda: NOW)
+    emitted = []
+    service.moversChanged.connect(emitted.append)
+    service._board = _movers_board()
+    service._run_options_chase({}, NOW)
+    assert emitted == [] and service.board() == _movers_board()
+
+
+def test_the_desk_wires_one_options_chase_into_the_movers_service():
+    source = (SCRIPTS_DIR / "ui" / "app.py").read_text(encoding="utf-8")
+    assert source.count("OptionsChaseService(") == 1
+    assert "options_chase=OptionsChaseService()" in source
