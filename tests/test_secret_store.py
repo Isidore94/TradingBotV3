@@ -102,7 +102,9 @@ def test_a_failed_blank_keeps_the_verified_copy(settings, monkeypatch):
     def refuse(*_args, **_kwargs):
         raise OSError("settings locked")
 
+    # The blank is the locked compare-and-blank now (review advisory 2).
     monkeypatch.setattr(project_paths, "save_local_setting", refuse)
+    monkeypatch.setattr(project_paths, "blank_local_setting_if_equal", refuse)
     assert secret_store.migrate_secrets_to_keyring((NTFY,)) == {NTFY: "blank_failed"}
     assert backend.values[(secret_store.KEYRING_SERVICE, NTFY)] == "tk-9"
     assert read()[NTFY] == "tk-9"
@@ -144,3 +146,37 @@ def test_saving_a_typed_token_goes_to_the_store_or_falls_back_to_json(settings, 
     _use(monkeypatch, FakeKeyring(fail_set=True))
     assert secret_store.save_secret_setting(NTFY, "newer") == "json"
     assert read()[NTFY] == "newer"
+
+
+def test_a_failed_verification_leaves_no_store_entry_to_shadow_the_json(settings, monkeypatch):
+    write, read = settings
+    write({OPENAI: "sk-123"})
+    backend = _use(monkeypatch, FakeKeyring(mangle=True))
+    assert secret_store.migrate_secrets_to_keyring((OPENAI,)) == {OPENAI: "kept_in_json"}
+    assert (secret_store.KEYRING_SERVICE, OPENAI) not in backend.values
+    assert secret_store.read_secret_setting(OPENAI) == "sk-123"
+
+
+def test_a_json_fallback_save_drops_the_older_stored_token(settings, monkeypatch):
+    write, read = settings
+    write({NTFY: ""})
+    backend = _use(monkeypatch, FakeKeyring())
+    backend.values[(secret_store.KEYRING_SERVICE, NTFY)] = "old-token"
+    backend.fail_set = True
+    assert secret_store.save_secret_setting(NTFY, "new-token") == "json"
+    assert (secret_store.KEYRING_SERVICE, NTFY) not in backend.values
+    assert secret_store.read_secret_setting(NTFY) == "new-token"
+
+
+def test_migration_never_blanks_a_value_saved_after_the_copy(settings, monkeypatch):
+    write, read = settings
+    write({NTFY: "tk-old"})
+
+    class SaveDuringCopy(FakeKeyring):
+        def set_password(self, service, name, value):
+            super().set_password(service, name, value)
+            write({NTFY: "tk-new"})  # the trader saves while the copy is in flight
+
+    _use(monkeypatch, SaveDuringCopy())
+    assert secret_store.migrate_secrets_to_keyring((NTFY,)) == {NTFY: "changed_meanwhile"}
+    assert read()[NTFY] == "tk-new"

@@ -35860,15 +35860,29 @@ def format_market_prep_payload_report(payload: dict | None) -> str:
 
     return "\n".join(lines).rstrip()
 
-from .runner import run_master
-
-
 # ============================================================================
 # GUI / ENTRYPOINT
 # ============================================================================
 
-from .runner import main
+# `run_master` and `main` live in runner, which imports this module. They are
+# resolved on first access (not at import) so that importing runner first -
+# as the scan child does - never meets a half-built runner (P2-11e).
+_RUNNER_EXPORTS = ("run_master", "main")
+
+
+def __getattr__(name):
+    if name in _RUNNER_EXPORTS:
+        from . import runner
+
+        return getattr(runner, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_RUNNER_EXPORTS))
 
 
 if __name__ == "__main__":
+    from .runner import main
+
     main()
