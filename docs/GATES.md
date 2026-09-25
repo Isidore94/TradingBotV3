@@ -3,6 +3,9 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #250 Rule lane off the Qt thread (P2-10): on a day whose rule is "size down in chop", the Mentor card opens with no stall and a trade sized over your usual in chop gets the size reflection [trader]
+- #249 Gap days from a statement (P2-10): desk closed, `journal_questrade_gaps.py --statement <portal export>` lists the FAILED days it covers and writes nothing; with `--apply --i-am-the-trader` those days leave the FAILED list, a second run adds no fills, and the "missing fills - not counted" line shrinks [trader]
+- #248 Made-up entries out of totals (P2-10): Day Review's P&L tile and sparkline, the Weekend Prep week line and the night day record leave a "needs missing fills" trade out of the sum but still list it [trader + lead]
 - #241 Plan rule copy (P1-7 7d): after the next Day Recap sets a rule for tomorrow, `trading_plan.md` has one `- Recap rule for <next session>: <rule>` line under What I am testing and your own lines there are unchanged [trader]
 - #240 Plan in the research pack (P1-7 7c): `research_pack.py export --out <scratch>` writes `trading_plan.md` and `plan_challenges.json`, and the manifest's `trading_plan` block says `ok` [lead]
 - #239 Plan challenges (P1-7 7b): once the plan has lines, the next night's ledger has a `plan_review` row (ok with a count, or skipped with a reason); a stored challenge shows on a Mentor card, Accept adds a dated line under Decisions and a reject is not asked again [trader + lead]

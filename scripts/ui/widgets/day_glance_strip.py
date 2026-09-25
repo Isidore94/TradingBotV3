@@ -60,6 +60,11 @@ def tile_texts(glance: Mapping[str, Any] | None) -> dict[str, tuple[str, str]]:
             else " R: not measured - a trade has no planned risk."
         )
         out["pnl"] = (text, tip)
+    # A trade with a made-up entry is listed but never summed; say so on the tile.
+    not_counted = str(data.get("pnl_not_counted_line") or "")
+    if not_counted and "pnl" in out:
+        value, tip = out["pnl"]
+        out["pnl"] = (value, f"{tip}\n{not_counted}.")
 
     if trades == 0:
         out["trades"] = ("—", "No trades on this session.")
