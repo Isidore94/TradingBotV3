@@ -395,25 +395,28 @@ def _trigger_trade_label(state: Mapping[str, Any]) -> list[Subject]:
     4), so the label the trader can still make BEFORE the outcome is known is
     actually offered. The section is forced and outside the budget.
     """
-    subjects: list[Subject] = []
+    subjects: list[tuple[bool, Subject]] = []
     seen: set[str] = set()
     for row in _rows(state, "trades"):
         trade_id = _text(row.get("trade_id"))
         if not trade_id or trade_id in seen:
             continue
-        if not _missing_material_fields(row):
+        missing = _missing_material_fields(row)
+        if not missing:
             continue
         seen.add(trade_id)
-        subjects.append(
+        subjects.append((
+            "stop" not in missing,
             Subject(
                 kind="trade_label",
                 subject_id=trade_id,
                 options=_answer_states(),
                 prompt=f"{_text(row.get('symbol'))} {_text(row.get('direction'))}".strip(),
                 detail={"trade_id": trade_id, "trade_date": _text(row.get("trade_date"))},
-            )
-        )
-    return subjects
+            ),
+        ))
+    # A trade with no stop is asked first (P8 P2); the order is otherwise kept.
+    return [subject for _has_stop, subject in sorted(subjects, key=lambda pair: pair[0])]
 
 
 #: What the trader may do with a waiting exit draft. Two verbs, and there is no

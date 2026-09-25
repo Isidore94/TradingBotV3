@@ -147,14 +147,15 @@ def test_words_typed_beside_a_blank_dropdown_are_an_answer(two_trades):
 
 
 def test_each_trade_asks_setup_thesis_stop_target_once(two_trades):
-    """Trader 2026-09-25: no catch-all note and no second setup row - the setup
-    list, then thesis (optional), stop and target, each asked once."""
+    """Trader 2026-09-25: no catch-all note and no second setup row - each field
+    asked once. P8 P2 (same day) put the stop first: stop, target, the setup
+    list, then thesis (optional)."""
     from PySide6.QtWidgets import QPlainTextEdit, QPushButton
 
     _store, card, first, _second = two_trades
     block = card._trade_blocks[first]
 
-    assert list(card._answer_inputs[first]) == ["thesis", "stop", "target"]
+    assert list(card._answer_inputs[first]) == ["stop", "target", "thesis"]
     assert card.setup_choice_box(first) is not None
     texts = [button.text() for button in block.findChildren(QPushButton)]
     assert not any("local AI" in text for text in texts)

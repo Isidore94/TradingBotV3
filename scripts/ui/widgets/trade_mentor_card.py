@@ -1630,13 +1630,15 @@ class TradeMentorCard(QWidget):
         heading.setObjectName("MutedLabel")
         block_layout.addWidget(heading)
         self._trade_headings[trade_id] = heading
-        # One ask per thing: the setup list, then thesis / stop / target rows.
-        # No catch-all note box and no second setup row (trader 2026-09-25).
-        self._add_setup_confirm(question, block, block_layout)
+        # One ask per thing, in `MATERIAL_FIELDS` order: stop, target, the
+        # setup list, then thesis (P8 P2). No catch-all note box and no second
+        # setup row (trader 2026-09-25).
         fields: dict[str, tuple[QComboBox, QLineEdit]] = {}
         for name in question.missing:
-            if name == "setup" and trade_id in self._setup_choice_boxes:
-                continue
+            if name == "setup":
+                self._add_setup_confirm(question, block, block_layout)
+                if trade_id in self._setup_choice_boxes:
+                    continue
             row = QWidget(block)
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
