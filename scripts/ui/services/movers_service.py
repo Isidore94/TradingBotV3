@@ -25,8 +25,10 @@ Each tick (once per 5-minute bar, 20 s after the boundary, regular hours only):
    the Alert Center's desk sound in DESK, nothing otherwise; each announced name
    is a `kind: notice` row in its outcome log.
 
-Zero IB historical or market-data traffic: the scanner client sends scanner
-subscriptions only, from the worker thread. No watchlist or Focus writes. A failed
+Zero IB historical traffic: the scanner client sends scanner subscriptions only,
+from the worker thread. The one market-data exception is the options chase (P10,
+`options_chase_service`, its own client id): option snapshot quotes for at most
+3 Pop names per tick, after the final board, on this worker. Display only: no alerts, no watchlist or Focus writes. A failed
 tick keeps the last good board and says so in the status line.
 """
 
@@ -285,8 +287,11 @@ class MoversService(QObject):
         push_sender: Callable[[str, str], Mapping[str, Any]] | None = None,
         hidden_provider: Callable[[], tuple[str, set[str]]] | None = None,
         sector_hidden: Callable[[str], bool] | None = None,
+        options_chase=None,
     ) -> None:
         super().__init__(parent)
+        # The options chase (P10): None = off. It runs on this worker after the final board.
+        self._options_chase = options_chase
         self._industry_provider = industry_provider or default_industry_map
         self._earnings_provider = earnings_provider or default_earnings_names
         if outcomes_path is None:
@@ -406,6 +411,9 @@ class MoversService(QObject):
         if client is not None:
             # Disconnect joins a thread: never on the Qt thread.
             threading.Thread(target=client.close, name="movers-ib-scanner-close",
+                             daemon=True).start()
+        if self._options_chase is not None:
+            threading.Thread(target=self._options_chase.close, name="options-chase-close",
                              daemon=True).start()
 
     def _arm(self) -> None:
@@ -545,6 +553,24 @@ class MoversService(QObject):
                         history[symbol], before=today, local_tz=local_tz
                     )
         self._publish(series, spy, now, focus, local_tz, final=True)
+        self._run_options_chase(series, now)
+
+    def _run_options_chase(self, series: Mapping[str, list], now: datetime) -> None:
+        """Chain + snapshot quotes for the top Pop names (own IB client id), then republish
+        the board with each Pop row's `opt`. A failure leaves the board as it was."""
+        chase = self._options_chase
+        if chase is None:
+            return
+        try:
+            prices = {s: float(bars[-1]["close"]) for s, bars in series.items()
+                      if bars and bars[-1].get("close") is not None}
+            chase.run(self._board, prices, now=now)
+            board = chase.annotate(self._board)
+        except Exception:
+            logging.warning("Movers: options chase failed", exc_info=True)
+            return
+        self._board = board
+        self.moversChanged.emit(dict(board))
 
     def _publish(self, series, spy, now, focus, local_tz, *, final: bool) -> None:
         """Build and emit. Only the tick's FINAL publish advances persistence
@@ -567,6 +593,9 @@ class MoversService(QObject):
         board["candidate_source"] = self._candidate_source
         board["scanner_names"] = len(self._scanner_names)
         board["scanner_error"] = self._scanner_error
+        if self._options_chase is not None:
+            # Last tick's chase results, so the Opt column holds until this tick's chase lands.
+            board = self._options_chase.annotate(board)
         self._board = board
         self._last_success = datetime.now()
         self.moversChanged.emit(dict(board))
