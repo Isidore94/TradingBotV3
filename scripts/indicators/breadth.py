@@ -69,6 +69,31 @@ class BreadthReading:
         }
 
 
+#: A reading with fewer than this share of names known (for A/D and SMA20) is
+#: THIN: shown as such, never leaned on, never graded and never stored.
+MIN_COVERAGE = 0.80
+
+
+def known_names(row: Mapping[str, Any]) -> int | None:
+    """Names known for BOTH A/D and SMA20, or None when the row has no counts."""
+    try:
+        total = int(row["names_total"])
+        ad_known = total - int(row["ad_unknown"])
+        sma_known = int(row["sma20_known"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return max(0, min(ad_known, sma_known)) if total > 0 else 0
+
+
+def is_thin(row: Mapping[str, Any]) -> bool:
+    """True when under MIN_COVERAGE of names are known. A row with no counts is not judged."""
+    known = known_names(row)
+    if known is None:
+        return False
+    total = int(row.get("names_total") or 0)
+    return total <= 0 or known < MIN_COVERAGE * total
+
+
 def _pct(part: int, whole: int) -> float | None:
     return (part / whole * 100.0) if whole else None
 
@@ -161,4 +186,4 @@ def compute_breadth(
     )
 
 
-__all__ = ["RULE_VERSION", "SMA_FAST", "SMA_SLOW", "BreadthReading", "compute_breadth", "name_facts"]
+__all__ = ["MIN_COVERAGE", "is_thin", "known_names", "RULE_VERSION","SMA_FAST", "SMA_SLOW", "BreadthReading", "compute_breadth", "name_facts"]

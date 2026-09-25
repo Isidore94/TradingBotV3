@@ -85,6 +85,11 @@ def test_the_reading_counts_unknown_apart():
 
 
 # -- the store ---------------------------------------------------------------
+#: Four more names that close up, so a fixture with one MISSING name stays above
+#: the 80% coverage floor.
+_UP4 = {f"UP{i}": [10.0] * 59 + [12.0] for i in range(4)}
+
+
 def _cache(tmp_path, names_closes: dict[str, list[float]], *, written: datetime):
     folder = tmp_path / "daily_bars"
     folder.mkdir()
@@ -102,13 +107,17 @@ def _cache(tmp_path, names_closes: dict[str, list[float]], *, written: datetime)
 
 def test_the_store_is_append_only_and_keyed_by_session(tmp_path):
     path = tmp_path / "market_breadth.jsonl"
-    reading = compute_breadth({}, universe=["A"], session="2026-09-24", prior_session="2026-09-23")
+    reading = compute_breadth(
+        {"A": _bars([10.0] * 59 + [12.0])}, universe=["A"],
+        session="2026-09-24", prior_session="2026-09-23",
+    )
     assert store.append_breadth(reading, path=path) is True
     assert store.append_breadth(reading, path=path) is False
     assert len(store.read_rows(path)) == 1
     row = store.row_for_session("2026-09-24", path=path)
     assert row["universe"] == store.UNIVERSE_ALL
-    assert row["pct_above_sma20"] is None
+    assert row["pct_above_sma20"] == 100.0
+    assert row["ad_unknown"] == 0
 
 
 def test_a_file_written_before_the_close_is_unknown_for_that_session(tmp_path):
@@ -121,7 +130,8 @@ def test_a_file_written_before_the_close_is_unknown_for_that_session(tmp_path):
 
 
 def test_the_night_records_the_last_completed_session(tmp_path, monkeypatch):
-    closes = {"AAA": [10.0] * 59 + [12.0], "BBB": [10.0] * 59 + [9.0]}
+    # 6 of 7 names known (86%), above the coverage floor.
+    closes = {"AAA": [10.0] * 59 + [12.0], "BBB": [10.0] * 59 + [9.0], **_UP4}
     after_close = datetime(2026, 9, 24, 17, 0, tzinfo=ET)
     folder, universe = _cache(tmp_path, closes, written=after_close)
     path = tmp_path / "market_breadth.jsonl"
@@ -136,14 +146,14 @@ def test_the_night_records_the_last_completed_session(tmp_path, monkeypatch):
     assert first["written"] is True and first["session"] == "2026-09-24"
     assert again["written"] is False
     row = store.row_for_session("2026-09-24")
-    assert (row["advancers"], row["decliners"], row["ad_unknown"]) == (1, 1, 1)
+    assert (row["advancers"], row["decliners"], row["ad_unknown"]) == (5, 1, 1)
     assert row["source"] == store.SOURCE_NIGHT
 
 
 def test_the_read_grades_slot_records_breadth(tmp_path, monkeypatch):
     from ai_jobs import read_grades_mature
 
-    closes = {"AAA": [10.0] * 59 + [12.0]}
+    closes = {"AAA": [10.0] * 59 + [12.0], **_UP4}
     folder, universe = _cache(tmp_path, closes, written=datetime(2026, 9, 24, 17, 0, tzinfo=ET))
     monkeypatch.setattr(project_paths, "MARKET_BREADTH_FILE", tmp_path / "b.jsonl")
     monkeypatch.setattr(project_paths, "DAILY_BARS_CACHE_DIR", folder)
@@ -159,7 +169,7 @@ def test_the_read_grades_slot_records_breadth(tmp_path, monkeypatch):
 
 
 def test_the_backfill_is_dry_by_default(tmp_path, monkeypatch, capsys):
-    closes = {"AAA": [10.0] * 59 + [12.0]}
+    closes = {"AAA": [10.0] * 59 + [12.0], **_UP4}
     folder, universe = _cache(tmp_path, closes, written=datetime(2026, 9, 24, 17, 0, tzinfo=ET))
     path = tmp_path / "b.jsonl"
     monkeypatch.setattr(project_paths, "MARKET_BREADTH_FILE", path)
@@ -222,3 +232,57 @@ def test_an_open_session_is_pending_and_a_missing_close_is_unmeasured():
     assert missing[0]["verdict"].startswith("unmeasured")
     assert read["axes"][1]["text"] == "breadth unknown"
     assert market_axes.grade_summary(missing)["unmeasured"] == 1
+
+
+# -- coverage floor (review follow-up) -------------------------------------------
+def test_the_axis_names_the_unknown_count():
+    row = {"names_total": 1467, "advancers": 490, "decliners": 750, "unchanged": 13,
+           "ad_unknown": 214, "sma20_known": 1253, "pct_above_sma20": 27.0, "pct_above_sma50": 29.0}
+    axis = market_axes.breadth_axis(row)
+    assert axis["state"] == "weak" and axis["lean"] == "down"
+    assert "A/D 490/750 (214 unknown)" in axis["text"]
+
+
+def test_a_thin_row_is_thin_has_no_lean_and_is_never_graded():
+    row = {"names_total": 1467, "advancers": 39, "decliners": 131, "unchanged": 0,
+           "ad_unknown": 1297, "sma20_known": 170, "pct_above_sma20": 20.0}
+    axis = market_axes.breadth_axis(row)
+    assert axis["state"] == "thin" and axis["lean"] == ""
+    assert axis["text"] == "breadth thin (170 known)"
+    grades = market_axes.grade_axes(
+        {"basis": "2026-09-23", "axes": [axis]}, spy_daily_bars=[],
+        target_session="2026-09-24", now=datetime(2026, 9, 24, 17, 0, tzinfo=ET),
+    )
+    assert grades[0]["verdict"] == market_axes.VERDICT_NO_CALL
+
+
+def test_a_thin_session_is_never_written_so_a_later_retry_can(tmp_path, monkeypatch):
+    closes = {name: [10.0] * 59 + [12.0] for name in ("AAA", "BBB")}
+    folder, universe = _cache(tmp_path, closes, written=datetime(2026, 9, 24, 17, 0, tzinfo=ET))
+    universe.write_text("AAA\nBBB\nX1\nX2\nX3\n", encoding="utf-8")  # 2 of 5 known
+    path = tmp_path / "market_breadth.jsonl"
+    monkeypatch.setattr(project_paths, "MARKET_BREADTH_FILE", path)
+    monkeypatch.setattr(project_paths, "DAILY_BARS_CACHE_DIR", folder)
+    monkeypatch.setattr(project_paths, "UNIVERSE_ALL_FILE", universe)
+    night = datetime(2026, 9, 24, 23, 30, tzinfo=ET)
+
+    thin = store.record_last_session(night)
+    assert thin["written"] is False and "thin" in thin["reason"]
+    assert not path.exists()
+
+    universe.write_text("AAA\nBBB\n", encoding="utf-8")
+    good = store.record_last_session(night)
+    assert good["written"] is True
+    assert store.row_for_session("2026-09-24")["ad_unknown"] == 0
+
+
+def test_the_backfill_never_writes_a_thin_row(tmp_path, monkeypatch):
+    closes = {"AAA": [10.0] * 59 + [12.0]}
+    folder, universe = _cache(tmp_path, closes, written=datetime(2026, 9, 24, 17, 0, tzinfo=ET))
+    path = tmp_path / "b.jsonl"  # universe = AAA + MISSING -> 1 of 2 known
+    monkeypatch.setattr(project_paths, "MARKET_BREADTH_FILE", path)
+    monkeypatch.setattr(project_paths, "DAILY_BARS_CACHE_DIR", folder)
+    monkeypatch.setattr(project_paths, "UNIVERSE_ALL_FILE", universe)
+    monkeypatch.setattr(store, "_sessions_since", lambda _since, _now: ["2026-09-24"])
+    assert store.main(["backfill", "--since", "2026-09-24", "--apply"]) == 0
+    assert not path.exists()

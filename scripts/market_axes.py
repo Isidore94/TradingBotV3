@@ -92,9 +92,14 @@ def _number(value: Any) -> float | None:
 
 def breadth_axis(row: Mapping[str, Any] | None) -> dict[str, Any]:
     """The breadth axis from one stored breadth row. No row is `unknown`."""
+    from indicators.breadth import is_thin, known_names
+
     pct20 = _number((row or {}).get("pct_above_sma20"))
     if pct20 is None:
         return {"axis": "breadth", "state": "unknown", "lean": "", "text": "breadth unknown"}
+    if is_thin(row or {}):
+        known = known_names(row or {}) or 0
+        return {"axis": "breadth", "state": "thin", "lean": "", "text": f"breadth thin ({known} known)"}
     if pct20 >= BREADTH_STRONG_PCT:
         state, lean = "strong", "up"
     elif pct20 <= BREADTH_WEAK_PCT:
@@ -107,7 +112,9 @@ def breadth_axis(row: Mapping[str, Any] | None) -> dict[str, Any]:
         parts.append(f"{pct50:.0f}% > SMA50")
     up, down = (row or {}).get("advancers"), (row or {}).get("decliners")
     if isinstance(up, int) and isinstance(down, int) and (up or down):
-        parts.append(f"A/D {up}/{down}")
+        unknown = (row or {}).get("ad_unknown")
+        suffix = f" ({unknown} unknown)" if isinstance(unknown, int) and unknown > 0 else ""
+        parts.append(f"A/D {up}/{down}{suffix}")
     return {
         "axis": "breadth",
         "state": state,
@@ -357,8 +364,10 @@ def day_axes(session: str, now: datetime) -> dict[str, Any]:
     day = date.fromisoformat(str(session)[:10])
     basis = market_calendar.previous_session(day).isoformat()
     read = morning_read_for(basis)
-    # SPY from the machine daily cache the D1 labels are built from (the
-    # grader's loader falls back to it too; the durable store has no SPY file).
+    # SPY from the machine daily cache (the grader's loader falls back to it).
+    # Not `market_read_grades.daily_bars_for_symbol`: that calls
+    # `chart_snapshot.load_d1_bars`, and `test_tj11_day_review_page` pins
+    # read_day's calls to that reader to the decided names only.
     grades = grade_axes(
         read,
         spy_daily_bars=d1_environment_store._cached_daily_bars("SPY"),

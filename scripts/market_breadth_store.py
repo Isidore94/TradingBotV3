@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import project_paths
-from indicators.breadth import RULE_VERSION, BreadthReading, compute_breadth
+from indicators.breadth import RULE_VERSION, BreadthReading, compute_breadth, is_thin, known_names
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +105,10 @@ def append_breadth(
     target = _resolve(path)
     key = (str(reading.session or "")[:10], str(universe or "").strip(), str(reading.rule_version))
     if not key[0] or not key[1]:
+        return False
+    # A thin reading is never stored: the store is append-only, so a thin row
+    # would block the good row a later retry could write for the same key.
+    if is_thin(reading.as_row()):
         return False
     try:
         if key in {row_key(row) for row in read_rows(target)}:
@@ -275,6 +279,13 @@ def record_last_session(now: datetime, *, path: Any = None, **kwargs: Any) -> di
         reading, as_of = compute_for_session(session, **kwargs)
         if not reading.names_total:
             return {"session": session, "written": False, "reason": "no universe_all names"}
+        if is_thin(reading.as_row()):
+            known = known_names(reading.as_row())
+            return {
+                "session": session,
+                "written": False,
+                "reason": f"thin: {known} of {reading.names_total} names known; retry later",
+            }
         written = append_breadth(
             reading, universe_as_of=as_of, source=SOURCE_NIGHT, path=path, now=now
         )
@@ -323,6 +334,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"(unknown {row['ad_unknown']}), >SMA20 {row['pct_above_sma20']}%, "
             f">SMA50 {row['pct_above_sma50']}%"
         )
+        if is_thin(row):
+            print(f"  thin ({known_names(row)} of {row['names_total']} known) - never written")
+            continue
         if args.apply:
             append_breadth(reading, universe_as_of=as_of, source=SOURCE_BACKFILL, path=target)
     if not args.apply:
