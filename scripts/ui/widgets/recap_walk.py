@@ -170,7 +170,16 @@ class WalkWriter:
     def rule(self, *, session, text, tag="", supersedes=""):
         import recap_store
 
-        return recap_store.record_rule(session_date=session, text=text, tag=tag, supersedes=supersedes)
+        row = recap_store.record_rule(session_date=session, text=text, tag=tag, supersedes=supersedes)
+        # P1-7 7d: the same rule goes under the plan's "What I am testing". The
+        # recap row is already saved, so a plan write failure is logged, not raised.
+        try:
+            import recap_rule_loop
+
+            recap_rule_loop.write_rule_to_plan(row)
+        except Exception:  # noqa: BLE001 - the recap is the record; the plan copy is secondary
+            logging.warning("The rule was saved but not copied into the trading plan.", exc_info=True)
+        return row
 
     def rule_check(self, *, session, answer, rule_id="", supersedes=""):
         import recap_store

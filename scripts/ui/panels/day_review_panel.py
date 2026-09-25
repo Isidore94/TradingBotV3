@@ -759,6 +759,10 @@ class DayReviewPanel(QFrame):
         self._build_traded()
         self._build_chart_section()
         self._build_ideas()
+        # P1-7: the trader's plan, read-only, read on its own worker.
+        from ui.widgets.trading_plan_view import TradingPlanView
+
+        self.plan_view = TradingPlanView(self)
         self._build_layout()
         self.refresh_reader_measure()
 
@@ -1572,6 +1576,7 @@ class DayReviewPanel(QFrame):
         body.addWidget(self.columns, 1)
         body.addWidget(self._walkaway_row())
         body.addWidget(self._bottom_row())
+        body.addWidget(self.plan_view)
         body.addWidget(self.status)
         # No trailing stretch: the slack belongs to the two columns, and inside
         # them to the chart. A stretch here is what left a 3800 px screen with
@@ -1912,6 +1917,7 @@ class DayReviewPanel(QFrame):
         backfill_bars = not self._next_read_skips_backfill
         self._next_read_skips_backfill = False
         self._request_day_read(session, backfill_bars=backfill_bars)
+        self.plan_view.refresh()
 
     def _request_day_read(self, session: str, *, backfill_bars: bool) -> None:
         """Run one existing reader, or queue its replacement after it finishes."""
@@ -3439,6 +3445,10 @@ class DayReviewPanel(QFrame):
         # (bounded) rather than abandoned.
         try:
             self.ideas_card.shutdown()
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            pass
+        try:
+            self.plan_view.shutdown()
         except Exception:  # noqa: BLE001 - shutdown must not raise
             pass
 

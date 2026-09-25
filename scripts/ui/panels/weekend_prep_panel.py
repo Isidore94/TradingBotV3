@@ -668,6 +668,11 @@ class WeekReviewPage(_StepPage):
         # so the ten-row floor above still has exactly one owner in this file.
         self.ideas_card = _IdeasCard(self)
         self._layout.addWidget(self.ideas_card)
+        # P1-7: the trader's plan, read-only, read on its own worker.
+        from ui.widgets.trading_plan_view import TradingPlanView
+
+        self.plan_view = TradingPlanView(self, collapsed=True)
+        self._layout.addWidget(self.plan_view)
         self._layout.addWidget(self.summary, 1)
         self._finish_layout()
         self._render(prep_service.empty_week_payload())
@@ -704,6 +709,7 @@ class WeekReviewPage(_StepPage):
         self._worker = worker
         worker.start()
         self.coach.load()
+        self.plan_view.refresh()
 
     def _on_week_ready(self, payload: object, generation: int) -> None:
         self._reading = False
@@ -744,6 +750,10 @@ class WeekReviewPage(_StepPage):
             self.ideas_card.shutdown()
         except Exception:  # noqa: BLE001 - shutdown must not raise
             logging.debug("The ideas card could not be shut down.", exc_info=True)
+        try:
+            self.plan_view.shutdown()
+        except Exception:  # noqa: BLE001 - shutdown must not raise
+            logging.debug("The plan view could not be shut down.", exc_info=True)
 
     # -- rendering, all of it on values the worker already read ------------
     def _render(self, payload) -> None:

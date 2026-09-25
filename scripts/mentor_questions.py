@@ -113,6 +113,9 @@ WRITES_MENTOR_CARD = "market_journal.entries:mentor.prediction"
 #: prediction - a second writer would be a second opinion about what the trader
 #: clicked.
 WRITES_EXIT_FIELDS = "trade_mentor_trade_check.confirm_exit_fields"
+#: P1-7 7b. A plan challenge's answer lands in the challenge answers file, and
+#: Accept also appends a dated line to the plan's Decisions.
+WRITES_PLAN_CHALLENGE = "plan_challenges.answer_challenge"
 
 #: Cadences. `once` is forever, `weekly` is once per EXCHANGE week (the ISO week
 #: of the session), `daily` is once per session, `per_card` is every card.
@@ -763,6 +766,44 @@ def _trigger_ai_question(state: Mapping[str, Any]) -> list[Subject]:
     ]
 
 
+PLAN_CHALLENGE_KIND = "plan_challenge"
+PLAN_CHALLENGE_OPTIONS = ("accept", "reject_too_few", "reject_wrong_evidence", "reject_disagree")
+
+
+def _trigger_plan_challenge(state: Mapping[str, Any]) -> list[Subject]:
+    """P1-7 7b: the night's open challenges to the trader's plan.
+
+    The host hands in `plan_challenges`, already filtered to OPEN ones
+    (not answered, not expired) by `plan_challenges.open_challenges`.
+    """
+    subjects: list[Subject] = []
+    seen: set[str] = set()
+    for row in _rows(state, "plan_challenges"):
+        challenge_id = _text(row.get("challenge_id"))
+        if not challenge_id or challenge_id in seen:
+            continue
+        seen.add(challenge_id)
+        line = _text(row.get("plan_line_text"))
+        subjects.append(
+            Subject(
+                kind=PLAN_CHALLENGE_KIND,
+                subject_id=challenge_id,
+                options=_with_answer_states(*PLAN_CHALLENGE_OPTIONS),
+                prompt=(
+                    f"Your plan says: \"{line}\". The night AI: {_text(row.get('text'))} "
+                    f"(evidence {_text(row.get('evidence'))}). Accept adds it to Decisions."
+                ),
+                detail={
+                    "challenge_id": challenge_id,
+                    "plan_line": _text(row.get("plan_line")),
+                    "evidence": _text(row.get("evidence")),
+                    "session": _text(row.get("session_date")),
+                },
+            )
+        )
+    return subjects
+
+
 REGISTRY: tuple[QuestionKind, ...] = (
     QuestionKind(
         kind="grader_gap",
@@ -872,6 +913,21 @@ REGISTRY: tuple[QuestionKind, ...] = (
         # AWAKE since TJ-12 (lead, 2026-09-20): `day_report_card.long_hold_lines`
         # reads this answer and reports an unanswered position as UNANSWERED -
         # never as "the thesis is intact", which is a claim nobody made.
+        dormant_until="",
+    ),
+    # P1-7 7b (2026-09-25): the night's challenge to one plan line. Accept
+    # appends a dated Decisions line; any other click is a reject with that
+    # reason. Read by `plan_challenges.challenge_status`.
+    QuestionKind(
+        kind=PLAN_CHALLENGE_KIND,
+        trigger=_trigger_plan_challenge,
+        options=_with_answer_states(*PLAN_CHALLENGE_OPTIONS),
+        writes=WRITES_PLAN_CHALLENGE,
+        consumer="plan_challenges.challenge_status",
+        answer_key="decision",
+        cadence=CADENCE_ONCE,
+        expiry="7 days after the night wrote it",
+        priority=55,
         dormant_until="",
     ),
     QuestionKind(
@@ -1192,6 +1248,14 @@ def record_answer(
             "reason": "the card's Confirm or Correct button writes an exit's fields",
         }
     state = _text((answer or {}).get("state"))
+    if kind.writes == WRITES_PLAN_CHALLENGE and state != STOP_ASKING:
+        import plan_challenges
+
+        try:
+            row = plan_challenges.answer_challenge(subject.subject_id, state, now=now)
+        except plan_challenges.PlanChallengeError as exc:
+            return {"ok": False, "reason": str(exc)}
+        return {"ok": True, "row": row, "answer_key": kind.answer_key}
     if state == STOP_ASKING:
         # `Stop asking this` is not an answer and is never stored as one. The
         # service retires the subject; see `TradeMentorService.stop_asking`.

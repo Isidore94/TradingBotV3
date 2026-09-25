@@ -101,6 +101,70 @@ def test_a_rule_written_tonight_is_tomorrows_not_todays(recap_file):
 
 
 # ---------------------------------------------------------------------------
+# P1-7 7d: the rule for tomorrow lands in the plan's "What I am testing"
+# ---------------------------------------------------------------------------
+@pytest.fixture()
+def plan_file(tmp_path, monkeypatch):
+    import project_paths
+
+    monkeypatch.setattr(project_paths, "TRADING_PLAN_FILE", tmp_path / "trading_plan.md")
+    monkeypatch.setattr(project_paths, "TRADING_PLAN_HISTORY_DIR", tmp_path / "trading_plan_history")
+    (tmp_path / "trading_plan.md").write_text("## What I am testing\n\n- my own idea\n\n## Decisions\n",
+                                              encoding="utf-8")
+    return tmp_path / "trading_plan.md"
+
+
+def test_the_walk_writer_copies_the_rule_into_the_plan(recap_file, plan_file):
+    import trading_plan
+    from ui.widgets.recap_walk import WalkWriter
+
+    writer = WalkWriter()
+    writer.rule(session=SESSION, text="respect the stop", tag="respect_stop")
+    parsed = trading_plan.parse_plan(plan_file.read_text(encoding="utf-8"))
+    assert parsed["sections"]["What I am testing"] == [
+        "my own idea", f"Recap rule for {NEXT}: respect the stop",
+    ]
+
+    writer.rule(session=NEXT, text="hold winners to 1R", tag="hold_winners")
+    parsed = trading_plan.parse_plan(plan_file.read_text(encoding="utf-8"))
+    assert parsed["sections"]["What I am testing"] == [
+        "my own idea", "Recap rule for 2026-09-24: hold winners to 1R",
+    ]
+    assert len(trading_plan.snapshots()) == 3
+
+
+def test_editing_an_older_rule_leaves_the_plan_alone(recap_file, plan_file):
+    import recap_rule_loop as loop
+    import recap_store
+
+    older = recap_store.record_rule(session_date=SESSION, text="a", now=EVENING)
+    loop.write_rule_to_plan(older)
+    recap_store.record_rule(session_date=NEXT, text="b", now=EVENING + timedelta(days=1))
+    text_before = plan_file.read_text(encoding="utf-8")
+    fixed = recap_store.record_rule(session_date=SESSION, text="a, fixed", supersedes=older["id"],
+                                    now=EVENING + timedelta(days=1, minutes=5))
+
+    assert loop.write_rule_to_plan(fixed)["changed"] is False
+    assert plan_file.read_text(encoding="utf-8") == text_before
+
+
+def test_a_plan_write_failure_never_loses_the_recap_rule(recap_file, plan_file, monkeypatch, caplog):
+    import recap_rule_loop as loop
+    import recap_store
+    from ui.widgets.recap_walk import WalkWriter
+
+    def boom(*_a, **_k):
+        raise RuntimeError("plan locked")
+
+    monkeypatch.setattr(loop, "write_rule_to_plan", boom)
+    with caplog.at_level("WARNING"):
+        row = WalkWriter().rule(session=SESSION, text="respect the stop")
+    assert row["text"] == "respect the stop"
+    assert recap_store.latest_rule_before(NEXT)["id"] == row["id"]
+    assert "not copied into the trading plan" in caplog.text
+
+
+# ---------------------------------------------------------------------------
 # 2. the desk chip
 # ---------------------------------------------------------------------------
 @pytest.fixture()

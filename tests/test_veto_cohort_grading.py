@@ -675,6 +675,8 @@ def test_the_scope_can_be_selected_on_demand():
         # `review_policy_draft.json`.
         "journal_enrichment",
         "review_policy_draft",
+        # P1-7 7b (2026-09-25): plan challenges, a stage 3 model slot.
+        "plan_review",
         # P1-4 4d (2026-09-25): the Saturday setup-keys narration, before setup_research.
         "setup_keys_narration",
         "setup_research",
