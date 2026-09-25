@@ -79,6 +79,8 @@ class SetupTableModel(QAbstractTableModel):
         ("plan_tp1", "TP1"),
         ("plan_r", "TP1 R"),
         ("plan_shares", "Shares"),
+        # P1-6 6d: an armed or fired Pullback alert on this name, read only.
+        ("timing", "Timing"),
     )
 
     #: The P1-6 plan columns, hidden together (compact profile, or no plan).
@@ -101,6 +103,8 @@ class SetupTableModel(QAbstractTableModel):
         self._plan_levels: dict[str, dict] = {}
         self._risk_dollars: float | None = None
         self._plans: dict[int, dict | None] = {}
+        #: P1-6 6d: `entry_timing.build_timing` map, built on the panel's worker.
+        self._timing: dict = {}
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows)
@@ -166,8 +170,14 @@ class SetupTableModel(QAbstractTableModel):
                 line = entry_plan.plan_line(self.plan_for(row), self._risk_dollars)
                 if key != "key_level":
                     return line or "No plan: the last scan has no level data for this symbol."
-                base = _tooltip(row, key)
-                return f"{base}\n{line}" if base and line else (base or line)
+                timing = self.timing_text(row)
+                lines = [text for text in (_tooltip(row, key), line, timing) if text]
+                return "\n".join(lines)
+            if key == "timing":
+                return (
+                    "Entry timing from your Pullback alert on this name: the last trigger "
+                    "that fired and its bar time, or 'armed' while it waits. Read only."
+                )
             return _tooltip(row, key)
         return None
 
@@ -215,6 +225,28 @@ class SetupTableModel(QAbstractTableModel):
             except Exception:  # noqa: BLE001 - a plan cell never costs the table
                 self._plans[key] = None
         return self._plans[key]
+
+    def set_entry_timing(self, mapping) -> bool:
+        """P1-6 6d: the timing chips. Returns True when anything changed."""
+        mapping = dict(mapping or {})
+        if mapping == self._timing:
+            return False
+        self.beginResetModel()
+        self._timing = mapping
+        self.endResetModel()
+        return True
+
+    def timing_text(self, row: SetupRow) -> str:
+        """`timing: H1 15-EMA held 10:30`, `timing: pullback armed`, or ''."""
+        if not self._timing:
+            return ""
+        import entry_timing
+
+        chip = entry_timing.timing_for(self._timing, row.symbol, row.side)
+        return str(chip.get("text") or "") if chip else ""
+
+    def has_timing(self) -> bool:
+        return bool(self._timing) and any(self.timing_text(row) for row in self._rows)
 
     def has_plans(self) -> bool:
         """True when any row has a plan (the scan's level data has landed)."""
@@ -334,6 +366,8 @@ class SetupTableModel(QAbstractTableModel):
             import entry_plan
 
             return entry_plan.plan_cells(self.plan_for(row), self._risk_dollars)[key]
+        if key == "timing":
+            return self.timing_text(row).removeprefix("timing: ")
         return ""
 
     def _sort_value(self, row: SetupRow, key: str) -> Any:

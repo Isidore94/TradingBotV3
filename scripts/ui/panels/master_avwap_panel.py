@@ -388,6 +388,21 @@ class _AiStateCompressionWorker(QThread):
         self.done.emit(changed)
 
 
+class _EntryTimingWorker(QThread):
+    """P1-6 6d: read the chart-watch store and the review-event tail OFF the Qt thread."""
+
+    done = Signal(object)
+
+    def run(self) -> None:  # pragma: no cover - exercised through its seam
+        try:
+            import entry_timing
+
+            mapping = entry_timing.load_timing()
+        except Exception:  # noqa: BLE001 - a chip never costs the table
+            mapping = None
+        self.done.emit(mapping)
+
+
 class _PointsProjectionWorker(QThread):
     """Validate the bounded rich Points sidecar off the Qt thread."""
 
@@ -695,6 +710,8 @@ class MasterAvwapPanel(QWidget):
         self.report_poll_timer.timeout.connect(self._check_decision_day_roll)
         # The Oil & Gas / Real Estate switch is shared; follow a flip made elsewhere.
         self.report_poll_timer.timeout.connect(self.sync_sector_switch)
+        # P1-6 6d: the timing chips re-read on the same 30 s tick (worker only).
+        self.report_poll_timer.timeout.connect(self._start_entry_timing_read)
         start_staggered(self.report_poll_timer, 43_000)
         self.scheduler_timer = QTimer(self)
         self.scheduler_timer.setInterval(15_000)
@@ -1260,6 +1277,9 @@ class MasterAvwapPanel(QWidget):
                 # P1-6 6b: full profile only, once the scan's levels have landed;
                 # compact reads the same plan in the key-level tooltip.
                 self.table.setColumnHidden(column, True)
+            if key == "timing" and (profile == "compact" or not self.model.has_timing()):
+                # P1-6 6d: same rule; the chip rides the key-level tooltip in compact.
+                self.table.setColumnHidden(column, True)
         if profile == "compact":
             # The compact profile is untouched by G2b, elision included.
             self.table.setItemDelegateForColumn(key_level_column, None)
@@ -1779,8 +1799,29 @@ class MasterAvwapPanel(QWidget):
         if bool(changed):
             self.refresh_from_reports(emit_empty=False)
 
+    def _start_entry_timing_read(self) -> None:
+        """One timing read at a time; the Qt thread only starts it."""
+        worker = getattr(self, "_entry_timing_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        worker = _EntryTimingWorker(self)
+        worker.done.connect(self._on_entry_timing_ready)
+        worker.finished.connect(worker.deleteLater)
+        self._entry_timing_worker = worker
+        worker.start()
+
+    def _on_entry_timing_ready(self, mapping: object) -> None:
+        """Apply the chips; re-apply the column profile only when they changed."""
+        self._entry_timing_worker = None
+        if mapping is None or not self.model.set_entry_timing(mapping):
+            return
+        profile = self._column_profile or "compact"
+        self._column_profile = ""
+        self.set_column_profile(profile)
+
     def refresh_from_reports(self, emit_empty: bool = True) -> None:
         self._start_family_record_read()
+        self._start_entry_timing_read()
         self._start_scan_freshness_read()
         self._start_ai_state_compression_read()
         self._start_points_projection_read()
