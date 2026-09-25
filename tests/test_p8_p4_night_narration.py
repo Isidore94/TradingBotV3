@@ -187,3 +187,72 @@ def test_the_live_rejection_was_a_past_auction_and_the_model_is_told_so():
     assert "2026-09-24" in instructions
     assert "already past" in instructions
     assert job.PROMPT_VERSION != "econ_brief_narration_v1"
+
+
+# ---------------------------------------------------------------------------
+# 3. theta: a pick that was never quoted is dead once its window has passed
+# ---------------------------------------------------------------------------
+def _no_quote_pick(scan_date: str, *, expiry: str = "", symbol: str = "DDD") -> dict:
+    return {"symbol": symbol, "scan_date": scan_date, "bar_date": scan_date,
+            "strike": None, "expiry": expiry, "close": 100.0, "atr": 2.0,
+            "play_type": "put", "support_combo": "SMA_50", "supports": []}
+
+
+def _quoted_pick(scan_date: str) -> dict:
+    return {**_no_quote_pick(scan_date, symbol="BBB"), "strike": 95.0, "expiry": "2026-07-17"}
+
+
+def _grade(tmp_path, picks, as_of):
+    import market_calendar
+    import theta_pick_tracker
+
+    return theta_pick_tracker.grade_theta_picks(
+        picks, closes_for=lambda symbol: {}, calendar=market_calendar,
+        as_of=as_of, path=tmp_path / "theta_outcomes.csv",
+    )
+
+
+def test_a_never_quoted_pick_past_thirty_sessions_is_dead(tmp_path):
+    from datetime import date
+
+    # 2026-06-01 + 30 sessions is 2026-07-15 (06-19 and 07-03 are holidays).
+    rows = _grade(tmp_path, [_no_quote_pick("2026-06-01")], date(2026, 7, 15))
+    assert rows[0]["status"] == "dead"
+    assert rows[0]["unmeasured_reason"] == "never_quoted"
+    assert rows[0]["held_20"] is None
+    young = _grade(tmp_path, [_no_quote_pick("2026-06-01")], date(2026, 7, 14))
+    assert young[0]["status"] == "unmeasured"
+    assert "no_option_quote" in young[0]["unmeasured_reason"]
+
+
+def test_a_never_quoted_pick_with_an_expiry_is_dead_once_that_expiry_passes(tmp_path):
+    from datetime import date
+
+    pick = _no_quote_pick("2026-06-01", expiry="2026-06-12")
+    assert _grade(tmp_path, [pick], date(2026, 6, 12))[0]["status"] == "dead"
+    assert _grade(tmp_path, [pick], date(2026, 6, 11))[0]["status"] == "unmeasured"
+
+
+def test_the_theta_ledger_sentence_names_dead_picks_apart(tmp_path, monkeypatch):
+    from datetime import date, datetime
+
+    import market_calendar
+    import theta_pick_tracker
+    from ai_jobs import theta_grading
+
+    picks = [_no_quote_pick("2026-06-01"), _no_quote_pick("2026-07-10", symbol="EEE"),
+             _quoted_pick("2026-07-10")]
+    monkeypatch.setattr(theta_pick_tracker, "read_theta_picks", lambda path: picks)
+    outcomes = tmp_path / "outcomes.csv"
+    result = theta_grading.run_theta_pick_grading(
+        picks_path=tmp_path / "p.jsonl", outcomes_path=outcomes,
+        daily_bars_dir=tmp_path / "bars",
+        now=datetime(2026, 7, 16, 2, 0, tzinfo=market_calendar.MARKET_TZ),
+    )
+    assert result["as_of"] == date(2026, 7, 15).isoformat()
+    assert result["reason"].endswith(
+        "0 measured, 1 pending, 1 dead (never quoted), 1 unmeasured"
+    )
+    assert result["dead"] == 1
+    # The CSV is still rewritten in full, dead rows included.
+    assert outcomes.read_text(encoding="utf-8").count("\n") == 4

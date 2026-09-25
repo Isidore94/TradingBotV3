@@ -50,6 +50,7 @@ def run_theta_pick_grading(
     import market_calendar
     from project_paths import MASTER_AVWAP_THETA_OUTCOMES_FILE, THETA_PICKS_FILE
     from theta_pick_tracker import (
+        STATUS_DEAD,
         STATUS_MEASURED,
         STATUS_PENDING,
         STATUS_UNMEASURED,
@@ -83,7 +84,7 @@ def run_theta_pick_grading(
     )
     counts = {
         status: sum(1 for row in graded if row.get("status") == status)
-        for status in (STATUS_MEASURED, STATUS_PENDING, STATUS_UNMEASURED)
+        for status in (STATUS_MEASURED, STATUS_PENDING, STATUS_DEAD, STATUS_UNMEASURED)
     }
     _log.info(
         "Theta pick grading: %d pick(s) at %s -> %s", len(graded), as_of.isoformat(), counts
@@ -93,7 +94,7 @@ def run_theta_pick_grading(
         "reason": (
             f"graded {len(graded)} theta pick(s) as of {as_of.isoformat()}: "
             f"{counts[STATUS_MEASURED]} measured, {counts[STATUS_PENDING]} pending, "
-            f"{counts[STATUS_UNMEASURED]} unmeasured"
+            f"{counts[STATUS_DEAD]} dead (never quoted), {counts[STATUS_UNMEASURED]} unmeasured"
         ),
         "picks": len(rows),
         "as_of": as_of.isoformat(),
