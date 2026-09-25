@@ -42,6 +42,28 @@ def test_day_review_glance_keeps_made_up_trades_but_leaves_them_out_of_pnl():
     assert glance["pnl_not_counted"] == 2
 
 
+def test_day_review_pnl_tile_tooltip_says_what_was_not_counted():
+    import pytest
+
+    pytest.importorskip("PySide6")
+    import day_report_card
+    from ui.widgets.day_glance_strip import tile_texts
+
+    glance = day_report_card.glance({"trades": _rows()})
+    assert glance["pnl_not_counted_line"] == "2 trades need missing fills - not counted ($366.57)"
+    value, tip = tile_texts(glance)["pnl"]
+    assert "60" in value
+    assert "2 trades need missing fills - not counted ($366.57)" in tip  # before: absent
+
+    only_made_up = day_report_card.glance({"trades": [dict(MADE_UP)]})
+    _value, tip = tile_texts(only_made_up)["pnl"]
+    assert "1 trade needs missing fills - not counted ($341.57)" in tip
+
+    clean = day_report_card.glance({"trades": [dict(REAL)]})
+    assert clean["pnl_not_counted_line"] == ""
+    assert "not counted" not in tile_texts(clean)["pnl"][1]
+
+
 def test_day_review_sparkline_leaves_made_up_trades_out():
     from ui.services.day_review_service import _pnl_by_session
 
