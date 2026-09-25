@@ -19,10 +19,14 @@ Each tick (once per 5-minute bar, 20 s after the boundary, regular hours only):
    per session) and list persistence, and emits it;
 5. feeds the dip/rip outcome tracker and the Pop outcome tracker and appends
    their rows to `MOVERS_DIP_OUTCOMES_FILE` / `MOVERS_POP_OUTCOMES_FILE` (a
-   failed write loses the rows, never the board).
+   failed write loses the rows, never the board);
+6. announces the top new Pop / Dip-strong / Rip-weak names (`movers_notify`):
+   a phone push in AWAY/EVENING (sent here, on the worker), `moversNotice` for
+   the Alert Center's desk sound in DESK, nothing otherwise; each announced name
+   is a `kind: notice` row in its outcome log.
 
 Zero IB historical or market-data traffic: the scanner client sends scanner
-subscriptions only, from the worker thread. Display only: no alerts, no watchlist or Focus writes. A failed
+subscriptions only, from the worker thread. No watchlist or Focus writes. A failed
 tick keeps the last good board and says so in the status line.
 """
 
@@ -36,6 +40,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
+import movers_notify
 import movers_outcomes
 import movers_scan
 
@@ -49,6 +54,41 @@ def default_industry_map() -> dict[str, str]:
         for symbol, row in load_symbol_classifications().items()
         if row.get("industry")
     }
+
+
+def default_auto_mode() -> str:
+    """The Auto mode from the shared state file ('' when unreadable = nothing sent)."""
+    try:
+        from autopilot_core import read_auto_pilot_mode
+
+        return str(read_auto_pilot_mode() or "")
+    except Exception:
+        return ""
+
+
+def default_hidden_keys() -> tuple[str, set[str]]:
+    """(day, "SYM|side" keys) the trader hid on the Movers board today (local setting)."""
+    try:
+        from project_paths import get_local_setting
+
+        saved = get_local_setting("movers_board_hidden", {})
+    except Exception:
+        return "", set()
+    if not isinstance(saved, dict):
+        return "", set()
+    return str(saved.get("day") or ""), {str(k) for k in saved.get("keys") or [] if k}
+
+
+def default_sector_hidden(symbol: str) -> bool:
+    import sector_exclusion
+
+    return sector_exclusion.symbol_is_hidden(symbol)
+
+
+def default_push_sender(title: str, message: str) -> dict[str, Any]:
+    import push_notify
+
+    return push_notify.send_push(title, message, priority=movers_notify.PUSH_PRIORITY)
 
 
 def default_earnings_names(today: date) -> set[str]:
@@ -223,6 +263,8 @@ class MoversService(QObject):
 
     moversChanged = Signal(dict)
     statusChanged = Signal(str)
+    #: A DESK-mode notice (`MoversNotice.to_dict()`), for the Alert Center's sound.
+    moversNotice = Signal(dict)
 
     def __init__(
         self,
@@ -239,6 +281,10 @@ class MoversService(QObject):
         outcomes_path=None,
         scanner: Callable[[], Mapping[str, list[str]]] | None = None,
         pop_outcomes_path=None,
+        mode_provider: Callable[[], str] | None = None,
+        push_sender: Callable[[str, str], Mapping[str, Any]] | None = None,
+        hidden_provider: Callable[[], tuple[str, set[str]]] | None = None,
+        sector_hidden: Callable[[str], bool] | None = None,
     ) -> None:
         super().__init__(parent)
         self._industry_provider = industry_provider or default_industry_map
@@ -261,6 +307,11 @@ class MoversService(QObject):
         self._pop_outcomes_path = pop_outcomes_path
         self._tracker = movers_outcomes.DipOutcomeTracker()
         self._pop_tracker = movers_outcomes.PopOutcomeTracker()
+        self._notifier = movers_notify.MoversNotifier()
+        self._mode_provider = mode_provider or default_auto_mode
+        self._push_sender = push_sender or default_push_sender
+        self._hidden_provider = hidden_provider or default_hidden_keys
+        self._sector_hidden = sector_hidden or default_sector_hidden
         self._industry: dict[str, str] = {}
         self._earnings: set[str] = set()
         self._tags_day: date | None = None
@@ -541,6 +592,48 @@ class MoversService(QObject):
                     records = []
                 if records:
                     movers_outcomes.append_records(path, records)
+            try:
+                self._announce(board, now, local_tz)
+            except Exception:
+                logging.warning("Movers notices failed", exc_info=True)
+
+    # ------------------------------------------------------------ notices
+    def _announce(self, board, now, local_tz) -> None:
+        """Push (AWAY/EVENING) or hand to the desk (DESK) this tick's new names,
+        then log each one. Worker thread; a failed log write never stops a push."""
+        try:
+            mode = self._mode_provider()
+        except Exception:
+            mode = ""
+        try:
+            day, keys = self._hidden_provider()
+        except Exception:
+            day, keys = "", set()
+        hidden = keys if day and day == str(board.get("as_of") or "")[:10] else set()
+        notices = self._notifier.decide(
+            board, mode=mode, now=now, hidden_keys=hidden,
+            is_sector_hidden=self._sector_hidden, local_tz=local_tz,
+        )
+        for notice in notices:
+            if notice.channel == movers_notify.CHANNEL_PUSH:
+                try:
+                    sent = self._push_sender(f"Movers {notice.label}", notice.line) or {}
+                    result = str(sent.get("kind") or ("delivered" if sent.get("ok") else ""))
+                except Exception as exc:
+                    result = f"error: {exc}"
+                    logging.warning("Movers push failed: %s", exc)
+            else:
+                result = "desk"
+                self.moversNotice.emit(notice.to_dict())
+            path = (self._pop_outcomes_path
+                    if movers_notify.LOG_FOR_LIST[notice.list_key] == "pop"
+                    else self._outcomes_path)
+            try:
+                movers_outcomes.append_records(
+                    path, movers_notify.notice_records(notice, pushed_at=now, result=result)
+                )
+            except Exception:
+                logging.warning("Movers notice log write failed", exc_info=True)
 
     # ------------------------------------------------------------ IB scanner
     def _run_scanner(self) -> Mapping[str, list[str]]:

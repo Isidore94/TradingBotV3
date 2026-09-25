@@ -9323,9 +9323,23 @@ class AlertCenterPanel(QFrame):
     def attach_movers_service(self, service) -> None:
         """Feed the Movers board from `MainWindow`'s one MoversService. Hosting only."""
         service.moversChanged.connect(self.movers_board.update_board)
+        notice_signal = getattr(service, "moversNotice", None)
+        if notice_signal is not None:
+            notice_signal.connect(self.announce_movers)
         board = service.board()
         if board:
             self.movers_board.update_board(board)
+
+    def announce_movers(self, notice: dict) -> None:
+        """A DESK Movers notice: the Alert Center's beep (same checkbox and mode
+        rule as alerts) and the line in the status bar and under the board."""
+        line = str((notice or {}).get("line") or "")
+        if not line:
+            return
+        if self._alerts_may_sound():
+            QApplication.beep()
+        self.movers_board.show_status(line)
+        self.statusChanged.emit(line)
 
     def attach_strength_board(self, service, focus_service=None) -> None:
         """Host the M5 Strength Board at the foot of the Strength page.
