@@ -414,10 +414,11 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source
                              if row.get("session") not in holdout_days and row.get("session") not in embargo]
                 holdout = [row for row in members if row.get("session") in holdout_days]
 
-                def register(depth, cells, *, _family=family, _side=side):
+                def register(depth, cells, *, _family=family, _side=side, _population=population,
+                             _horizon=horizon, _sel_window=sel_window, _hold_window=hold_window):
                     return register_grid(ledger_root, grid_trial(
-                        population=population, horizon=horizon, family=_family, side=_side, depth=depth,
-                        cells=cells, selection_window=sel_window, holdout_window=hold_window,
+                        population=_population, horizon=_horizon, family=_family, side=_side, depth=depth,
+                        cells=cells, selection_window=_sel_window, holdout_window=_hold_window,
                     ))
 
                 result = search_group(selection, holdout, names=names, register=register)

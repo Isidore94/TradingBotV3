@@ -82,7 +82,7 @@ def test_an_unchanged_list_reuses_every_chip():
     editor.refresh()
     after = _chips(editor)
     assert [chip.symbol for chip in after] == symbols
-    assert all(one is two for one, two in zip(before, after)), "chips were rebuilt"
+    assert all(one is two for one, two in zip(before, after, strict=False)), "chips were rebuilt"
 
 
 def test_only_the_arrival_is_constructed():

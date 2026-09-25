@@ -54,7 +54,7 @@ def fetch_market_snapshot(tickers: list[str] | None = None) -> dict[str, Any]:
     ticker_list = tickers or MARKET_SNAPSHOT_TICKERS
     generated_at = datetime.now().isoformat(timespec="seconds")
     try:
-        data = (_download or getattr(yf, "download"))(
+        data = (_download or getattr(yf, "download"))(  # noqa: B009 - standalone fallback; the lock guard test bans the attribute form
             tickers=" ".join(ticker_list),
             period="90d",
             interval="1d",

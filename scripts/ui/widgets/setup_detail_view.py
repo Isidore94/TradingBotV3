@@ -11,6 +11,7 @@ from ui import theme
 from ui.panels.setup_docs_panel import render_doc_html
 from ui.services.ai_state_levels import load_symbol_levels
 from ui.widgets.research_explanation_view import render_research_explanation_html
+from swallowed import note_swallowed
 
 
 class SetupDetailView(QTextBrowser):
@@ -103,8 +104,8 @@ class SetupDetailView(QTextBrowser):
             self._levels_loading = False
             try:
                 self._levelsLoaded.emit()
-            except RuntimeError:
-                pass  # the view was deleted while levels loaded in the background
+            except RuntimeError as exc:
+                note_swallowed("levels loaded after the view was deleted", exc, quiet=True)  # the view was deleted while levels loaded in the background
 
     def _on_levels_loaded(self) -> None:
         if self._current is not None:

@@ -607,7 +607,7 @@ def test_a_decline_from_a_PRIOR_session_does_not_block_adoption(desk):
 def test_putting_the_name_back_by_hand_clears_the_decline(desk):
     """A trader who re-adds the name has changed their mind about it."""
     panel, store, focus_service, _adds = desk
-    service = _attach(desk)
+    _attach(desk)
     focus_service.remove("NVDA", "long", "m5")
     assert store.declined_today("NVDA", "long", "m5") is True
 

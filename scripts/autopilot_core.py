@@ -61,6 +61,7 @@ from project_paths import (
     UNIVERSE_SHORTS_FILE,
 )
 from watchlist_utils import read_watchlist_symbols
+from swallowed import note_swallowed
 
 # Scheduling (minutes are relative to the session open, local clock).
 AUTOPILOT_FIRST_SCAN_AFTER_OPEN_MINUTES = 60
@@ -2476,8 +2477,8 @@ def _save_auto_populate_membership(path: Path, payload: Mapping[str, Any]) -> No
     try:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    except OSError:
-        pass
+    except OSError as exc:
+        note_swallowed("auto-populate membership write failed", exc)
 
 
 #: Requests from BounceBot's triple-VWAP invalidation that a Focus entry be
@@ -2532,8 +2533,8 @@ def record_focus_desync(
         try:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("focus desync record write failed", exc)
 
 
 def take_focus_desync_requests(
@@ -2561,8 +2562,8 @@ def take_focus_desync_requests(
                 Path(path).write_text(
                     json.dumps({"date": today_iso, "requests": []}, indent=2), encoding="utf-8"
                 )
-            except OSError:
-                pass
+            except OSError as exc:
+                note_swallowed("focus desync requests not cleared after take", exc)
         return [dict(row) for row in requests]
 
 
@@ -2704,8 +2705,8 @@ def _save_auto_populate_pending(path: Path, payload: Mapping[str, Any]) -> None:
     try:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    except OSError:
-        pass
+    except OSError as exc:
+        note_swallowed("auto-populate pending write failed", exc)
 
 
 #: How long a stored gate verdict stays usable at adoption time. The staging
@@ -3338,8 +3339,8 @@ def write_watchlist_file(path: Path, symbols: Iterable[str]) -> bool:
         if os.path.exists(staged_name):
             try:
                 os.remove(staged_name)
-            except OSError:
-                pass
+            except OSError as exc:
+                note_swallowed("watchlist staged file not removed", exc, quiet=True)
     return True
 
 
@@ -4256,7 +4257,7 @@ def hide_sector_names(
     ):
         pairs = [
             (line, symbol)
-            for line, symbol in zip(alerts, alert_symbols)
+            for line, symbol in zip(alerts, alert_symbols, strict=False)
             if keep(symbol)
         ]
         out["alerts"] = [line for line, _symbol in pairs]
@@ -4953,8 +4954,8 @@ def _publish_under_local_lock(
             if os.path.exists(tmp_name):
                 try:
                     os.remove(tmp_name)
-                except OSError:
-                    pass
+                except OSError as swallowed_exc:
+                    note_swallowed("report publish temp file not removed", swallowed_exc, quiet=True)
         readback = target.read_bytes()
         actual = hashlib.sha256(readback).hexdigest()
         if expected != actual:
@@ -5071,8 +5072,8 @@ def _publish_under_local_lock(
             for stale in history[: max(0, len(history) - int(archive_keep))]:
                 try:
                     stale.unlink()
-                except OSError:
-                    pass
+                except OSError as swallowed_exc:
+                    note_swallowed("old report archive copy not pruned", swallowed_exc, quiet=True)
         except Exception:
             logging.exception("Away report archive write failed (latest report is fine).")
     return result

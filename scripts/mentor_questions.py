@@ -1173,7 +1173,7 @@ def pending(state: Mapping[str, Any], slot: Any) -> CardQuestions:
     # Anything the previous card carried that this card's triggers no longer
     # produce is still owed - a question is dropped only when it is answered or
     # retired, never because a lane arrived empty.
-    for key, subject in known.items():
+    for _key, subject in known.items():
         try:
             kind = kind_named(subject.kind)
         except KeyError:
@@ -1436,7 +1436,7 @@ def pull_slot_ids(session: Any, slots: Sequence[Any] | None = None) -> tuple[str
     except Exception:  # noqa: BLE001
         TRADES_HOUR = 9
     anchor = next(
-        (slot for slot in ordered if getattr(slot, "scheduled_at").hour == TRADES_HOUR),
+        (slot for slot in ordered if slot.scheduled_at.hour == TRADES_HOUR),
         None,
     )
     chosen: list[Any] = []

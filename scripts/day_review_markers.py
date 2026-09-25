@@ -193,7 +193,7 @@ def _bar_width(starts: list[datetime]) -> timedelta:
     """
     gaps = [
         later - earlier
-        for earlier, later in zip(starts, starts[1:])
+        for earlier, later in zip(starts, starts[1:], strict=False)
         if later > earlier
     ]
     return min(gaps) if gaps else timedelta(minutes=DEFAULT_BAR_MINUTES)

@@ -225,13 +225,19 @@ def _moves(
     daily_order_ambiguous: bool = False,
 ) -> dict[str, Any]:
     if side == "SHORT":
-        favorable = lambda high, low: entry_price - low
-        adverse = lambda high, low: entry_price - high
-        closing = lambda close: entry_price - close
+        def favorable(high, low):
+            return entry_price - low
+        def adverse(high, low):
+            return entry_price - high
+        def closing(close):
+            return entry_price - close
     else:
-        favorable = lambda high, low: high - entry_price
-        adverse = lambda high, low: low - entry_price
-        closing = lambda close: close - entry_price
+        def favorable(high, low):
+            return high - entry_price
+        def adverse(high, low):
+            return low - entry_price
+        def closing(close):
+            return close - entry_price
 
     best_move: float | None = None
     worst_move: float | None = None

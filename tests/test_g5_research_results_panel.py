@@ -71,7 +71,10 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 # The two module-scoped fixtures, imported UNDER THEIR OWN NAMES: pytest
 # registers a fixture under the attribute name it finds in this module, so an
 # alias would rename them and every test below would error on a missing fixture.
-from test_g5_research_results import journal_trades, snapshot_payload  # noqa: E402,F401
+import test_g5_research_results as _g5  # noqa: E402
+
+journal_trades = _g5.journal_trades
+snapshot_payload = _g5.snapshot_payload
 
 _app = QApplication.instance() or QApplication([])
 

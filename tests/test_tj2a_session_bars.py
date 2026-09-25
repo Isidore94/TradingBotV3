@@ -207,7 +207,7 @@ def qapp():
 
 def test_post_close_worker_fetches_after_index_off_the_timer_thread(qapp, monkeypatch):
     """The index remains first; bars are a non-fatal second operation on its worker."""
-    bars = _bars_module()
+    _bars_module()
     from ui.panels.day_review_panel import _IndexBuildWorker
 
     calls: list[tuple[str, int]] = []

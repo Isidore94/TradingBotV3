@@ -216,7 +216,7 @@ def test_stamp_scan_rows_adds_only_the_stamp_columns():
     before = [dict(row) for row in rows[:2]]
     context = spc.SessionContext(slots={("ABC", "LONG"): "0730"}, triggers={}, m5={("XYZ", "SHORT"): "vwap"})
     assert spc.stamp_scan_rows(rows, session="2026-09-24", context=context) == 2
-    for original, stamped in zip(before, rows[:2]):
+    for original, stamped in zip(before, rows[:2], strict=False):
         assert set(stamped) - set(original) == set(sp.STAMP_COLUMNS)
         assert {key: stamped[key] for key in original} == original
     assert "slot_0730" in rows[0]["permutation_label"]

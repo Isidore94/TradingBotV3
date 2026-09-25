@@ -118,9 +118,9 @@ def test_the_socket_import_drops_the_combo_parent_row():
     Flex reports only the legs. The parent row became a fake OPEN BAG trade."""
     importer = _socket_importer()
     importer.executions = [
-        dict(zip(("contract", "execution"), _socket_bag())),
+        dict(zip(("contract", "execution"), _socket_bag(), strict=False)),
         dict(zip(("contract", "execution"), _socket_leg(
-            "00021ab9.6a2c031e.02.01.01", "CVNA  260618P00064500", 64.5, "BOT", 2.17))),
+            "00021ab9.6a2c031e.02.01.01", "CVNA  260618P00064500", 64.5, "BOT", 2.17), strict=False)),
     ]
     results = importer._normalized_results()
 
@@ -136,11 +136,11 @@ def test_the_socket_then_flex_spread_rebuilds_one_position_per_leg(tmp_path):
     store.initialize_schema()
     importer = _socket_importer()
     importer.executions = [
-        dict(zip(("contract", "execution"), _socket_bag())),
+        dict(zip(("contract", "execution"), _socket_bag(), strict=False)),
         dict(zip(("contract", "execution"), _socket_leg(
-            "00021ab9.6a2c031e.02.01.01", "CVNA  260618P00064500", 64.5, "BOT", 2.17))),
+            "00021ab9.6a2c031e.02.01.01", "CVNA  260618P00064500", 64.5, "BOT", 2.17), strict=False)),
         dict(zip(("contract", "execution"), _socket_leg(
-            "00021ab9.6a2c031e.03.01.01", "CVNA  260618P00063000", 63.0, "SLD", 1.51))),
+            "00021ab9.6a2c031e.03.01.01", "CVNA  260618P00063000", 63.0, "SLD", 1.51), strict=False)),
     ]
     store.upsert_executions(importer._normalized_results())
     store.upsert_executions(parse_ibkr_flex_statement(CVNA_FLEX_XML))

@@ -802,7 +802,7 @@ def test_a_waiting_draft_never_greys_save(tmp_path):
     assert card.exit_draft_line(trade_id).strip(), "no draft line was shown"
     assert card.save_answers_button.isEnabled() is False, "nothing answered yet"
 
-    for name, (combo, _text) in card._answer_inputs[trade_id].items():
+    for _name, (combo, _text) in card._answer_inputs[trade_id].items():
         combo.setCurrentIndex(combo.findData(check.ANSWER_NOT_REMEMBERED))
     for other, fields in card._answer_inputs.items():
         if other == trade_id:

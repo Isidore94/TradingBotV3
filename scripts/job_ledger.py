@@ -35,6 +35,15 @@ DEFAULT_RETRY_BUDGET = {
 }
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 def job_key(market_date: str, job_type: str, slot: str, config_hash: str = "") -> str:
     return "|".join((str(market_date), str(job_type), str(slot), str(config_hash)))
 
@@ -221,8 +230,8 @@ class JobLedger:
                     continue
                 if "key" in event and "event" in event:
                     self._reduce(event)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("job ledger unreadable during replay", exc)
 
 
 def _ts(now: datetime | None) -> str:

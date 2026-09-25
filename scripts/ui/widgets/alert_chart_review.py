@@ -35,6 +35,7 @@ from ui.annotations.store import (
 from ui.widgets.arm_bar import ArmBar
 from ui.widgets.empty_state import EmptyState
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+from swallowed import note_swallowed
 
 _NO_M5_WATCH_REASON = (
     "No cached M5 bars for this symbol yet - arming still works: BounceBot "
@@ -74,8 +75,8 @@ class _MentorPopup(QDialog):
 
         try:
             save_local_setting(self.SIZE_SETTING, [self.width(), self.height()])
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("alert chart size setting write failed", exc)
 
     def keyPressEvent(self, event):  # noqa: N802 - Qt override
         if event.key() == Qt.Key.Key_Escape:

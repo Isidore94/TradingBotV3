@@ -64,6 +64,7 @@ from journal_importers import (  # noqa: E402
     normalize_side,
 )
 from journal_store import JournalStore  # noqa: E402
+from swallowed import note_swallowed
 
 #: Roots that hold the trader's live data. A database under one of these is the
 #: real journal until proven otherwise, and this tool will not write it without
@@ -352,8 +353,8 @@ def _make_writable(path: Path) -> None:
     try:
         mode = path.stat().st_mode
         path.chmod(mode | stat.S_IWRITE)
-    except OSError:  # pragma: no cover - defensive
-        pass
+    except OSError as exc:  # pragma: no cover - defensive
+        note_swallowed("journal file could not be made writable", exc)
 
 
 def _simulate(

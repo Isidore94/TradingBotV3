@@ -92,6 +92,15 @@ EXTRA_SOURCE_SHA = "bronze_source_sha256"
 EXTRA_MAX_OFFSET = "bronze_max_offset"
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 def _paths():
     try:
         from scripts import project_paths
@@ -337,8 +346,8 @@ def _watermark(store: ResearchStore, dataset: str) -> dict:
         latest = entry
         try:
             max_offset = max(max_offset, int(entry.extra.get(EXTRA_MAX_OFFSET, -1)))
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            note_swallowed("manifest max-offset unparseable; ignored", exc, quiet=True)
     return {
         "latest": latest,
         "max_offset": max_offset,
@@ -522,7 +531,7 @@ def _log_rows(artifact, source: Path, raw: bytes, source_sha: str, observed_at, 
         for offset, values in enumerate(reader, start=1):
             if offset <= after_offset:
                 continue
-            parsed = dict(zip(header, values))
+            parsed = dict(zip(header, values, strict=False))
             rows.append(
                 _bronze_row(
                     artifact,
@@ -685,7 +694,7 @@ def snapshot_universe_membership(
         (str(session), str(name))
         for session, name in zip(
             existing.column("session_date").to_pylist(),
-            existing.column("list_name").to_pylist(),
+            existing.column("list_name").to_pylist(), strict=False,
         )
     }
     stamp = now or utc_now()
@@ -872,7 +881,7 @@ def snapshot_level_geometry(
         (str(session), str(level))
         for session, level in zip(
             existing.column("session_date").to_pylist(),
-            existing.column("level_id").to_pylist(),
+            existing.column("level_id").to_pylist(), strict=False,
         )
     }
     stamp = now or utc_now()
@@ -1122,7 +1131,7 @@ def ingest_daily_bars(
     already = {
         (str(symbol), str(session))
         for symbol, session in zip(
-            existing.column("symbol").to_pylist(), existing.column("session_date").to_pylist()
+            existing.column("symbol").to_pylist(), existing.column("session_date").to_pylist(), strict=False
         )
     }
     rows: list[dict] = []

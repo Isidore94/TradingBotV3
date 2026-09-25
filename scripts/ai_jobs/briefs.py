@@ -101,6 +101,15 @@ INCOMPLETE_RUN_NOTE = "Run in progress at the time of writing; counts above may 
 TICKER_BRIEFS_MAX_ATTEMPTS = 3
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 def _summary_dir(session_date: str) -> Path:
     from ai_jobs.store import briefs_dir
 
@@ -797,8 +806,8 @@ def atomic_publish_morning_file(
     finally:
         try:
             staged.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("morning brief staged file not removed", exc, quiet=True)
 
 
 def _membership_names(memberships: Sequence[Mapping[str, str]]) -> str:

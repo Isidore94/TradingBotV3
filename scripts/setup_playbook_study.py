@@ -186,7 +186,7 @@ def compute_weekly_streak_series(df: pd.DataFrame) -> np.ndarray:
 
     streak_by_week: dict = {}
     streak = 0
-    for week, wclose, wema in zip(weekly_close.index, weekly_close.values, ema8.values):
+    for week, wclose, wema in zip(weekly_close.index, weekly_close.values, ema8.values, strict=False):
         if wclose >= wema:
             streak = streak + 1 if streak >= 0 else 1
         else:
@@ -795,7 +795,7 @@ def _aggregate_rows(frame: pd.DataFrame, keys: list[str]) -> list[dict]:
         if not isinstance(key_values, tuple):
             key_values = (key_values,)
         mask = pd.Series(True, index=closed.index)
-        for key, value in zip(keys, key_values):
+        for key, value in zip(keys, key_values, strict=False):
             mask &= closed[key] == value
         closed_group = closed[mask]
         net_r = closed_group["net_r"]
@@ -814,7 +814,7 @@ def _aggregate_rows(frame: pd.DataFrame, keys: list[str]) -> list[dict]:
                 horizon_stats["short_term_win_rate"] = float((series > 0).mean()) if len(series) else None
         rows.append(
             {
-                **dict(zip(keys, key_values)),
+                **dict(zip(keys, key_values, strict=False)),
                 "group": group["group"].iloc[0],
                 "episodes": int(len(group)),
                 "closed": int(len(closed_group)),

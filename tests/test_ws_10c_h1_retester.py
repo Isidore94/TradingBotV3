@@ -491,7 +491,7 @@ def test_the_recorded_five_minute_series_aggregates_to_the_golden_h1_bars():
     built = rule.closed_h1_bars(m5)
 
     assert len(built) == len(h1_bars)
-    for got, want in zip(built, h1_bars):
+    for got, want in zip(built, h1_bars, strict=False):
         assert got["dt"] == want["dt"]
         for field in ("open", "high", "low", "close"):
             assert got[field] == pytest.approx(want[field], abs=1e-9), (

@@ -90,7 +90,7 @@ def test_ema_series_matches_pandas_ewm():
     expected = pd.Series(values).ewm(span=5, adjust=False).mean().tolist()
     result = chart_snapshot.ema_series(values, 5)
     assert len(result) == len(expected)
-    for mine, pandas_value in zip(result, expected):
+    for mine, pandas_value in zip(result, expected, strict=False):
         assert abs(mine - pandas_value) < 1e-9
 
 

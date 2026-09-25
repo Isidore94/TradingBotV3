@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 import day_session_record as dsr
+from swallowed import note_swallowed
 
 MIN_N = dsr.MIN_N
 UNKNOWN = dsr.UNKNOWN
@@ -714,7 +715,7 @@ def write_frontier(
     try:
         if target.read_text(encoding="utf-8") == text:
             return {"path": str(target), "changed": False}
-    except OSError:
-        pass
+    except OSError as exc:
+        note_swallowed("week frontier file unreadable; rewriting it", exc, quiet=True)
     dsr._atomic_text(target, text)
     return {"path": str(target), "changed": True}

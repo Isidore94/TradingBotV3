@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Any, Iterable
 
 from PySide6.QtCore import QObject, QThread, Signal
+from swallowed import note_swallowed
 
 def _forecast_origin() -> str:
     import market_journal
@@ -510,8 +511,8 @@ class MarketJournalService(QObject):
     def _release_capture_worker(self, worker) -> None:
         try:
             self._capture_workers.remove(worker)
-        except ValueError:
-            pass
+        except ValueError as exc:
+            note_swallowed("journal capture worker already released", exc, quiet=True)
         worker.deleteLater()
 
     def chart_capture(self, entry_id: str) -> dict[str, Any] | None:
@@ -531,8 +532,8 @@ class MarketJournalService(QObject):
         for worker in list(self._capture_workers):
             try:
                 worker.wait(int(msecs))
-            except RuntimeError:
-                pass
+            except RuntimeError as exc:
+                note_swallowed("journal capture worker already deleted at shutdown", exc, quiet=True)
 
     def sessions_with_entries(self) -> list[str]:
         return sorted({str(row.get("session_date") or "") for row in self.entries_for() if row.get("session_date")})

@@ -581,7 +581,6 @@ def _record_coverage(
     error: Exception | None = None,
 ) -> None:
     global _coverage
-    session_date = evaluated_at.date().isoformat()
     try:
         _activate_coverage_scope(evaluated_at, config_hash)
     except ShadowRolloverError:

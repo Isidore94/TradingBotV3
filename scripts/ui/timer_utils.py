@@ -15,6 +15,7 @@ each arrival as "rebuild everything".
 import logging
 
 from PySide6.QtCore import QObject, QTimer
+from swallowed import note_swallowed
 
 
 def start_staggered(timer: QTimer, delay_ms: int) -> QTimer:
@@ -42,8 +43,8 @@ def stop_staggered(timer: QTimer) -> None:
     if starter is not None:
         try:
             starter.stop()
-        except RuntimeError:
-            pass
+        except RuntimeError as exc:
+            note_swallowed("stagger starter timer already torn down", exc, quiet=True)
     timer.stop()
 
 

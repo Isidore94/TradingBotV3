@@ -118,10 +118,10 @@ def test_long_short_mirror_equivalence():
     short_ranks = engine.rank(mirrored_spy, mirrored)
 
     assert [r.symbol for r in short_ranks] == [r.symbol for r in long_ranks]
-    for l, s in zip(long_ranks, short_ranks):
-        assert s.tier == l.tier
-        assert abs(s.composite - l.composite) < 1e-9
-        assert s.side_sign == -l.side_sign
+    for long_rank, s in zip(long_ranks, short_ranks, strict=False):
+        assert s.tier == long_rank.tier
+        assert abs(s.composite - long_rank.composite) < 1e-9
+        assert s.side_sign == -long_rank.side_sign
 
 
 def test_full_universe_candidate_can_outrank_watchlist_name():
@@ -298,5 +298,5 @@ def test_d1_strength_breaks_intraday_ties_and_mirrors_cleanly():
     mirrored = [mirror_candidate(c, 100.0) for c in (strong_daily, weak_daily)]
     short_ranks = engine.rank(mirrored_spy, mirrored)
     assert [r.symbol for r in short_ranks] == [r.symbol for r in ranks]
-    for long_rank, short_rank in zip(ranks, short_ranks):
+    for long_rank, short_rank in zip(ranks, short_ranks, strict=False):
         assert abs(short_rank.composite - long_rank.composite) < 1e-9

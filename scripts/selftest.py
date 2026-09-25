@@ -248,6 +248,10 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "greatness_monitor",
     "research_warehouse.config",
     "diagnostics",
+    # P2-11d: the secret migration runs on a worker at desk start; secret_store
+    # imports keyring inside functions. Import only - no credential is read.
+    "secret_store",
+    "keyring.backends.Windows",
     # the desk itself
     "ui.app",
     "ui.theme",

@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import QLabel
+from swallowed import note_swallowed
 
 #: How often the Qt thread compares the market date (no file read).
 DATE_CHECK_MS = 60_000
@@ -86,8 +87,8 @@ class RuleChip(QLabel):
             from ui.read_worker import join_worker
 
             join_worker(worker)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            note_swallowed("rule chip worker join failed at shutdown", exc, quiet=True)
 
     # -- internals ----------------------------------------------------------
     def _market_date(self) -> str:

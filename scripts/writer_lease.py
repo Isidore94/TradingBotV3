@@ -74,6 +74,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from local_writer_lock import LocalLockUnavailable, local_writer_lock, lock_key_for_path
+from swallowed import note_swallowed
 
 __all__ = [
     "DEFAULT_CLOCK_SKEW_SECONDS",
@@ -474,10 +475,10 @@ def _remember_generation(lease_path: Path, generation: int) -> None:
                 ),
             },
         )
-    except Exception:
+    except Exception as exc:
         # A missing marker only costs ordering information after a restart; it
         # can never authorize a write, so it must not fail a publication.
-        pass
+        note_swallowed("writer lease generation marker not written", exc)
 
 
 def _write(lease_path: Path, payload: dict) -> None:

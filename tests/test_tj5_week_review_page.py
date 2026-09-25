@@ -331,7 +331,7 @@ def test_the_small_spy_charts_are_built_once_and_reused(page, monkeypatch):
     page.reload()
     _drain(reader, page)
     second = [card.chart for card in page.day_cards]
-    assert all(a is b for a, b in zip(first, second)), "the charts were rebuilt"
+    assert all(a is b for a, b in zip(first, second, strict=False)), "the charts were rebuilt"
 
 
 # ---------------------------------------------------------------------------

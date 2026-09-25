@@ -15,6 +15,7 @@ from typing import Iterable, Mapping
 from project_paths import MASTER_AVWAP_UNMAPPED_CLASSIFICATIONS_FILE
 from ui.models.setup import SetupRow
 from ui.services.rs_window_feed import load_industry_context_map
+from swallowed import note_swallowed
 
 
 def weighted_d1_excess(
@@ -164,7 +165,7 @@ def write_unmapped_setup_classification_report(
     except Exception:
         try:
             os.unlink(temporary)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("unmapped setup report temp file not removed", exc, quiet=True)
         raise
     return unresolved

@@ -936,7 +936,7 @@ def test_the_original_export_columns_stay_byte_identical_while_the_counts_are_ad
         with golden_path.open("r", newline="", encoding="utf-8") as handle:
             golden_rows = list(csv.DictReader(handle))
         assert len(golden_rows) == len(produced)
-        for old, new in zip(golden_rows, produced):
+        for old, new in zip(golden_rows, produced, strict=False):
             for column in ("ranking_score", "score_delta"):
                 if column in columns:
                     assert _number(new[column]) == _number(old[column]), (

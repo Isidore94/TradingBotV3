@@ -420,7 +420,7 @@ def _known_bar_keys(store: ResearchStore, partitions) -> set:
     for partition in sorted(partitions):
         table = store.read_table("bar_m5", partition, columns=["symbol", "interval_start"])
         for symbol, start in zip(
-            table.column("symbol").to_pylist(), table.column("interval_start").to_pylist()
+            table.column("symbol").to_pylist(), table.column("interval_start").to_pylist(), strict=False
         ):
             stamp = start if start is None or start.tzinfo else start.replace(tzinfo=timezone.utc)
             known.add((str(symbol), stamp))
@@ -486,7 +486,7 @@ def record_scan_coverage(
     already = {
         (str(risk), str(symbol))
         for risk, symbol in zip(
-            existing.column("risk_set_id").to_pylist(), existing.column("symbol").to_pylist()
+            existing.column("risk_set_id").to_pylist(), existing.column("symbol").to_pylist(), strict=False
         )
     }
     rows = []
@@ -556,7 +556,7 @@ def reconcile_scan_coverage(store: ResearchStore | None, manifest: dict, *, symb
     rows = [
         symbol
         for risk, symbol in zip(
-            table.column("risk_set_id").to_pylist(), table.column("symbol").to_pylist()
+            table.column("risk_set_id").to_pylist(), table.column("symbol").to_pylist(), strict=False
         )
         if str(risk) == outcome["risk_set_id"]
     ]
@@ -610,7 +610,7 @@ def record_collection_gaps(
         for symbol, frame, start in zip(
             existing.column("symbol").to_pylist(),
             existing.column("timeframe").to_pylist(),
-            existing.column("gap_start").to_pylist(),
+            existing.column("gap_start").to_pylist(), strict=False,
         )
     }
     rows = []
@@ -672,7 +672,7 @@ def captured_bar_counts(store: ResearchStore | None, session: SessionContext, sy
     table = store.read_table("bar_m5", f"month={session.rth_open_at:%Y-%m}", columns=["symbol", "interval_start"])
     wanted = {str(symbol).strip().upper() for symbol in (symbols or [])}
     counts: dict[str, int] = {symbol: 0 for symbol in wanted}
-    for symbol, start in zip(table.column("symbol").to_pylist(), table.column("interval_start").to_pylist()):
+    for symbol, start in zip(table.column("symbol").to_pylist(), table.column("interval_start").to_pylist(), strict=False):
         if start is None:
             continue
         stamp = start if start.tzinfo else start.replace(tzinfo=timezone.utc)

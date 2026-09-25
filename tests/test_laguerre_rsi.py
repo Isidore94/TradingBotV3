@@ -22,8 +22,8 @@ def _bars(contract):
     padding = float(contract["bar_construction"]["high_low_padding"])
     volume_value = float(contract["bar_construction"]["volume"])
     opens = [closes[0], *closes[:-1]]
-    highs = [max(open_value, close) + padding for open_value, close in zip(opens, closes)]
-    lows = [min(open_value, close) - padding for open_value, close in zip(opens, closes)]
+    highs = [max(open_value, close) + padding for open_value, close in zip(opens, closes, strict=False)]
+    lows = [min(open_value, close) - padding for open_value, close in zip(opens, closes, strict=False)]
     volumes = [volume_value] * len(closes)
     return opens, highs, lows, closes, volumes
 

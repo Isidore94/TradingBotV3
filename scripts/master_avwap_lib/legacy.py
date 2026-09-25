@@ -191,6 +191,7 @@ from .levels import (
     recompute_touch_stats as recompute_level_touch_stats,
     save_level_store,
 )
+from swallowed import note_swallowed
 
 try:
     from earnings_history import (
@@ -1903,24 +1904,6 @@ def build_bouncebot_focus_context(symbol: str, side: str, trade_date: str | None
         "bouncebot_relevant_focus_timeframes": list(relevant_record.get("timeframes") or []),
     }
 WATCHLIST_SKIP_TOKENS = {"LONG", "SHORT", "NONE"}
-YF_EARNINGS_LOGGER_NAMES = (
-    "yfinance",
-    "yfinance.base",
-    "yfinance.scrapers",
-    "yfinance.scrapers.calendar",
-    "yfinance.scrapers.quote",
-)
-IBAPI_NOISY_LOGGER_NAMES = (
-    "ibapi",
-    "ibapi.client",
-    "ibapi.comm",
-    "ibapi.connection",
-    "ibapi.decoder",
-    "ibapi.orderdecoder",
-    "ibapi.reader",
-    "ibapi.utils",
-    "ibapi.wrapper",
-)
 YF_EARNINGS_NO_DATA_MARKERS = (
     "No earnings dates found",
     "symbol may be delisted",
@@ -2008,54 +1991,20 @@ _DAILY_BAR_FETCH_COUNTS: dict[str, int] = {key: 0 for key in DAILY_BAR_FETCH_COU
 _DAILY_BAR_YAHOO_PREFETCH: dict[tuple[str, str], pd.DataFrame] = {}
 DAILY_BAR_YAHOO_BATCH_SIZE = 100
 DAILY_BAR_YAHOO_BATCH_THREADS = 8
-APP_LOG_FORMAT = "%(asctime)s %(levelname)s [%(filename)s]: %(message)s"
 
 # ============================================================================
 # LOGGING
 # ============================================================================
 
-def _configure_third_party_loggers() -> None:
-    # The IB API emits one INFO log per socket send/request, which overwhelms
-    # the console and makes it look like the watchlist itself exploded.
-    for logger_name in IBAPI_NOISY_LOGGER_NAMES:
-        ib_logger = logging.getLogger(logger_name)
-        ib_logger.setLevel(logging.WARNING)
-        ib_logger.propagate = True
-    for logger_name in YF_EARNINGS_LOGGER_NAMES:
-        yf_logger = logging.getLogger(logger_name)
-        yf_logger.setLevel(logging.CRITICAL)
-        yf_logger.propagate = True
-
-
-def configure_logging():
-    logger = logging.getLogger()
-    if logger.handlers:
-        _configure_third_party_loggers()
-        return  # already configured
-
-    logger.setLevel(logging.INFO)
-    fmt = logging.Formatter(APP_LOG_FORMAT)
-
-    ch = logging.StreamHandler()
-    ch.setFormatter(fmt)
-    ch.setLevel(logging.INFO)
-
-    logger.addHandler(ch)
-    try:
-        MASTER_AVWAP_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        fh = SafeRotatingFileHandler(
-            MASTER_AVWAP_LOG_FILE,
-            maxBytes=2_000_000,
-            backupCount=APP_LOG_BACKUP_COUNT,
-        )
-    except OSError as exc:
-        logger.warning(f"File logging disabled for {MASTER_AVWAP_LOG_FILE}: {exc}")
-        return
-
-    fh.setFormatter(fmt)
-    fh.setLevel(logging.INFO)
-    logger.addHandler(fh)
-    _configure_third_party_loggers()
+# Moved unchanged to app_logging (P2-11e) so the package can configure logging
+# without loading this module; re-exported here under the same names.
+from .app_logging import (  # noqa: E402
+    APP_LOG_FORMAT,
+    IBAPI_NOISY_LOGGER_NAMES,
+    YF_EARNINGS_LOGGER_NAMES,
+    _configure_third_party_loggers,
+    configure_logging,
+)
 
 configure_logging()
 
@@ -2398,8 +2347,8 @@ def connect_daily_data_client(client_id: int, startup_wait: float = 1.0) -> IBAp
         )
     try:
         ib.disconnect()
-    except Exception:
-        pass
+    except Exception as swallowed_exc:
+        note_swallowed("IB daily data client disconnect failed after a failed connect", swallowed_exc, quiet=True)
     return None
 
 
@@ -2408,8 +2357,8 @@ def disconnect_daily_data_client(ib: IBApi | None) -> None:
         return
     try:
         ib.disconnect()
-    except Exception:
-        pass
+    except Exception as exc:
+        note_swallowed("IB daily data client disconnect failed", exc, quiet=True)
 
 
 def is_daily_data_client_connected(ib: IBApi | None) -> bool:
@@ -2547,8 +2496,8 @@ def _json_default(value):
     if callable(item):
         try:
             return item()
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("numpy item() failed in JSON default; using str", exc, quiet=True)
     return str(value)
 
 
@@ -2795,8 +2744,8 @@ def _replace_d1_feature_history(frame: pd.DataFrame) -> None:
         try:
             if temp.exists():
                 temp.unlink()
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("D1 feature history temp file not removed", exc, quiet=True)
 
 
 _EARNINGS_CALENDAR_ROWS_CACHE: dict | None = None
@@ -3079,8 +3028,8 @@ def _provider_count(family: str, outcome: str, provider: str | None = None) -> N
             from diagnostics.provider_counters import note_capture_error
 
             note_capture_error()
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("provider counter capture error not recorded", exc, quiet=True)
 
 
 def _record_ibkr_historical_result(
@@ -14435,8 +14384,8 @@ def update_setup_tracker_from_scan(
                     try:
                         anchor_date_obj = datetime.fromisoformat(anchor_date).date()
                         days_needed = max(days_needed, (datetime.now().date() - anchor_date_obj).days + 20)
-                    except ValueError:
-                        pass
+                    except ValueError as exc:
+                        note_swallowed("setup anchor date unparseable; default bar window kept", exc, quiet=True)
                     if symbol in symbols_needing_live_bars:
                         df = fetch_daily_bars(ib, symbol, days_needed)
                     else:
@@ -18457,8 +18406,8 @@ def _fetch_ib_option_quote_once(
     finally:
         try:
             ib.cancelMktData(req_id)
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("IB option market data cancel failed", swallowed_exc, quiet=True)
         ib.option_quotes.pop(req_id, None)
         ib.option_quotes_ready.pop(req_id, None)
         getattr(ib, "request_errors", {}).pop(req_id, None)
@@ -18497,8 +18446,8 @@ def _fetch_ib_option_quote(
         if _ib_quote_has_price(quote):
             try:
                 setattr(ib, "_theta_option_type_confirmed", True)
-            except Exception:
-                pass
+            except Exception as exc:
+                note_swallowed("option type confirmation flag not set on the IB client", exc, quiet=True)
             return quote
         if quote and 200 in {int(code or 0) for code in quote.get("ib_error_codes", [])}:
             return quote
@@ -19396,8 +19345,8 @@ def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataF
         if not request_completed and hasattr(ib, "cancelHistoricalData"):
             try:
                 ib.cancelHistoricalData(reqId)
-            except Exception:
-                pass
+            except Exception as swallowed_exc:
+                note_swallowed("IB daily historical data cancel failed", swallowed_exc, quiet=True)
 
         request_errors = list(getattr(ib, "request_errors", {}).get(reqId, []) or [])
         bars = ib.data.pop(reqId, [])
@@ -19430,8 +19379,8 @@ def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataF
                 ib.data.pop(reqId, None)
                 ib.ready.pop(reqId, None)
                 getattr(ib, "request_errors", {}).pop(reqId, None)
-            except Exception:
-                pass
+            except Exception as exc:
+                note_swallowed("IB daily request bookkeeping cleanup failed", exc, quiet=True)
 
     # Reached only after a real IBKR attempt failed: this Yahoo call is a
     # fallback, distinct from the yahoo-only paths above.
@@ -19545,8 +19494,8 @@ def _normalize_intraday_bar_frame(df: pd.DataFrame | None) -> pd.DataFrame:
     except (AttributeError, TypeError):
         try:
             work["datetime"] = work["datetime"].dt.tz_convert(None)
-        except (AttributeError, TypeError):
-            pass
+        except (AttributeError, TypeError) as exc:
+            note_swallowed("intraday datetimes neither naive nor tz-aware; left as parsed", exc, quiet=True)
     for column in ("open", "high", "low", "close", "volume"):
         work[column] = pd.to_numeric(work[column], errors="coerce")
     work = work.dropna(subset=["datetime", "open", "high", "low", "close"])
@@ -19658,8 +19607,8 @@ def _fetch_live_intraday_bars(
         if not request_completed and hasattr(ib, "cancelHistoricalData"):
             try:
                 ib.cancelHistoricalData(reqId)
-            except Exception:
-                pass
+            except Exception as swallowed_exc:
+                note_swallowed("IB intraday historical data cancel failed", swallowed_exc, quiet=True)
 
         request_errors = list(getattr(ib, "request_errors", {}).get(reqId, []) or [])
         bars = ib.data.pop(reqId, [])
@@ -19693,8 +19642,8 @@ def _fetch_live_intraday_bars(
                 ib.data.pop(reqId, None)
                 ib.ready.pop(reqId, None)
                 getattr(ib, "request_errors", {}).pop(reqId, None)
-            except Exception:
-                pass
+            except Exception as exc:
+                note_swallowed("IB intraday request bookkeeping cleanup failed", exc, quiet=True)
 
     # Reached only after a real IBKR attempt failed.
     _provider_count("intraday_bars", "fallback_used")
@@ -19852,8 +19801,8 @@ def _load_cached_intraday_bar_frame(symbol: str, token: str) -> pd.DataFrame:
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 durable.to_csv(path, index=False)
-            except Exception:
-                pass
+            except Exception as swallowed_exc:
+                note_swallowed("durable intraday bars not mirrored to the CSV cache", swallowed_exc)
             _INTRADAY_BAR_CACHE_TOUCHED_AT[key] = datetime.now()
             return durable.copy()
         return _empty_intraday_bar_frame()
@@ -20035,8 +19984,8 @@ def warm_durable_stores_for_watchlists(
         if owns_ib and ib is not None:
             try:
                 ib.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                note_swallowed("IB client disconnect failed after warming stores", exc, quiet=True)
 
 # ============================================================================
 # AVWAP CALCULATION
@@ -20093,8 +20042,8 @@ def _to_float(value):
     try:
         if pd.isna(value):
             return None
-    except TypeError:
-        pass
+    except TypeError as exc:
+        note_swallowed("value not a scalar for isna; converting directly", exc, quiet=True)
     return float(value)
 
 
@@ -20127,8 +20076,8 @@ def _build_ordered_level_points(anchor_meta: dict) -> list[tuple[str, float]]:
         try:
             if pd.isna(level):
                 continue
-        except TypeError:
-            pass
+        except TypeError as exc:
+            note_swallowed("level not a scalar for isna; using it as is", exc, quiet=True)
         level_points.append((name, float(level)))
 
     level_points.sort(key=lambda item: item[1])
@@ -22680,8 +22629,8 @@ def _apply_best_option_to_theta_row(row: dict, recommendations: list[dict], unav
         row["option_score"] = best.get("rank_score")
         try:
             row["score"] = int(round(float(best.get("rank_score", row.get("score", 0)) or 0.0)))
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            note_swallowed("best option rank score not numeric; score kept", exc, quiet=True)
         return
     row["best_option"] = {}
     row["option_status"] = unavailable_reason or "no_quote"
@@ -26850,8 +26799,8 @@ def run_anchor_watchlist_scan(archive_expired: bool = False) -> list[dict]:
         try:
             anchor_date = datetime.fromisoformat(anchor_date_iso).date()
             days_needed = max(days_needed, (today_run - anchor_date).days + 10)
-        except ValueError:
-            pass
+        except ValueError as exc:
+            note_swallowed("anchor date unparseable; default bar window kept", exc, quiet=True)
 
         df = fetch_daily_bars(ib, ticker, days_needed)
         if df.empty:
@@ -32819,8 +32768,8 @@ def _normalize_tracker_attribute_value(value):
     if hasattr(value, "item"):
         try:
             return value.item()
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("tracker attribute item() failed; using str", exc, quiet=True)
     return str(value)
 
 def _tracker_attribute_is_present(value, value_type: str | None = None) -> bool:

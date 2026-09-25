@@ -104,7 +104,7 @@ def _validated_ohlc(
     if len(lengths) != 1:
         raise ValueError("OHLCV arrays must have equal lengths")
     for index, (open_value, high_value, low_value, close_value) in enumerate(
-        zip(open_rows, high_rows, low_rows, close_rows)
+        zip(open_rows, high_rows, low_rows, close_rows, strict=False)
     ):
         if low_value > high_value:
             raise ValueError(f"bar {index} has low above high")
@@ -131,16 +131,16 @@ def _price_series(
     if source == "close":
         return close_values
     if source == "hl2":
-        return tuple((high + low) / 2.0 for high, low in zip(high_values, low_values))
+        return tuple((high + low) / 2.0 for high, low in zip(high_values, low_values, strict=False))
     if source == "hlc3":
         return tuple(
             (high + low + close) / 3.0
-            for high, low, close in zip(high_values, low_values, close_values)
+            for high, low, close in zip(high_values, low_values, close_values, strict=False)
         )
     return tuple(
         (open_value + high + low + close) / 4.0
         for open_value, high, low, close in zip(
-            open_values, high_values, low_values, close_values
+            open_values, high_values, low_values, close_values, strict=False
         )
     )
 
@@ -162,12 +162,12 @@ def compute_fractal_energy(
     window = int(lookback)
     if window < 2:
         raise ValueError("lookback must be at least 2")
-    for index, (high, low) in enumerate(zip(high_rows, low_rows)):
+    for index, (high, low) in enumerate(zip(high_rows, low_rows, strict=False)):
         if low > high:
             raise ValueError(f"bar {index} has low above high")
 
     true_ranges: list[float] = []
-    for index, (high, low) in enumerate(zip(high_rows, low_rows)):
+    for index, (high, low) in enumerate(zip(high_rows, low_rows, strict=False)):
         if index == 0:
             true_ranges.append(high - low)
         else:

@@ -88,6 +88,15 @@ _capture_errors = 0
 _orphan_events_last_run = 0
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 def begin_run() -> int:
     """Open a fresh per-run bucket; returns the run generation token."""
     global _run_open, _run_generation, _capture_errors
@@ -121,8 +130,8 @@ def record(family: str, outcome: str, provider: str | None = None, n: int = 1) -
         try:
             with _lock:
                 _capture_errors += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("provider counter capture-error tally failed", exc, quiet=True)
 
 
 def note_capture_error() -> None:

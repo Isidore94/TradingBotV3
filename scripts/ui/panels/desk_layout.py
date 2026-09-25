@@ -16,6 +16,7 @@ from __future__ import annotations
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 
 from project_paths import get_local_setting, save_local_setting
+from swallowed import note_swallowed
 
 # Desk column split, as (chart column, setups column) weights. The chart column
 # is the larger share and widens further on a big monitor: the setups table
@@ -205,8 +206,8 @@ def persist_sizes(owner, splitter, key: str) -> None:
     def _save() -> None:
         try:
             save_local_setting(key, [int(size) for size in splitter.sizes()])
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("splitter size setting write failed", exc)
 
     timer.timeout.connect(_save)
     timers[key] = timer

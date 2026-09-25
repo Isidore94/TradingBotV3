@@ -60,6 +60,15 @@ EPSILON = 1e-7
 INVENTED_ROLES = frozenset({"SYNTHETIC_OPEN", "SYNTHETIC_CLOSE"})
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 @dataclass
 class Position:
     """One (broker, account, symbol, currency) over the reported window."""
@@ -234,8 +243,8 @@ def build_tax_report(
             position.commission += float(row.get("commission") or 0.0) + float(
                 row.get("fees") or 0.0
             )
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            note_swallowed("journal row commission or fees unparseable; not added", exc)
 
         if position.cad_total is None:
             continue

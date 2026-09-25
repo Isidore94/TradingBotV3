@@ -750,7 +750,7 @@ class ResearchStore:
         if not columns:
             return set()
         values = [table.column(name).to_pylist() for name in columns]
-        return set(zip(*values))
+        return set(zip(*values, strict=False))
 
     def _overlaps_live_rows(self, dataset: str, partition: str, table) -> bool:
         """Would adopting ``table`` duplicate rows already live in the partition?
@@ -850,7 +850,7 @@ class ResearchStore:
                     self._quarantine_file(path, dataset or "_unknown", partition, reason, job_id=job_id)
                 )
 
-        for relative, entry in live_paths.items():
+        for relative in live_paths:
             if not (self.root / relative).exists():
                 result.missing_live_files.append(relative)
 

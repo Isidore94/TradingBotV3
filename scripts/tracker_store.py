@@ -288,7 +288,7 @@ class TrackerStore:
             payload: dict = {}
             for name in HEADER_FIELDS:
                 payload[name] = json.loads(meta[name]) if name in meta else None
-            for name, text, _digest_ in conn.execute("SELECT name, payload, digest FROM sections"):
+            for name, text, _digest in conn.execute("SELECT name, payload, digest FROM sections"):
                 payload[name] = json.loads(text)
             for section in RECORD_SECTIONS:
                 payload[section] = _ordered_section(conn, meta, section)
@@ -488,7 +488,7 @@ def load_fresh_projection(
                     if row[1] != "object":
                         continue
                     by_key[row[0]] = {
-                        name: json.loads(text) for name, text in zip(names, row[2:]) if text is not None
+                        name: json.loads(text) for name, text in zip(names, row[2:], strict=False) if text is not None
                     }
                 projected.extend(_apply_order(by_key, meta.get(ORDER_META_PREFIX + name_of_section)).values())
         finally:

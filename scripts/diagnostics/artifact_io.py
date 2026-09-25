@@ -74,6 +74,15 @@ CAPTURE_MODE_LIVE = "live"
 CAPTURE_MODE_BACKFILL = "backfill"
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 def row_capture_mode(row) -> str:
     """Capture mode of one ledger row; an absent field means the row is live."""
     getter = row.get if hasattr(row, "get") else (lambda key, default=None: default)
@@ -241,8 +250,8 @@ def atomic_write_json(path: Path | str, obj, *, indent: int | None = 1, fsync: b
 def _remove_quietly(target: Path | str) -> None:
     try:
         os.remove(target)
-    except OSError:
-        pass
+    except OSError as exc:
+        note_swallowed("diagnostics artifact not removed", exc, quiet=True)
 
 
 # ---------------------------------------------------------------------------

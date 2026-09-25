@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import project_paths
+from swallowed import note_swallowed
 
 #: What a cell reads when nobody measured it. `unknown` is its own answer.
 UNKNOWN = "unknown"
@@ -465,8 +466,8 @@ def _parse_moment(value: Any) -> datetime | None:
         text = text[:-1] + "+00:00"
     try:
         return _aware(datetime.fromisoformat(text))
-    except ValueError:
-        pass
+    except ValueError as exc:
+        note_swallowed("recap moment not ISO; trying other formats", exc, quiet=True)
     try:
         day = date.fromisoformat(text[:10])
     except ValueError:

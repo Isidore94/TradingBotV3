@@ -16,6 +16,15 @@ from datetime import datetime
 from pathlib import Path
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 class SafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
     """RotatingFileHandler that tolerates a locked target file on rollover.
 
@@ -144,6 +153,8 @@ LOCAL_SETTINGS_FILE = LOCAL_SETTINGS_DIR / "local_settings.json"
 #: next call and an unchanged file is never parsed twice.
 _local_settings_cache: tuple[int, int, dict] | None = None
 _local_settings_lock = threading.Lock()
+#: Serialises in-process read-modify-write of the settings file (P2-11d).
+_local_settings_write_lock = threading.Lock()
 
 
 def _load_local_settings() -> dict:
@@ -318,6 +329,13 @@ LOCAL_LOG_DIR = LOCAL_SETTINGS_DIR / "logs"
 RUNTIME_DATA_DIR = DATA_DIR / "runtime"
 REPORTS_DIR = OUTPUT_DIR / "reports"
 AI_SUMMARY_EXPORT_DIR = REPORTS_DIR / "ai_summaries"
+# Move forensics exports. Here so the Research page can read them without
+# importing move_forensics (and master_avwap_lib.legacy) at desk boot.
+FORENSICS_MOVERS_CSV = REPORTS_DIR / "move_forensics_movers.csv"
+FORENSICS_BASELINE_CSV = REPORTS_DIR / "move_forensics_baseline.csv"
+FORENSICS_PATTERNS_CSV = REPORTS_DIR / "move_forensics_patterns.csv"
+FORENSICS_REPORT_TXT = REPORTS_DIR / "move_forensics_report.txt"
+FORENSICS_AI_DIGEST_JSON = REPORTS_DIR / "move_forensics_ai_digest.json"
 PERSISTENT_RUNTIME_DATA_DIR = RUNTIME_DATA_DIR
 
 LONGS_FILE = PERSISTENT_DATA_DIR / "longs.txt"
@@ -920,12 +938,13 @@ def save_local_settings(values: dict) -> None:
     if not values:
         return
     LOCAL_SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
-    payload = _load_local_settings()
-    payload.update(values)
-    tmp = LOCAL_SETTINGS_FILE.with_name(LOCAL_SETTINGS_FILE.name + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(tmp, LOCAL_SETTINGS_FILE)
-    invalidate_local_settings_cache()
+    with _local_settings_write_lock:
+        payload = _load_local_settings()
+        payload.update(values)
+        tmp = LOCAL_SETTINGS_FILE.with_name(LOCAL_SETTINGS_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp, LOCAL_SETTINGS_FILE)
+        invalidate_local_settings_cache()
 
 
 def open_path_in_file_manager(path: Path) -> None:
@@ -971,8 +990,8 @@ def _append_legacy_text_file(source_path: Path, destination_path: Path) -> None:
     try:
         if source_path.resolve() == destination_path.resolve():
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        note_swallowed("legacy text file paths could not be resolved for comparison", exc, quiet=True)
 
     try:
         content = source_path.read_text(encoding="utf-8", errors="ignore")

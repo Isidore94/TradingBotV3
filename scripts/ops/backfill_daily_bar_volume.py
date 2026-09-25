@@ -176,7 +176,7 @@ def yahoo_volume_by_date(frame) -> dict[str, float]:
     stamps = pd.to_datetime(work.index, errors="coerce")
     volumes = pd.to_numeric(work["volume"], errors="coerce")
     out: dict[str, float] = {}
-    for stamp, volume in zip(stamps, volumes):
+    for stamp, volume in zip(stamps, volumes, strict=False):
         if stamp is None or stamp != stamp or volume != volume:
             continue
         if float(volume) <= 0:

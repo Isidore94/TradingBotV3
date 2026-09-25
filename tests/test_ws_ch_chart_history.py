@@ -153,7 +153,7 @@ def test_the_visible_tail_indicators_are_identical_to_the_ninety_session_chart()
     expected = golden["expected_90"]["overlays"]
     actual = payload["overlays"]
     assert [row["label"] for row in actual] == [row["label"] for row in expected]
-    for wanted, got in zip(expected, actual):
+    for wanted, got in zip(expected, actual, strict=False):
         tail = got["values"][-VISIBLE_SESSIONS:]
         assert len(tail) == VISIBLE_SESSIONS
         assert tail == wanted["values"], f"{wanted['label']} moved in the visible tail"

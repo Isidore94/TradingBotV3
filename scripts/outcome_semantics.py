@@ -206,7 +206,7 @@ def spec_for(family: str | None) -> FamilySpec:
                 + ", ".join(sorted(kinds))
                 + "), so what the row as a whole claims is UNMEASURED",
             )
-        unknown = [part for part, spec in zip(parts, specs) if spec is None]
+        unknown = [part for part, spec in zip(parts, specs, strict=False) if spec is None]
         return _unconfigured(
             key,
             "a compound containing level(s) no entry declares: " + ", ".join(unknown),

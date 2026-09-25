@@ -68,6 +68,7 @@ from typing import Any, Callable, Mapping, Sequence
 import evidence_stats
 import project_paths
 from ai_jobs import ledger
+from swallowed import note_swallowed
 
 _log = logging.getLogger(__name__)
 
@@ -1488,8 +1489,8 @@ def _write_state(state: Mapping[str, Any]) -> None:
     except Exception:
         try:
             temporary.unlink()
-        except OSError:  # pragma: no cover - the temp file is already gone
-            pass
+        except OSError as exc:  # pragma: no cover - the temp file is already gone
+            note_swallowed("improvement ideas temp state not removed", exc, quiet=True)
         raise
 
 
@@ -1897,8 +1898,8 @@ def _write_asked_marker(
         # Review round 2: a failed rename left the temp file beside the store.
         try:
             temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("asked-marker temp file not removed", exc, quiet=True)
         return None
     return path
 

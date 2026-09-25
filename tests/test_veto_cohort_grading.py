@@ -173,7 +173,7 @@ def test_running_twice_the_same_night_changes_nothing_but_the_stamp(graded):
     # And the only column that moved is the one that is allowed to.
     differing = {
         key
-        for before, after in zip(first, second)
+        for before, after in zip(first, second, strict=False)
         for key in before
         if before[key] != after[key]
     }

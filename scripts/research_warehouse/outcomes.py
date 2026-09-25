@@ -105,6 +105,15 @@ PATH_KIND_UNLABELLED = "unlabelled"
 PATH_KINDS = (PATH_KIND_MANAGED, PATH_KIND_PLAIN_TARGET, PATH_KIND_PLAIN_NO_TARGET)
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 def path_kind_bucket(value) -> str:
     """The reader's bucket for a stored ``path_kind``; NULL is ``unlabelled``."""
     text = "" if value is None else str(value).strip()
@@ -486,8 +495,8 @@ def half_spread(price: float, observed_nbbo_half_spread: float | None = None) ->
     if observed_nbbo_half_spread is not None:
         try:
             return max(0.0, float(observed_nbbo_half_spread))
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            note_swallowed("observed half-spread unparseable; using the fallback", exc, quiet=True)
     return max(MIN_HALF_SPREAD, HALF_SPREAD_BPS * float(price))
 
 
@@ -2618,8 +2627,8 @@ def build_entry_quality_windows(
                     threshold = abs(entry_price - risk_price) / entry_price * 100.0
                     measurement_entry["favorable_threshold_pct"] = threshold
                     measurement_entry["adverse_threshold_pct"] = threshold
-                except (TypeError, ValueError, ZeroDivisionError):
-                    pass
+                except (TypeError, ValueError, ZeroDivisionError) as exc:
+                    note_swallowed("entry-quality thresholds not computable for this entry", exc, quiet=True)
             measured = entry_quality.measure_m5_forward(measurement_entry, bars, as_of=cutoff)
             for raw_window, payload in (measured.get("windows") or {}).items():
                 if not isinstance(payload, dict):

@@ -152,6 +152,17 @@ def _derived_tokens(values: Mapping[str, str]) -> dict[str, str]:
         "group_chip_short_bg": with_alpha(short, 0.10),
         "group_chip_unknown_border": with_alpha(neutral, 0.35),
         "group_chip_unknown_bg": with_alpha(neutral, 0.06),
+        # Focus board chips (P2-11e): the alphas the chip mixed in an f-string.
+        "focus_chip_bounce_bg": with_alpha(favorite, 0.20),
+        "focus_chip_bounce_border": with_alpha(favorite, 0.78),
+        "focus_chip_rrs_long_bg": with_alpha(long_, 0.14),
+        "focus_chip_rrs_long_border": with_alpha(long_, 0.55),
+        "focus_chip_rrs_short_bg": with_alpha(short, 0.14),
+        "focus_chip_rrs_short_border": with_alpha(short, 0.55),
+        "focus_chip_plain_long_bg": with_alpha(long_, 0.10),
+        "focus_chip_plain_long_border": with_alpha(long_, 0.55),
+        "focus_chip_plain_short_bg": with_alpha(short, 0.10),
+        "focus_chip_plain_short_border": with_alpha(short, 0.55),
         # Journal calendar and stat cards: P&L tints, two strengths per side.
         "pnl_win_bg": with_alpha(long_, 0.16),
         "pnl_win_strong_bg": with_alpha(long_, 0.34),

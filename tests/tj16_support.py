@@ -257,7 +257,7 @@ def graded_session(
     rows = grades.read_rows(entries, session=session)
     assert len(rows) == len(specs), (session, len(rows), len(specs))
     out = []
-    for spec, row in zip(specs, rows):
+    for spec, row in zip(specs, rows, strict=False):
         overrides = {
             key: value
             for key, value in spec.items()

@@ -87,6 +87,15 @@ OUTCOME_BUCKETS = 32
 OUTCOME_BUCKET_MIN_SYMBOLS = 64
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 class SingleFlightError(RuntimeError):
     """Another build already holds the lock."""
 
@@ -150,7 +159,7 @@ def single_flight(lock_path: Path | None = None):
             raise SingleFlightError(
                 f"a research warehouse build is already running (pid {pid}, started "
                 f"{holder.get('started_at', 'unknown')}). Wait for it, or stop it first."
-            )
+            ) from None
         # The holder is gone (crash, power loss): reclaim rather than wedge.
         path.unlink(missing_ok=True)
         handle = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -172,8 +181,8 @@ def _record_job(state: str, detail: dict | None = None) -> None:
         recorder = getattr(ledger, "record_event", None) or getattr(ledger, "append", None)
         if callable(recorder):
             recorder({"job_type": JOB_TYPE, "state": state, **(detail or {})})
-    except Exception:
-        pass  # telemetry must never break a build
+    except Exception as exc:
+        note_swallowed("warehouse job ledger record failed", exc)  # telemetry must never break a build
 
 
 @dataclass
@@ -201,7 +210,7 @@ def _bronze_payloads(store: ResearchStore, dataset: str) -> list[dict]:
     except Exception:
         return rows
     for payload, fmt in zip(
-        table.column("payload").to_pylist(), table.column("payload_format").to_pylist()
+        table.column("payload").to_pylist(), table.column("payload_format").to_pylist(), strict=False
     ):
         if str(fmt or "").upper() not in _JSON_PAYLOAD_FORMATS:
             continue
@@ -241,7 +250,7 @@ def anchors_from_bronze(store: ResearchStore) -> list[dict]:
     for symbol, days in sorted(by_symbol.items()):
         ordered = sorted(days, reverse=True)
         for anchor_type, day in zip(
-            (features.ANCHOR_TYPE_CURRENT, features.ANCHOR_TYPE_PREVIOUS), ordered
+            (features.ANCHOR_TYPE_CURRENT, features.ANCHOR_TYPE_PREVIOUS), ordered, strict=False
         ):
             anchors.append(
                 {

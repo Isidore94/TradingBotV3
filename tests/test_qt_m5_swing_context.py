@@ -75,7 +75,7 @@ def test_the_suffix_shows_on_a_swing_backed_row_and_in_the_tooltip():
     bar.post(_m5("NVDA"))
     bar.post(_m5("TSLA", "SHORT"))
     bar.post(_m5("AMD", "SHORT"))  # AMD's setup is LONG: nothing
-    rows = dict(zip(_symbols(bar), _texts(bar)))
+    rows = dict(zip(_symbols(bar), _texts(bar), strict=False))
     assert rows["NVDA"].endswith("VWAP bounce  · D1 A ★")
     assert rows["TSLA"].endswith("· D1 New")
     assert "D1" not in rows["AMD"]
@@ -103,7 +103,7 @@ def test_a_stale_or_empty_context_leaves_the_rows_clean():
     bar.post(_m5("NVDA"))
     bar.post(_m5("AMD"))
     bar.set_swing_context({("AMD", "LONG"): CONTEXT[("AMD", "LONG")]})
-    rows = dict(zip(_symbols(bar), _texts(bar)))
+    rows = dict(zip(_symbols(bar), _texts(bar), strict=False))
     assert "D1" not in rows["NVDA"]
     assert rows["AMD"].endswith("· D1 B")
     bar.set_swing_context({})
@@ -164,7 +164,7 @@ def test_the_desk_hands_the_setups_table_to_the_bar():
                 ),
             ]
         )
-        rows = dict(zip(_symbols(desk.m5_alert_bar), _texts(desk.m5_alert_bar)))
+        rows = dict(zip(_symbols(desk.m5_alert_bar), _texts(desk.m5_alert_bar), strict=False))
         assert rows["NVDA"].endswith("· D1 New"), "no grades loaded yet: New"
         assert "D1" not in rows["AMD"], "AMD's setup is LONG; the alert is SHORT"
         import setup_grades

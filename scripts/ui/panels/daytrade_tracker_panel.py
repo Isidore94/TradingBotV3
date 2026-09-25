@@ -24,6 +24,7 @@ from ui.widgets.data_table import DataTable
 from ui.widgets.kpi_tile import KpiTile
 from ui.widgets.research_explanation_view import ResearchExplanationView
 from ui.widgets.section_header import SectionHeader
+from swallowed import note_swallowed
 
 #: V3 item 2 (decision 0016 answer 4): *"the intraday level holds, then the name
 #: runs. Rank by maximum favourable excursion - the most the move offered - not
@@ -504,12 +505,12 @@ class DaytradeTrackerPanel(QFrame):
             payload["message"] = f"Your decisions could not be read: {exc}"
         try:
             self._decisionsLoaded.emit(payload)
-        except RuntimeError:
+        except RuntimeError as swallowed_exc:
             # The panel was deleted while this read was in flight. `shutdown`
             # joins the thread, but deletion can still win the race, and a
             # worker must never touch a widget that is gone - there is nothing
             # left to update, so the payload is simply dropped.
-            pass
+            note_swallowed("decisions read finished after the panel was deleted", swallowed_exc, quiet=True)
 
     def _on_decisions_loaded(self, payload: object) -> None:
         data = payload if isinstance(payload, dict) else {}
@@ -678,7 +679,7 @@ class DaytradeTrackerPanel(QFrame):
         )
         self.learning_model.set_rows(learning_rows)
 
-        for key, (table, _model) in self._dimension_tables.items():
+        for table, _model in self._dimension_tables.values():
             table.fit_columns()
         self.learning_table.fit_columns()
 
@@ -740,9 +741,9 @@ class DaytradeTrackerPanel(QFrame):
         summaries = load_held_run_report()
         try:
             self._heldRunLoaded.emit(summaries)
-        except RuntimeError:
+        except RuntimeError as exc:
             # The panel went away mid-read. Nothing left to update; drop it.
-            pass
+            note_swallowed("held-run read finished after the panel was deleted", exc, quiet=True)
 
     def _on_held_run_loaded(self, summaries) -> None:
         window_text = ""

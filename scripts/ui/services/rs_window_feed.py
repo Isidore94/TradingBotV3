@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from statistics import median
 from typing import Any, Mapping
+from swallowed import note_swallowed
 
 # Session caches: classification/board joins and per-symbol daily strength are
 # stable within a session; keyed by file mtimes so a fresh scan invalidates.
@@ -693,8 +694,8 @@ def save_industry_intraday_snapshot(
     except Exception:
         try:
             os.unlink(temporary)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("industry intraday snapshot temp file not removed", exc, quiet=True)
         raise
     return payload
 

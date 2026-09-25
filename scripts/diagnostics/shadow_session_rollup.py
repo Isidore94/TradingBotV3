@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from diagnostics.artifact_io import atomic_write_json, config_hash, prune_by_age, prune_by_size
+from swallowed import note_swallowed
 
 SESSION_SUMMARY_SCHEMA = "shadow_session_summary_v1"
 RETENTION_POLICY = {
@@ -451,8 +452,8 @@ def _session_metrics(
             end = datetime.fromisoformat(last_evaluation.replace("Z", "+00:00"))
             if end >= start:
                 durations[last_state] += int((end - start).total_seconds())
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            note_swallowed("shadow session last-state duration unparseable", exc, quiet=True)
     return {
         "state_observations": dict(raw_stats.get("state_observations") or {}),
         "state_transitions": dict(raw_stats.get("state_transitions") or {}),

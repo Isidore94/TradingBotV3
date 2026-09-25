@@ -167,7 +167,7 @@ def result_for(
         return sign * (value - price) / risk
 
     best = worst = None
-    for _begins, open_, high, low, close in usable:
+    for _begins, open_, high, low, _close in usable:
         result["bars"] += 1
         touched = low <= stop if long_side else high >= stop
         if touched:

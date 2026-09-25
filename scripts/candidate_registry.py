@@ -63,6 +63,15 @@ _STAGE_POOL_PRIORITY = {
 }
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 class StaleWriterError(RuntimeError):
     """The on-disk registry advanced past this writer's loaded generation."""
 
@@ -342,8 +351,8 @@ class CandidateRegistry:
             if os.path.exists(tmp_name):
                 try:
                     os.remove(tmp_name)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    note_swallowed("candidate registry temp file not removed", exc, quiet=True)
         self._loaded_generation = self._generation
 
     @classmethod

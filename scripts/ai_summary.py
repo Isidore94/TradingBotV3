@@ -55,6 +55,7 @@ from project_paths import (
     PASS_COHORT_PERFORMANCE_FILE,
     REJECTION_COHORT_PERFORMANCE_FILE,
 )
+from swallowed import note_swallowed
 
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
@@ -1683,7 +1684,7 @@ def _read_path_content(path: Path) -> tuple[Any, bool, str, str]:
         try:
             with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
                 reader = csv.DictReader(handle)
-                rows = [_bounded(dict(row)) for _, row in zip(range(MAX_ROWS), reader)]
+                rows = [_bounded(dict(row)) for _, row in zip(range(MAX_ROWS), reader, strict=False)]
                 truncated = next(reader, None) is not None
         except OSError as exc:
             return None, False, SOURCE_STATUS_UNAVAILABLE, f"could not be read: {exc}"
@@ -4308,8 +4309,8 @@ def _atomic_write(path: Path, content: str) -> None:
     finally:
         try:
             temp.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("AI summary temp file not removed", exc, quiet=True)
 
 
 def export_ai_summary(

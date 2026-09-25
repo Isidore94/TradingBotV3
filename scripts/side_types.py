@@ -19,6 +19,15 @@ _SHORT_ALIASES = {"SHORT", "S", "SELL", "BEAR", "BEARISH"}
 _warned_values: set[str] = set()
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 class Side(str, Enum):
     LONG = "LONG"
     SHORT = "SHORT"
@@ -60,8 +69,8 @@ def coerce_side_legacy(value, *, default: Side = Side.LONG, context: str = "") -
                 context_text = str(context or "").strip()
                 if context_text and context_text not in item["contexts"]:
                     item["contexts"].append(context_text)
-    except Exception:
-        pass
+    except Exception as exc:
+        note_swallowed("side coercion evidence tally failed", exc, quiet=True)
     if text and text not in _warned_values:
         _warned_values.add(text)
         logging.warning(

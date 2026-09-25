@@ -50,7 +50,7 @@ def _write_csv(path: Path, rows: list[dict]) -> Path:
 
 def _feature_rows() -> list[dict]:
     rows = []
-    for s_index, session in enumerate(SESSIONS):
+    for _s_index, session in enumerate(SESSIONS):
         for n, symbol in enumerate(SYMBOLS):
             base = {
                 "run_id": f"run-{session.isoformat()}-close",

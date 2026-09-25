@@ -72,6 +72,7 @@ from typing import Any, Callable, Mapping, Sequence
 import requests
 
 from ai_jobs import ledger, store, window
+from swallowed import note_swallowed
 
 _log = logging.getLogger(__name__)
 
@@ -184,8 +185,8 @@ def _memory_in_use_mb() -> tuple[float, str]:
                 used = int(status.ullTotalPhys) - int(status.ullAvailPhys)
                 if used > 0:
                     return used / (1024.0 * 1024.0), "system_in_use"
-        except Exception:  # a measurement must never be the thing that fails
-            pass
+        except Exception as swallowed_exc:  # a measurement must never be the thing that fails
+            note_swallowed("Windows memory status reading unavailable", swallowed_exc, quiet=True)
     try:
         meminfo = Path("/proc/meminfo")
         if meminfo.is_file():
@@ -199,8 +200,8 @@ def _memory_in_use_mb() -> tuple[float, str]:
             available = values.get("MemAvailable", values.get("MemFree", 0))
             if total and total > available:
                 return (total - available) / 1024.0, "system_in_use"
-    except Exception:
-        pass
+    except Exception as swallowed_exc:
+        note_swallowed("/proc/meminfo memory reading unavailable", swallowed_exc, quiet=True)
     try:
         import resource
 
@@ -210,8 +211,8 @@ def _memory_in_use_mb() -> tuple[float, str]:
             mb = peak / 1024.0 if sys.platform != "darwin" else peak / (1024.0 * 1024.0)
             if mb > 0:
                 return mb, "probe_process_rss"
-    except Exception:
-        pass
+    except Exception as exc:
+        note_swallowed("process RSS memory reading unavailable", exc, quiet=True)
     return 0.0, "unmeasured"
 
 

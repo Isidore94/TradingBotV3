@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import threading
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
@@ -26,6 +27,7 @@ from ui.timer_utils import start_staggered
 from ui.widgets.data_table import measure_column_widths
 from ui.widgets.kpi_tile import KpiTile
 from ui.widgets.section_header import SectionHeader
+from swallowed import note_swallowed
 
 #: Warehouse tile status -> this page's four-status vocabulary. OFF is UNKNOWN,
 #: not green: "no research store configured" is an unmeasured dimension, and
@@ -112,6 +114,90 @@ def _merge_checks(payload: dict[str, Any], rows: list[dict[str, Any]]) -> dict[s
     elif "degraded" in statuses and current == "healthy":
         merged["status"] = "degraded"
     return merged
+
+
+def _health_row(row_id: str, label: str, status: str, summary: str, source: str, details=None) -> dict[str, Any]:
+    return {
+        "id": row_id,
+        "label": label,
+        "status": status,
+        "summary": summary,
+        "updated_at": "",
+        "source": source,
+        "details": dict(details or {}),
+    }
+
+
+def universe_floor_check() -> dict[str, Any]:
+    """The universe's symbol count against its write floor (P2-11c); audit worker only."""
+    source = "universe_builder.py"
+    try:
+        from project_paths import UNIVERSE_ALL_FILE
+        from universe_builder import UNIVERSE_FLOOR_MIN_SYMBOLS, _read_universe_count
+
+        floor = int(UNIVERSE_FLOOR_MIN_SYMBOLS)
+        count = _read_universe_count(Path(UNIVERSE_ALL_FILE))
+    except Exception as exc:
+        return _health_row(
+            "universe_floor", "Universe vs floor", _UNKNOWN, f"Universe count unreadable: {exc}", source
+        )
+    details = {"count": count, "floor": floor}
+    if count is None:
+        return _health_row(
+            "universe_floor", "Universe vs floor", _UNKNOWN,
+            f"No universe list on this machine; count unknown (floor {floor}).", source, details,
+        )
+    if count < floor:
+        return _health_row(
+            "universe_floor", "Universe vs floor", "unhealthy",
+            f"Universe {count} symbols, below the floor of {floor}.", source, details,
+        )
+    return _health_row(
+        "universe_floor", "Universe vs floor", "healthy",
+        f"Universe {count} symbols (floor {floor}).", source, details,
+    )
+
+
+def ib_status_check(bot_provider: Callable[[], Any] | None) -> dict[str, Any]:
+    """IB connection as the live bot sees it (P2-11c); audit worker only.
+
+    A proxied bot answers over a pipe, so this must never run on the Qt thread.
+    No bot, or a bot that cannot be asked, is UNKNOWN - never "disconnected".
+    """
+    source = "ui/services/bounce_service.py"
+    if bot_provider is None:
+        return _health_row("ib_status", "IB connection", _UNKNOWN, "IB status is not wired to this page.", source)
+    try:
+        bot = bot_provider()
+    except Exception as exc:
+        return _health_row("ib_status", "IB connection", _UNKNOWN, f"Bot unreadable: {exc}", source)
+    if bot is None:
+        return _health_row("ib_status", "IB connection", _UNKNOWN, "Bot not running; IB status unknown.", source)
+    try:
+        connected = bool(getattr(bot, "connection_status", False))
+    except Exception as exc:
+        return _health_row("ib_status", "IB connection", _UNKNOWN, f"IB status unreadable: {exc}", source)
+    if not connected:
+        return _health_row(
+            "ib_status", "IB connection", "unhealthy", "IB disconnected; the bot is waiting to reconnect.", source
+        )
+    try:
+        pacing = float(bot.pacing_delay_remaining())
+    except Exception:
+        pacing = 0.0
+    if pacing > 0:
+        return _health_row(
+            "ib_status", "IB connection", "degraded",
+            f"IB connected, in pacing backoff ({pacing:.0f}s).", source, {"pacing_s": pacing},
+        )
+    return _health_row("ib_status", "IB connection", "healthy", "IB connected.", source)
+
+
+def _with_universe_and_ib_checks(payload: dict[str, Any], bot_provider) -> dict[str, Any]:
+    """Append the universe-floor and IB rows; audit worker only."""
+    if not isinstance(payload, dict):
+        return payload
+    return _merge_checks(payload, [universe_floor_check(), ib_status_check(bot_provider)])
 
 
 def _with_tracker_write_line(payload: dict[str, Any]) -> dict[str, Any]:
@@ -254,10 +340,18 @@ class HealthPanel(QFrame):
     #: them on the GUI thread.
     _audit_ready = Signal(dict)
 
-    def __init__(self, parent=None, *, refresh_interval_ms: int = 15_000) -> None:
+    def __init__(
+        self,
+        parent=None,
+        *,
+        refresh_interval_ms: int = 15_000,
+        bot_provider: Callable[[], Any] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
         self._payload: dict[str, Any] = {}
+        #: Returns the live bot (or None); called on the audit worker only.
+        self._bot_provider = bot_provider
 
         self.overall_tile = KpiTile("Overall Sol3 health", "CHECKING")
         self.healthy_tile = KpiTile("Healthy checks", "0", "long")
@@ -386,6 +480,7 @@ class HealthPanel(QFrame):
             payload = _with_map_freshness_checks(payload)
             payload = _with_tracker_write_line(payload)
             payload = _with_ai_night_lines(payload)
+            payload = _with_universe_and_ib_checks(payload, self._bot_provider)
         except Exception as exc:
             payload = {
                 "status": "unhealthy",
@@ -407,10 +502,10 @@ class HealthPanel(QFrame):
             }
         try:
             self._audit_ready.emit(payload)
-        except RuntimeError:
+        except RuntimeError as swallowed_exc:
             # The panel's C++ half was deleted while the audit ran (app
             # shutdown). Nothing to update, nothing to leak.
-            pass
+            note_swallowed("health audit finished after the panel was deleted", swallowed_exc, quiet=True)
 
     def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
         super().showEvent(event)

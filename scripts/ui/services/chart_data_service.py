@@ -37,6 +37,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
 from ui.services.bar_cache import BarSeries, D1BarStore, shared_store
+from swallowed import note_swallowed
 
 _log = logging.getLogger(__name__)
 
@@ -224,8 +225,8 @@ class ChartDataService(QObject):
             from ui import interaction_trace
 
             interaction_trace.mark("chart_request")
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("chart request interaction trace mark failed", exc, quiet=True)
         request_id = next(self._counter)
         with self._lock:
             self._newest[symbol] = request_id
@@ -509,8 +510,8 @@ class ChartDataService(QObject):
                 self.snapshotFailed.emit(symbol)
             else:
                 self.snapshotReady.emit(symbol, d1, m5, dict(meta or {}))
-        except RuntimeError:
-            pass  # the service was torn down while the task ran
+        except RuntimeError as exc:
+            note_swallowed("chart snapshot finished after the service was torn down", exc, quiet=True)  # the service was torn down while the task ran
 
     def _remember(self, symbol: str, d1: dict, m5: dict) -> None:
         """Keep the last built snapshot so a revisit paints before the reload.
@@ -537,8 +538,8 @@ class ChartDataService(QObject):
     def _prefetch_done(self, warmed: int, requested: int) -> None:
         try:
             self.prefetchFinished.emit(int(warmed), int(requested))
-        except RuntimeError:
-            pass
+        except RuntimeError as exc:
+            note_swallowed("chart prefetch finished after the service was torn down", exc, quiet=True)
 
     # -- lifecycle / tests ------------------------------------------------
     def wait_for_idle(self, timeout_ms: int = 5000) -> bool:
@@ -593,8 +594,8 @@ def _drain_shared_pool() -> None:
     try:
         pool.clear()
         pool.waitForDone(5000)
-    except Exception:
-        pass
+    except Exception as exc:
+        note_swallowed("chart data pool drain failed at shutdown", exc, quiet=True)
 
 
 _SERVICE: ChartDataService | None = None
@@ -622,8 +623,8 @@ def _shutdown_shared_service() -> None:
     if service is not None:
         try:
             service.shutdown()
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("shared chart data service shutdown failed", exc)
 
 
 def reset_shared_service() -> None:

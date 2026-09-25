@@ -24,12 +24,12 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 # The fixtures are the tester's own, imported under their own names.
-from test_g5_research_results import (  # noqa: E402,F401
-    AS_OF,
-    _cell,
-    journal_trades,
-    snapshot_payload,
-)
+import test_g5_research_results as _g5  # noqa: E402
+from test_g5_research_results import AS_OF, _cell  # noqa: E402
+
+# Bound as module attributes (not imports) so pytest registers them by name.
+journal_trades = _g5.journal_trades
+snapshot_payload = _g5.snapshot_payload
 
 
 def _view(population, horizon, snapshot, trades, window="recent"):

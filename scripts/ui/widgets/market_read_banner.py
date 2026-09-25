@@ -10,6 +10,7 @@ import logging
 from typing import Any, Callable
 
 from PySide6.QtWidgets import QLabel
+from swallowed import note_swallowed
 
 #: What the banner says before its first read lands or when nothing was read.
 NO_READ_TEXT = "Market read: not recorded yet."
@@ -49,8 +50,8 @@ class MarketReadBanner(QLabel):
             from ui.read_worker import join_worker
 
             join_worker(self._worker)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            note_swallowed("market read worker join failed at shutdown", exc, quiet=True)
 
     def _read(self):
         if self._loader is not None:

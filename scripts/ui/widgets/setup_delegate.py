@@ -11,6 +11,7 @@ import compression_chip
 from ui import theme
 from ui.models.setup import SetupRow
 from ui.models.setup_table_model import ROW_ROLE, SetupTableModel
+from swallowed import note_swallowed
 
 
 _COLUMN_KEYS = [key for key, _label in SetupTableModel.COLUMNS]
@@ -52,8 +53,8 @@ def _clock_text(stamp: object) -> str:
         return ""
     try:
         return datetime.fromisoformat(text).strftime("%H:%M")
-    except ValueError:
-        pass
+    except ValueError as exc:
+        note_swallowed("setup stamp not ISO; trying the time part", exc, quiet=True)
     marker = text.find("T")
     return text[marker + 1 : marker + 6] if marker != -1 else ""
 

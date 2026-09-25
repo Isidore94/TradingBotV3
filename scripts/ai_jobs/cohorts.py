@@ -29,6 +29,15 @@ _log = logging.getLogger(__name__)
 GRADEABLE_SIDES = ("LONG", "SHORT")
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 def _read_pick_rows(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
@@ -356,8 +365,8 @@ def _run_cohort_grading(
         if staged is not None:
             try:
                 staged.unlink()
-            except OSError:
-                pass
+            except OSError as exc:
+                note_swallowed("cohort grading staged file not removed", exc, quiet=True)
 
     return {
         "status": "ok",

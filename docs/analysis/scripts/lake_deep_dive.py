@@ -24,7 +24,7 @@ for side in ("LONG", "SHORT"):
     states = Counter()
     net_rs = []
     gross_rs = []
-    for key, row in outcome_view.items():
+    for _key, row in outcome_view.items():
         if row.get("recipe_id") != SWING_HOUSE_V1.recipe_id:
             continue
         oid = row.get("occurrence_id", "")
@@ -60,7 +60,7 @@ for side in ("LONG", "SHORT"):
                 if row.get("recipe_id") == SWING_HOUSE_V1.recipe_id
                 and occ_view.get(row.get("occurrence_id", ""), {}).get("side") == side
                 and row.get("result_state") in TERMINAL_RESULT_STATES]
-    print(f"\n    Sample terminal rows (first 5):")
+    print("\n    Sample terminal rows (first 5):")
     for _, row in terminal[:5]:
         print(f"      state={row.get('result_state')} net_r={row.get('net_r')} gross_r={row.get('gross_r')} "
               f"target_r={row.get('target_r')} mfe_r={row.get('mfe_r')} "
@@ -69,7 +69,7 @@ for side in ("LONG", "SHORT"):
 # 2. Check which families have swing outcomes
 print("\n\n=== Which families have swing_house_v1 outcomes? ===")
 families = Counter()
-for key, row in outcome_view.items():
+for _key, row in outcome_view.items():
     if row.get("recipe_id") != SWING_HOUSE_V1.recipe_id:
         continue
     oid = row.get("occurrence_id", "")
@@ -82,7 +82,7 @@ for fam, cnt in families.most_common():
 print("\n\n=== Families across ALL swing recipes ===")
 swing_recipes = {"swing_house_v1", "control_fixed_1r2r_v1", "control_time_only_v1"}
 family_recipe_counts = defaultdict(lambda: Counter())
-for key, row in outcome_view.items():
+for _key, row in outcome_view.items():
     rid = row.get("recipe_id", "")
     if rid not in swing_recipes:
         continue

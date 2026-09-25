@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_jobs import ledger
+from swallowed import note_swallowed
 
 
 def refresh_recent_packs(
@@ -146,8 +147,8 @@ def run_day_review_facts(
         path = day_review_pack.pack_path(session, root=root)
         if path.is_file():
             outputs.append(str(path))
-    except Exception:
-        pass
+    except Exception as swallowed_exc:
+        note_swallowed("day review pack path not listed in outputs", swallowed_exc)
     try:
         recent = refresh_recent_packs(
             end_session=session, now=now, root=root, service=service,

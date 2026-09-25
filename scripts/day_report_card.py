@@ -1696,7 +1696,7 @@ def glance(payload: Mapping[str, Any]) -> dict[str, Any]:
     pnl = sum(net for _row, net in known) if known else None
     risks = [_money(row.get("planned_risk")) for row, _net in known]
     r_value = (
-        sum(net / risk for (_row, net), risk in zip(known, risks))
+        sum(net / risk for (_row, net), risk in zip(known, risks, strict=False))
         if known and all(risk and risk > 0 for risk in risks)
         else None
     )

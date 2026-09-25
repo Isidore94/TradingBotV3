@@ -31,6 +31,7 @@ from market_session import (
     normalize_market_local_datetime,
 )
 from project_paths import get_diagnostics_dir, get_local_setting
+from swallowed import note_swallowed
 
 
 FEATURE_VERSION = "vold_session_recorder_v1"
@@ -120,8 +121,8 @@ def _parse_datetime(value: Any) -> datetime | None:
         return None
     try:
         return datetime.fromisoformat(text)
-    except ValueError:
-        pass
+    except ValueError as exc:
+        note_swallowed("datetime not ISO; trying other formats", exc, quiet=True)
     for pattern in ("%Y%m%d  %H:%M:%S", "%Y%m%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
         try:
             return datetime.strptime(text, pattern)

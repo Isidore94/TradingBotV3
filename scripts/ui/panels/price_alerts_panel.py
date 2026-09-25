@@ -32,6 +32,7 @@ from push_notify import (
     PUSH_TOKEN_SETTING,
     PUSH_TOPIC_SETTING,
 )
+from secret_store import save_secret_setting
 from ui.services.price_alert_service import ALWAYS_ON_SETTING, PriceAlertService
 from ui.widgets.data_table import measure_column_widths
 from ui.widgets.section_header import SectionHeader
@@ -118,8 +119,10 @@ class PriceAlertsPanel(QFrame):
         self.server_input = QLineEdit(str(get_local_setting(PUSH_SERVER_SETTING, DEFAULT_NTFY_SERVER) or DEFAULT_NTFY_SERVER))
         self.topic_input = QLineEdit(str(get_local_setting(PUSH_TOPIC_SETTING, "") or ""))
         self.topic_input.setPlaceholderText("your private ntfy topic (empty = pushes off)")
+        # The token lives in Windows Credential Manager (P2-11d). The box shows
+        # only a legacy JSON value; blank means "keep what is stored".
         self.token_input = QLineEdit(str(get_local_setting(PUSH_TOKEN_SETTING, "") or ""))
-        self.token_input.setPlaceholderText("access token (optional)")
+        self.token_input.setPlaceholderText("access token (optional; blank keeps the saved one)")
         self.token_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.always_on_check = QCheckBox("Monitor in every mode (not just Auto EVENING)")
         self.always_on_check.setChecked(bool(get_local_setting(ALWAYS_ON_SETTING, True)))
@@ -358,7 +361,10 @@ class PriceAlertsPanel(QFrame):
             return
         save_local_setting(PUSH_SERVER_SETTING, self.server_input.text().strip() or DEFAULT_NTFY_SERVER)
         save_local_setting(PUSH_TOPIC_SETTING, self.topic_input.text().strip())
-        save_local_setting(PUSH_TOKEN_SETTING, self.token_input.text().strip())
+        token = self.token_input.text().strip()
+        if token and save_secret_setting(PUSH_TOKEN_SETTING, token) == "keyring":
+            self.token_input.clear()
+            self.token_input.setPlaceholderText("saved in Windows Credential Manager (type to replace)")
         save_local_setting(ALWAYS_ON_SETTING, bool(self.always_on_check.isChecked()))
         self._refresh_status()
 

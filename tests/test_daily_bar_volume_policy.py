@@ -205,7 +205,7 @@ def test_the_rest_of_the_history_is_untouched_by_a_collision():
     # 08-03..08-05 and 08-05..08-07: five sessions, one of them contested.
     assert len(merged) == 5
     assert merged["datetime"].is_monotonic_increasing
-    by_day = dict(zip(merged["datetime"].dt.strftime("%Y-%m-%d"), merged["source"]))
+    by_day = dict(zip(merged["datetime"].dt.strftime("%Y-%m-%d"), merged["source"], strict=False))
     assert by_day["2026-08-03"] == "yahoo"
     assert by_day["2026-08-05"] == "yahoo", "the overlap keeps the share-denominated row"
     assert by_day["2026-08-07"] == "ibkr", "a day only IB has is still kept, prices only"

@@ -296,7 +296,7 @@ class ArmBar(QFrame):
 
     def _classic_d1_widgets(self) -> list:
         grouped: list = []
-        for group_label, (_title, kinds) in zip(self._d1_group_labels, D1_MENU_GROUPS):
+        for group_label, (_title, kinds) in zip(self._d1_group_labels, D1_MENU_GROUPS, strict=False):
             grouped.append(group_label)
             grouped.extend(self._menu_button_for(kind) for kind in kinds)
         return [

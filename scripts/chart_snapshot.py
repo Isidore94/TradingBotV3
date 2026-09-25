@@ -672,6 +672,6 @@ def build_m5_snapshot(symbol: str, bars: list[Mapping[str, Any]]) -> dict[str, A
         _overlay("+1σ", vwap["upper_1"], "accent", 1.0, True),
         _overlay("-1σ", vwap["lower_1"], "accent", 1.0, True),
     ]
-    for kind, span, label, color, width, dash in M5_EMA_SPECS:
+    for _kind, span, label, color, width, dash in M5_EMA_SPECS:
         overlays.append(_overlay(label, ema_series(closes, span), color, width, dash))
     return {"symbol": symbol, "timeframe": "M5", "bars": bars, "overlays": overlays, "note": ""}

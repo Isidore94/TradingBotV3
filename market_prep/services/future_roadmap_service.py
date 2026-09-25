@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -689,7 +690,7 @@ def _parse_date(value: Any) -> date | None:
     try:
         return datetime.fromisoformat(text[:10]).date()
     except ValueError:
-        pass
+        logging.getLogger("market_prep").debug("roadmap date not ISO; trying other formats")
     try:
         return parsedate_to_datetime(text).date()
     except (TypeError, ValueError, IndexError, AttributeError):

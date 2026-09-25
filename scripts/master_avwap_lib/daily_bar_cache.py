@@ -65,6 +65,7 @@ import pandas as pd
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPTS_DIR) not in sys.path:  # `python -m master_avwap_lib.daily_bar_cache`
     sys.path.insert(0, str(SCRIPTS_DIR))
+from swallowed import note_swallowed  # noqa: E402
 
 import market_calendar  # noqa: E402
 from project_paths import DAILY_BARS_CACHE_DIR  # noqa: E402
@@ -434,8 +435,8 @@ def _atomic_write_csv(path: Path, frame: pd.DataFrame) -> None:
     finally:
         try:
             temp.unlink(missing_ok=True)
-        except OSError:  # pragma: no cover - the rename already moved it
-            pass
+        except OSError as exc:  # pragma: no cover - the rename already moved it
+            note_swallowed("daily bar cache temp file not removed", exc, quiet=True)
 
 
 def _repair_one_file(path: Path, *, apply: bool, now: datetime) -> RepairFinding | None:

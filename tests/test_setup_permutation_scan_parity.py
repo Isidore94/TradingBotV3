@@ -171,7 +171,7 @@ def test_detector_and_scoring_output_are_identical_with_and_without_the_stamp(ru
     assert _strip(stamped["priority_row"]) == _strip(plain["priority_row"])
     assert _strip(stamped["ai_state_entry"]) == _strip(plain["ai_state_entry"])
     assert len(stamped["history"]) == len(plain["history"])
-    for on_row, off_row in zip(stamped["history"], plain["history"]):
+    for on_row, off_row in zip(stamped["history"], plain["history"], strict=False):
         assert _strip(on_row) == _strip(off_row)
     # With the hooks off the appended columns are present and blank: nothing else moved.
     assert all(plain["history"][-1][column] == "" for column in sp.SCAN_ROW_COLUMNS)

@@ -425,6 +425,6 @@ def test_a_week_pools_each_session_once(tmp_path):
     twice = day_report_card.week([day, dict(day)])
 
     assert tuple(twice.sessions) == (fx.SESSION,)
-    for first, second in zip(once.lines, twice.lines):
+    for first, second in zip(once.lines, twice.lines, strict=False):
         assert first["n"] == second["n"], first["key"]
         assert first["measured"] == second["measured"], first["key"]

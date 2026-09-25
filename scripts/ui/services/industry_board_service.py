@@ -17,6 +17,7 @@ from industry_scanner import (
     run_industry_scan,
 )
 from project_paths import INDUSTRY_BOARD_STATE_FILE
+from swallowed import note_swallowed
 
 
 INDUSTRY_REFRESH_INTERVAL_SECONDS = 60 * 60
@@ -94,8 +95,8 @@ def _write_state(path: Path, payload: dict[str, Any]) -> None:
     except Exception:
         try:
             os.unlink(temp_name)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("industry board temp state not removed", exc, quiet=True)
         raise
 
 
@@ -283,8 +284,8 @@ class IndustryBoardService(QObject):
         }
         try:
             _write_state(self._state_path, state)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("industry board state write failed", exc)
         result = {**payload, "snapshot": snapshot, "state": state}
         self._emit_snapshot(snapshot)
         self.refreshFinished.emit(result)

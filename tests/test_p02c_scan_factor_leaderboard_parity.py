@@ -103,5 +103,5 @@ def test_leaderboard_equals_the_pre_change_golden():
     actual = leaderboard_without_clock(rows)
     expected = contract["expected_leaderboard"]
     assert len(actual) == len(expected)
-    for index, (got, want) in enumerate(zip(actual, expected)):
+    for index, (got, want) in enumerate(zip(actual, expected, strict=False)):
         contract.assert_matches(got, want, context=f"row {index}")

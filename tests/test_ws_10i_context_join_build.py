@@ -35,7 +35,7 @@ LABELS = {
 
 def _m5_rows(session: str, symbols=("AAPL", "MSFT")) -> list[dict]:
     rows: list[dict] = []
-    for symbol, mfe in zip(symbols, (1.4, 0.6)):
+    for symbol, mfe in zip(symbols, (1.4, 0.6), strict=False):
         stamp = session.replace("-", "")
         event_id = f"{symbol}_long_{stamp}_10_35_00_h1_blue_after_red"
         context = json.dumps({"market_environment": "quiet"})
