@@ -227,6 +227,8 @@ class TradingDeskPanel(QWidget):
         self.live_results_strip.set_bars_provider(self._live_results_bars)
         self.alert_center.m5AlertPosted.connect(self.live_results_strip.record)
         self.alert_center.m5AlertsDayRolled.connect(self.live_results_strip.clear_day)
+        # P1-6 6a: the strip's worker also measures each row's entry state.
+        self.live_results_strip.entryStatesChanged.connect(self.m5_alert_bar.set_entry_states)
 
         # P1-5 5b: "Best right now" - one ranked list under "Working now".
         # Display only; it reads the strip's results, the Movers board and the
