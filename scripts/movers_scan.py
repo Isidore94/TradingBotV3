@@ -54,6 +54,9 @@ MIN_SESSION_VOLUME = 50_000.0
 PULLBACK_MIN_PCT = 0.30
 #: The session high must be on bar index >= this (i.e. after the first 2 bars).
 PULLBACK_MIN_HIGH_INDEX = 2
+#: A rally may start from a low in the first 2 bars once this many completed
+#: bars have passed since that low (30 minutes; lead 2026-09-25).
+RALLY_OPEN_LOW_MIN_BARS = 6
 #: A series whose last completed bar starts before
 #: floor5(now) - 5 min x (STALE_BARS_ALLOWED + 1) is stale: not ranked, and a
 #: stale SPY makes the market state unknown.
@@ -249,7 +252,8 @@ def market_state(
     and now >= PULLBACK_MIN_PCT off that high (it may be below VWAP or the
     open now). Bounce mirrors it off the session low; when both qualify, the
     later turn wins. Rally: SPY now >= PULLBACK_MIN_PCT above its last swing
-    low (`last_swing_low`), on either day type; it beats a pullback or bounce
+    low (`last_swing_low`), on either day type (a low in the first 2 bars
+    counts after RALLY_OPEN_LOW_MIN_BARS bars); it beats a pullback or bounce
     only when its low is the later turn (a bounce off the same low stays a
     bounce). Up/down day is SPY vs its session open. SPY bars older than
     `fresh_after` make the state unknown.
@@ -304,8 +308,11 @@ def market_state(
     swing_index = last_swing_low(today)
     swing_low = today[swing_index]["low"]
     off_swing = _pct(last, swing_low)
-    rally = turn_on(swing_index, off_swing,
-                    off_swing is not None and off_swing >= PULLBACK_MIN_PCT)
+    rally_beyond = off_swing is not None and off_swing >= PULLBACK_MIN_PCT
+    rally = turn_on(swing_index, off_swing, rally_beyond) or (
+        swing_index < PULLBACK_MIN_HIGH_INDEX and rally_beyond
+        and last_index - swing_index >= RALLY_OPEN_LOW_MIN_BARS
+    )
     if rally and ((pull and high_index >= swing_index) or (bounce and low_index >= swing_index)):
         rally = False  # the pullback/bounce turn is as late or later
     if rally:

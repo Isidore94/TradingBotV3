@@ -102,13 +102,37 @@ def test_rally_below_the_threshold_lights_nothing():
     assert state.rally is False and state.start_dt is None
 
 
-def test_a_low_in_the_first_two_bars_is_not_a_rally_start():
-    # Same rule as the pullback's high: the first two bars' extremes are opening noise.
-    closes = [401.0, 401.2, 401.3, 401.5, 402.0, 402.5, 403.0]
+def test_a_low_in_the_first_two_bars_waits_for_the_open_low_bar_count():
+    # Lead 2026-09-25: an open low may start a rally only after RALLY_OPEN_LOW_MIN_BARS bars.
+    closes = [401.0, 401.2, 401.3, 401.5, 402.0, 402.5]  # bar 5: 5 bars after the low
     bars = _series(closes, prior_close=400.0)
     _today(bars)[0]["low"] = 399.0
     state = _state(bars, len(closes))
     assert state.rally is False and state.start_dt is None
+    bars = _series(closes + [403.0], prior_close=400.0)  # bar 6: 6 bars after the low
+    _today(bars)[0]["low"] = 399.0
+    state = _state(bars, len(closes) + 1)
+    assert state.rally is True and state.extreme_time == "09:30"
+
+
+def _open_low_grind(last_bar):
+    """SPY opens at its low (bar 0) and grinds up 0.3 a bar through `last_bar`."""
+    closes = [400.0 + 0.3 * i for i in range(last_bar + 1)]
+    bars = _series(closes, prior_close=400.0)
+    _today(bars)[0]["low"] = 399.8
+    return bars, len(closes)
+
+
+def test_an_open_low_grind_lights_rally_at_bar_8_not_bar_5():
+    bars, n = _open_low_grind(5)
+    state = _state(bars, n)
+    assert (401.5 / 399.8 - 1) * 100 >= ms.PULLBACK_MIN_PCT  # far enough, too soon
+    assert state.rally is False and state.start_dt is None
+    bars, n = _open_low_grind(8)
+    state = _state(bars, n)
+    assert state.rally is True and state.pullback is False
+    assert state.extreme_time == "09:30" and state.extreme_price == pytest.approx(399.8)
+    assert ms.RALLY_OPEN_LOW_MIN_BARS == 6
 
 
 def test_rally_after_a_pullback_starts_at_the_pullback_low_and_the_later_turn_wins():
