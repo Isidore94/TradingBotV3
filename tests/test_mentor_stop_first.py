@@ -53,9 +53,12 @@ def test_a_trade_with_no_stop_is_listed_first(tmp_path):
 
     store = new_store(tmp_path)
     mark_covered(store, REVIEWED)
-    with_stop = add_round_trip(store, "AAA", day=REVIEWED, entry_hour=7)
-    no_stop = add_round_trip(store, "BBB", day=REVIEWED, entry_hour=8)
+    # `list_trades` is newest first, so the trade WITH a stop (opened later)
+    # comes first on its own; only the stop-first sort can move it second.
+    with_stop = add_round_trip(store, "AAA", day=REVIEWED, entry_hour=8)
+    no_stop = add_round_trip(store, "BBB", day=REVIEWED, entry_hour=7)
     store.save_risk_fields(with_stop, planned_stop=9.5)
+    assert [t["trade_id"] for t in store.list_trades(trade_date=REVIEWED)] == [with_stop, no_stop]
 
     task = check.build_task(store, SESSION)
 

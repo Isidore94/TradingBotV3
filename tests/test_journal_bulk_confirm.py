@@ -117,6 +117,7 @@ def test_a_row_confirmed_meanwhile_is_left_alone(journal):
 
     assert result["confirmed"] == 0
     assert _annotation_row(store, ids["AAA"]) == before
+    assert bulk.summary_text(result) == "0 confirmed, 1 refused (already confirmed), 2 left"
 
 
 def test_a_failed_journal_write_raises(journal, monkeypatch):
@@ -163,6 +164,13 @@ def test_the_dialog_confirms_ticked_rows_and_says_how_many_are_left(journal, mon
     assert store.annotation_state(ids["BBB"])["setup_tags"] == "pullback_sma_reclaim"
     assert store.annotation_state(ids["CCC"])["tag_status"] == "needs_review"
     assert dialog.table.rowCount() == 1, "confirmed rows leave the list"
+
+    # A ticked row with no setup is refused: named in the line, kept, reason shown.
+    dialog.table.item(0, module.COL_CHECK).setCheckState(Qt.Checked)
+    dialog.confirm_button.click()
+    assert dialog.status_label.text() == "0 confirmed, 1 refused (no setup chosen), 1 left"
+    assert dialog.table.rowCount() == 1
+    assert dialog.table.item(0, module.COL_WHY).text() == "refused: no setup chosen"
 
     # A failed write is loud: a warning box, and the status says FAILED.
     warned = []

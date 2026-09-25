@@ -138,5 +138,11 @@ def confirm(store: Any, choices: Iterable[tuple[BulkConfirmRow, str]]) -> dict[s
 
 
 def summary_text(result: dict[str, Any]) -> str:
-    """The line the dialog shows when a confirm finishes."""
-    return f"{int(result.get('confirmed') or 0)} confirmed, {int(result.get('left') or 0)} left"
+    """The line the dialog shows when a confirm finishes, refusals named."""
+    refused = list(result.get("refused") or ())
+    parts = [f"{int(result.get('confirmed') or 0)} confirmed"]
+    if refused:
+        reasons = sorted({str(reason) for _trade_id, reason in refused})
+        parts.append(f"{len(refused)} refused ({'; '.join(reasons)})")
+    parts.append(f"{int(result.get('left') or 0)} left")
+    return ", ".join(parts)

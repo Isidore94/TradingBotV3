@@ -191,10 +191,15 @@ class BulkConfirmDialog(QDialog):
         import journal_bulk_confirm as bulk
 
         done = set(result.get("confirmed_ids") or ())
+        refused = {str(trade_id): str(reason) for trade_id, reason in result.get("refused") or ()}
         for index in reversed(range(len(self._rows))):
-            if self._rows[index].trade_id in done:
+            trade_id = self._rows[index].trade_id
+            if trade_id in done:
                 self.table.removeRow(index)
                 del self._rows[index]
+            elif trade_id in refused:
+                # A refused row stays, with its reason in the why column.
+                self.table.setItem(index, COL_WHY, QTableWidgetItem(f"refused: {refused[trade_id]}"))
         self.confirm_button.setEnabled(bool(self._rows))
         self.status_label.setText(bulk.summary_text(result))
         self.confirmedSetups.emit(dict(result))
