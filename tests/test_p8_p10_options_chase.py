@@ -486,6 +486,37 @@ def test_a_failing_chase_leaves_the_board_alone():
     assert emitted == [] and service.board() == _movers_board()
 
 
+def test_a_failed_log_write_never_touches_the_board(tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_text("x", encoding="utf-8")
+    ocs = _svc()
+    service = ocs.OptionsChaseService(
+        client_factory=FakeClient, hv_provider=lambda _s, _d: 0.41,
+        log_path=blocker / "sub" / "options_chase_log.jsonl")
+    results = service.run(_movers_board(), {}, now=NOW)
+    assert results["AAA|long"]["status"] == "candidate"
+    board = service.annotate(_movers_board())
+    assert board["pop"]["long"][0]["opt"]["strike"] == 27.0
+
+
+def test_log_rows_carry_the_option_mid_at_flag_and_a_fresh_cached_mid_later(tmp_path):
+    clock = Clock()
+    service = _service(tmp_path, FakeClient(), clock)
+    service.run(_movers_board(), {"AAA": 25.0}, now=NOW)
+    clock.t += 200  # cache still fresh at +30m in this fake clock
+    later = datetime(2026, 9, 28, 11, 10, 20, tzinfo=NY)
+    service.run(_movers_board(), {"AAA": 25.2, "BBB": 25.0, "EEE": 25.0}, now=later)
+    rows = oc.load_records(tmp_path / "options_chase_log.jsonl")
+    flag = next(r for r in rows if r["kind"] == "flag" and r["symbol"] == "AAA")
+    assert flag["mid"] == pytest.approx(0.90) and flag["strike"] == 27.0
+    outcome = next(r for r in rows if r["kind"] == "outcome" and r["symbol"] == "AAA")
+    assert outcome["horizon"] == "+30m" and outcome["move_atr"] == pytest.approx(1.0)
+    assert outcome["option_mid"] == pytest.approx(0.90)
+    assert service.fresh_mid(flag) == pytest.approx(0.90)
+    clock.t += 200  # the cached quote is now 400 s old: no mid is claimed
+    assert service.fresh_mid(flag) is None
+
+
 # ---------------------------------------------------------------- the Opt column
 @pytest.fixture(scope="module")
 def qapp():
