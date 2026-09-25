@@ -185,3 +185,84 @@ def test_the_card_tooltip_says_why(tmp_path):
     assert "2 day(s) before entry" in button.toolTip()
     assert "from evidence" in button.toolTip()
     assert card.setup_choice_box("T1").currentText() == "new_5d_high"
+
+
+def test_a_trade_with_no_guess_still_gets_the_setup_list(tmp_path):
+    """Trader 2026-09-25: every trade missing a setup gets the list, not only
+    the ones the machine could guess. With no guess it opens on a blank pick
+    and the button stays off until a real name is chosen."""
+    import os
+
+    import pytest
+
+    pytest.importorskip("PySide6", reason="the Mentor card is Qt")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    import trade_mentor_trade_check as check
+    from ui.widgets.trade_mentor_card import TradeMentorCard
+
+    QApplication.instance() or QApplication([])
+    card = TradeMentorCard(drafts_path=tmp_path / "drafts.json")
+    question = check.TradeQuestion("T1", "AAA", "LONG", ("setup",))
+    card._add_setup_confirm(question)
+
+    box = card.setup_choice_box("T1")
+    button = card.setup_confirm_button("T1")
+    assert box is not None and button is not None
+    assert box.currentData() == ""
+    assert not button.isEnabled()
+    box.setCurrentIndex(1)
+    assert box.currentData()
+    assert button.isEnabled()
+    box.setCurrentIndex(0)
+    assert not button.isEnabled()
+
+
+def test_a_trade_with_its_setup_answered_gets_no_list(tmp_path):
+    import os
+
+    import pytest
+
+    pytest.importorskip("PySide6", reason="the Mentor card is Qt")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    import trade_mentor_trade_check as check
+    from ui.widgets.trade_mentor_card import TradeMentorCard
+
+    QApplication.instance() or QApplication([])
+    card = TradeMentorCard(drafts_path=tmp_path / "drafts.json")
+    card._add_setup_confirm(check.TradeQuestion("T1", "AAA", "LONG", ("thesis",)))
+
+    assert card.setup_choice_box("T1") is None
+
+
+def test_an_untouched_guess_is_not_an_answer_and_a_hand_pick_is(tmp_path):
+    """Save files the setup list only when the trader moved it by hand; the
+    preselected machine guess stays a suggestion."""
+    import os
+
+    import pytest
+
+    pytest.importorskip("PySide6", reason="the Mentor card is Qt")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    import trade_mentor_trade_check as check
+    from ui.widgets.trade_mentor_card import TradeMentorCard
+
+    QApplication.instance() or QApplication([])
+    card = TradeMentorCard(drafts_path=tmp_path / "drafts.json")
+    question = check.TradeQuestion("T1", "AAA", "LONG", ("setup",), setup_guess="new_5d_high")
+    card._add_setup_confirm(question)
+
+    assert card._picked_setup("T1") == ""
+    assert card._has_answer("T1") is False
+    assert card._blank_fields("T1") == ["setup"]
+
+    card._setup_hand_picked("T1")
+
+    assert card._picked_setup("T1") == "new_5d_high"
+    assert card._has_answer("T1") is True
+    assert card._blank_fields("T1") == []
