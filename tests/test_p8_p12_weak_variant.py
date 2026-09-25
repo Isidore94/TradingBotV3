@@ -11,10 +11,13 @@ import sys
 from datetime import date
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+import pytest
+
+ROOT =Path(__file__).resolve().parents[1]
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
+import setup_key_labels  # noqa: E402
 import setup_permutation_search as search  # noqa: E402
 import setup_permutation_verdicts as verdicts  # noqa: E402
 
@@ -151,3 +154,186 @@ def test_the_search_writes_history_then_verdicts_beside_its_out(tmp_path, monkey
     payload = json.loads((tmp_path / search.VERDICTS_FILE_NAME).read_text(encoding="utf-8"))
     assert [v["verdict"] for v in payload["verdicts"]] == [verdicts.WEAK]
     assert len(payload["reports_read"]) == 2
+
+
+# --- 3. show it -------------------------------------------------------------
+
+THREE_SATURDAYS = [
+    ("2026-09-12", _saturday(passes=[("ma_support=sma50_support", 0.6)], fails=[("band_zone=vwap", 0.3)])),
+    ("2026-09-19", _saturday(passes=[("ma_support=sma50_support", 0.62)], fails=[("band_zone=vwap", 0.41)])),
+    ("2026-09-26", _saturday(passes=[("ma_support=sma50_support", 0.58)], fails=[("band_zone=vwap", 0.39)])),
+]
+WEAK_KEY = "setup_permutations.v1|avwap_band_bounce|LONG|band_zone=vwap;ma_support=sma20_support"
+CANDIDATE_KEY = "setup_permutations.v1|avwap_band_bounce|LONG|band_zone=lower_1;ma_support=sma50_support"
+PLAIN_KEY = "setup_permutations.v1|avwap_band_bounce|LONG|band_zone=lower_1;ma_support=sma20_support"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_label_cache():
+    setup_key_labels.reset_cache_for_tests()
+    yield
+    setup_key_labels.reset_cache_for_tests()
+
+
+def _verdicts_payload():
+    return verdicts.build_verdicts(THREE_SATURDAYS)
+
+
+def _write_features_and_verdicts(folder: Path) -> Path:
+    features = folder / "d1_features.csv"
+    features.write_text(
+        "symbol,side,last_trade_date,permutation_label,permutation_key\n"
+        f"WEAK,LONG,2026-09-25,vwap|sma20_support,{WEAK_KEY}\n"
+        f"CAND,LONG,2026-09-25,lower_1|sma50_support,{CANDIDATE_KEY}\n"
+        f"PLAIN,LONG,2026-09-25,lower_1|sma20_support,{PLAIN_KEY}\n"
+        f"SHRT,SHORT,2026-09-25,vwap,{WEAK_KEY.replace('|LONG|', '|SHORT|')}\n",
+        encoding="utf-8",
+    )
+    (folder / setup_key_labels.VERDICTS_FILE_NAME).write_text(json.dumps(_verdicts_payload()), encoding="utf-8")
+    return features
+
+
+def _row(symbol, side="LONG", family="avwap_band_bounce", raw=None):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(symbol=symbol, side=side, last_trade_date="2026-09-25",
+                           raw={"setup_family": family, **(raw or {})})
+
+
+def test_rows_carry_the_verdict_of_a_key_their_facets_contain(tmp_path):
+    features = _write_features_and_verdicts(tmp_path)
+    rows = [_row("WEAK"), _row("CAND"), _row("PLAIN"), _row("SHRT", side="SHORT"),
+            _row("OWN", raw={"permutation_key": WEAK_KEY, "permutation_label": "vwap"})]
+    setup_key_labels.attach_labels(rows, allow_read=True, path=features)
+    assert [setup_key_labels.display_label(row) for row in rows] == [
+        "vwap|sma20_support (weak variant)",
+        "lower_1|sma50_support (candidate)",
+        "lower_1|sma20_support",
+        "vwap",  # a SHORT row never takes a LONG family's verdict
+        "vwap (weak variant)",  # the row's own stamped key is enough
+    ]
+    tip = setup_key_labels.verdict_tooltip(rows[0])
+    assert "2026-09-19 41%" in tip and "2026-09-26 39%" in tip
+    # Nothing hidden, nothing rescored: the same rows, the same label column.
+    assert rows[0].raw["permutation_label"] == "vwap|sma20_support"
+
+
+def test_the_setups_table_shows_the_chip_and_the_citation():
+    from PySide6.QtCore import Qt
+
+    from ui.models.setup import SetupRow
+    from ui.models.setup_table_model import SetupTableModel
+
+    weak = {"verdict": verdicts.WEAK, "citation": "failed hold-out 2026-09-19 41% and 2026-09-26 39%"}
+    row = SetupRow(symbol="WEAK", side="LONG", raw={"permutation_label": "vwap", "permutation_verdicts": [weak]})
+    model = SetupTableModel([row])
+    key_col = [key for key, _label in SetupTableModel.COLUMNS].index("setup_key")
+    tags_col = [key for key, _label in SetupTableModel.COLUMNS].index("setup_tags")
+    assert model.data(model.index(0, key_col)) == "vwap (weak variant)"
+    tip = model.data(model.index(0, tags_col), Qt.ItemDataRole.ToolTipRole)
+    assert "Setup key: vwap (weak variant)" in tip and "2026-09-26 39%" in tip
+
+
+def _weak(raw):
+    return {**raw, "permutation_verdicts": [{"verdict": verdicts.WEAK, "citation": "x"}]}
+
+
+def test_a_weak_variant_sorts_after_its_family_peers_with_the_same_grade_and_is_never_hidden():
+    rows = [
+        _row("W1", raw=_weak({})),          # weak, family A
+        _row("B1", family="fam_b"),
+        _row("A1"),
+        _row("W2", raw=_weak({})),          # weak, family A, keeps order after W1
+        _row("A2"),
+        _row("B2", family="fam_b"),
+        _row("LONE", family="fam_c", raw=_weak({})),  # no peers: stays put
+    ]
+
+    def group(row):
+        return (row.side, row.raw["setup_family"])
+
+    out = setup_key_labels.weak_variants_last(rows, group)
+    assert [row.symbol for row in out] == ["B1", "A1", "A2", "W1", "W2", "B2", "LONE"]
+    assert sorted(id(row) for row in out) == sorted(id(row) for row in rows)
+    # A different grade is not a peer: the weak row only passes same-grade rows.
+    grades = {"W1": "B", "A1": "A", "A2": "B"}
+    graded = [_row("A1"), _row("W1", raw=_weak({})), _row("A2")]
+    out = setup_key_labels.weak_variants_last(graded, lambda r: (r.raw["setup_family"], grades[r.symbol]))
+    assert [row.symbol for row in out] == ["A1", "A2", "W1"]
+
+
+def test_the_setups_panel_applies_the_weak_variant_order_under_the_priority_switch(monkeypatch):
+    from types import SimpleNamespace
+
+    import working_lately
+    from ui.panels.master_avwap_panel import MasterAvwapPanel
+
+    panel = MasterAvwapPanel.__new__(MasterAvwapPanel)
+    panel.model = SimpleNamespace(grade_cell_for=lambda row: {"grade": "A"})
+    rows = [_row("W1", raw=_weak({})), _row("A1"), _row("B1", family="fam_b")]
+    monkeypatch.setattr(working_lately, "prioritise_enabled", lambda: True)
+    assert [r.symbol for r in panel._weak_variants_last(rows)] == ["A1", "W1", "B1"]
+    monkeypatch.setattr(working_lately, "prioritise_enabled", lambda: False)
+    assert [r.symbol for r in panel._weak_variants_last(rows)] == ["W1", "A1", "B1"]
+    source = (ROOT / "scripts" / "ui" / "panels" / "master_avwap_panel.py").read_text(encoding="utf-8")
+    assert "rows = self._weak_variants_last(self._by_points(" in source
+
+
+def test_the_away_digest_says_weak_variant_in_the_text():
+    import autopilot_core as core
+
+    picks = [
+        {"symbol": "WEAK", "side": "LONG", "bucket": "Favorite", "family": "avwap_band_bounce",
+         "expected_r": 1.0, "raw": _weak({"permutation_label": "vwap"})},
+        {"symbol": "CAND", "side": "LONG", "bucket": "Favorite", "family": "avwap_band_bounce",
+         "expected_r": 1.0, "raw": {"permutation_label": "lower_1",
+                                    "permutation_verdicts": [{"verdict": verdicts.CANDIDATE}]}},
+        {"symbol": "BARE", "side": "LONG", "bucket": "Favorite", "family": "avwap_band_bounce",
+         "expected_r": 1.0, "raw": {}},
+    ]
+    text = core.render_away_report({"auto_mode": "AWAY", "swing_picks": picks})
+    line = {sym: next(ln for ln in text.splitlines() if f" {sym} " in ln and "(LONG)" in ln)
+            for sym in ("WEAK", "CAND", "BARE")}
+    assert line["WEAK"].endswith("| key vwap (weak variant)")
+    assert line["CAND"].endswith("| key lower_1 (candidate)")
+    assert "(weak variant)" not in line["BARE"] and "(candidate)" not in line["BARE"]
+
+
+def test_the_setup_keys_panel_has_a_verdict_column_and_shows_weak_variants():
+    from ui.panels import setup_keys_panel as panel_module
+
+    assert ("verdict", "Verdict") in panel_module.COLUMNS
+    report = THREE_SATURDAYS[-1][1]
+    rows = panel_module.report_rows(report, "swing", "5", _verdicts_payload())
+    by_key = {row["key"]: row for row in rows}
+    assert by_key["ma_support=sma50_support"]["verdict"] == "candidate"
+    assert "2026-09-26 58%" in by_key["ma_support=sma50_support"]["verdict_tip"]
+    weak = by_key["band_zone=vwap"]
+    assert weak["verdict"] == "weak variant" and weak["holdout"].startswith("failed: 39% on n=40")
+    assert "2026-09-19 41%" in weak["verdict_tip"]
+    # No verdicts file: the column is blank, the rows are the report's.
+    assert [row["verdict"] for row in panel_module.report_rows(report, "swing", "5")] == [""]
+
+
+def test_the_setup_keys_panel_reads_verdicts_off_the_qt_thread_with_the_citation_on_hover(tmp_path):
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    from ui.panels import setup_keys_panel as panel_module
+
+    report_path = tmp_path / "permutation_report.json"
+    report_path.write_text(json.dumps({**THREE_SATURDAYS[-1][1], "generated_at": "x"}), encoding="utf-8")
+    (tmp_path / "permutation_verdicts.json").write_text(json.dumps(_verdicts_payload()), encoding="utf-8")
+    panel = panel_module.SetupKeysPanel(report_path=report_path)
+    panel.refresh()
+    panel._worker.wait(15000)
+    for _ in range(20):
+        app.processEvents()
+    column = [key for key, _label in panel_module.COLUMNS].index("verdict")
+    cells = {panel.table.item(i, 2).text(): panel.table.item(i, column) for i in range(panel.row_count())}
+    assert cells["band_zone=vwap"].text() == "weak variant"
+    assert "2026-09-26 39%" in cells["band_zone=vwap"].toolTip()
+    panel.shutdown()

@@ -43,7 +43,9 @@ COLUMNS = (
     ("n", "n"),
     ("sessions", "Sessions"),
     ("holdout", "Hold-out (last 20 sessions)"),
+    ("verdict", "Verdict"),
 )
+VERDICTS_FILE_NAME = "permutation_verdicts.json"
 
 NO_REPORT_TEXT = (
     "No setup-keys report yet. Run the backfill and the search "
@@ -52,7 +54,8 @@ NO_REPORT_TEXT = (
 CAVEAT_TEXT = (
     "SHADOW ONLY: nothing here ranks, filters or alerts. A key is reported only when it beats the "
     "family baseline in selection (n >= 30 over 10+ sessions) AND on the last 20 sessions, which "
-    "selection never saw. 'No key found' is an answer, not a gap."
+    "selection never saw. 'No key found' is an answer, not a gap. Verdict: 'weak variant' = failed the "
+    "hold-out in the last two reports, 'candidate' = passed both (hover for the dates and numbers)."
 )
 _VERDICT_TEXT = {"no_key_found": "no key found", "too_little_data": "too little data"}
 
@@ -70,42 +73,93 @@ def horizons_in(report: Mapping[str, Any] | None, population: str) -> list[str]:
     return sorted(((pops.get(population) or {}).get("horizons") or {}), key=lambda text: int(text))
 
 
-def report_rows(report: Mapping[str, Any] | None, population: str, horizon: str) -> list[dict[str, str]]:
-    """Display rows for one population and horizon. Pure: no Qt, no I/O."""
+def _verdict_cells(verdict: Mapping[str, Any] | None) -> dict[str, str]:
+    if not verdict:
+        return {"verdict": "", "verdict_tip": ""}
+    from setup_permutation_verdicts import CHIPS
+
+    return {"verdict": CHIPS.get(str(verdict.get("verdict")), ""), "verdict_tip": str(verdict.get("citation") or "")}
+
+
+def report_rows(
+    report: Mapping[str, Any] | None,
+    population: str,
+    horizon: str,
+    verdicts: Mapping[str, Any] | None = None,
+) -> list[dict[str, str]]:
+    """Display rows for one population and horizon. Pure: no Qt, no I/O.
+
+    `verdicts` is the `permutation_verdicts.json` payload (P12): a key with a
+    verdict shows it in the Verdict column, and a weak variant (a key that
+    failed hold-out twice, so not in `keys`) gets its own row under its family.
+    """
+    from setup_permutation_verdicts import WEAK, index_by_verdict
+
+    by_key = index_by_verdict(verdicts)
     block = (((report or {}).get("populations") or {}).get(population) or {}).get("horizons", {}).get(horizon) or {}
     rows: list[dict[str, str]] = []
     for name, family in sorted((block.get("families") or {}).items()):
-        base = family.get("baseline") or {}
-        keys = family.get("keys") or []
-        if not keys:
-            rows.append({
-                "family": name, "rank": "-",
-                "key": _VERDICT_TEXT.get(str(family.get("verdict")), "no key found"),
-                "depth": "-", "lift_pp": "-", "win_rate": _pct(base.get("win_rate")),
-                "wilson_lb": _pct(base.get("wilson_lb")), "mean_r": _num(base.get("mean_r"), "+.2f"),
-                "n": str(base.get("n", 0)), "sessions": str(base.get("sessions", 0)),
-                "holdout": f"baseline {_pct((family.get('holdout_baseline') or {}).get('win_rate'))}",
-            })
+        rows.extend(_family_rows(name, family, {
+            label: verdict for (pop, hz, fam, label), verdict in by_key.items()
+            if (pop, hz, fam) == (population, str(horizon), name)
+        }, WEAK))
+    return rows
+
+
+def _family_rows(name: str, family: Mapping[str, Any], verdicts: Mapping[str, Any], weak: str) -> list[dict[str, str]]:
+    rows = _key_rows(name, family, verdicts)
+    shown = {row["key"] for row in rows}
+    for label, verdict in sorted(verdicts.items()):
+        if verdict.get("verdict") != weak or label in shown:
             continue
-        for key in keys:
-            selection = key.get("selection") or {}
-            hold = key.get("holdout") or {}
-            rows.append({
-                "family": name,
-                "rank": str(key.get("rank", "")),
-                "key": str(key.get("label") or ""),
-                "depth": str(key.get("depth", "")),
-                "lift_pp": _num(key.get("lift_pp"), "+.1f"),
-                "win_rate": _pct(selection.get("win_rate")),
-                "wilson_lb": _pct(selection.get("wilson_lb")),
-                "mean_r": _num(selection.get("mean_r"), "+.2f"),
-                "n": str(selection.get("n", "")),
-                "sessions": str(selection.get("sessions", "")),
-                "holdout": (
-                    f"passed: {_pct(hold.get('win_rate'))} on n={hold.get('n', 0)} "
-                    f"vs {_pct((family.get('holdout_baseline') or {}).get('win_rate'))} baseline"
-                ),
-            })
+        cite = (verdict.get("citations") or [{}])[-1]
+        rows.append({
+            "family": name, "rank": "-", "key": label, "depth": str(len(verdict.get("facets") or {})),
+            "lift_pp": "-", "win_rate": "-", "wilson_lb": "-", "mean_r": "-", "n": "-", "sessions": "-",
+            "holdout": (
+                f"failed: {_pct(cite.get('holdout_win_rate'))} on n={cite.get('holdout_n', 0)} "
+                f"vs {_pct(cite.get('holdout_baseline'))} baseline"
+            ),
+            **_verdict_cells(verdict),
+        })
+    return rows
+
+
+def _key_rows(name: str, family: Mapping[str, Any], verdicts: Mapping[str, Any]) -> list[dict[str, str]]:
+    base = family.get("baseline") or {}
+    keys = family.get("keys") or []
+    if not keys:
+        return [{
+            "family": name, "rank": "-",
+            "key": _VERDICT_TEXT.get(str(family.get("verdict")), "no key found"),
+            "depth": "-", "lift_pp": "-", "win_rate": _pct(base.get("win_rate")),
+            "wilson_lb": _pct(base.get("wilson_lb")), "mean_r": _num(base.get("mean_r"), "+.2f"),
+            "n": str(base.get("n", 0)), "sessions": str(base.get("sessions", 0)),
+            "holdout": f"baseline {_pct((family.get('holdout_baseline') or {}).get('win_rate'))}",
+            **_verdict_cells(None),
+        }]
+    rows: list[dict[str, str]] = []
+    for key in keys:
+        selection = key.get("selection") or {}
+        hold = key.get("holdout") or {}
+        label = str(key.get("label") or "")
+        rows.append({
+            "family": name,
+            "rank": str(key.get("rank", "")),
+            "key": label,
+            "depth": str(key.get("depth", "")),
+            "lift_pp": _num(key.get("lift_pp"), "+.1f"),
+            "win_rate": _pct(selection.get("win_rate")),
+            "wilson_lb": _pct(selection.get("wilson_lb")),
+            "mean_r": _num(selection.get("mean_r"), "+.2f"),
+            "n": str(selection.get("n", "")),
+            "sessions": str(selection.get("sessions", "")),
+            "holdout": (
+                f"passed: {_pct(hold.get('win_rate'))} on n={hold.get('n', 0)} "
+                f"vs {_pct((family.get('holdout_baseline') or {}).get('win_rate'))} baseline"
+            ),
+            **_verdict_cells(verdicts.get(label)),
+        })
     return rows
 
 
@@ -116,6 +170,23 @@ def read_report(path: Path) -> dict[str, Any] | None:
         return None
     payload = json.loads(target.read_text(encoding="utf-8"))
     return payload if isinstance(payload, dict) else None
+
+
+def read_verdicts(path: Path) -> dict[str, Any] | None:
+    """`permutation_verdicts.json`, or None when there is none. Runs on the worker.
+
+    An unreadable verdicts file costs the Verdict column only, never the report.
+    """
+    try:
+        target = Path(path)
+        payload = json.loads(target.read_text(encoding="utf-8")) if target.is_file() else None
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _read_both(report_path: Path, verdicts_path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    return read_report(report_path), read_verdicts(verdicts_path)
 
 
 class SetupKeysPanel(QFrame):
@@ -129,7 +200,10 @@ class SetupKeysPanel(QFrame):
 
             report_path = project_paths.SETUP_PERMUTATION_REPORT_FILE
         self.report_path = Path(report_path)
+        # P12: the verdicts sit beside the report (live: SETUP_PERMUTATION_VERDICTS_FILE).
+        self.verdicts_path = self.report_path.parent / VERDICTS_FILE_NAME
         self._report: dict[str, Any] | None = None
+        self._verdicts: dict[str, Any] | None = None
         self._worker: ReadWorker | None = None
 
         layout = QVBoxLayout(self)
@@ -171,20 +245,22 @@ class SetupKeysPanel(QFrame):
             return
         self.refresh_button.setEnabled(False)
         self.status_label.setText("Reading the report...")
-        path = self.report_path
-        worker = ReadWorker(lambda: read_report(path), self)
+        path, verdicts_path = self.report_path, self.verdicts_path
+        worker = ReadWorker(lambda: _read_both(path, verdicts_path), self)
         worker.finished_with.connect(self._on_read)
         worker.failed.connect(self._on_failed)
         self._worker = worker
         worker.start()
 
-    def _on_read(self, report) -> None:
+    def _on_read(self, result) -> None:
         self.refresh_button.setEnabled(True)
         self._worker = None
+        report, verdicts = result
         if report is None:
             self.status_label.setText(NO_REPORT_TEXT.format(path=self.report_path))
             return
         self._report = report
+        self._verdicts = verdicts
         self._on_population()
         self.status_label.setText(
             f"Report {report.get('generated_at', '?')} ({report.get('search_version', '?')}, "
@@ -212,11 +288,14 @@ class SetupKeysPanel(QFrame):
     def _render(self) -> None:
         population = str(self.population_input.currentData() or "swing")
         horizon = str(self.horizon_input.currentData() or "")
-        rows = report_rows(self._report, population, horizon)
+        rows = report_rows(self._report, population, horizon, self._verdicts)
         self.table.setRowCount(len(rows))
         for index, row in enumerate(rows):
             for column, (key, _label) in enumerate(COLUMNS):
-                self.table.setItem(index, column, QTableWidgetItem(row.get(key, "")))
+                item = QTableWidgetItem(row.get(key, ""))
+                if key == "verdict" and row.get("verdict_tip"):
+                    item.setToolTip(row["verdict_tip"])
+                self.table.setItem(index, column, item)
 
     def row_count(self) -> int:
         return self.table.rowCount()
