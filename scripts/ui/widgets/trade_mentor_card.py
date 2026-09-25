@@ -1095,7 +1095,9 @@ class TradeMentorCard(QWidget):
 
         row = QWidget(self.questions_box)
         stack = QVBoxLayout(row)
-        stack.setContentsMargins(0, 0, 0, 0)
+        # The day question sits apart, so it never reads as the last trade's.
+        top = 12 if str(subject.kind) == DAY_CLOSE_KIND else 0
+        stack.setContentsMargins(0, top, 0, 0)
         stack.setSpacing(2)
 
         line = QWidget(row)

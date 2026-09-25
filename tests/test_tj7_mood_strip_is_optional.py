@@ -372,3 +372,13 @@ def test_the_journal_tab_strip_starts_blank_on_every_new_note(journal_tab):
 
     assert panel.mood_answer()["mood"] is None
     assert tuple(panel.mood_answer()["state_tags"]) == ()
+
+
+def test_the_plan_question_says_it_is_about_the_whole_day(card, tmp_path):
+    """Trader 2026-09-25: "Followed the plan?" read as part of the last trade's
+    question. It names the day and sits apart from the trade questions."""
+    subject, _store = _day_close_card(card, tmp_path)
+
+    assert subject.prompt == "Today overall: did you stick to your trading plan?"
+    row = card._question_rows[(subject.kind, subject.subject_id)]
+    assert row.layout().contentsMargins().top() >= 12
