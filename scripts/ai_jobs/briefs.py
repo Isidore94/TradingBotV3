@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from swallowed import note_swallowed
 
 #: The scopes a hands-off nightly review should cover. Journal review is
 #: deliberately included: it is the trader's own revealed preference and the
@@ -797,8 +798,8 @@ def atomic_publish_morning_file(
     finally:
         try:
             staged.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("morning brief staged file not removed", exc, quiet=True)
 
 
 def _membership_names(memberships: Sequence[Mapping[str, str]]) -> str:

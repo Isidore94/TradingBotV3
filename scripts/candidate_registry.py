@@ -26,6 +26,7 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from swallowed import note_swallowed
 
 REGISTRY_VERSION = "candidate_registry_v1"
 
@@ -342,8 +343,8 @@ class CandidateRegistry:
             if os.path.exists(tmp_name):
                 try:
                     os.remove(tmp_name)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    note_swallowed("candidate registry temp file not removed", exc, quiet=True)
         self._loaded_generation = self._generation
 
     @classmethod

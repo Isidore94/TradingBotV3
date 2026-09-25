@@ -17,6 +17,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from swallowed import note_swallowed
 
 LEDGER_SCHEMA = "job_ledger_v1"
 
@@ -221,8 +222,8 @@ class JobLedger:
                     continue
                 if "key" in event and "event" in event:
                     self._reduce(event)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("job ledger unreadable during replay", exc)
 
 
 def _ts(now: datetime | None) -> str:

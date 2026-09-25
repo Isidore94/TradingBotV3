@@ -35,6 +35,7 @@ from diagnostics.artifact_io import (
 from durability_retry import fetch_with_bounded_retry
 from market_session import get_market_session_window, normalize_market_local_datetime
 from project_paths import get_diagnostics_dir, get_local_setting
+from swallowed import note_swallowed
 
 
 FEATURE_VERSION = "technical_integrity_v1"
@@ -623,8 +624,8 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
         if os.path.exists(staged):
             try:
                 os.remove(staged)
-            except OSError:
-                pass
+            except OSError as exc:
+                note_swallowed("technical integrity temp file not removed", exc, quiet=True)
 
 
 #: The parsed snapshot, keyed by path, with the (mtime_ns, size) it came from.
@@ -2338,8 +2339,8 @@ def rebuild_resolved_sidecar(
     except OSError as exc:
         try:
             tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as swallowed_exc:
+            note_swallowed("resolved sidecar temp file not removed", swallowed_exc, quiet=True)
         return {"ok": False, "reason": str(exc), "rows": written, "resolved": resolved}
     return {"ok": written == resolved, "reason": "", "rows": written, "resolved": resolved}
 

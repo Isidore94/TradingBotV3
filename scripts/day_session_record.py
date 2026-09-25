@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 import project_paths
+from swallowed import note_swallowed
 
 _log = logging.getLogger(__name__)
 
@@ -809,8 +810,8 @@ def _atomic_text(path: Path, text: str) -> None:
     except OSError:
         try:
             temporary.unlink()
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("day session record temp file not removed", exc, quiet=True)
         raise
 
 

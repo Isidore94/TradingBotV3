@@ -43,6 +43,7 @@ from typing import Any, Iterable
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+from swallowed import note_swallowed  # noqa: E402
 
 from project_paths import (  # noqa: E402
     REVIEW_POLICY_DRAFT_FILE,
@@ -136,8 +137,8 @@ def save_review_policy(
     except OSError:
         try:
             os.unlink(temp_name)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("review policy temp file not removed", exc, quiet=True)
         raise
     return payload
 

@@ -42,6 +42,7 @@ from datetime import date, datetime, time as _time, timedelta
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
+from swallowed import note_swallowed
 
 __all__ = [
     "CAPTURE_MODE_BACKFILL",
@@ -241,8 +242,8 @@ def atomic_write_json(path: Path | str, obj, *, indent: int | None = 1, fsync: b
 def _remove_quietly(target: Path | str) -> None:
     try:
         os.remove(target)
-    except OSError:
-        pass
+    except OSError as exc:
+        note_swallowed("diagnostics artifact not removed", exc, quiet=True)
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from project_paths import MASTER_AVWAP_BUCKET_STATE_FILE
+from swallowed import note_swallowed
 
 
 UPGRADE_TARGET_BUCKETS = {"favorite_setup", "high_conviction"}
@@ -124,9 +125,9 @@ def save_bucket_state(state: dict[str, Any], path: Path = MASTER_AVWAP_BUCKET_ST
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
         os.replace(tmp, path)
-    except OSError:
+    except OSError as exc:
         # Another process or AV scan can briefly lock files; state is best-effort.
-        pass
+        note_swallowed("master AVWAP bucket state write failed", exc)
 
 
 def record_scan_bucket_upgrades(

@@ -21,6 +21,7 @@ import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from swallowed import note_swallowed
 
 _log = logging.getLogger(__name__)
 
@@ -316,8 +317,8 @@ def _write_plan(target: Path, text: str) -> None:
     except OSError as exc:
         try:
             temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as swallowed_exc:
+            note_swallowed("trading plan temp file not removed", swallowed_exc, quiet=True)
         raise PlanWriteError(f"the trading plan was not saved: {exc}") from exc
 
 

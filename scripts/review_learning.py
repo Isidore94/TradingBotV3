@@ -51,6 +51,7 @@ from typing import Any, Callable, Iterable
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+from swallowed import note_swallowed  # noqa: E402
 
 from project_paths import (  # noqa: E402
     ALERT_REVIEW_EVENTS_FILE,
@@ -895,8 +896,8 @@ def save_review_learning_state(
     except OSError:
         try:
             os.unlink(temp_name)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("review learning temp file not removed", exc, quiet=True)
         raise
 
 
@@ -1065,8 +1066,8 @@ def refresh_review_learning_if_stale(
         report_path = Path(report_path)
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(render_report(state), encoding="utf-8")
-    except OSError:
-        pass
+    except OSError as exc:
+        note_swallowed("review learning report write failed", exc)
     return True
 
 

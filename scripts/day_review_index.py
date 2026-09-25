@@ -62,6 +62,7 @@ from typing import Any, Mapping, Sequence
 
 import daily_recap_reader
 import project_paths
+from swallowed import note_swallowed
 
 _log = logging.getLogger(__name__)
 
@@ -687,8 +688,8 @@ def refresh_stamp(
         _log.info("The Day Review stamp %s was not written: %s", path, exc)
         try:
             temp.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as swallowed_exc:
+            note_swallowed("day review stamp temp file not removed", swallowed_exc, quiet=True)
         return None
     return path
 
@@ -827,14 +828,14 @@ def write_index(
         _log.info("The Day Review index %s was not written: %s", path, exc)
         try:
             temp.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as swallowed_exc:
+            note_swallowed("day review index temp file not removed", swallowed_exc, quiet=True)
         return None
     # A fresh body carries its own stamp, so any sidecar is now history.
     try:
         stamp_path(session, root=root).unlink(missing_ok=True)
-    except OSError:
-        pass
+    except OSError as swallowed_exc:
+        note_swallowed("stale day review stamp sidecar not removed", swallowed_exc)
     # `index_path` is <base>/sessions/<date>/outcomes.json, so three parents up
     # is the base whether or not a root was named.
     _prune(path.parent.parent.parent)

@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from chart_snapshot import anchored_vwap_band_series, session_vwap_series
+from swallowed import note_swallowed
 
 M5_BAR_SPAN = timedelta(minutes=5)
 
@@ -900,8 +901,8 @@ def _atomic_write_json(payload: dict, path: Path) -> None:
     finally:
         try:
             staged.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("chart watch temp JSON not removed", exc, quiet=True)
 
 
 def chart_watch_to_dict(watch: ChartWatch) -> dict:

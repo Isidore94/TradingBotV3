@@ -86,6 +86,7 @@ from project_paths import (
     get_diagnostics_dir,
     get_local_setting,
 )
+from swallowed import note_swallowed
 
 AUDIT_SCHEMA = "operations_audit_v2"
 AWAY_REPORT_DEGRADED_AFTER_MINUTES = 75.0
@@ -1972,8 +1973,8 @@ def _writability_probe(directory: Path) -> tuple[bool, str, str]:
         os.close(fd)
         try:
             os.remove(name)
-        except OSError:
-            pass
+        except OSError as swallowed_exc:
+            note_swallowed("writability probe file not removed after open failed", swallowed_exc, quiet=True)
         return False, f"{type(exc).__name__}: {exc}", str(name)
     try:
         with handle:
@@ -1985,8 +1986,8 @@ def _writability_probe(directory: Path) -> tuple[bool, str, str]:
     finally:
         try:
             os.remove(name)
-        except OSError:
-            pass
+        except OSError as swallowed_exc:
+            note_swallowed("writability probe file not removed", swallowed_exc, quiet=True)
     return True, "", str(name)
 
 
@@ -3209,8 +3210,8 @@ def write_operations_audit(payload: dict[str, Any], path: Path | str | None = No
         if os.path.exists(tmp_name):
             try:
                 os.remove(tmp_name)
-            except OSError:
-                pass
+            except OSError as exc:
+                note_swallowed("operations audit temp file not removed", exc, quiet=True)
     return target
 
 

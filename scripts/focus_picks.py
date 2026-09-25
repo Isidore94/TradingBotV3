@@ -40,6 +40,7 @@ from project_paths import (
     SHORTS_FILE,
 )
 from watchlist_utils import extract_watchlist_symbols, read_watchlist_symbols
+from swallowed import note_swallowed
 
 
 FOCUS_CATEGORIES = ("swing", "m5")
@@ -185,8 +186,8 @@ def _atomic_json_write(path: Path, payload: object) -> None:
             json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         os.replace(staged, target)
-    except OSError:
-        pass
+    except OSError as exc:
+        note_swallowed("focus store JSON write failed", exc)
 
 
 def _pick_clock_path_for(focus_longs_path: Path) -> Path:
@@ -246,10 +247,10 @@ def _write_m5_market_date(path: Path, date_text: str) -> None:
             json.dumps({"market_date": date_text}, indent=2) + "\n", encoding="utf-8"
         )
         os.replace(staged, target)
-    except OSError:
+    except OSError as exc:
         # Another process or AV scan can briefly lock files; the stamp is best-effort
         # (a missed write just delays the reset to the next successful one).
-        pass
+        note_swallowed("focus M5 market-date stamp write failed", exc)
 
 
 class FocusPickStore:
@@ -1062,8 +1063,8 @@ class FocusPickStore:
         for callback in list(self._listeners):
             try:
                 callback()
-            except Exception:
-                pass
+            except Exception as exc:
+                note_swallowed("focus store listener callback raised", exc)
 
     # ------------------------------------------------------- shared watchlist
     def _inject_into_shared(self, symbol: str, side: str, category: str, *, defer_membership_save: bool = False) -> None:
@@ -1120,9 +1121,9 @@ class FocusPickStore:
             tmp = self._membership_path.with_name(self._membership_path.name + ".tmp")
             tmp.write_text(json.dumps(self._membership, indent=2, sort_keys=True), encoding="utf-8")
             os.replace(tmp, self._membership_path)
-        except OSError:
+        except OSError as exc:
             # Another process or AV scan can briefly lock files; membership is best-effort.
-            pass
+            note_swallowed("focus membership file write failed", exc)
 
     def _forget_auto_marker(
         self, symbol: str, side: str, category: str, *, defer_save: bool = False
@@ -1262,11 +1263,11 @@ class FocusPickStore:
                 encoding="utf-8",
             )
             os.replace(tmp, self._auto_pick_path)
-        except OSError:
+        except OSError as exc:
             # Best-effort, like the membership file: a lost write costs a
             # marker, and a lost marker means the entry reads as the trader's -
             # which is the safe direction to fail.
-            pass
+            note_swallowed("focus auto-pick marker file write failed", exc)
 
     def shared_watchlist_path(self, side: object, category: object = "m5") -> Path:
         """The plain watchlist file this store injects into for one side.
@@ -1419,8 +1420,8 @@ def _write_symbols(path: Path, symbols: Iterable[str]) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(symbols), encoding="utf-8")
-    except OSError:
-        pass
+    except OSError as exc:
+        note_swallowed("focus symbol file write failed", exc)
 
 
 def _record_watchlist_intent(
@@ -1447,8 +1448,8 @@ def _record_watchlist_intent(
             writer="focus_picks.FocusPickStore",
             reason=reason,
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        note_swallowed("focus watchlist intent record failed", exc)
 
 
 def _append_symbol_to_file(path: Path, symbol: str) -> None:
@@ -1458,8 +1459,8 @@ def _append_symbol_to_file(path: Path, symbol: str) -> None:
         separator = "" if (not existing or existing.endswith("\n")) else "\n"
         with path.open("a", encoding="utf-8") as handle:
             handle.write(f"{separator}{symbol}\n")
-    except OSError:
-        pass
+    except OSError as exc:
+        note_swallowed("focus symbol append to watchlist file failed", exc)
 
 
 def _remove_symbol_from_file(path: Path, symbol: str) -> None:

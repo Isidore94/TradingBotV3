@@ -62,6 +62,7 @@ from ui.widgets.setup_delegate import _PAD as SETUP_CELL_PAD
 from ui.widgets.setup_delegate import SetupTableDelegate
 from ui.widgets.empty_state import EmptyState
 from ui.widgets.setup_detail_view import SetupDetailView
+from swallowed import note_swallowed
 
 
 # The segmented bucket selector. Values are sets of RAW bucket keys, so a
@@ -2479,8 +2480,8 @@ class MasterAvwapPanel(QWidget):
                 context_fields=setup_context_fields(row),
                 path=self._review_events_path,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("setup review event write failed", exc)
 
     def _dislike_row(self, row: SetupRow) -> bool:
         """Prompt for a versioned reason code plus optional detail."""
@@ -2674,8 +2675,8 @@ class MasterAvwapPanel(QWidget):
         """The note row. Swallowed on failure, like every capture on this panel."""
         try:
             verdicts.record_note_on(written, note)
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("setup verdict note write failed", exc)
 
     def _add_row_to_focus(self, proxy_index, category: str = "swing") -> None:
         if self.focus_service is None or not proxy_index.isValid():

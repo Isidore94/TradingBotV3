@@ -19,6 +19,7 @@ from setup_permutations import SCAN_ROW_COLUMNS as PERMUTATION_SCAN_ROW_COLUMNS
 from setup_permutations import ma_distance_columns as permutation_ma_distance_columns
 from tracker_store import record_write_failure as record_setup_tracker_write_failure
 from tracker_store import record_write_success as record_setup_tracker_write_success
+from swallowed import note_swallowed
 # Packet WS-TH (2026-09-12). The theta picks the scan just printed, recorded as
 # shadow evidence in the scan's own output pass - never from `legacy.py`'s
 # tracker save (lead ruling (c)). A failed append loses the row, never the scan.
@@ -498,8 +499,8 @@ def _log_phase_duration(label: str, since: float) -> float:
         recorder = get_active_recorder()
         if recorder is not None:
             recorder.record_phase(label, now - since)
-    except Exception:
-        pass  # diagnostics must never break a scan
+    except Exception as exc:
+        note_swallowed("scan phase duration not recorded in diagnostics", exc, quiet=True)  # diagnostics must never break a scan
     return now
 
 
@@ -643,8 +644,8 @@ def refresh_playbook_study_if_stale(max_age_days: int = PLAYBOOK_STUDY_REFRESH_D
         age_days = (_dt.now() - _dt.fromtimestamp(PLAYBOOK_AI_DIGEST_JSON.stat().st_mtime)).days
         if age_days < max_age_days:
             return False
-    except OSError:
-        pass  # no digest yet -> build the first one
+    except OSError as exc:
+        note_swallowed("playbook digest missing; building the first one", exc, quiet=True)  # no digest yet -> build the first one
     logging.info("Refreshing setup playbook study (digest missing or stale)...")
     result = run_playbook_study(days=PLAYBOOK_STUDY_BACKFILL_SESSIONS, write_outputs=True)
     logging.info(
@@ -2673,8 +2674,8 @@ def _run_master_impl(
                     recorder = get_active_recorder()
                     if recorder is not None:
                         recorder.incr("avwap_signal_rows_invalid_dropped", invalid_signal_rows)
-                except Exception:
-                    pass
+                except Exception as swallowed_exc:
+                    note_swallowed("invalid-signal-row counter not recorded in diagnostics", swallowed_exc, quiet=True)
             df_signals = pd.concat([existing_signals, df_signals], ignore_index=True)
             df_signals.sort_values(["run_date", "trade_date", "symbol", "signal_type"], inplace=True)
 
@@ -2722,8 +2723,8 @@ def _run_master_impl(
                 source_mtime_ns=signal_stat.st_mtime_ns,
             )
             save_json(MASTER_AVWAP_ACTIVE_EVENTS_FILE, active_payload, pretty=True)
-        except FileNotFoundError:
-            pass
+        except FileNotFoundError as swallowed_exc:
+            note_swallowed("no signals file yet; active-events export skipped", swallowed_exc, quiet=True)
         except Exception as exc:
             logging.warning("Active AVWAP event summary publish failed: %s", exc)
     _output_t = _log_phase_duration("output/signals", _output_t)

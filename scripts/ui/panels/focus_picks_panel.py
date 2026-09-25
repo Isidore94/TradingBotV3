@@ -29,6 +29,7 @@ from ui.timer_utils import SignalCoalescer
 from ui.widgets.flow_layout import FlowLayout
 from ui.widgets.price_alert_board import PriceAlertBoard
 from ui.widgets.section_header import SectionHeader
+from swallowed import note_swallowed
 
 
 class FocusPicksPanel(QFrame):
@@ -657,8 +658,8 @@ class FocusSideEditor(QFrame):
                 timeframe=self._annotation_timeframe(),
                 **self._annotation_path_kwargs(),
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("focus panel not-today verdict record failed", exc)
         dropped = False
         try:
             dropped = bool(

@@ -15,6 +15,7 @@ import logging
 import sys
 import threading
 from typing import Any, Callable, Iterable
+from swallowed import note_swallowed
 
 try:
     from ibapi.client import EClient
@@ -239,8 +240,8 @@ class IBMarketScanner:
     def _drop(app, thread) -> None:
         try:
             app.disconnect()
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("IB scanner client disconnect failed", exc, quiet=True)
         if thread is not None:
             thread.join(timeout=2.0)
 
@@ -289,8 +290,8 @@ class IBMarketScanner:
                 finally:
                     try:
                         app.cancelScannerSubscription(req_id)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        note_swallowed("IB scanner subscription cancel failed", exc, quiet=True)
                 symbols, error = app.take(req_id)
                 if error:
                     self.last_errors[code] = error

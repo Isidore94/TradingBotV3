@@ -47,6 +47,7 @@ import requests
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+from swallowed import note_swallowed  # noqa: E402
 
 from project_paths import (  # noqa: E402
     CACHE_DIR,
@@ -349,8 +350,8 @@ def fetch_price_history(
                 if set(tickers) <= set(cached["symbol"].unique()):
                     stats["cache_hit"] = True
                     return cached[cached["symbol"].isin(tickers)]
-            except Exception:
-                pass
+            except Exception as swallowed_exc:
+                note_swallowed("universe price-history cache unreadable; refetching", swallowed_exc)
 
     from yahoo_download import download
 

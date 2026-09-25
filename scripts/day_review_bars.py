@@ -18,6 +18,7 @@ import yahoo_download
 from completed_bars import completed_m5_bars
 from project_paths import DAY_REVIEW_DIR
 from ui.services.market_journal_service import shared_journal_service
+from swallowed import note_swallowed
 
 _log = logging.getLogger(__name__)
 BENCHMARKS = ("SPY", "QQQ", "IWM", "VXX")
@@ -228,8 +229,8 @@ def write_session_bars(session: str, bars: Mapping[str, Iterable[Mapping[str, An
     finally:
         try:
             temp.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("day review bars temp file not removed", exc, quiet=True)
     return path
 
 

@@ -93,6 +93,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from swallowed import note_swallowed
 
 __all__ = [
     "LocalLockInfo",
@@ -270,8 +271,8 @@ class _FileLockLayer:
         except BaseException:
             try:
                 handle.close()
-            except OSError:
-                pass
+            except OSError as swallowed_exc:
+                note_swallowed("writer lock handle close failed after a failed acquire", swallowed_exc, quiet=True)
             raise
 
     @staticmethod
@@ -319,13 +320,13 @@ class _FileLockLayer:
                 import fcntl
 
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        except (OSError, ImportError):
-            pass
+        except (OSError, ImportError) as swallowed_exc:
+            note_swallowed("writer lock unlock failed on release", swallowed_exc)
         finally:
             try:
                 handle.close()
-            except OSError:
-                pass
+            except OSError as exc:
+                note_swallowed("writer lock handle close failed on release", exc, quiet=True)
 
 
 # ---------------------------------------------------------------------------
@@ -388,8 +389,8 @@ def _claim_owner_marker(key: str) -> bool:
             ),
             encoding="utf-8",
         )
-    except OSError:
-        pass
+    except OSError as exc:
+        note_swallowed("writer lock owner marker not written", exc)
     return abandoned
 
 
@@ -397,8 +398,8 @@ def _clear_owner_marker(key: str) -> None:
     """Clean release. Anything that skips this leaves the marker as evidence."""
     try:
         _owner_marker_path(key).unlink(missing_ok=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        note_swallowed("writer lock owner marker not removed on release", exc, quiet=True)
 
 
 def _guard_for(key: str) -> _Guard:

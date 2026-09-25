@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import numpy as np
+from swallowed import note_swallowed
 
 _OHLCV = ("open", "high", "low", "close", "volume")
 
@@ -369,8 +370,8 @@ class D1BarStore:
             _log.debug("Chart bar mirror unreadable: %s", path, exc_info=True)
             try:
                 path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            except OSError as exc:
+                note_swallowed("corrupt chart bar mirror not removed", exc, quiet=True)
             return None
 
     def _read_newest_mirror(self, symbol: str, stem: str) -> BarSeries | None:
@@ -426,8 +427,8 @@ class D1BarStore:
             for path in self.cache_dir.glob(f"{stem}-*.feather"):
                 if path != keep:
                     path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("superseded chart bar mirror not pruned", exc, quiet=True)
 
 
 def _normalize(symbol: str) -> str:

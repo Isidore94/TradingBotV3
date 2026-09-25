@@ -61,6 +61,7 @@ from ui.widgets.bounce_status_proxy import BounceStatusProxy
 from ui.widgets.page_tab_row import PageTabRow
 from ui.widgets.price_alert_toast import PriceAlertToastManager
 from ui.widgets.technical_integrity_dialog import TechnicalIntegrityDialog
+from swallowed import note_swallowed
 
 
 @dataclass(frozen=True)
@@ -453,8 +454,8 @@ class MainWindow(QMainWindow):
                 from review_learning import refresh_review_learning_if_stale
 
                 refresh_review_learning_if_stale()
-            except Exception:
-                pass  # the scoreboard is advisory; startup must never notice
+            except Exception as exc:
+                note_swallowed("review learning refresh failed at startup", exc)  # the scoreboard is advisory; startup must never notice
 
         threading.Thread(target=worker, name="review-learning-refresh", daemon=True).start()
 
@@ -741,8 +742,8 @@ class MainWindow(QMainWindow):
             self.trading_panel.bounce_panel.service.alertReceived.emit(
                 BounceAlert.from_callback(f"PRICE ALERT: {message}", "red")
             )
-        except Exception:
-            pass  # the push already went out; the desk echo is best-effort
+        except Exception as exc:
+            note_swallowed("price alert desk echo failed", exc)  # the push already went out; the desk echo is best-effort
         self.price_alert_toasts.show_alert(payload, replayed=replayed)
 
     def _show_technical_integrity_details(self) -> None:

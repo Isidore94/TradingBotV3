@@ -60,6 +60,7 @@ from greatness_monitor import (
 )
 from market_state import M5Bar
 from market_session import get_market_local_timezone, normalize_market_local_datetime
+from swallowed import note_swallowed
 
 _BAR_MINUTES = 5
 #: v4 adds candidate lineage + plan revision identity, the ``data_health``
@@ -643,7 +644,7 @@ def record_d1_shadow(bot, symbol: str, today_df, *, now: datetime | None = None)
     except Exception as exc:
         try:
             shadow_board().record_error(exc, evaluated_at=now)
-        except Exception:
-            pass
+        except Exception as swallowed_exc:
+            note_swallowed("greatness shadow error record failed", swallowed_exc)
         logging.warning("Greatness D1 shadow failed (live alerts unaffected).", exc_info=True)
         return []

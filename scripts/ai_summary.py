@@ -55,6 +55,7 @@ from project_paths import (
     PASS_COHORT_PERFORMANCE_FILE,
     REJECTION_COHORT_PERFORMANCE_FILE,
 )
+from swallowed import note_swallowed
 
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
@@ -4308,8 +4309,8 @@ def _atomic_write(path: Path, content: str) -> None:
     finally:
         try:
             temp.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("AI summary temp file not removed", exc, quiet=True)
 
 
 def export_ai_summary(

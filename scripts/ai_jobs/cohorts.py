@@ -22,6 +22,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from swallowed import note_swallowed
 
 _log = logging.getLogger(__name__)
 
@@ -356,8 +357,8 @@ def _run_cohort_grading(
         if staged is not None:
             try:
                 staged.unlink()
-            except OSError:
-                pass
+            except OSError as exc:
+                note_swallowed("cohort grading staged file not removed", exc, quiet=True)
 
     return {
         "status": "ok",

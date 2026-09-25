@@ -16,6 +16,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from swallowed import note_swallowed
 
 SCHEMA_VERSION = "run_manifest_v1"
 DEFAULT_KEEP = 90
@@ -111,8 +112,8 @@ class ManifestRecorder:
             if os.path.exists(tmp_name):
                 try:
                     os.remove(tmp_name)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    note_swallowed("run manifest temp file not removed", exc, quiet=True)
         prune_manifests(directory, keep=keep)
         return path
 
@@ -127,8 +128,8 @@ def prune_manifests(directory: Path | str, keep: int = DEFAULT_KEEP) -> int:
         try:
             path.unlink()
             removed += 1
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("old run manifest not pruned", exc, quiet=True)
     return removed
 
 
