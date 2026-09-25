@@ -21,6 +21,8 @@ side: a baseline, then single facets, pairs and triples, never deeper.
   facet; a deeper key must beat its best parent on hold-out or it is not
   reported.
 - "no key found" is a first-class answer.
+- Each run also keeps a dated copy in `permutation_report_history/` and writes
+  `permutation_verdicts.json` (P12, `setup_permutation_verdicts.py`), both beside --out.
 
 Shadow only: the report ranks and annotates. Nothing reads it for a score, a
 filter or an alert.
@@ -69,6 +71,7 @@ VERDICT_NONE = "no_key_found"
 VERDICT_THIN = "too_little_data"
 #: Beside the report, so a scratch --out never writes into the live history.
 HISTORY_DIR_NAME = "permutation_report_history"
+VERDICTS_FILE_NAME = "permutation_verdicts.json"
 
 Cell = tuple[tuple[str, str], ...]
 
@@ -517,12 +520,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--history-dir", type=Path, default=None,
                         help="default: permutation_report_history/ beside --out")
+    parser.add_argument("--verdicts-out", type=Path, default=None,
+                        help="default: permutation_verdicts.json beside --out")
     args = parser.parse_args(argv)
     rows = read_outcomes(args.outcomes)
     report = build_report(rows, ledger_root=args.ledger_root, source=str(args.outcomes))
     write_report(report, args.out)
     history_dir = args.history_dir or Path(args.out).parent / HISTORY_DIR_NAME
     append_history(report, history_dir)
+    # P12: the verdicts over the newest two reports, in the same run (never the Qt thread).
+    import setup_permutation_verdicts
+
+    setup_permutation_verdicts.publish(history_dir, args.verdicts_out or Path(args.out).parent / VERDICTS_FILE_NAME)
     found = sum(
         len(fam["keys"])
         for pop in report["populations"].values()
