@@ -227,6 +227,7 @@ def mark_terminal(
     session_date: str,
     reason: str,
     path: Path | None = None,
+    extra: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Record the one row that ends a job's session, the way no-session does."""
     return record(
@@ -235,7 +236,7 @@ def mark_terminal(
         session_date=session_date,
         reason=reason,
         path=path,
-        extra={TERMINAL_FIELD: True},
+        extra={TERMINAL_FIELD: True, **dict(extra or {})},
     )
 
 
