@@ -3,6 +3,9 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #250 Rule lane off the Qt thread (P2-10): on a day whose rule is "size down in chop", the Mentor card opens with no stall and a trade sized over your usual in chop gets the size reflection [trader]
+- #249 Gap days from a statement (P2-10): desk closed, `journal_questrade_gaps.py --statement <portal export>` lists the FAILED days it covers and writes nothing; with `--apply --i-am-the-trader` those days leave the FAILED list, a second run adds no fills, and the "missing fills - not counted" line shrinks [trader]
+- #248 Made-up entries out of totals (P2-10): Day Review's P&L tile and sparkline, the Weekend Prep week line and the night day record leave a "needs missing fills" trade out of the sum but still list it [trader + lead]
 - #221 Tracker reads SQLite (P0-2 2d): after the next close slot, trading_bot.log shows `Setup tracker mirrored to` and, on the close slot after it, `Setup tracker read from the SQLite store` (a `read from JSON, not the SQLite store: <reason>` line instead means it fell back - send the reason); a Corrections OK in the Journal logs no `auto-tagger read the setup tracker JSON` line [lead]
 - #220 Night journal import (P1-3 3d): after the next weeknight, Health's top line shows `journal import: last success <session>, last error <session>: <one line>`; a night that met "Statement could not be generated/retrieved" logs "IBKR Flex not ready" retry lines in the AI jobs log and ends `ok` or fails only after the waits [trader + lead]
 - #219 Summary slice cap (P1-3 3c): the next Saturday's `ai_summary` ledger reason says "N slice(s) left out by the per-run cap of 24" (or reads all slices) and the row finishes in under ~2 hours [lead]
