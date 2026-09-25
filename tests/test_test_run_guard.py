@@ -138,6 +138,30 @@ def test_configure_skips_workers_and_single_process(tmp_path: Path) -> None:
     assert getattr(single, "_tbv3_run_lock", None) is None
 
 
+@pytest.mark.parametrize(
+    ("stamp", "expected"),
+    [
+        (datetime(2026, 9, 24, 21, 59, tzinfo=LA), None),
+        (datetime(2026, 9, 24, 22, 37, tzinfo=LA), 2),  # the 2026-09-24 low-memory night
+        (datetime(2026, 9, 25, 1, 59, tzinfo=LA), 2),
+        (datetime(2026, 9, 25, 2, 0, tzinfo=LA), None),
+        (datetime(2026, 9, 26, 23, 0, tzinfo=LA), 2),  # Saturday night too
+        (datetime(2026, 9, 23, 9, 0, tzinfo=LA), 4),  # desk hours unchanged
+    ],
+)
+def test_window_cap(stamp: datetime, expected: int | None) -> None:
+    assert guard.window_cap(stamp) == expected
+
+
+def test_configure_caps_to_two_while_night_ai_runs(tmp_path: Path) -> None:
+    config = _config(8)
+    guard.configure(
+        config, real_localappdata=None, env={guard.ENV_LOCK: "0"}, now=datetime(2026, 9, 24, 23, 0, tzinfo=LA)
+    )
+    assert config.option.numprocesses == 2
+    assert config.option.tx == ["popen"] * 2
+
+
 # --- the lock -------------------------------------------------------------------
 
 
