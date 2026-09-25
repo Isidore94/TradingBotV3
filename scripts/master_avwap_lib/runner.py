@@ -44,6 +44,21 @@ globals().update(
 )
 
 
+def _scan_daily_days_needed(curr_iso, prev_iso, today_run) -> int:
+    """Days of daily bars one scan symbol needs: ATR warm-up, or back past its oldest anchor."""
+    days_needed = ATR_LENGTH + 5
+    anchor_dates = []
+    if curr_iso:
+        anchor_dates.append(datetime.fromisoformat(curr_iso).date())
+    if prev_iso:
+        anchor_dates.append(datetime.fromisoformat(prev_iso).date())
+
+    if anchor_dates:
+        max_span = max((today_run - d).days for d in anchor_dates)
+        days_needed = max(days_needed, max_span + 5)
+    return days_needed
+
+
 def load_setup_tracker_payload() -> dict:
     """The write slot's tracker read: the SQLite mirror when it matches the JSON file, else the JSON."""
     return _legacy.load_setup_tracker_payload(prefer_store=True)
@@ -1029,6 +1044,21 @@ def _run_master_impl(
     }
 
     long_set, short_set, theta_long_set = set(longs), set(shorts), set(theta_longs)
+    # P0-2 2e: the loop's Yahoo daily-bar requests, fetched up front in batches of 100.
+    # A failure here only means each symbol fetches on its own, as before. Skipped when the
+    # fetch is stubbed: the batch would bypass whoever supplies the bars.
+    try:
+        if fetch_daily_bars is _legacy.fetch_daily_bars:
+            prefetch_daily_bars_from_yahoo(
+                ib,
+                {
+                    sym: _scan_daily_days_needed(curr_cache.get(sym), prev_cache.get(sym), today_run)
+                    for sym in symbols
+                    if curr_cache.get(sym) or prev_cache.get(sym)
+                },
+            )
+    except Exception:
+        logging.warning("Daily-bar batch prefetch failed; symbols fetch one by one.", exc_info=True)
     for sym in symbols:
         # `side` is unchanged from list membership; `theta_side` is the only
         # thing thetalongs.txt moves, and it moves it for the two premium
@@ -1041,18 +1071,7 @@ def _run_master_impl(
             logging.warning(f"{sym}: no earnings anchors available.")
             continue
 
-        # Determine days needed for a single daily fetch
-        days_needed = ATR_LENGTH + 5
-        anchor_dates = []
-        if curr_iso:
-            anchor_dates.append(datetime.fromisoformat(curr_iso).date())
-        if prev_iso:
-            anchor_dates.append(datetime.fromisoformat(prev_iso).date())
-
-        if anchor_dates:
-            max_span = max((today_run - d).days for d in anchor_dates)
-            days_needed = max(days_needed, max_span + 5)
-
+        days_needed = _scan_daily_days_needed(curr_iso, prev_iso, today_run)
         df = fetch_daily_bars(ib, sym, days_needed)
         if df.empty:
             logging.warning(f"{sym}: no daily bars returned.")
@@ -2309,6 +2328,7 @@ def _run_master_impl(
         ai_state=ai_state,
         feature_rows_by_symbol=feature_rows_by_symbol,
     )
+    logging.info(daily_bar_fetch_summary_line())
     _phase_t = _log_phase_duration("prep+fetch+priority", _phase_t)
     htf_trend_study_rows = enrich_priority_rows_with_htf_trend_context(
         priority_rows,

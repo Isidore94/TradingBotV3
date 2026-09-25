@@ -20,3 +20,16 @@ def download(*args: Any, **kwargs: Any):
 
     with _LOCK:
         return yf.download(*args, **kwargs)
+
+
+def download_frames(tickers, *, yf_module=None, **kwargs) -> tuple[dict[str, Any], dict[str, str]]:
+    """One batched ``download``; returns each ticker's own frame and error, read under the lock."""
+    if yf_module is None:
+        import yfinance as yf_module
+
+    with _LOCK:
+        yf_module.download(list(tickers), **kwargs)
+        shared = yf_module.shared
+        frames = dict(shared._DFS)
+        errors = dict(shared._ERRORS)
+    return frames, errors
