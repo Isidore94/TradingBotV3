@@ -203,6 +203,10 @@ class MainWindow(QMainWindow):
         self.trading_panel.alert_center.d1EventRecorded.connect(
             self.autopilot_panel.service.record_d1_event
         )
+        # P9: the phone report drops (and counts) M5 lines the Show filter hides.
+        self.autopilot_panel.service.set_show_filter(
+            self.trading_panel.alert_center.show_filter_verdict
+        )
         self.autopilot_panel.service.enabledChanged.connect(self._sync_scan_scheduler_owner)
         self._sync_scan_scheduler_owner(self.autopilot_panel.service.enabled)
         # Every auto-mode flip says so in the Auto Pilot log, and nowhere else

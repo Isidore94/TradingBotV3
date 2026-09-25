@@ -216,6 +216,9 @@ class AutopilotService(QObject):
         # Each line's symbol, kept in step with `_alerts_today`, so the phone
         # report can apply the Oil & Gas / Real Estate view filter.
         self._alert_symbols_today: deque[str] = deque(maxlen=60)
+        # P9: each line's Show-filter verdict `(hidden, is_new)`, in step too.
+        self._alert_show_today: deque[tuple[bool, bool]] = deque(maxlen=60)
+        self._show_filter = None
         self._alerts_date = datetime.now().date().isoformat()
         #: D1 level/event alerts seen since the last hourly D1 push. Cleared on
         #: a sent push, so each push carries only what is new.
@@ -650,6 +653,8 @@ class AutopilotService(QObject):
             self._alerts_today.clear()
             if getattr(self, "_alert_symbols_today", None) is not None:
                 self._alert_symbols_today.clear()
+            if getattr(self, "_alert_show_today", None) is not None:
+                self._alert_show_today.clear()
             # Yesterday's unsent D1 events are not news; a push naming them at
             # 07:00 would read as this morning's.
             self._d1_events_pending.clear()
@@ -2021,6 +2026,9 @@ class AutopilotService(QObject):
                 "alert_symbols": list(getattr(self, "_alert_symbols_today", ()))[
                     -_MAX_REPORT_ALERTS:
                 ][::-1],
+                "alert_show_flags": list(getattr(self, "_alert_show_today", ()))[
+                    -_MAX_REPORT_ALERTS:
+                ][::-1],
                 "slots_done": snapshot["slots_done"],
                 "next_slot": snapshot["next_slot"],
                 "log_lines": list(self._log_lines)[-_MAX_REPORT_LOG_LINES:][::-1],
@@ -2073,6 +2081,11 @@ class AutopilotService(QObject):
                 payload["ai_night_line"] = ai_night_digest_line()
             except Exception:
                 logging.exception("Night AI line unreadable; the report goes out without it.")
+            try:
+                # P9: before the sector filter, which drops lines the flags follow.
+                payload = core.hide_show_filtered_alerts(payload)
+            except Exception:
+                logging.exception("Away report Show filter failed; publishing unfiltered.")
             try:
                 payload = core.hide_sector_names(payload)
             except Exception:
@@ -2196,6 +2209,23 @@ class AutopilotService(QObject):
         symbols = getattr(self, "_alert_symbols_today", None)
         if symbols is not None:
             symbols.append(str(getattr(alert, "symbol", "") or "").strip().upper())
+        flags = getattr(self, "_alert_show_today", None)
+        if flags is not None:
+            flags.append(self._show_verdict(alert))
+
+    def set_show_filter(self, verdict) -> None:
+        """P9: the Alert Center's `alert -> (hidden, is_new)` for the phone report."""
+        self._show_filter = verdict
+
+    def _show_verdict(self, alert) -> tuple[bool, bool]:
+        verdict = getattr(self, "_show_filter", None)
+        if verdict is None:
+            return (False, False)
+        try:
+            hidden, is_new = verdict(alert)
+        except Exception:  # noqa: BLE001 - unknown shows
+            return (False, False)
+        return (bool(hidden), bool(is_new))
 
     @Slot(object)
     def record_d1_event(self, event) -> None:

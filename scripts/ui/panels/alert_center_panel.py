@@ -87,6 +87,7 @@ from intraday_history import (
     last_completed_bucket as _intraday_last_bucket,
 )
 import focus_adoption_gate
+import alert_show_filter
 import regime_pause_hold
 import sector_exclusion
 from regime_pause_focus import day_bias, focus_side_for
@@ -540,6 +541,8 @@ class AlertCenterPanel(QFrame):
     # {symbol, label, time_text} dict d1_push_event builds. Emitted for every
     # qualifying alert in every mode; Auto Pilot owns the AWAY-only gate.
     d1EventRecorded = Signal(object)
+    #: P9: the Show filter's answer may have changed (choice, grades, Best list).
+    showFilterChanged = Signal()
     #: The faded list changed (a fade, a restore, a discard), so the button
     #: count can repaint. The active Focus lists change too, so `focusChanged`
     #: already fires - this exists so a surface that only shows the FADED
@@ -916,6 +919,30 @@ class AlertCenterPanel(QFrame):
         )
         self.hide_sector_input.setChecked(sector_exclusion.hide_enabled())
         self.hide_sector_input.toggled.connect(self._on_hide_sector_toggled)
+
+        # P9 (trader, 2026-09-25): which M5 rows show. Display only; every
+        # alert is still recorded and still reaches the review-queue door.
+        self._show_grades: dict = {}
+        self._show_best_keys: frozenset | None = None
+        #: `id(alert) -> (alert, (hidden, is_new))`; cleared when any input changes.
+        self._show_verdicts: dict = {}
+        self._show_typed_seen: frozenset | None = None
+        if self.focus_service is not None:
+            self.focus_service.focusChanged.connect(self._on_show_filter_membership_changed)
+        self.show_filter_input = QComboBox()
+        self.show_filter_input.setObjectName("AlertShowFilter")
+        for value, label in alert_show_filter.MODES:
+            self.show_filter_input.addItem(label, value)
+        self.show_filter_input.setCurrentIndex(
+            max(0, self.show_filter_input.findData(alert_show_filter.mode()))
+        )
+        self.show_filter_input.setToolTip(
+            "Which M5 alert rows show. Grade B and up = PROVEN, A, B (C, D and New hide). "
+            "Best right now = only names on the Best-right-now list. Hidden rows make no "
+            "sound and open no chart, but are still recorded. Your typed names, Focus "
+            "names, armed watches, price alerts and regime-pause rows always show."
+        )
+        self.show_filter_input.currentIndexChanged.connect(self._on_show_filter_changed)
 
         clear_button = QPushButton("Clear")
         clear_button.clicked.connect(self.clear_feed)
@@ -1313,6 +1340,7 @@ class AlertCenterPanel(QFrame):
             self.min_tier_input,
             self.sound_input,
             self.hide_sector_input,
+            self.show_filter_input,
             None,  # the stretch
             self.ignored_button,
             clear_button,
@@ -1483,6 +1511,7 @@ class AlertCenterPanel(QFrame):
     def add_alert(self, alert: BounceAlert) -> None:
         self._refresh_ignored_market_date()
         self.sync_sector_switch()
+        self._check_typed_symbols()
         if _is_feed_noise_alert(alert):
             return
         if (
@@ -1539,6 +1568,10 @@ class AlertCenterPanel(QFrame):
             # independently of, how the row is presented.
             if not auto_focused:
                 self._enqueue_review_alert(alert)
+            if self.show_filter_hides(alert):
+                # P9: posted to the M5 bar's backing list above; no row, no sound.
+                self._emit_feed_status()
+                return
             decision = self._repetition_decision(alert, is_focus=is_focus)
             if decision.action == ACTION_FOLD and self._fold_into_existing_row(alert, decision):
                 pass
@@ -1835,9 +1868,12 @@ class AlertCenterPanel(QFrame):
             if self._focus_gate_held
             else ""
         )
+        shown_hidden = alert_show_filter.hidden_text(*self.show_filter_hidden_counts())
+        shown_hidden = f" {shown_hidden}." if shown_hidden else ""
         self.statusChanged.emit(
             f"Alert center: {len(self._alerts)} live alert(s), {loud} loud; "
             f"{len(self._d1_alerts)} favorite-bucket transition(s) in D1 Focus.{held}"
+            f"{shown_hidden}"
         )
 
     def clear_feed(self) -> None:
@@ -1881,6 +1917,133 @@ class AlertCenterPanel(QFrame):
         if is_chart_watch_alert(alert) or self._alert_is_focus(alert):
             return False
         return sector_exclusion.symbol_is_excluded(alert.symbol)
+
+    # -- P9: the Show filter (display only) -------------------------------
+    def show_filter_mode(self) -> str:
+        return str(self.show_filter_input.currentData() or alert_show_filter.DEFAULT_MODE)
+
+    def _on_show_filter_changed(self, *_args) -> None:
+        try:
+            alert_show_filter.set_mode(self.show_filter_mode())
+        except Exception:  # noqa: BLE001 - a preference never costs the feed
+            logging.debug("Show filter setting not saved.", exc_info=True)
+        self._show_verdicts.clear()
+        self._rebuild_feed()
+        self.showFilterChanged.emit()
+        self._emit_feed_status()
+
+    def set_setup_grades(self, payload) -> None:
+        """The day-trade grades the M5 bar shows; the Show filter reads the same."""
+        import setup_grades
+
+        self._show_grades = setup_grades.daytrade_lookup(payload)
+        self._show_filter_inputs_changed(alert_show_filter.GRADE_B_UP)
+
+    def set_best_now_entries(self, entries) -> None:
+        """The Best-right-now strip's rows (P1-5); the Best filter shows only these."""
+        keys = alert_show_filter.best_keys(entries)
+        if keys == self._show_best_keys:
+            return
+        self._show_best_keys = keys
+        self._show_filter_inputs_changed(alert_show_filter.BEST_NOW)
+
+    def _show_filter_inputs_changed(self, affects: str | None = None) -> None:
+        """An input the verdicts read changed: drop them and redraw if it matters."""
+        self._show_verdicts.clear()
+        show_mode = self.show_filter_mode()
+        if show_mode == alert_show_filter.ALL or (affects is not None and show_mode != affects):
+            return
+        self._rebuild_feed()
+        self.showFilterChanged.emit()
+        self._emit_feed_status()
+
+    def _on_show_filter_membership_changed(self, *_args) -> None:
+        """Focus membership changed: privileged rows may have changed."""
+        self._show_filter_inputs_changed()
+
+    def _check_typed_symbols(self) -> None:
+        """longs.txt / shorts.txt changed (throttled stat): privileged rows may have changed."""
+        try:
+            typed = alert_show_filter.typed_symbols()
+        except Exception:  # noqa: BLE001 - unknown shows
+            return
+        if self._show_typed_seen is None:
+            self._show_typed_seen = typed
+            return
+        if typed != self._show_typed_seen:
+            self._show_typed_seen = typed
+            self._show_filter_inputs_changed()
+
+    def show_filter_grade(self, alert: BounceAlert) -> str | None:
+        return alert_show_filter.daytrade_grade(self._show_grades, alert)
+
+    def _show_filter_privileged(self, alert: BounceAlert) -> bool:
+        """Rows the Show filter never hides."""
+        if is_chart_watch_alert(alert) or is_regime_pause_alert(alert) or is_entry_assist_alert(alert):
+            return True
+        if str(alert.raw_text or "").lstrip().upper().startswith("PRICE ALERT"):
+            return True
+        if self._alert_is_focus(alert):
+            return True
+        symbol = str(alert.symbol or "").strip().upper()
+        try:
+            return bool(symbol) and symbol in alert_show_filter.typed_symbols()
+        except Exception:  # noqa: BLE001 - unknown shows
+            return True
+
+    def show_filter_verdict(self, alert: BounceAlert) -> tuple[bool, bool]:
+        """`(hidden, is_new)` for one alert, cached until an input changes."""
+        if self.show_filter_mode() == alert_show_filter.ALL:
+            return (False, False)
+        cached = self._show_verdicts.get(id(alert))
+        if cached is not None and cached[0] is alert:
+            return cached[1]
+        verdict = self._compute_show_verdict(alert)
+        if len(self._show_verdicts) > MAX_FEED_ITEMS * 8:
+            self._show_verdicts.clear()
+        self._show_verdicts[id(alert)] = (alert, verdict)
+        return verdict
+
+    def _compute_show_verdict(self, alert: BounceAlert) -> tuple[bool, bool]:
+        """Only ordinary M5 rows on a real symbol can hide."""
+        show_mode = self.show_filter_mode()
+        if not str(alert.symbol or "").strip() or not self._is_m5_review_alert(alert):
+            return (False, False)
+        grade = self.show_filter_grade(alert)
+        hidden = alert_show_filter.hides(
+            show_mode,
+            grade=grade,
+            best=self._show_best_keys,
+            symbol=alert.symbol,
+            side=alert.side,
+            privileged=self._show_filter_privileged(alert),
+        )
+        return (hidden, grade == alert_show_filter.setup_grades.NEW)
+
+    def show_filter_hides(self, alert: BounceAlert) -> bool:
+        return self.show_filter_verdict(alert)[0]
+
+    def show_filter_hidden_counts(self) -> tuple[int, int]:
+        """`(rows, new)` the Show filter holds back from the feed, one per name+side."""
+        if self.show_filter_mode() == alert_show_filter.ALL:
+            return (0, 0)
+        mode = self._min_tier_mode()
+        hide_sectors = sector_exclusion.hide_enabled()
+
+        def verdicts():
+            for alert in self._alerts:
+                if (
+                    alert.symbol in self._ignored_symbols
+                    or self._sector_hidden(alert, hide_sectors)
+                    or not alert_passes_feed_gate(
+                        alert, mode, is_focus=self._alert_has_focus_privilege(alert)
+                    )
+                ):
+                    continue
+                hidden, is_new = self.show_filter_verdict(alert)
+                yield (self._feed_row_key(alert), hidden, is_new)
+
+        return alert_show_filter.count_hidden(verdicts())
 
     def _on_hide_sector_toggled(self, checked: bool) -> None:
         try:
@@ -2722,6 +2885,7 @@ class AlertCenterPanel(QFrame):
             and alert_passes_feed_gate(
                 alert, mode, is_focus=self._alert_has_focus_privilege(alert)
             )
+            and not self.show_filter_hides(alert)
         ]
         digested = self._digested_keys()
         if digested:
