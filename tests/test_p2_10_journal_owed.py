@@ -70,3 +70,79 @@ def test_recap_day_record_total_leaves_made_up_trades_out_but_keeps_the_rows():
     made_up = next(row for row in section["rows"] if row["trade_id"] == "m1")
     assert made_up["net_pnl"] == 341.57  # the trade's own number stays visible
     assert made_up["counted_in_pnl"] is False
+
+
+# ---------------------------------------------------------------------------
+# step 2: the Mentor rule lane never reads the journal on the Qt thread
+# ---------------------------------------------------------------------------
+def _size_rule():
+    return {"for_date": SESSION, "rule_id": "rc-1", "set_on": "2026-09-21",
+            "text": "size down in chop", "tag": "size_down_in_chop", "streak": 1}
+
+
+def _sized_trade(trade_id, day, qty, *, opened="09:50"):
+    return {
+        "trade_id": trade_id, "symbol": "ZETA", "direction": "LONG", "status": "CLOSED",
+        "opened_at": f"{day}T{opened}:00-04:00", "closed_at": f"{day}T11:00:00-04:00",
+        "trade_date": day, "net_pnl": 10.0, "average_entry_price": 10.0,
+        "average_exit_price": 10.1, "quantity_opened": qty,
+    }
+
+
+class _CountingStore:
+    def __init__(self, rows=()):
+        self.rows = list(rows)
+        self.calls = 0
+
+    def list_trades(self, **_kwargs):
+        self.calls += 1
+        return list(self.rows)
+
+
+def test_rule_lane_reads_no_journal_on_the_qt_thread():
+    import types
+
+    import pytest
+
+    pytest.importorskip("PySide6")
+    from ui.app import MainWindow
+
+    store = _CountingStore()
+    host = types.SimpleNamespace(
+        rule_chip=types.SimpleNamespace(info=_size_rule), _regime_timeline=[],
+    )
+    MainWindow._mentor_rule_lane(host, store, SESSION, [_sized_trade("t1", SESSION, 500)])
+    assert store.calls == 0  # before: one list_trades call on the Qt thread
+
+
+def test_rule_lane_uses_the_worker_baseline_for_its_own_session_only():
+    import types
+    from datetime import datetime, timedelta, timezone
+
+    import pytest
+
+    pytest.importorskip("PySide6")
+    from ui.app import MainWindow
+
+    earlier = [_sized_trade(f"e{i}", f"2026-09-{10 + i:02d}", 100) for i in range(6)]
+    store = _CountingStore(earlier)
+    # The worker's read: one bounded journal query, the median entry notional.
+    baseline = MainWindow._read_rule_size_baseline(SESSION, store=store)
+    assert baseline == {"session": SESSION, "median": 1000.0}
+    assert store.calls == 1
+
+    chop = datetime(2026, 9, 22, 9, 35, tzinfo=timezone(timedelta(hours=-4)))
+    host = types.SimpleNamespace(
+        rule_chip=types.SimpleNamespace(info=_size_rule),
+        _regime_timeline=[(chop, "neutral_chop")],
+        _rule_size_baseline=baseline,
+    )
+    big = [_sized_trade("t1", SESSION, 500)]
+    rows = MainWindow._mentor_rule_lane(host, None, SESSION, big)
+    assert [row["trade_id"] for row in rows] == ["t1"]
+    # A baseline for another session is not used: the size check says nothing.
+    host._rule_size_baseline = {"session": "2026-09-21", "median": 1000.0}
+    assert MainWindow._mentor_rule_lane(host, None, SESSION, big) == []
+    # Another rule clears the baseline without starting a read.
+    MainWindow._refresh_rule_size_baseline(host, {"tag": "hold_winners"})
+    assert host._rule_size_baseline is None

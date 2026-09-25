@@ -558,6 +558,8 @@ class MainWindow(QMainWindow):
         from ui.widgets.rule_chip import RuleChip
 
         self.rule_chip = RuleChip(self)
+        self._rule_size_baseline = None
+        self.rule_chip.ruleLoaded.connect(self._refresh_rule_size_baseline)
         # Compact layout only: the hidden BounceBot strip's controls, proxied.
         # Added to the bar only while compact - QStatusBar sizes itself from
         # hidden items too, so a parked proxy would change the classic bar.
@@ -612,8 +614,9 @@ class MainWindow(QMainWindow):
     def _mentor_rule_lane(self, store, session: str, trades) -> list:
         """The rule-reflection lane: today's closed trades the rule can be checked on.
 
-        The rule comes from the status-bar chip's worker (no file read here); the
-        size baseline is one bounded journal query, only for `size_down_in_chop`.
+        The rule comes from the status-bar chip's worker and the size baseline
+        from `_rule_size_baseline` (its own worker): no journal read here. A
+        baseline for another session is not used; the size check then says nothing.
         """
         try:
             import recap_rule_loop as loop
@@ -624,12 +627,9 @@ class MainWindow(QMainWindow):
                 return []
             median = None
             if rule.get("tag") == "size_down_in_chop":
-                from datetime import timedelta
-
-                day = _date.fromisoformat(str(session)[:10])
-                start = day - timedelta(days=loop.SIZE_BASELINE_DAYS)
-                earlier = store.list_trades(date_from=start.isoformat(), date_to=day.isoformat())
-                median = loop.size_baseline(earlier, day)
+                cached = getattr(self, "_rule_size_baseline", None) or {}
+                if cached.get("session") == str(session)[:10]:
+                    median = cached.get("median")
             return loop.reflection_rows(
                 rule,
                 trades,
@@ -640,6 +640,61 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001 - a lane never costs the card
             logging.debug("Mentor rule lane unreadable.", exc_info=True)
             return []
+
+    @staticmethod
+    def _read_rule_size_baseline(session: str, store=None) -> dict:
+        """Worker-thread read: the median entry size before `session`, one bounded query."""
+        from datetime import timedelta
+
+        import recap_rule_loop as loop
+
+        if store is None:
+            from journal_store import JournalStore
+
+            store = JournalStore()
+        day = _date.fromisoformat(str(session)[:10])
+        start = day - timedelta(days=loop.SIZE_BASELINE_DAYS)
+        earlier = store.list_trades(date_from=start.isoformat(), date_to=day.isoformat())
+        return {"session": day.isoformat(), "median": loop.size_baseline(earlier, day)}
+
+    def _refresh_rule_size_baseline(self, info: object = None) -> None:
+        """When today's rule is `size_down_in_chop`, read the size baseline on a worker."""
+        try:
+            import recap_rule_loop as loop
+
+            if not isinstance(info, dict) or info.get("tag") != "size_down_in_chop":
+                self._rule_size_baseline = None
+                return
+            worker = getattr(self, "_rule_size_worker", None)
+            if worker is not None and worker.isRunning():
+                return
+            from ui.read_worker import ReadWorker
+
+            session = loop.market_date().isoformat()
+            worker = ReadWorker(lambda: MainWindow._read_rule_size_baseline(session), self)
+            worker.finished_with.connect(self._apply_rule_size_baseline)
+            worker.failed.connect(
+                lambda message: logging.debug("Rule size baseline unreadable: %s", message)
+            )
+            self._rule_size_worker = worker
+            worker.start()
+        except Exception:  # noqa: BLE001 - a lane never costs the desk
+            logging.debug("Rule size baseline read could not start.", exc_info=True)
+
+    def _apply_rule_size_baseline(self, payload: object) -> None:
+        self._rule_size_baseline = dict(payload) if isinstance(payload, dict) else None
+
+    def _join_rule_size_baseline(self) -> None:
+        """Wait for the size-baseline reader, but never forever. Called from shutdown."""
+        worker = getattr(self, "_rule_size_worker", None)
+        if worker is None:
+            return
+        try:
+            from ui.read_worker import join_worker
+
+            join_worker(worker)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _set_technical_integrity(self, snapshot) -> None:
         self._technical_integrity_snapshot = snapshot if isinstance(snapshot, dict) else {}
@@ -2000,6 +2055,7 @@ class MainWindow(QMainWindow):
                 chip.shutdown()
         except Exception:  # noqa: BLE001 - shutdown must not raise
             pass
+        self._join_rule_size_baseline()
         for panel in (
             self.trading_panel,
             self.journal_panel,
