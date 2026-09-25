@@ -24,6 +24,9 @@ was on the scan date (``f_<facet>`` columns):
   trader had before the alert, never the same day's later scan. With
   ``--m5-stamps`` the live alert-time stamp (`m5_setup_key_stamp`, same rule)
   is joined on event_id and wins; no usable stamp record = the recompute.
+  The M5-native facets (P11, ``f_m5_*``) join the same way: the stamp's M5
+  part wins, else the registered row's entry time, RVOL and bounce type (the
+  VWAP distance and SPY state need the live stamp and are unknown otherwise).
 
 Refuses any input or output inside a live store: copy first.
 """
@@ -65,7 +68,12 @@ def facet_column(name: str) -> str:
 
 
 def output_columns() -> list[str]:
-    return [*BASE_COLUMNS, *(facet_column(name) for name in sp.FACETS)]
+    """D1 facets then the M5-native facets (P11): the m5 population is searched on the union."""
+    return [*BASE_COLUMNS, *(facet_column(name) for name in (*sp.FACETS, *sp.M5_FACETS))]
+
+
+def _unknown_m5() -> dict[str, str]:
+    return {facet_column(name): sp.UNKNOWN for name in sp.M5_FACETS}
 
 
 # --- live-store refusal
@@ -352,6 +360,7 @@ def _swing_row(keyed: KeyedRow, horizon: int, favorable: Any, side_return_pct: A
         "permutation_rule_version": keyed.rule_version,
         "backfill_version": BACKFILL_VERSION,
         **{facet_column(name): value for name, value in keyed.facets.items()},
+        **_unknown_m5(),
     }
 
 
@@ -439,6 +448,28 @@ def live_stamp_facets(record: Mapping[str, Any] | None) -> dict[str, str] | None
     return {name: _text(facets.get(name)) or sp.UNKNOWN for name in sp.FACETS}
 
 
+def live_m5_facets(record: Mapping[str, Any] | None) -> dict[str, str] | None:
+    """The M5-native facets a sidecar record stamped at alert time (P11), or None when it holds none."""
+    if not isinstance(record, Mapping) or record.get("m5_rule_version") != sp.M5_PERMUTATION_RULE_VERSION:
+        return None
+    facets = record.get("m5_facets")
+    if not isinstance(facets, Mapping):
+        return None
+    return {name: _text(facets.get(name)) or sp.UNKNOWN for name in sp.M5_FACETS}
+
+
+def _registered_inputs(rows: Iterable[Mapping[str, Any]], sink: dict[str, dict], tz: Any) -> Iterable:
+    """Pass rows through, keeping the M5 inputs of each event's registered (alert-time) row."""
+    import m5_setup_key_stamp
+
+    for row in rows:
+        if _text(row.get("event_type")) == "registered":
+            event_id = _text(row.get("event_id"))
+            if event_id and event_id not in sink:
+                sink[event_id] = m5_setup_key_stamp.alert_inputs(row, tz)
+        yield row
+
+
 def m5_rows(
     m5_path: Path,
     keyed: Mapping[tuple[str, str, str], KeyedRow],
@@ -447,16 +478,26 @@ def m5_rows(
     stamps: Mapping[str, Mapping[str, Any]] | None = None,
     counts: dict[str, int] | None = None,
 ) -> list[dict]:
-    """One row per measured M5 episode. ``stamps`` (the live sidecar, by event_id) wins when usable."""
+    """One row per measured M5 episode. ``stamps`` (the live sidecar, by event_id) wins when usable.
+
+    D1 facets and M5-native facets are joined separately: each comes from the
+    live stamp when it holds one, else from the recompute (the previous
+    session's scan row; the registered row's entry time, RVOL and bounce type).
+    """
     import held_run_score
+    import m5_setup_key_stamp
 
     unknown = {name: sp.UNKNOWN for name in sp.FACETS}
     tally = counts if counts is not None else {}
     tally.setdefault("m5_live_stamped", 0)
     tally.setdefault("m5_live_stamp_disagreed", 0)
+    tally.setdefault("m5_live_m5_stamped", 0)
     out = []
     previous: dict[str, str] = {}
-    for episode in held_run_score.build_episodes(_read_rows(m5_path), as_of=as_of):
+    registered: dict[str, dict] = {}
+    tz = m5_setup_key_stamp._local_tz()
+    rows = _registered_inputs(_read_rows(m5_path), registered, tz)
+    for episode in held_run_score.build_episodes(rows, as_of=as_of):
         if not episode.measured:
             continue
         side = _side(episode.direction)
@@ -467,11 +508,17 @@ def m5_rows(
             previous[session] = previous_session_text(session)
         d1 = keyed.get((episode.symbol, side, previous[session]))
         facets = d1.facets if d1 else unknown
-        live = live_stamp_facets((stamps or {}).get(episode.event_id))
+        record = (stamps or {}).get(episode.event_id)
+        live = live_stamp_facets(record)
         if live is not None:
             tally["m5_live_stamped"] += 1
             tally["m5_live_stamp_disagreed"] += int(live != facets)
             facets = live
+        m5_facets = live_m5_facets(record)
+        if m5_facets is not None:
+            tally["m5_live_m5_stamped"] += 1
+        else:
+            m5_facets = sp.m5_facets_for(registered.get(episode.event_id), side).as_dict()
         out.append({
             "population": POPULATION_M5,
             "episode_id": episode.event_id,
@@ -487,6 +534,7 @@ def m5_rows(
             "permutation_rule_version": sp.PERMUTATION_RULE_VERSION,
             "backfill_version": BACKFILL_VERSION,
             **{facet_column(name): value for name, value in facets.items()},
+            **{facet_column(name): value for name, value in m5_facets.items()},
         })
     return out
 

@@ -76,6 +76,16 @@ def _state(bot: Any) -> dict[str, Any]:
     }
 
 
+def _register_setup_key_bar_source(bot: Any) -> None:
+    """P11: the shadow M5 setup-key stamp reads this bot's cached bars (cache only); never fails the child."""
+    try:
+        import m5_setup_key_stamp
+
+        m5_setup_key_stamp.register_bar_source(bot)
+    except Exception as exc:  # noqa: BLE001 - a shadow stamp never costs the scanner
+        note_swallowed("M5 setup key bar source not registered", exc, quiet=True)
+
+
 def _child_main(
     connection,
     events,
@@ -94,6 +104,7 @@ def _child_main(
     try:
         launcher = _resolve_launcher(launcher_spec)
         bot = launcher(callback, start_scanning_enabled=bool(start_scanning_enabled))
+        _register_setup_key_bar_source(bot)
         connection.send(
             {
                 "type": "ready",

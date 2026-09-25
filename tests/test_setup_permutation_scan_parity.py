@@ -38,6 +38,7 @@ from pathlib import Path
 SCRATCH = Path(sys.argv[1])
 SCRIPTS_DIR = sys.argv[2]
 DISABLE = sys.argv[3] == "off"
+SESSION_COUNT = int(sys.argv[4]) if len(sys.argv) > 4 else 260
 SYMBOL = "PKEY"
 os.environ["TRADINGBOTV3_DATA_DIR"] = str(SCRATCH / "home")
 os.environ["LOCALAPPDATA"] = str(SCRATCH / "localappdata")
@@ -58,6 +59,9 @@ from master_avwap_lib import runner
 if DISABLE:
     runner.stamp_permutation_scan_rows = lambda rows, **kwargs: 0
     runner.permutation_ma_distance_columns = lambda *args, **kwargs: {}
+    # P11: the appended D1 history columns are switched off the same way.
+    if hasattr(runner, "permutation_d1_history_columns"):
+        runner.permutation_d1_history_columns = lambda *args, **kwargs: {}
 
 
 def _sessions(count):
@@ -67,11 +71,13 @@ def _sessions(count):
     return list(pd.bdate_range(end=pd.Timestamp(end), periods=count))
 
 
-stamps = _sessions(260)
+stamps = _sessions(SESSION_COUNT)
 rows = []
 for index, stamp in enumerate(stamps):
     base = 60.0 + index * 0.2 + (1.5 if index % 7 == 0 else 0.0)
-    rows.append((stamp, base, base + 1.0, base - 1.0, base + 0.2))
+    # Longer runs (P11) widen the last 20 ranges so ATR14 has a 252-session range to sit in.
+    wide = 1.5 if SESSION_COUNT > 260 and index >= SESSION_COUNT - 20 else 1.0
+    rows.append((stamp, base, base + wide, base - 1.0, base + 0.2))
 frame = pd.DataFrame(rows, columns=["datetime", "open", "high", "low", "close"])
 frame["volume"] = 1_000_000
 anchor_iso = stamps[230].date().isoformat()
@@ -109,8 +115,8 @@ VOLATILE_KEYS = {
 }
 
 
-def _run(tmp_path: Path, mode: str) -> dict:
-    scratch = tmp_path / mode
+def _run(tmp_path: Path, mode: str, sessions: int = 260) -> dict:
+    scratch = tmp_path / f"{mode}-{sessions}"
     for name in ("home", "localappdata", "diag"):
         (scratch / name).mkdir(parents=True, exist_ok=True)
     child = scratch / "child.py"
@@ -118,7 +124,7 @@ def _run(tmp_path: Path, mode: str) -> dict:
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
     completed = subprocess.run(
-        [sys.executable, str(child), str(scratch), str(SCRIPTS_DIR), mode],
+        [sys.executable, str(child), str(scratch), str(SCRIPTS_DIR), mode, str(sessions)],
         capture_output=True, text=True, timeout=900, env=environment, cwd=str(SCRIPTS_DIR),
     )
     assert completed.returncode == 0, completed.stderr[-4000:]

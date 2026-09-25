@@ -8,6 +8,10 @@ blank or NaN input gives ``unknown`` - never a default.
 No I/O, no Qt, and nothing reads the key for ranking. Adding a facet is one
 function decorated with ``@facet(...)`` plus its own fixture test.
 
+M5-native facets (group ``m5``, P11) live in their own registry, ``M5_FACETS``,
+and make their own versioned key (``m5_facets_for``) over what one M5 alert
+carried at alert time; the D1 key never includes them.
+
 Column names were checked against the writer (`master_avwap_lib/legacy.py`) and
 the live CSV header. Sign conventions on the row:
 
@@ -97,7 +101,7 @@ class PermutationKey:
         """Short display label, e.g. ``sma100_support|weekly_ema15_hold``."""
         parts = []
         for name, value in self.facets:
-            spec = FACETS.get(name)
+            spec = FACETS.get(name) or M5_FACETS.get(name)
             if value == UNKNOWN or (spec is not None and (not spec.in_label or value in spec.quiet)):
                 continue
             parts.append(value)
@@ -666,6 +670,64 @@ def _entry_trigger_time(row, ctx, side):
     return "trigger_" + checkpoint.replace(" ", "_")
 
 
+# --- P11: D1 facets from the scan's own daily bars (appended `perm_` columns)
+
+
+@facet("atr_percentile", "volatility", in_label=False)
+def _atr_percentile(row, ctx, side):
+    # ATR14 placed in its own 252-session range (0 = lowest, 1 = highest).
+    value = _num(row.get("perm_atr14_pctile_252"))
+    if value is None or not 0.0 <= value <= 1.0:
+        return UNKNOWN
+    return _band(value, (0.2, 0.5, 0.8), ("atr_pctile_0_20", "atr_pctile_20_50", "atr_pctile_50_80",
+                                          "atr_pctile_80_100"))
+
+
+@facet("low_52w_distance", "weekly", in_label=False)
+def _low_52w_distance(row, ctx, side):
+    value = _num(row.get("perm_low_52w_dist_atr"))
+    if value is None or value < 0:
+        return UNKNOWN
+    return _band(value, (2.0, 5.0, 10.0), ("off_52w_low_0_2atr", "off_52w_low_2_5atr", "off_52w_low_5_10atr",
+                                           "off_52w_low_10atr_plus"))
+
+
+@facet("closes_vs_level", "levels", in_label=False)
+def _closes_vs_level(row, ctx, side):
+    # Of the last 5 closes, how many sat on the setup's side of the current AVWAPE.
+    count = _num(row.get("perm_closes_right_of_level_5"))
+    if count is None or not 0 <= count <= 5:
+        return UNKNOWN
+    if count >= 5:
+        return "closes_right_5of5"
+    return "closes_right_3_4of5" if count >= 3 else "closes_right_0_2of5"
+
+
+@facet("level_respect", "levels", in_label=False)
+def _level_respect(row, ctx, side):
+    # Sessions in the last 20 that touched the current AVWAPE and closed on the setup's side.
+    count = _num(row.get("perm_level_respect_20"))
+    if count is None or count < 0:
+        return UNKNOWN
+    if count >= 4:
+        return "level_respect_4_plus"
+    if count >= 2:
+        return "level_respect_2_3"
+    return f"level_respect_{int(count)}"
+
+
+@facet("d1_zone_arm", "band_zone", quiet=("no_zone_arm",))
+def _d1_zone_arm(row, ctx, side):
+    # The scan's own D1 zone arm for the name ("LONG_z1"); "not_armed" when evaluated and nothing armed.
+    text = (_text(row.get("perm_d1_zone_arm")) or "").upper()
+    if text == "NOT_ARMED":
+        return "no_zone_arm"
+    arm_side, _, zone = text.partition("_Z")
+    if arm_side not in {"LONG", "SHORT"} or zone not in {"1", "2", "3"}:
+        return UNKNOWN
+    return f"zone_arm_{arm_side.lower()}_z{zone}"
+
+
 # --- stamping (4a): the scan-row columns and the honest input view
 
 #: `perm_dist_<ma>_atr` columns the enrichment step writes: (close - ma) / ATR20. The `perm_`
@@ -675,8 +737,16 @@ MA_DISTANCE_COLUMNS = tuple(f"perm_dist_{ma}_atr" for ma in SUPPORT_MAS)
 WEEKLY_STREAK_COLUMN = "perm_weekly_ema8_hold_weeks"
 #: The compact key (unknown facets omitted), its short label and its rule version, as written on a row.
 STAMP_COLUMNS = ("permutation_key", "permutation_label", "permutation_rule_version")
-#: Every column 4a appends to `d1_features_history.csv`, in order.
-SCAN_ROW_COLUMNS = (*MA_DISTANCE_COLUMNS, WEEKLY_STREAK_COLUMN, *STAMP_COLUMNS)
+#: P11: the D1 facet inputs computed from the scan's own daily bars, appended after the 4a columns.
+D1_HISTORY_COLUMNS = (
+    "perm_atr14_pctile_252",
+    "perm_low_52w_dist_atr",
+    "perm_closes_right_of_level_5",
+    "perm_level_respect_20",
+    "perm_d1_zone_arm",
+)
+#: Every column P1-4 appends to `d1_features_history.csv`, in order (4a first, then P11).
+SCAN_ROW_COLUMNS = (*MA_DISTANCE_COLUMNS, WEEKLY_STREAK_COLUMN, *STAMP_COLUMNS, *D1_HISTORY_COLUMNS)
 
 _WEEKLY_TOP_PATTERN_FLAGS = (
     "top_pattern_weekly_ema15_hold",
@@ -740,3 +810,207 @@ def stamp_fields(
         "permutation_label": key.label,
         "permutation_rule_version": key.permutation_rule_version,
     }
+
+
+# --- P11: the D1 history columns (pure; the scan passes the bars it already holds)
+
+ATR_PERCENTILE_WINDOW = 252
+ATR_PERCENTILE_LENGTH = 14
+LOW_52W_WINDOW = 252
+CLOSES_VS_LEVEL_WINDOW = 5
+LEVEL_RESPECT_WINDOW = 20
+#: A touch is a low (long) or high (short) within this many ATR of the level.
+LEVEL_TOUCH_TOL_ATR = 0.1
+
+
+def _bar_values(bar: Mapping[str, Any]) -> tuple[float, float, float] | None:
+    high, low, close = _num(bar.get("high")), _num(bar.get("low")), _num(bar.get("close"))
+    if high is None or low is None or close is None:
+        return None
+    return high, low, close
+
+
+def _atr14_percentile(bars: list[tuple[float, float, float]]) -> float | None:
+    trs = []
+    previous_close = None
+    for high, low, close in bars:
+        tr = high - low if previous_close is None else max(high - low, abs(high - previous_close),
+                                                           abs(low - previous_close))
+        trs.append(tr)
+        previous_close = close
+    length = ATR_PERCENTILE_LENGTH
+    atrs = [sum(trs[i - length + 1:i + 1]) / length for i in range(length - 1, len(trs))]
+    if len(atrs) < ATR_PERCENTILE_WINDOW:
+        return None
+    window = atrs[-ATR_PERCENTILE_WINDOW:]
+    low, high = min(window), max(window)
+    if high - low <= 1e-12:
+        return None
+    return round((window[-1] - low) / (high - low), 6)
+
+
+def d1_history_columns(
+    daily_ohlc: Any,
+    *,
+    side: Any,
+    level: Any,
+    atr: Any,
+    as_of: Any = None,
+    zone_arm: Mapping[str, Any] | None = None,
+    zone_arm_evaluated: bool = False,
+) -> dict[str, Any]:
+    """The P11 ``perm_`` columns for one scan row; None where the scan's bars cannot say.
+
+    ``daily_ohlc`` is the scan's own list of ``{date, open, high, low, close}``
+    dicts in date order; bars after ``as_of`` (ISO date) are never read. ``level``
+    is the current AVWAPE; ``zone_arm`` the scan's zone-arm entry for the name.
+    """
+    as_of_text = str(as_of)[:10] if as_of else None
+    bars = []
+    for bar in daily_ohlc or ():
+        if not isinstance(bar, Mapping):
+            continue
+        if as_of_text and str(bar.get("date") or "")[:10] > as_of_text:
+            continue
+        values = _bar_values(bar)
+        if values is None:
+            return dict.fromkeys(D1_HISTORY_COLUMNS)  # a hole in the bars: nothing is measured
+        bars.append(values)
+    side_text = _side(side)
+    level_value = _num(level)
+    atr_value = _num(atr)
+    atr_ok = atr_value is not None and atr_value > 0
+    out: dict[str, Any] = dict.fromkeys(D1_HISTORY_COLUMNS)
+    out["perm_atr14_pctile_252"] = _atr14_percentile(bars)
+    if atr_ok and len(bars) >= LOW_52W_WINDOW:
+        year_low = min(low for _high, low, _close in bars[-LOW_52W_WINDOW:])
+        out["perm_low_52w_dist_atr"] = round((bars[-1][2] - year_low) / atr_value, 6)
+    if level_value is not None and side_text != UNKNOWN:
+        long_side = side_text == "LONG"
+        if len(bars) >= CLOSES_VS_LEVEL_WINDOW:
+            closes = [close for _high, _low, close in bars[-CLOSES_VS_LEVEL_WINDOW:]]
+            out["perm_closes_right_of_level_5"] = sum(
+                1 for close in closes if (close >= level_value if long_side else close <= level_value)
+            )
+        if atr_ok and len(bars) >= LEVEL_RESPECT_WINDOW:
+            tol = LEVEL_TOUCH_TOL_ATR * atr_value
+            held = 0
+            for high, low, close in bars[-LEVEL_RESPECT_WINDOW:]:
+                if long_side and low <= level_value + tol and close >= level_value:
+                    held += 1
+                elif not long_side and high >= level_value - tol and close <= level_value:
+                    held += 1
+            out["perm_level_respect_20"] = held
+    if zone_arm_evaluated:
+        arm_side = _side(zone_arm.get("side")) if zone_arm else UNKNOWN
+        zone = zone_arm.get("zone") if zone_arm else None
+        out["perm_d1_zone_arm"] = f"{arm_side}_z{zone}" if arm_side != UNKNOWN and zone in (1, 2, 3) else "not_armed"
+    return out
+
+
+# --- P11: M5-native facets over one alert's own inputs (group ``m5``)
+
+M5_PERMUTATION_RULE_VERSION = "setup_permutations.m5.v1"
+#: name -> spec for the M5 key, in registration order. Never part of the D1 key.
+M5_FACETS: dict[str, FacetSpec] = {}
+#: The alert-time inputs an M5 facet reads (`m5_setup_key_stamp.alert_inputs` builds them).
+M5_INPUT_FIELDS = ("entry_time", "session_rvol", "vwap_dist_atr", "spy_state", "spy_side_sign", "bounce_type")
+
+
+def m5_facet(name: str, *, quiet: tuple[str, ...] = (), in_label: bool = True) -> Callable[[FacetFn], FacetFn]:
+    """Register ``fn(inputs, ctx, side) -> value`` as the M5 facet ``name``."""
+
+    def _register(fn: FacetFn) -> FacetFn:
+        if name in M5_FACETS or name in FACETS:
+            raise ValueError(f"facet {name!r} is already registered")
+        M5_FACETS[name] = FacetSpec(name=name, group="m5", fn=fn, quiet=frozenset(quiet), in_label=in_label)
+        return fn
+
+    return _register
+
+
+def m5_facets_for(inputs: Mapping[str, Any] | None, side: Any) -> PermutationKey:
+    """The M5 key for one alert; family = its bounce type. Missing input is unknown."""
+    source: Mapping[str, Any] = inputs or {}
+    side_text = _side(side)
+    family = _text(source.get("bounce_type")) or UNKNOWN
+    values = []
+    for name, spec in M5_FACETS.items():
+        try:
+            value = spec.fn(source, {}, side_text)
+        except (TypeError, ValueError, ArithmeticError):
+            value = UNKNOWN
+        values.append((name, value or UNKNOWN))
+    return PermutationKey(family=family, side=side_text, facets=tuple(values),
+                          permutation_rule_version=M5_PERMUTATION_RULE_VERSION)
+
+
+#: Minutes after 09:30 ET at which the alert bar CLOSED: (upper bound inclusive, name).
+_M5_TIME_BUCKETS = ((30, "first30"), (120, "morning"), (330, "midday"), (390, "last60"))
+#: US Eastern offsets (EDT, EST) in hours: the only offsets `entry_time` may carry.
+_EXCHANGE_UTC_OFFSETS = (-4.0, -5.0)
+
+
+@m5_facet("m5_time_bucket")
+def _m5_time_bucket(inputs, ctx, side):
+    # ``entry_time`` is the alert bar's close in exchange time (`m5_setup_key_stamp.alert_inputs`).
+    text = _text(inputs.get("entry_time"))
+    if not text:
+        return UNKNOWN
+    try:
+        local = datetime.fromisoformat(text)
+    except ValueError:
+        return UNKNOWN
+    offset = local.utcoffset()
+    if offset is None or offset.total_seconds() / 3600.0 not in _EXCHANGE_UTC_OFFSETS:
+        return UNKNOWN  # naive or not written in exchange time: never guessed
+    minutes = local.hour * 60 + local.minute - (9 * 60 + 30)
+    if minutes <= 0:
+        return "time_extended"
+    for upper, name in _M5_TIME_BUCKETS:
+        if minutes <= upper:
+            return name
+    return "time_extended"
+
+
+@m5_facet("m5_rvol_bucket")
+def _m5_rvol_bucket(inputs, ctx, side):
+    value = _num(inputs.get("session_rvol"))
+    if value is None or value < 0:
+        return UNKNOWN
+    return _band(value, (1.0, 2.0, 3.0), ("rvol_below_1", "rvol_1_2", "rvol_2_3", "rvol_3_plus"))
+
+
+@m5_facet("m5_vwap_dist_atr")
+def _m5_vwap_dist_atr(inputs, ctx, side):
+    # (alert-bar close - session VWAP) / M5 ATR14, both at the alert bar.
+    value = _band(_num(inputs.get("vwap_dist_atr")), _ATR_DIST_EDGES, _ATR_DIST_NAMES)
+    return value if value == UNKNOWN else f"m5vwap_{value}"
+
+
+_SPY_COUNTERMOVE = {"COUNTERMOVE_ARMED", "COUNTERMOVE_ACTIVE", "STABILIZING"}
+_SPY_TREND = {"BULL_IMPULSE": 1, "BEAR_IMPULSE": -1, "TREND_RESUMED": 0}
+_SPY_QUIET = {"PREOPEN", "OPENING_DISCOVERY", "RANGE", "REGIME_FAILED"}
+
+
+@m5_facet("m5_spy_state", quiet=("spy_none",))
+def _m5_spy_state(inputs, ctx, side):
+    # The SPY market-state engine's recorded state at the alert bar (`market_state_bridge` shadow log).
+    state = (_text(inputs.get("spy_state")) or "").upper()
+    sign = _num(inputs.get("spy_side_sign"))
+    if state in _SPY_QUIET:
+        return "spy_none"
+    if sign not in (1.0, -1.0):
+        return UNKNOWN
+    if state in _SPY_COUNTERMOVE:
+        return "spy_pullback" if sign > 0 else "spy_bounce"
+    if state in _SPY_TREND:
+        direction = _SPY_TREND[state] or int(sign)
+        return "spy_rally" if direction > 0 else "spy_selloff"
+    return UNKNOWN
+
+
+@m5_facet("m5_bounce_type")
+def _m5_bounce_type(inputs, ctx, side):
+    bounce = _text(inputs.get("bounce_type"))
+    return f"bounce_{bounce.lower().replace(' ', '_')}" if bounce else UNKNOWN
