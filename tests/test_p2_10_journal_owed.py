@@ -266,6 +266,30 @@ def test_gap_statement_apply_refuses_the_live_folder_without_the_traders_flag(tm
     assert _sha(db) == before
 
 
+def test_gap_statement_apply_says_how_many_days_the_file_took_over_from_the_api(tmp_path, capsys):
+    import journal_questrade_gaps
+    from journal_store import JournalStore
+
+    db = _gap_db(tmp_path)
+    # The API saw only the buy on the gap day, so the day's money disagrees with the file.
+    JournalStore(db).upsert_executions([{
+        "execution_uid": f"QUESTRADE:{GAP_ACCOUNT}:api-1", "broker": "QUESTRADE",
+        "account_number": GAP_ACCOUNT, "account_label": "Individual margin",
+        "account_type": "Individual margin", "symbol": "AAPL", "security_type": "STK",
+        "currency": "USD", "side": "BUY", "quantity": 10.0, "price": 100.0,
+        "timestamp": "2026-06-10T09:45:00-04:00", "trade_date": "2026-06-10",
+        "commission": 0.0, "fees": 0.0, "gross_amount": None, "net_amount": None,
+        "order_id": "", "exchange_exec_id": "", "raw_json": "{}", "source": "QT_API",
+    }])
+
+    code = journal_questrade_gaps.main(
+        ["--db", str(db), "--statement", str(_gap_statement(tmp_path)), "--apply"]
+    )
+
+    assert code == journal_questrade_gaps.EXIT_OK
+    assert "1 taken over from QT_API rows by the file" in capsys.readouterr().out
+
+
 def test_statement_import_only_days_leaves_other_days_alone(tmp_path):
     from datetime import date
 

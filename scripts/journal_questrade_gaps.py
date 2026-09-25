@@ -329,9 +329,11 @@ def _run_statement(db_path: Path, statement: Path, report: dict[str, Any], *, ap
         print(f"REFUSED - {type(exc).__name__}: {exc}. The journal was put back.", file=sys.stderr)
         print(f"  the backup is still at {backup}", file=sys.stderr)
         return EXIT_FAILED
+    taken_over = int((summary.get("authority") or {}).get("days_taken_over") or 0)
     print(
         f"\n{summary.get('days_written', 0)} gap day(s) imported "
         f"({summary.get('executions_written', 0)} fills), "
+        f"{taken_over} taken over from QT_API rows by the file (money disagreed), "
         f"{summary.get('days_skipped_richer_source', 0)} left to a richer source. Backup: {backup}"
     )
     return EXIT_OK
