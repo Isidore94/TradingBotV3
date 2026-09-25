@@ -198,26 +198,48 @@ def m5_bounce_types(rows: Iterable[Mapping[str, Any]], session: Any) -> dict[tup
     return out
 
 
-def _tail_rows_for_session(path: Path, session: str) -> list[dict]:
+class TailReadCapped(RuntimeError):
+    """The backwards read passed its byte cap before it left the session behind."""
+
+
+def _tail_rows_for_session(
+    path: Path,
+    session: str,
+    *,
+    date_columns: tuple[str, ...] = ("trade_date",),
+    max_bytes: int | None = None,
+) -> list[dict]:
     """The log's rows for ``session``, read backwards from the end (the log is append-ordered).
 
-    Stops after one whole chunk holds no row of the session or later, so a
-    582 MB log costs a few MB per scan.
+    A row's date is its first non-blank ``date_columns`` value. Stops after one
+    whole chunk holds no row of the session or later, so a 582 MB log costs a
+    few MB per scan. Rows come back in file order. ``max_bytes`` raises
+    `TailReadCapped` instead of reading further back.
     """
     with path.open("rb") as handle:
-        header = handle.readline().decode("utf-8", errors="replace")
-        fieldnames = next(csv.reader(io.StringIO(header)), [])
-        date_index = fieldnames.index("trade_date") if "trade_date" in fieldnames else -1
-        if date_index < 0:
+        header = handle.readline()
+        fieldnames = next(csv.reader(io.StringIO(header.decode("utf-8-sig", errors="replace"))), [])
+        indexes = [fieldnames.index(column) for column in date_columns if column in fieldnames]
+        if not indexes:
             return []
+
+        def row_date(values: list[str]) -> str:
+            for index in indexes:
+                text = values[index].strip() if len(values) > index else ""
+                if text:
+                    return text
+            return ""
+
         handle.seek(0, 2)
         end = handle.tell()
-        start_of_body = len(header.encode("utf-8"))
+        start_of_body = len(header)
         position = end
         carry = b""
-        lines: list[bytes] = []
+        chunks: list[list[bytes]] = []
         while position > start_of_body:
             step = min(_TAIL_CHUNK, position - start_of_body)
+            if max_bytes is not None and end - (position - step) > max_bytes:
+                raise TailReadCapped(f"{path.name}: more than {max_bytes} bytes back to {session}")
             position -= step
             handle.seek(position)
             block = handle.read(step) + carry
@@ -225,23 +247,25 @@ def _tail_rows_for_session(path: Path, session: str) -> list[dict]:
             carry = parts[0] if position > start_of_body else b""
             chunk_lines = parts[1:] if position > start_of_body else parts
             recent = False
+            kept: list[bytes] = []
             for raw in chunk_lines:
                 text = raw.decode("utf-8", errors="replace")
                 if not text.strip():
                     continue
                 reader_row = next(csv.reader(io.StringIO(text)), [])
-                trade_date = reader_row[date_index] if len(reader_row) > date_index else ""
-                if trade_date >= session:
+                if row_date(reader_row) >= session:
                     recent = True
-                lines.append(raw)
+                kept.append(raw)
+            chunks.append(kept)
             if not recent:
                 break
+    lines = [raw for kept in reversed(chunks) for raw in kept]
     body = b"\n".join(lines).decode("utf-8", errors="replace")
-    return [
-        row
-        for row in csv.DictReader(io.StringIO(body), fieldnames=fieldnames)
-        if _session_text(row.get("trade_date")) == session
-    ]
+    out = []
+    for values in csv.reader(io.StringIO(body)):
+        if _session_text(row_date(values)) == session:
+            out.append(dict(zip(fieldnames, values)))
+    return out
 
 
 def load_m5_bounce_types(session: Any, *, path: Path | None = None) -> dict[tuple[str, str], str] | None:

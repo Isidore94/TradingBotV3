@@ -94,6 +94,7 @@ from focus_picks import load_auto_pick_symbols, load_focus_map
 # gets back from it, are ONE decision - kept in a pure, import-light module so
 # the writer here and every reader of the outcome CSV cannot drift apart.
 import outcome_semantics
+import m5_setup_key_stamp
 from market_internals import format_internals_line, internals_context_fields
 from completed_bars import is_completed_bar as _is_completed_bar
 from durability_retry import fetch_with_bounded_retry
@@ -5428,6 +5429,11 @@ class BounceBot(EWrapper, EClient):
         # write above has already happened and stays the authority during the
         # canary, so nothing here can change what was recorded.
         self._mirror_outcome_row_to_ledger(row, state)
+        # P1-4 4a: queue the shadow setup-key stamp (sidecar jsonl) after the row is written.
+        try:
+            m5_setup_key_stamp.submit(row)
+        except Exception:  # noqa: BLE001 - a stamp never costs the outcome row
+            logging.debug("M5 setup key stamp hook failed", exc_info=True)
         return status
 
     def _update_pending_bounce_outcomes(self, symbol, df):

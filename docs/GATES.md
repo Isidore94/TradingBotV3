@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #252 M5 setup key (P1-4 4a): after the first M5 alert of a session, `C:\TradingBotData\data\runtime\m5_setup_key_stamps.jsonl` has one line for its event_id with `status` stamped (or `no_scan_row`), `intraday_bounce_outcomes.csv` keeps its old header, the log has no "M5 setup key stamp skipped" warning, and the desk does not stutter on that bar [lead]
 - #241 Plan rule copy (P1-7 7d): after the next Day Recap sets a rule for tomorrow, `trading_plan.md` has one `- Recap rule for <next session>: <rule>` line under What I am testing and your own lines there are unchanged [trader]
 - #240 Plan in the research pack (P1-7 7c): `research_pack.py export --out <scratch>` writes `trading_plan.md` and `plan_challenges.json`, and the manifest's `trading_plan` block says `ok` [lead]
 - #239 Plan challenges (P1-7 7b): once the plan has lines, the next night's ledger has a `plan_review` row (ok with a count, or skipped with a reason); a stored challenge shows on a Mentor card, Accept adds a dated line under Decisions and a reject is not asked again [trader + lead]
