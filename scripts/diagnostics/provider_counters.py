@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import threading
 from collections import Counter
+from swallowed import note_swallowed
 
 SCHEMA_VERSION = 2
 
@@ -121,8 +122,8 @@ def record(family: str, outcome: str, provider: str | None = None, n: int = 1) -
         try:
             with _lock:
                 _capture_errors += 1
-        except Exception:
-            pass
+        except Exception as exc:
+            note_swallowed("provider counter capture-error tally failed", exc, quiet=True)
 
 
 def note_capture_error() -> None:

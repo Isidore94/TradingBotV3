@@ -11,6 +11,7 @@ from project_paths import (
     MASTER_AVWAP_MARKET_PREP_FILE,
     MASTER_AVWAP_MARKET_PREP_REPORT_FILE,
 )
+from swallowed import note_swallowed
 
 
 MARKET_PREP_SECTION_DEFINITIONS = [
@@ -93,8 +94,8 @@ def load_market_prep_report() -> str:
             text = MASTER_AVWAP_MARKET_PREP_REPORT_FILE.read_text(encoding="utf-8", errors="ignore")
             if text.strip():
                 return text
-        except OSError:
-            pass
+        except OSError as exc:
+            note_swallowed("market prep report unreadable; using the payload", exc)
     payload = load_market_prep_payload()
     if not payload:
         return "No market prep output yet."

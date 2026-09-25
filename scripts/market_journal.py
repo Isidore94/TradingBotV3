@@ -33,6 +33,7 @@ import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
+from swallowed import note_swallowed
 
 #: Schema NAME (ground rule 5).
 SCHEMA_MARKET_JOURNAL_ENTRY = "market_journal_entry_v1"
@@ -661,8 +662,8 @@ def session_date_for(now: datetime | None = None) -> str:
         # trader's own clock. Both mean the same thing: the note is about the
         # last session that actually traded.
         return previous_session(market_date).isoformat()
-    except Exception:  # noqa: BLE001 - never the reason a thought is lost
-        pass
+    except Exception as exc:  # noqa: BLE001 - never the reason a thought is lost
+        note_swallowed("market calendar unavailable for the note's session; using the local date", exc, quiet=True)
     return local.date().isoformat()
 
 
@@ -680,8 +681,8 @@ def session_of_entry(entry: Mapping[str, Any]) -> str:
     if raw:
         try:
             return session_date_for(datetime.fromisoformat(raw))
-        except Exception:  # noqa: BLE001 - never lose an entry to a calendar
-            pass
+        except Exception as exc:  # noqa: BLE001 - never lose an entry to a calendar
+            note_swallowed("entry created_at unparseable; using its stored session date", exc, quiet=True)
     return str(entry.get("session_date") or "")
 
 

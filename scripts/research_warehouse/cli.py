@@ -87,6 +87,15 @@ OUTCOME_BUCKETS = 32
 OUTCOME_BUCKET_MIN_SYMBOLS = 64
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 class SingleFlightError(RuntimeError):
     """Another build already holds the lock."""
 
@@ -172,8 +181,8 @@ def _record_job(state: str, detail: dict | None = None) -> None:
         recorder = getattr(ledger, "record_event", None) or getattr(ledger, "append", None)
         if callable(recorder):
             recorder({"job_type": JOB_TYPE, "state": state, **(detail or {})})
-    except Exception:
-        pass  # telemetry must never break a build
+    except Exception as exc:
+        note_swallowed("warehouse job ledger record failed", exc)  # telemetry must never break a build
 
 
 @dataclass

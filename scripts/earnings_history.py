@@ -8,6 +8,7 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from swallowed import note_swallowed
 
 try:
     from project_paths import EARNINGS_CALENDAR_HISTORY_FILE
@@ -515,8 +516,8 @@ def parse_market_cap(value: Any) -> int | None:
     try:
         numeric = int(float(value))
         return numeric if numeric >= 0 else None
-    except (TypeError, ValueError):
-        pass
+    except (TypeError, ValueError) as exc:
+        note_swallowed("market cap not numeric; parsing text form", exc, quiet=True)
     text = str(value or "").strip()
     if not text or text.upper() in {"N/A", "NA", "--", "NONE"}:
         return None

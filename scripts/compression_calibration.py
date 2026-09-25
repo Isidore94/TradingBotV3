@@ -120,6 +120,7 @@ from typing import Any, Iterator, Sequence
 
 import project_paths
 from indicators.atr import wilder_atr
+from swallowed import note_swallowed
 
 #: The two codes this report pools, by name. `veto_cohort` does not pool them
 #: (they are different definitions, not a rename); see the DESK_INTERNALS entry.
@@ -376,8 +377,8 @@ class _JsonWindow:
                 try:
                     value, end = self._decoder.raw_decode(self._buffer, offset)
                     return value, self._base + end
-                except ValueError:
-                    pass
+                except ValueError as exc:
+                    note_swallowed("JSON value incomplete in buffer; reading more", exc, quiet=True)
             if not self._read_more():
                 raise ValueError(f"unterminated JSON value at offset {absolute}")
 

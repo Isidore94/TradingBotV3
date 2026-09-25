@@ -2623,7 +2623,7 @@ def _outcome_sweep_check(now: datetime, local_tz, diagnostics: Path | None = Non
         reference = now.replace(tzinfo=None) if stamp.tzinfo is None else now
         age_days = (reference - stamp).total_seconds() / 86400.0
     except ValueError:
-        pass
+        age_days = None  # unparseable sweep stamp: age unknown
 
     tail = (
         f" Last sweep {swept_at}: {finalized} finalized"
@@ -2695,7 +2695,7 @@ def _daily_bar_units_check(now: datetime, local_tz, diagnostics: Path | None = N
             stamp = stamp.replace(tzinfo=timezone.utc)
         age_hours = (now.astimezone(timezone.utc) - stamp).total_seconds() / 3600.0
     except ValueError:
-        pass
+        age_hours = None  # unparseable measure stamp: age unknown
 
     details = {
         "rows": rows,
@@ -2892,7 +2892,7 @@ def _evidence_snapshot_check(now: datetime, local_tz, staging: Path | None = Non
     try:
         age_days = (now.date() - _date.fromisoformat(stamp)).days
     except (TypeError, ValueError):
-        pass
+        age_days = None  # unparseable snapshot stamp: age unknown
     if age_days is None:
         status = STATUS_UNKNOWN
     elif age_days <= 1:

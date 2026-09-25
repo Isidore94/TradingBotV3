@@ -92,6 +92,15 @@ EXTRA_SOURCE_SHA = "bronze_source_sha256"
 EXTRA_MAX_OFFSET = "bronze_max_offset"
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 def _paths():
     try:
         from scripts import project_paths
@@ -337,8 +346,8 @@ def _watermark(store: ResearchStore, dataset: str) -> dict:
         latest = entry
         try:
             max_offset = max(max_offset, int(entry.extra.get(EXTRA_MAX_OFFSET, -1)))
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            note_swallowed("manifest max-offset unparseable; ignored", exc, quiet=True)
     return {
         "latest": latest,
         "max_offset": max_offset,

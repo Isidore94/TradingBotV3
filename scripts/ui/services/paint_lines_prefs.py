@@ -27,6 +27,7 @@ from pathlib import Path
 
 from chart_levels import GROUP_NAMES, GROUPS_HIDDEN_BY_DEFAULT
 from project_paths import LOCAL_SETTINGS_DIR
+from swallowed import note_swallowed
 
 PAINT_LINES_FILE = LOCAL_SETTINGS_DIR / "chart_paint_lines.json"
 
@@ -105,5 +106,5 @@ class PaintLinesPrefs:
                 encoding="utf-8",
             )
             os.replace(tmp, self._path)
-        except OSError:
-            pass  # a display preference never blocks a chart
+        except OSError as exc:
+            note_swallowed("paint-lines preference write failed", exc)  # a display preference never blocks a chart

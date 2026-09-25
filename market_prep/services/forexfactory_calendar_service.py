@@ -173,7 +173,7 @@ def _fetch_calendar_html_with_selenium(settings: dict[str, Any]) -> str:
             try:
                 driver.quit()
             except Exception:
-                pass
+                logging.getLogger("market_prep").debug("ForexFactory browser driver quit failed", exc_info=True)
 
 
 def _fetch_events_from_calendar_html(html: str, settings: dict[str, Any]) -> list[dict[str, Any]]:

@@ -27,6 +27,7 @@ import re
 from pathlib import Path
 
 from project_paths import LOCAL_SETTINGS_DIR
+from swallowed import note_swallowed
 
 #: Tickers, class shares (BRK.B), and the odd hyphenated listing. Deliberately
 #: strict: this string reaches provider requests and filenames.
@@ -110,5 +111,5 @@ class RecentLookups:
                 json.dumps({"symbols": self._symbols}, indent=2), encoding="utf-8"
             )
             os.replace(tmp, self._path)
-        except OSError:
-            pass  # a convenience cache never blocks a lookup
+        except OSError as exc:
+            note_swallowed("symbol lookup cache write failed", exc)  # a convenience cache never blocks a lookup

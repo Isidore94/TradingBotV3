@@ -138,8 +138,8 @@ def _enter_background_thread_mode() -> None:
         thread_priority_lowest = -2
         if not kernel32.SetThreadPriority(handle, thread_mode_background_begin):
             kernel32.SetThreadPriority(handle, thread_priority_lowest)
-    except Exception:
-        pass
+    except Exception as exc:
+        note_swallowed("background thread priority not set", exc, quiet=True)
 _MAX_REPORT_LOG_LINES = 30
 
 
@@ -1339,8 +1339,8 @@ class AutopilotService(QObject):
                 last_dt = datetime.strptime(f"{self._state.get('date')} {last_check}", "%Y-%m-%d %H:%M:%S")
                 if (now - last_dt).total_seconds() < core.AUTOPILOT_HOD_CHECK_COOLDOWN_MINUTES * 60:
                     return
-            except ValueError:
-                pass
+            except ValueError as swallowed_exc:
+                note_swallowed("HOD check stamp unparseable; checking now", swallowed_exc, quiet=True)
         bot = self._current_bot()
         if bot is None:
             return

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import json
 import sys
@@ -291,7 +292,7 @@ def _local_settings_file() -> Path:
 
         return Path(LOCAL_SETTINGS_FILE)
     except ImportError:
-        pass
+        logging.getLogger("market_prep").debug("project_paths unavailable; using the standalone settings path")
     local_appdata = os.environ.get("LOCALAPPDATA")
     if local_appdata:
         return Path(local_appdata) / "TradingBotV3" / "local_settings.json"

@@ -50,6 +50,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any
+from swallowed import note_swallowed
 
 BASE_CURRENCY = "CAD"
 
@@ -234,8 +235,8 @@ def build_tax_report(
             position.commission += float(row.get("commission") or 0.0) + float(
                 row.get("fees") or 0.0
             )
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            note_swallowed("journal row commission or fees unparseable; not added", exc)
 
         if position.cad_total is None:
             continue

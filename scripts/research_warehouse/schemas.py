@@ -94,6 +94,15 @@ DERIVED_TIMEFRAMES = ("M15", "M30", "H1", "H2", "H4", "W1")
 SYMBOL_HASH_BUCKETS = 8
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 def _pit_source_columns() -> list[pa.Field]:
     """Observation columns for records that come straight from a provider."""
     return [
@@ -745,8 +754,8 @@ def bronze_dataset_spec(name: str) -> DatasetSpec:
 def dataset_spec(name: str) -> DatasetSpec:
     try:
         return DATASETS[name]
-    except KeyError:
-        pass
+    except KeyError as exc:
+        note_swallowed("dataset not in the static registry; checking bronze prefix", exc, quiet=True)
     if str(name).startswith(BRONZE_PREFIX):
         return bronze_dataset_spec(name)
     raise KeyError(

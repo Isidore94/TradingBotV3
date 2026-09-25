@@ -85,6 +85,15 @@ SEED_LEDGER_NAME = "yahoo_m5_seed_ledger.jsonl"
 YAHOO_M5_WINDOW_DAYS = 60
 
 
+def note_swallowed(reason, exc=None, **kwargs):
+    """Log a swallowed failure via ``swallowed`` (imported lazily: scripts/ may not be on sys.path)."""
+    try:
+        from swallowed import note_swallowed as _note
+    except ImportError:
+        return
+    _note(reason, exc, **kwargs)
+
+
 @dataclass
 class BackfillReport:
     job: str = ""
@@ -246,8 +255,8 @@ def _session_date_of(session_id, stamp: datetime) -> date:
     if len(text) >= 10:
         try:
             return date.fromisoformat(text[-10:])
-        except ValueError:
-            pass
+        except ValueError as exc:
+            note_swallowed("session id carries no date; deriving it another way", exc, quiet=True)
     try:
         from .bar_archive import session_context
     except ImportError:  # pragma: no cover - scripts/ on sys.path

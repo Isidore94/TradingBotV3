@@ -239,8 +239,8 @@ def read_plan(
             with target.open("x", encoding="utf-8", newline="") as handle:
                 handle.write(TEMPLATE)
             created = True
-        except FileExistsError:
-            pass
+        except FileExistsError as swallowed_exc:
+            note_swallowed("trading plan template already created by another writer", swallowed_exc, quiet=True)
         except OSError as exc:
             result["error"] = f"the plan template could not be written: {exc}"
             return result

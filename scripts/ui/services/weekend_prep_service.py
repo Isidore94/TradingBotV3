@@ -36,6 +36,7 @@ from diagnostics.artifact_io import atomic_write_json
 import market_calendar
 import weekend_strength
 from project_paths import WEEKEND_PREP_STATE_FILE
+from swallowed import note_swallowed
 
 #: V2 item 2e appended `tag_week`. APPENDED, and the position is argued: the
 #: nightly tagger (V2 item 1) leaves provisional tags and needs_review markers
@@ -762,8 +763,8 @@ def read_week_review(
                     {},
                 )
                 read_horizons = dict(read_line.get("horizons") or {})
-            except Exception:  # one old/unreadable card remains explicitly unseparated
-                pass
+            except Exception as swallowed_exc:  # one old/unreadable card remains explicitly unseparated
+                note_swallowed("old week card unreadable; read horizons left unseparated", swallowed_exc, quiet=True)
         cards.append(
             {
                 "session": session,

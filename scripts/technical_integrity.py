@@ -221,8 +221,8 @@ def _parse_datetime(value: Any) -> datetime | None:
         return None
     try:
         return datetime.fromisoformat(text)
-    except ValueError:
-        pass
+    except ValueError as exc:
+        note_swallowed("datetime not ISO; trying other formats", exc, quiet=True)
     for pattern in ("%Y%m%d  %H:%M:%S", "%Y%m%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
         try:
             return datetime.strptime(text, pattern)

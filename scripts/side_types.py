@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from enum import Enum
+from swallowed import note_swallowed
 
 _LONG_ALIASES = {"LONG", "L", "BUY", "BULL", "BULLISH"}
 _SHORT_ALIASES = {"SHORT", "S", "SELL", "BEAR", "BEARISH"}
@@ -60,8 +61,8 @@ def coerce_side_legacy(value, *, default: Side = Side.LONG, context: str = "") -
                 context_text = str(context or "").strip()
                 if context_text and context_text not in item["contexts"]:
                     item["contexts"].append(context_text)
-    except Exception:
-        pass
+    except Exception as exc:
+        note_swallowed("side coercion evidence tally failed", exc, quiet=True)
     if text and text not in _warned_values:
         _warned_values.add(text)
         logging.warning(

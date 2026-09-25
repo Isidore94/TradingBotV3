@@ -44,6 +44,7 @@ from typing import Any, Callable, Iterable
 SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+from swallowed import note_swallowed
 
 LIVE_ROOTS = (Path(r"C:\TradingBotData"), Path(r"\\MINI-PC\Trading Bot Data"))
 CAP = 20
@@ -203,8 +204,8 @@ def price_for(row: dict[str, Any], completed: list[dict[str, Any]]) -> tuple[flo
         entry = float(row.get("entry_price"))
         if entry > 0:
             return entry, "entry_price"
-    except (TypeError, ValueError):
-        pass
+    except (TypeError, ValueError) as exc:
+        note_swallowed("row entry price unparseable; trying the completed price", exc, quiet=True)
     if completed:
         return float(completed[-1]["close"]), "prior_close"
     return None, "none"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import replace
 from datetime import date, datetime
@@ -1251,7 +1252,7 @@ def _headline_date(row: dict[str, Any]) -> date | None:
     try:
         return datetime.fromisoformat(normalized[:10] if len(normalized) >= 10 else normalized).date()
     except ValueError:
-        pass
+        logging.getLogger("market_prep").debug("headline date not ISO; trying other formats")
     try:
         return parsedate_to_datetime(text).date()
     except (TypeError, ValueError, IndexError, AttributeError):

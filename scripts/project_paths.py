@@ -14,6 +14,7 @@ import time
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
+from swallowed import note_swallowed
 
 
 class SafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
@@ -971,8 +972,8 @@ def _append_legacy_text_file(source_path: Path, destination_path: Path) -> None:
     try:
         if source_path.resolve() == destination_path.resolve():
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        note_swallowed("legacy text file paths could not be resolved for comparison", exc, quiet=True)
 
     try:
         content = source_path.read_text(encoding="utf-8", errors="ignore")

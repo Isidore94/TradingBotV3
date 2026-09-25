@@ -20,6 +20,7 @@ the first import is serialized and the rest are cache hits.
 """
 
 import threading
+from swallowed import note_swallowed
 
 _LOCK = threading.RLock()
 
@@ -51,7 +52,7 @@ def warm() -> None:
             import chart_snapshot  # noqa: F401
             import setup_playbook_study  # noqa: F401
             from master_avwap_lib import legacy  # noqa: F401
-        except Exception:
+        except Exception as exc:
             # A failed warm is not fatal here - the real call site will raise
             # (and log) with the context that actually matters.
-            pass
+            note_swallowed("background warm import failed; the call site will report it", exc, quiet=True)

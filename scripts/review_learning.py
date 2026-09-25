@@ -1056,8 +1056,8 @@ def refresh_review_learning_if_stale(
             fresh = (datetime.now().timestamp() - state_mtime) < max_age_hours * 3600
             if fresh and events_mtime <= state_mtime:
                 return False
-    except OSError:
-        pass
+    except OSError as swallowed_exc:
+        note_swallowed("review learning state stamp unreadable; rebuilding", swallowed_exc, quiet=True)
     state = build_review_learning_state(
         events_path=events_path, outcomes_path=outcomes_path
     )
