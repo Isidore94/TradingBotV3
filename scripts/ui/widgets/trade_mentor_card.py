@@ -2374,8 +2374,10 @@ class TradeMentorCard(QWidget):
         return f"fills current to {current}" if current else "no verified import yet"
 
     def _add_setup_confirm(self, question, parent=None, layout=None) -> None:
-        """One click for the setup, when the machine has something to suggest.
+        """The setup list for every trade whose setup is still missing.
 
+        With a machine guess the list opens on it; with none it opens on a
+        blank pick and the button stays off until a real name is chosen.
         The button is a SUGGESTION until it is pressed. Showing it writes
         nothing - the row stays exactly as the bulk tagger left it - and
         pressing it is the trader's write through the Journal's own writer. A
@@ -2387,7 +2389,7 @@ class TradeMentorCard(QWidget):
         import trade_mentor_trade_check as check
 
         guess = str(getattr(question, "setup_guess", "") or "")
-        if not guess or "setup" not in tuple(question.missing or ()):
+        if "setup" not in tuple(question.missing or ()):
             return
         lane = str(getattr(question, "setup_guess_lane", "") or "")
         parent = parent if parent is not None else self.trade_check_box
@@ -2401,7 +2403,9 @@ class TradeMentorCard(QWidget):
         # CORRECTED here rather than confirmed, and the list carries no
         # rejection, so nothing outside it can be written from this card.
         choice = QComboBox(row)
-        names = [guess]
+        if not guess:
+            choice.addItem("- pick a setup -", "")
+        names = [guess] if guess else []
         for name in check.setup_vocabulary():
             if name not in names:
                 names.append(name)
@@ -2409,9 +2413,13 @@ class TradeMentorCard(QWidget):
             choice.addItem(name, name)
         choice.setCurrentIndex(0)
         button = QPushButton("Confirm setup", row)
+        button.setEnabled(bool(choice.currentData()))
+        choice.currentIndexChanged.connect(
+            lambda _index, box=choice, btn=button: btn.setEnabled(bool(box.currentData()))
+        )
         evidence = str(getattr(question, "setup_guess_evidence", "") or "")
         button.setToolTip(
-            "The machine's best guess"
+            ("The machine's best guess" if guess else "No machine guess - pick one")
             + (f", from {lane.replace('_', ' ')}" if lane else "")
             + (f": {evidence}" if evidence else "")
             + ". Nothing is written until you press this, and what is written "
