@@ -608,10 +608,27 @@ def _previous_story(session: str, root: Path) -> dict[str, Any]:
     }
 
 
-#: Ceiling on the day evidence the model reads, in characters of JSON. The
-#: medium model evaluates ~118 prompt tokens/s at ~2.1 chars/token, so this
-#: keeps prompt evaluation near three minutes inside the call's timeout.
-MAX_DAY_EVIDENCE_CHARS = 60_000
+#: Ceiling on the day evidence the model reads, in characters of JSON. At
+#: ~2.1 chars/token and ~118 prompt tokens/s this is ~14k tokens, ~2 minutes of
+#: prompt evaluation; a ~4 KB reply at ~8 tok/s is ~3.5 more, so the call ends
+#: near 6 minutes, well inside `TIMEOUT_SECONDS`.
+MAX_DAY_EVIDENCE_CHARS = 30_000
+
+#: Measured dense-JSON chars per token on the medium model; used to estimate.
+CHARS_PER_TOKEN = 2.1
+
+#: Pack parts dropped, in this order, until the evidence fits. The live stories
+#: of 2026-09-23/24 cited none of the first four; trades go last because they
+#: carry the trader's words. Every dropped id stays in `allowed_source_ids`,
+#: and reads, trader_said, measured, internals, environment and mood never drop.
+DAY_TRIM_ORDER: tuple[str, ...] = (
+    "report_card",
+    "congruence",
+    "skill",
+    "walkaway",
+    "forecast_text",
+    "trades",
+)
 
 #: Longest pasted forecast text the model reads; its parsed fields stay whole.
 MAX_FORECAST_TEXT_CHARS = 6_000
@@ -760,14 +777,67 @@ def _day_evidence(pack: Mapping[str, Any], root: Path) -> dict[str, Any]:
         # story is context for continuity, never a fact this night may cite.
         "previous_day": _previous_view(_previous_story(session, root)),
     }
-    size = len(json.dumps(evidence, sort_keys=True, default=str))
+    trimmed: list[str] = []
+    size = _evidence_chars(evidence)
+    for part in DAY_TRIM_ORDER:
+        if size <= MAX_DAY_EVIDENCE_CHARS:
+            break
+        if _trim_part(evidence["pack"], part):
+            trimmed.append(part)
+            evidence["pack_trimmed"] = list(trimmed)
+            size = _evidence_chars(evidence)
     if size > MAX_DAY_EVIDENCE_CHARS:
         # Refused before the model loads: a prompt this size times out instead.
+        dropped = f" after dropping {', '.join(trimmed)}" if trimmed else ""
         raise NarrationRejected(
-            f"the day evidence is {size} characters; the medium model reads at most "
-            f"{MAX_DAY_EVIDENCE_CHARS} inside the {TIMEOUT_SECONDS}s call"
+            f"the day evidence is {size} characters{dropped}; the medium model reads "
+            f"at most {MAX_DAY_EVIDENCE_CHARS} inside the {TIMEOUT_SECONDS}s call"
         )
     return evidence
+
+
+def _evidence_chars(evidence: Mapping[str, Any]) -> int:
+    return len(json.dumps(evidence, sort_keys=True, default=str))
+
+
+def _trim_part(view: dict[str, Any], part: str) -> bool:
+    """Drop one `DAY_TRIM_ORDER` part from the model view; False if nothing to drop."""
+    if part == "forecast_text":
+        forecast = view.get("forecast")
+        if not isinstance(forecast, Mapping) or not forecast.get("text"):
+            return False
+        kept = {k: v for k, v in forecast.items() if k not in ("text", "text_truncated")}
+        view["forecast"] = {**kept, "text_dropped": "the pasted text was dropped to fit the call"}
+        return True
+    if not view.get(part):
+        return False
+    view[part] = {"dropped": "this section was dropped to fit the call; its ids stay citable"}
+    return True
+
+
+def sent_size(evidence: Mapping[str, Any], schema: Mapping[str, Any]) -> dict[str, int]:
+    """Bytes of the prompt the local provider sends, and its estimated tokens."""
+    import ai_summary
+
+    try:
+        text = ai_summary._system_instruction() + ai_summary._local_schema_prompt(
+            evidence, schema, ""
+        )
+    except Exception:  # noqa: BLE001 - a size note never costs the story
+        text = json.dumps(evidence, sort_keys=True, default=str)
+    size = len(text.encode("utf-8"))
+    return {"bytes": size, "tokens_est": int(round(size / CHARS_PER_TOKEN))}
+
+
+def _size_note(size: Mapping[str, int] | None, evidence: Mapping[str, Any] | None) -> str:
+    """` (sent N bytes (~T tokens est.), dropped a, b to fit)` for a ledger reason."""
+    if not size:
+        return ""
+    note = f"sent {size['bytes']:,} bytes (~{size['tokens_est']:,} tokens est.)"
+    trimmed = (evidence or {}).get("pack_trimmed") or ()
+    if trimmed:
+        note += f", dropped {', '.join(trimmed)} to fit"
+    return f" ({note})"
 
 
 def _d1_window(session: str) -> list[str]:
@@ -1114,13 +1184,17 @@ def _run_day_story(
             "reason": refusal,
             "outputs": [],
         }
+    size: dict[str, int] | None = None
+    evidence: dict[str, Any] | None = None
     try:
         # A malformed/ambiguous pack is evidence failure too.  Keep the last
         # story and report it through the same no-raise nightly seam.
         schema = _narration_schema_for(pack)
+        evidence = _day_evidence(pack, root)
+        size = sent_size(evidence, schema)
         result = _call(
             caller,
-            evidence=_day_evidence(pack, root),
+            evidence=evidence,
             schema=schema,
             prompt_version=PROMPT_VERSION,
             schema_name="tradingbot_day_review_narration",
@@ -1168,13 +1242,14 @@ def _run_day_story(
         return {
             "status": "degraded_no_narrative",
             "model": "",
-            "reason": f"the day story was rejected; the prior story was kept: {exc}",
+            "reason": "the day story was rejected; the prior story was kept: "
+            f"{exc}{_size_note(size, evidence)}",
             "outputs": [],
         }
     return {
         "status": "ok",
         "model": str(result.get("model") or ""),
-        "reason": f"grounded day story written for {session}",
+        "reason": f"grounded day story written for {session}{_size_note(size, evidence)}",
         "outputs": [str(destination)],
     }
 
