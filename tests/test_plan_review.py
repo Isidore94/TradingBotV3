@@ -265,6 +265,89 @@ def test_an_untouched_challenge_expires_after_seven_days(world):
         plan_challenges.answer_challenge(challenge, "accept", now=NIGHT + timedelta(days=8))
 
 
+def test_accept_twice_after_a_lost_answer_row_writes_one_decision(world, monkeypatch):
+    import plan_challenges
+    import trading_plan
+
+    challenge = _one_challenge(world)
+    real_append = plan_challenges._append
+    calls = {"n": 0}
+
+    def flaky(rows, path):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("disk full")
+        return real_append(rows, path)
+
+    monkeypatch.setattr(plan_challenges, "_append", flaky)
+    later = NIGHT + timedelta(hours=12)
+    with pytest.raises(plan_challenges.PlanChallengeError):
+        plan_challenges.answer_challenge(challenge, "accept", now=later)
+    plan_challenges.answer_challenge(challenge, "accept", now=later + timedelta(minutes=1))
+
+    parsed = trading_plan.parse_plan((world / "trading_plan.md").read_text(encoding="utf-8"))
+    assert len(parsed["decisions"]) == 1
+    assert f"[{challenge}]" in parsed["decisions"][0]["text"]
+    assert plan_challenges.challenge_status(challenge, now=later) == "accepted"
+
+
+def test_a_generic_answer_state_is_skipped_never_a_reject(world):
+    import plan_challenges
+    import trade_mentor_trade_check as check
+
+    challenge = _one_challenge(world)
+    plan_before = (world / "trading_plan.md").read_text(encoding="utf-8")
+    moment = NIGHT + timedelta(hours=1)
+    row = plan_challenges.answer_challenge(challenge, check.ANSWER_STATES[0], now=moment)
+
+    assert row["decision"] == "skipped"
+    assert plan_challenges.challenge_status(challenge, now=moment) == "skipped"
+    assert plan_challenges.open_challenges(moment) == []
+    assert (world / "trading_plan.md").read_text(encoding="utf-8") == plan_before
+
+
+def test_the_card_files_a_plan_answer_off_the_qt_thread(world, tmp_path):
+    import threading
+
+    import mentor_questions
+    import plan_challenges
+    from PySide6.QtCore import QThreadPool
+    from PySide6.QtWidgets import QApplication
+    from ui.widgets.trade_mentor_card import TradeMentorCard
+
+    app = QApplication.instance() or QApplication([])
+    challenge = _one_challenge(world)
+    moment = NIGHT + timedelta(hours=14)
+    result = mentor_questions.pending(
+        {"session": "2026-09-25", "plan_challenges": plan_challenges.open_challenges(moment)}, slot=None
+    )
+    gui = threading.get_ident()
+    seen: list = []
+    real = plan_challenges.answer_challenge
+
+    def spy(*args, **kwargs):
+        seen.append(threading.get_ident())
+        return real(*args, **kwargs)
+
+    plan_challenges.answer_challenge = spy
+    try:
+        card = TradeMentorCard(drafts_path=tmp_path / "drafts.json")
+        card._clock = lambda: moment
+        card.set_questions(result, store=None, service=None)
+        combo = card.question_box("plan_challenge", challenge)
+        combo.setCurrentIndex(combo.findData("reject_disagree"))
+        outcome = card.save_questions()
+        QThreadPool.globalInstance().waitForDone(5000)
+        for _ in range(20):
+            app.processEvents()
+    finally:
+        plan_challenges.answer_challenge = real
+
+    assert outcome["queued"] == 1
+    assert seen and seen[0] != gui
+    assert plan_challenges.challenge_status(challenge, now=moment) == "rejected"
+
+
 # ---------------------------------------------------------------------------
 # the Mentor item
 # ---------------------------------------------------------------------------

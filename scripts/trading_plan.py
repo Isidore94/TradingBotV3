@@ -17,6 +17,7 @@ import hashlib
 import logging
 import os
 import re
+import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -62,6 +63,10 @@ TEMPLATE = (
 _HEADING = re.compile(r"^\s{0,3}#{2,3}\s+(?P<name>.+?)\s*#*\s*$")
 _DATED = re.compile(r"^(?P<day>\d{4}-\d{2}-\d{2})\s*[:\-]\s*(?P<text>.+)$")
 _BULLET = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
+#: The exact line the recap rule loop writes; nothing else under the heading is touched.
+_RECAP_LINE = re.compile(r"^- Recap rule for \d{4}-\d{2}-\d{2}: \S")
+#: How long a desk plan write waits for another desk plan write.
+LOCK_TIMEOUT_SECONDS = 5.0
 
 
 def slug(heading: str) -> str:
@@ -300,7 +305,7 @@ def _insert_at_end(lines: list[str], heading: str, new_line: str) -> list[str]:
 
 
 def _write_plan(target: Path, text: str) -> None:
-    temporary = target.with_name(target.name + ".tmp")
+    temporary = target.with_name(f"{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         with temporary.open("w", encoding="utf-8", newline="") as handle:
@@ -317,7 +322,18 @@ def _write_plan(target: Path, text: str) -> None:
 
 
 def _edit(mutate, *, now: datetime | None, path: Path | None) -> dict[str, Any]:
+    """Read-modify-write under ONE machine-wide lock for the plan file."""
+    from local_writer_lock import LocalLockUnavailable, local_writer_lock, lock_key_for_path
+
     target = Path(path) if path is not None else plan_path()
+    try:
+        with local_writer_lock(lock_key_for_path(target), timeout_seconds=LOCK_TIMEOUT_SECONDS):
+            return _edit_locked(mutate, target, now=now, path=path)
+    except LocalLockUnavailable as exc:
+        raise PlanWriteError(f"the trading plan is busy; nothing was written: {exc}") from exc
+
+
+def _edit_locked(mutate, target: Path, *, now: datetime | None, path: Path | None) -> dict[str, Any]:
     current = read_plan(create=True, snapshot=True, now=now, path=path)
     if current["error"]:
         raise PlanWriteError(current["error"])
@@ -345,14 +361,28 @@ def _day(now: datetime | None, day: Any = None) -> str:
 
 
 def append_decision(
-    text: Any, *, now: datetime | None = None, day: Any = None, path: Path | None = None
+    text: Any, *, now: datetime | None = None, day: Any = None, path: Path | None = None,
+    unless_contains: str = "",
 ) -> dict[str, Any]:
-    """Add ``- YYYY-MM-DD: text`` as the last line under Decisions. Raises PlanWriteError."""
+    """Add ``- YYYY-MM-DD: text`` as the last line under Decisions. Raises PlanWriteError.
+
+    With `unless_contains`, nothing is written when a Decisions line already
+    holds that text (checked under the lock, so a repeat never doubles a line).
+    """
     words = " ".join(str(text or "").split())
     if not words:
         raise PlanWriteError("a decision needs text")
     line = f"- {_day(now, day)}: {words}"
-    return _edit(lambda lines: _insert_at_end(lines, DECISIONS, line), now=now, path=path)
+    marker = str(unless_contains or "").strip()
+
+    def mutate(lines: list[str]) -> list[str] | None:
+        if marker:
+            bounds = _section_bounds(lines, DECISIONS)
+            if bounds is not None and any(marker in lines[i] for i in range(bounds[0] + 1, bounds[1])):
+                return None
+        return _insert_at_end(lines, DECISIONS, line)
+
+    return _edit(mutate, now=now, path=path)
 
 
 def set_testing_rule(
@@ -374,7 +404,7 @@ def set_testing_rule(
         if bounds is not None:
             start, end = bounds
             for index in range(start + 1, end):
-                if _BULLET.sub("", lines[index].strip()).startswith(RECAP_RULE_PREFIX):
+                if _RECAP_LINE.match(lines[index].strip()):
                     if lines[index] == line:
                         return None
                     out = list(lines)

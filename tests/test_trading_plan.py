@@ -152,6 +152,47 @@ def test_the_recap_rule_line_is_replaced_and_the_traders_lines_kept(plan_dir):
     assert any("Recap rule for 2026-09-24: hold winners" in text for text in history)
 
 
+def test_a_line_the_trader_typed_is_never_taken_for_the_recap_line(plan_dir):
+    Path(project_paths.TRADING_PLAN_FILE).write_text(
+        "## What I am testing\n\n- Recap rules I like: mine\n- Recap rule for later, maybe\n\n## Decisions\n",
+        encoding="utf-8",
+    )
+    trading_plan.set_testing_rule("hold winners", for_day="2026-09-24", now=NOW)
+
+    lines = trading_plan.parse_plan(Path(project_paths.TRADING_PLAN_FILE).read_text(encoding="utf-8"))[
+        "sections"]["What I am testing"]
+    assert lines == [
+        "Recap rules I like: mine",
+        "Recap rule for later, maybe",
+        "Recap rule for 2026-09-24: hold winners",
+    ]
+
+
+def test_two_desk_writes_at_once_both_land(plan_dir):
+    import threading
+
+    trading_plan.read_plan(now=NOW)
+    errors: list = []
+
+    def write(tag):
+        for index in range(6):
+            try:
+                trading_plan.append_decision(f"{tag}-{index}", now=NOW, day="2026-09-24")
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+    threads = [threading.Thread(target=write, args=(f"t{n}",)) for n in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    decisions = trading_plan.parse_plan(Path(project_paths.TRADING_PLAN_FILE).read_text(encoding="utf-8"))[
+        "decisions"]
+    assert sorted(row["text"] for row in decisions) == sorted(f"t{n}-{i}" for n in range(6) for i in range(6))
+
+
 def test_a_failed_plan_write_raises(plan_dir, monkeypatch):
     trading_plan.read_plan(now=NOW)
 

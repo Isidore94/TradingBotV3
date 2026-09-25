@@ -1270,6 +1270,7 @@ class TradeMentorCard(QWidget):
         moment = self._now()
         saved = 0
         retired = 0
+        queued = 0
         failures: list[str] = []
         mood = self.mood_answer()
         touched_the_strip = mood["mood"] is not None or bool(mood["state_tags"])
@@ -1299,6 +1300,11 @@ class TradeMentorCard(QWidget):
             if carries_a_mood:
                 answer["mood"] = mood["mood"]
                 answer["state_tags"] = tuple(mood["state_tags"])
+            if kind == mentor_questions.PLAN_CHALLENGE_KIND:
+                # P1-7: an Accept writes the trading plan, so it runs on a worker.
+                self._start_plan_write(subject, answer, moment)
+                queued += 1
+                continue
             try:
                 outcome = mentor_questions.record_answer(
                     subject,
@@ -1313,20 +1319,46 @@ class TradeMentorCard(QWidget):
                 saved += 1
             else:
                 failures.append(f"{kind}: {outcome.get('reason') or 'not stored'}")
-        if not saved and not retired and not failures:
+        if not saved and not retired and not queued and not failures:
             self._set_status("Nothing was answered, so nothing was filed.")
             return {"ok": False, "reason": "no question was answered"}
         parts = []
         if saved:
             parts.append(f"{saved} answer(s) filed")
+        if queued:
+            parts.append(f"{queued} plan answer(s) being filed")
         if retired:
             parts.append(f"{retired} question(s) retired")
         if failures:
             parts.append(f"{len(failures)} NOT stored ({failures[0]})")
         self._set_status("; ".join(parts) + ".")
-        if saved or retired:
+        if saved or retired or queued:
             self._clear_questions()
-        return {"ok": not failures, "saved": saved, "retired": retired, "failures": failures}
+        return {
+            "ok": not failures, "saved": saved, "retired": retired, "queued": queued, "failures": failures,
+        }
+
+    def _start_plan_write(self, subject, answer: Mapping[str, Any], moment: datetime) -> None:
+        """File one plan-challenge answer off the Qt thread; every ending sets the status."""
+        import mentor_questions
+
+        worker = _ExitWriteWorker(
+            str(subject.subject_id),
+            lambda: mentor_questions.record_answer(subject, dict(answer), now=moment),
+        )
+        worker.signals.done.connect(self._plan_write_done)
+        worker.signals.failed.connect(self._plan_write_failed)
+        QThreadPool.globalInstance().start(worker)
+
+    def _plan_write_done(self, challenge_id: str, result: object) -> None:
+        outcome = result if isinstance(result, Mapping) else {}
+        if outcome.get("ok"):
+            self._set_status("Plan answer filed.")
+        else:
+            self._set_status(f"Plan answer NOT stored ({outcome.get('reason') or 'nothing written'}).")
+
+    def _plan_write_failed(self, challenge_id: str, reason: str) -> None:
+        self._set_status(f"Plan answer NOT stored ({reason}).")
 
     def _clear_trade_check(self) -> None:
         """Drop the trade section. A WAITING-READING row is not part of it.

@@ -40,6 +40,9 @@ STATUS_OPEN = "open"
 STATUS_ACCEPTED = "accepted"
 STATUS_REJECTED = "rejected"
 STATUS_EXPIRED = "expired"
+#: A generic answer state (not remembered, not applicable ...): the question is
+#: not asked again, but it is neither an accept nor a reject.
+STATUS_SKIPPED = "skipped"
 
 #: The Mentor clicks. Any other answer state files a reject with that state as the reason.
 ACCEPT = "accept"
@@ -161,9 +164,9 @@ def read_answers(path: Path | None = None) -> dict[str, dict[str, Any]]:
 
 
 def status_of(challenge: Mapping[str, Any], answer: Mapping[str, Any] | None, now: datetime) -> str:
-    """open, accepted, rejected or expired. An unreadable creation time never expires."""
+    """open, accepted, rejected, skipped or expired. An unreadable creation time never expires."""
     decision = _text((answer or {}).get("decision"))
-    if decision in (STATUS_ACCEPTED, STATUS_REJECTED):
+    if decision in (STATUS_ACCEPTED, STATUS_REJECTED, STATUS_SKIPPED):
         return decision
     created = _aware(challenge.get("created_at"))
     if created is not None and _now(now) - created >= timedelta(days=EXPIRY_DAYS):
@@ -242,7 +245,12 @@ def answer_challenge(
     challenges_file: Path | None = None,
     answers_file: Path | None = None,
 ) -> dict[str, Any]:
-    """File the trader's answer. Accept writes the plan; anything else is a reject with its reason.
+    """File the trader's answer.
+
+    Accept writes a Decisions line tagged ``[<challenge id>]`` (never twice:
+    the plan is checked for the tag under the plan lock) and only then the
+    answer row. A reject option is a reject with that reason; any other state
+    (the generic answer states) is filed as ``skipped``, never as a reject.
 
     Raises :class:`PlanChallengeError` when nothing could be filed. The desk's
     Mentor card is the only caller.
@@ -262,15 +270,21 @@ def answer_challenge(
     status = status_of(challenge, replies.get(wanted), moment)
     if status != STATUS_OPEN:
         raise PlanChallengeError(f"challenge {wanted} is already {status}")
-    decision = STATUS_ACCEPTED if chosen == ACCEPT else STATUS_REJECTED
+    if chosen == ACCEPT:
+        decision = STATUS_ACCEPTED
+    elif chosen in REJECT_OPTIONS:
+        decision = STATUS_REJECTED
+    else:
+        decision = STATUS_SKIPPED
     plan_line = ""
     if decision == STATUS_ACCEPTED:
+        tag = f"[{wanted}]"
         plan_line = (
             f"Accepted the night AI's challenge to \"{_text(challenge.get('plan_line_text'))}\": "
-            f"{_text(challenge.get('text'))} ({_text(challenge.get('evidence'))})"
+            f"{_text(challenge.get('text'))} ({_text(challenge.get('evidence'))}) {tag}"
         )
         try:
-            trading_plan.append_decision(plan_line, now=moment, path=plan_path)
+            trading_plan.append_decision(plan_line, now=moment, path=plan_path, unless_contains=tag)
         except trading_plan.PlanWriteError as exc:
             raise PlanChallengeError(str(exc)) from exc
     row = {
@@ -340,6 +354,7 @@ __all__ = [
     "STATUS_EXPIRED",
     "STATUS_OPEN",
     "STATUS_REJECTED",
+    "STATUS_SKIPPED",
     "answer_challenge",
     "challenge_status",
     "closed_keys",
