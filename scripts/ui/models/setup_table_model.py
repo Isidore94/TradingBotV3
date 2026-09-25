@@ -69,6 +69,8 @@ class SetupTableModel(QAbstractTableModel):
         # row's own fields and the injected family record - this model still
         # never reads a file.
         ("points", "Points"),
+        # P1-5 5a: the scan's short setup-key label (P1-4), blank when unstamped.
+        ("setup_key", "Setup key"),
     )
 
     def __init__(self, rows: list[SetupRow] | None = None, parent=None) -> None:
@@ -150,6 +152,12 @@ class SetupTableModel(QAbstractTableModel):
         self.beginResetModel()
         self._rows = list(rows)
         self.endResetModel()
+
+    def has_setup_keys(self) -> bool:
+        """True when any row carries a stamped setup-key label (P1-5 5a)."""
+        from setup_key_labels import row_label
+
+        return any(row_label(row) for row in self._rows)
 
     def set_family_records(self, records) -> None:
         """The per-family swing record, built OFF this thread by the panel."""
@@ -251,6 +259,10 @@ class SetupTableModel(QAbstractTableModel):
             return format_win_rate(record) if record else "-"
         if key == "points":
             return self.points_for(row).text()
+        if key == "setup_key":
+            from setup_key_labels import row_label
+
+            return row_label(row)
         return ""
 
     def _sort_value(self, row: SetupRow, key: str) -> Any:
@@ -509,8 +521,15 @@ def _tooltip(row: SetupRow, key: str) -> str:
         source = row.industry_classification_source.replace("_", " ")
         detail = f" Classification: {source}." if source else ""
         return "Weighted D1 excess return versus the displayed industry board composite." + detail
-    if key == "setup_tags":
-        return row.tags_text
+    if key in {"setup_tags", "setup_key"}:
+        # P1-5 5a: the compact profile hides the key column, so the tags tooltip carries it.
+        from setup_key_labels import row_label
+
+        label = row_label(row)
+        text = row.tags_text if key == "setup_tags" else ""
+        if label:
+            text = f"{text}\nSetup key: {label}" if text else f"Setup key: {label}"
+        return text
     if key == "bucket":
         return row.bucket_display
     return ""

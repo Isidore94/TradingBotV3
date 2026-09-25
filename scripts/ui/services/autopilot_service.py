@@ -1940,6 +1940,13 @@ class AutopilotService(QObject):
             swing_data_date = str(swing_feed.get("data_date") or "")
             current_session_data = swing_data_date == datetime.now().date().isoformat()
             swing_rows = list(swing_feed.get("rows") or []) if current_session_data else []
+            # P1-5 5a: the setup key's short label, when the scan stamped one (worker thread).
+            try:
+                import setup_key_labels
+
+                setup_key_labels.attach_labels(swing_rows, allow_read=True)
+            except Exception:
+                logging.warning("Setup key labels skipped for this digest.", exc_info=True)
             # WS-PT4: ONE projection, in `autopilot_core`, so the digest's pick
             # rows carry the point system's inputs (the scan row plus the two
             # group-context readings) as well as the six display fields. The
@@ -1957,7 +1964,7 @@ class AutopilotService(QObject):
                 }
                 for row in swing_rows
             ]
-            # The top-ten cap is applied by `hide_sector_names` below, AFTER the
+            # The top-ten cap is applied by `core.rank_digest_picks` below, AFTER the
             # Oil & Gas / Real Estate view filter, so a hidden name costs no slot.
             picks = [pick for pick in picks if pick["symbol"]]
             # ONE read of the tier outcomes for both the ranking and the line
@@ -2057,11 +2064,21 @@ class AutopilotService(QObject):
             except Exception:
                 logging.exception("Night AI line unreadable; the report goes out without it.")
             try:
-                payload = core.hide_sector_names(payload, pick_limit=10)
+                payload = core.hide_sector_names(payload)
             except Exception:
                 # The view filter never costs the report; fall back to the cap alone.
                 logging.exception("Away report sector filter failed; publishing unfiltered.")
-                payload["swing_picks"] = list(payload.get("swing_picks") or [])[:10]
+            # P1-5 5a: the top ten are chosen by rank with a family+side cap,
+            # AFTER the sector filter so a hidden name never costs a slot.
+            try:
+                payload["swing_picks"], _order = core.rank_digest_picks(
+                    payload.get("swing_picks") or [], swing_family_records
+                )
+            except Exception:
+                logging.exception("Digest top-ten ranking failed; publishing the first ten.")
+                payload["swing_picks"] = list(payload.get("swing_picks") or [])[
+                    : core.DIGEST_TOP_PICKS
+                ]
             publish = core.publish_away_report(payload)
             self._last_report_attempt = datetime.now()
             if publish.get("ok"):

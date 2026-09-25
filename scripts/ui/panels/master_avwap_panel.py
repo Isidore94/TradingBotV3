@@ -378,6 +378,13 @@ class _AiStateCompressionWorker(QThread):
             changed = bool(ai_state_levels.warm_cache())
         except Exception:  # noqa: BLE001 - one chip, never the table
             changed = False
+        try:
+            # P1-5 5a: the setup-key labels ride the same off-thread warm.
+            import setup_key_labels
+
+            changed = bool(setup_key_labels.warm_cache()) or changed
+        except Exception:  # noqa: BLE001 - a label never costs the table
+            pass
         self.done.emit(changed)
 
 
@@ -1240,9 +1247,13 @@ class MasterAvwapPanel(QWidget):
         self._column_profile = profile
         header = self.table.horizontalHeader()
         key_level_column = _column_index("key_level")
+        has_setup_keys = self.model.has_setup_keys()
         for column, (key, _label) in enumerate(self.model.COLUMNS):
             self.table.setColumnHidden(column, False)
             if profile == "compact" and key in COMPACT_HIDDEN_COLUMNS:
+                self.table.setColumnHidden(column, True)
+            if key == "setup_key" and (profile == "compact" or not has_setup_keys):
+                # P1-5 5a: full profile only, and only when a row carries a stamped label.
                 self.table.setColumnHidden(column, True)
         if profile == "compact":
             # The compact profile is untouched by G2b, elision included.

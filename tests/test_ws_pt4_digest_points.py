@@ -221,7 +221,8 @@ def test_ws_pt4_switch_off_leaves_the_digest_as_the_golden_pinned_it(monkeypatch
     _switch(monkeypatch, False)
     text = core.render_away_report(_payload())
     golden = GOLDEN_PATH.read_text(encoding="utf-8")
-    assert text == _with_order_clause(golden, "order: Wilson bound")
+    # P1-5 5a adds the top-ten rule to the same line; every other byte is the golden's.
+    assert text == _with_order_clause(golden, f"order: Wilson bound | {core.DIGEST_TOP_RULE}")
     # And the pick lines themselves are untouched: same names, same order.
     assert _pick_order(text) == _pick_order(golden)
 

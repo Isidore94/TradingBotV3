@@ -42,6 +42,7 @@ import focus_adoption_gate
 import opening_regime_history
 import prev_day_gate
 import sector_exclusion
+import setup_key_labels
 from evidence_stats import SWING_HORIZON_SESSIONS
 from market_session import get_market_session_window, normalize_market_local_datetime
 from project_paths import (
@@ -3794,6 +3795,69 @@ def order_swing_picks(
     return [ordered[index] for index in order], SWING_ORDER_POINTS
 
 
+# P1-5 5a: the digest's top ten, spread across setups. Display and ranking only.
+DIGEST_TOP_PICKS = 10
+DIGEST_PER_GROUP_CAP = 3
+DIGEST_TOP_RULE = (
+    f"top {DIGEST_TOP_PICKS}: max {DIGEST_PER_GROUP_CAP} per family+side, then filled in rank order"
+)
+
+
+def digest_pick_group(pick: Mapping[str, Any]) -> tuple[str, str]:
+    """The (family, side) a digest pick is capped under."""
+    return (
+        normalize_family_key(pick.get("family")),
+        str(pick.get("side") or "").strip().upper(),
+    )
+
+
+def cap_ranked_items(
+    items: Sequence[Any],
+    group_of: Callable[[Any], Any],
+    *,
+    limit: int | None = DIGEST_TOP_PICKS,
+    per_group: int = DIGEST_PER_GROUP_CAP,
+) -> list[Any]:
+    """Take ranked items in order, at most `per_group` per group; then fill by the same order.
+
+    Pure. Nothing is re-ranked: the capped pass keeps rank order, and the fill
+    pass appends the skipped items in rank order until `limit` (None = keep all).
+    """
+    items = list(items)
+    cap = max(1, int(per_group))
+    counts: dict[Any, int] = {}
+    first: list[Any] = []
+    skipped: list[Any] = []
+    for item in items:
+        group = group_of(item)
+        if counts.get(group, 0) < cap:
+            counts[group] = counts.get(group, 0) + 1
+            first.append(item)
+        else:
+            skipped.append(item)
+    chosen = first + skipped
+    if limit is None:
+        return chosen
+    limit = max(0, int(limit))
+    if len(first) >= limit:
+        return first[:limit]
+    return chosen[:limit]
+
+
+def rank_digest_picks(
+    picks: Iterable[Mapping[str, Any]],
+    records: Mapping[str, Any] | None,
+    *,
+    limit: int | None = DIGEST_TOP_PICKS,
+) -> tuple[list[Mapping[str, Any]], str]:
+    """The digest's order (Wilson, or points when the switch is on), then the family+side cap."""
+    indexed = [(index, pick) for index, pick in enumerate(picks or ()) if isinstance(pick, Mapping)]
+    indexed.sort(key=lambda item: (swing_pick_rank(item[1], records), item[0]))
+    indexed, order_label = order_swing_picks(indexed, records)
+    capped = cap_ranked_items(indexed, lambda item: digest_pick_group(item[1]), limit=limit)
+    return [pick for _index, pick in capped], order_label
+
+
 # The swing PUSH starts later than the report it rides on. The digest keeps
 # publishing hourly from AUTOPILOT_AWAY_REPORT_START_HOUR (07:00); the phone
 # just stays quiet until the setups behind it are worth reading. Trader call
@@ -4148,6 +4212,10 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     # buckets are re-ordered by the point system with that order as the
     # tiebreak. Off, this is the identity and the digest is unchanged.
     indexed_picks, swing_order_label = order_swing_picks(indexed_picks, records)
+    # P1-5 5a: at most three per (family, side) first, then the rest in rank order.
+    indexed_picks = cap_ranked_items(
+        indexed_picks, lambda item: digest_pick_group(item[1]), limit=None
+    )
 
     picks_lines = []
     picks_symbols: list[str] = []
@@ -4173,6 +4241,9 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         family_text = f" | {family}" if family else ""
         key_level = str(pick.get("key_level") or "").strip()
         level_text = f" @ {key_level}" if key_level else ""
+        # P1-5 5a: the setup key's short label, only when the scan stamped one.
+        setup_key = setup_key_labels.row_label(pick)
+        key_text = f" | key {setup_key}" if setup_key else ""
         # WS-WS (WISHLIST 9): a LONG under its current AVWAPE, or a SHORT over
         # it, says so right after its name. The tag is the ONLY thing it
         # changes - the pick is in the same place in the same list with the same
@@ -4184,7 +4255,7 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         picks_symbols.append(symbol)
         picks_lines.append(
             f"{len(picks_symbols)}. {symbol}{wrong_text} ({side})"
-            f"{bucket_text}{expected_text}{family_text}{level_text}"
+            f"{bucket_text}{expected_text}{family_text}{level_text}{key_text}"
         )
     if wrong_side_rows:
         picks_lines.append(
@@ -4225,9 +4296,9 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     if picks_lines:
         swing_lines = [
             *swing_lines,
-            f"Ranked on: {record_line} | {swing_order_label}"
+            f"Ranked on: {record_line} | {swing_order_label} | {DIGEST_TOP_RULE}"
             if record_line
-            else f"Ranked on: {swing_order_label}",
+            else f"Ranked on: {swing_order_label} | {DIGEST_TOP_RULE}",
         ]
 
     def _tv_line(items: Iterable[str]) -> str:
