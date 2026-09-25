@@ -1235,6 +1235,37 @@ def _evidence_package(pack: Mapping[str, Any]) -> dict[str, Any]:
     return package
 
 
+_NUMBER = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _fact_numbers(view: Any) -> set[str]:
+    """Every number in the facts, as written at 0-3 decimals and as a percent."""
+    out: set[str] = set()
+    for raw in _NUMBER.findall(json.dumps(view, default=str)):
+        value = float(raw)
+        for scaled in (value, value * 100.0):
+            for places in range(4):
+                out.add(f"{round(scaled, places):.{places}f}")
+    return out
+
+
+def _keep_quoted_statements(summary: Mapping[str, Any], view: Any) -> dict[str, Any]:
+    """Drop every statement that quotes no number from the facts; raise when all were dropped."""
+    known = _fact_numbers(view)
+    kept: dict[str, Any] = dict(summary)
+    offered = survivors = 0
+    for key, rows in summary.items():
+        if not isinstance(rows, list) or not all(isinstance(row, Mapping) and "statement" in row for row in rows):
+            continue
+        quoted = [row for row in rows if any(number in known for number in _NUMBER.findall(str(row["statement"])))]
+        kept[key] = quoted
+        offered += len(rows)
+        survivors += len(quoted)
+    if offered and not survivors:
+        raise ValueError("the narration quoted no number from the facts; only the fact pack is published")
+    return kept
+
+
 def _narrate(pack: Mapping[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
     import ai_summary
 
@@ -1258,7 +1289,7 @@ def _narrate(pack: Mapping[str, Any], *, now: datetime | None = None) -> dict[st
         # who opens the narration alone and never the pack must still be able to
         # see that it was written over K of N cells and on what basis.
         "narrated": dict(package["sources"][0]["content"]["narrated"]),
-        "narration": result.get("summary") or {},
+        "narration": _keep_quoted_statements(result.get("summary") or {}, package["sources"][0]["content"]),
         "note": "Advisory words over deterministic facts. No live rule was changed.",
     }
 

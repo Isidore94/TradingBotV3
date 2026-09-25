@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -19,6 +20,9 @@ SCHEMA = "market_story_narration_v1"
 #: How many click options the overnight question may carry (TJ-14B). Four is a
 #: card row; a fifth is a list, and a list is not a click.
 MENTOR_QUESTION_OPTIONS_MAX = 4
+
+#: The symbols `market_story` measures; the only ones a direction claim is checked for.
+_BENCHMARKS = {"SPY", "QQQ", "IWM", "VXX", "TLT", "USO"}
 
 NARRATION_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -107,6 +111,61 @@ def _evidence(packs: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
         "allowed_source_ids": source_ids,
         "rollups": {kind: dict(pack) for kind, pack in packs.items()},
     }
+
+
+_UP_WORDS = r"up|higher|rose|rising|rises|increased|increasing|increases|gained|gaining|climbed|climbing|rallied|rallying"
+_DOWN_WORDS = r"down|lower|fell|falling|falls|decreased|decreasing|decreases|dropped|dropping|declined|declining|slid|sliding"
+#: After a ticker: up to three words, then a direction word ("USO decreased", "VXX going up").
+_AFTER_SYMBOL = re.compile(
+    rf"(?:\W+\w+){{0,3}}?\W+(?:(?P<up>{_UP_WORDS})|(?P<down>{_DOWN_WORDS}))\b",
+    re.IGNORECASE,
+)
+_SYMBOL = re.compile(r"\b[A-Z]{2,5}\b")
+_INLINE_SOURCE = re.compile(r"\b(?:journal|rollup):[\w:.-]+")
+
+
+def _moves(text: str, symbols: set[str]) -> list[tuple[str, int]]:
+    """(symbol, +1/-1) for every benchmark the text says went up or down."""
+    out = []
+    for found in _SYMBOL.finditer(text):
+        if found.group(0) not in symbols:
+            continue
+        move = _AFTER_SYMBOL.match(text, found.end())
+        if move is not None:
+            out.append((found.group(0), 1 if move.group("up") else -1))
+    return out
+
+
+def _check_directions(narration: Mapping[str, Any], packs: Mapping[str, Mapping[str, Any]]) -> None:
+    """A benchmark's up/down claim must match a measured change or the trader's own words."""
+    measured: dict[str, set[int]] = {}
+    said: dict[str, set[int]] = {}
+    for pack in packs.values():
+        for session in pack.get("sessions") or ():
+            if not isinstance(session, Mapping):
+                continue
+            for cell in session.get("measured") or ():
+                change = cell.get("change_pct") if isinstance(cell, Mapping) else None
+                if isinstance(change, (int, float)) and change:
+                    measured.setdefault(str(cell.get("symbol") or "").upper(), set()).add(1 if change > 0 else -1)
+            for entry in session.get("entries") or ():
+                if isinstance(entry, Mapping):
+                    for symbol, sign in _moves(str(entry.get("text") or "").upper(), _BENCHMARKS):
+                        said.setdefault(symbol, set()).add(sign)
+    texts = [str(narration.get("summary") or "")] + [str(item) for item in narration.get("changes") or ()]
+    for text in texts:
+        for symbol, sign in _moves(text, _BENCHMARKS):
+            if sign not in measured.get(symbol, set()) | said.get(symbol, set()):
+                word = "rose" if sign > 0 else "fell"
+                raise ValueError(f"narration says {symbol} {word}, which no measured bar or journal note says")
+
+
+def _check_inline_sources(narration: Mapping[str, Any], allowed: set[str]) -> None:
+    texts = [str(narration.get("summary") or "")] + [str(item) for item in narration.get("changes") or ()]
+    for text in texts:
+        for cited in _INLINE_SOURCE.findall(text):
+            if cited.rstrip(".") not in allowed:
+                raise ValueError(f"narration cited {cited!r} in its text, outside its fact packs")
 
 
 def _check_mentor_question_options(narration: Mapping[str, Any]) -> None:
@@ -213,6 +272,8 @@ def run_market_story_narration(
         cited = [str(item) for item in narration.get("sources") or ()]
         if not cited or any(source not in allowed for source in cited):
             raise ValueError("narration cited a source outside its fact packs")
+        _check_inline_sources(narration, allowed)
+        _check_directions(narration, packs)
         _check_mentor_question_options(narration)
         moment = now or datetime.now(timezone.utc)
         if moment.tzinfo is None:

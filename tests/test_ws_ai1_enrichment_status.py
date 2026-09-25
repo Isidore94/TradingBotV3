@@ -256,7 +256,9 @@ def test_a_response_validated_against_the_enrichment_schema_yields_text_and_tags
         trade={"trade_id": "T-AI1", "symbol": "AAPL", "direction": "LONG",
                "status": "CLOSED", "trade_date": SESSION},
         vocabulary=vocabulary,
-        review_rows=[],
+        # A tag needs evidence behind it (2026-09-25); one review row on the name.
+        review_rows=[{"symbol": "AAPL", "side": "LONG", "trade_date": SESSION,
+                      "review_record_id": "r1", "action": "like"}],
         session_date=SESSION,
     )
 

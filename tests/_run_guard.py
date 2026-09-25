@@ -3,7 +3,9 @@
 Two parallel full-suite runs next to the live desk exhausted RAM + pagefile and
 bluescreened the desk machine. This module keeps it to one ``-n`` > 1 run at a
 time (an OS file lock the OS drops when the process dies) and caps workers at
-``MARKET_HOURS_WORKER_CAP`` while the desk could be live. ``tests/conftest.py``
+``MARKET_HOURS_WORKER_CAP`` while the desk could be live, and at
+``NIGHT_AI_WORKER_CAP`` while the night AI's model holds most of the RAM.
+``tests/conftest.py``
 wires it in; everything here is stdlib only.
 """
 
@@ -26,6 +28,11 @@ DESK_TIMEZONE = "America/Los_Angeles"
 DESK_LIVE_START = dtime(6, 0)
 DESK_LIVE_END = dtime(13, 30)
 MARKET_HOURS_WORKER_CAP = 4
+
+#: Night-AI window, desk-local time, every day: the local model takes ~20 GB of RAM.
+NIGHT_AI_START = dtime(22, 0)
+NIGHT_AI_END = dtime(2, 0)
+NIGHT_AI_WORKER_CAP = 2
 
 #: Default wait for another parallel run to finish before giving up.
 DEFAULT_LOCK_TIMEOUT_SECONDS = 30 * 60
@@ -52,6 +59,23 @@ def desk_could_be_live(now: datetime) -> bool:
     if local.weekday() >= 5:
         return False
     return DESK_LIVE_START <= local.time() < DESK_LIVE_END
+
+
+def night_ai_could_be_running(now: datetime) -> bool:
+    """True between NIGHT_AI_START and NIGHT_AI_END desk time, any day."""
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    local = now.astimezone(ZoneInfo(DESK_TIMEZONE)).time()
+    return local >= NIGHT_AI_START or local < NIGHT_AI_END
+
+
+def window_cap(now: datetime) -> int | None:
+    """The worker cap for this moment, or None when no window applies."""
+    if night_ai_could_be_running(now):
+        return NIGHT_AI_WORKER_CAP
+    if desk_could_be_live(now):
+        return MARKET_HOURS_WORKER_CAP
+    return None
 
 
 def cap_mode(env: Mapping[str, str]) -> str:
@@ -244,8 +268,10 @@ def configure(
 
     mode = cap_mode(env)
     if mode != "off":
-        live = mode == "on" or desk_could_be_live(now or datetime.now().astimezone())
-        workers = capped_workers(requested, live=live)
+        cap = window_cap(now or datetime.now().astimezone())
+        if mode == "on" and cap is None:
+            cap = MARKET_HOURS_WORKER_CAP
+        workers = capped_workers(requested, live=cap is not None, cap=cap or MARKET_HOURS_WORKER_CAP)
         if workers != requested:
             config.option.numprocesses = workers
             # xdist turned -n into a "popen" tx list in its pytest_cmdline_main;
@@ -254,7 +280,7 @@ def configure(
             if isinstance(tx, list) and len(tx) > workers:
                 config.option.tx = tx[:workers]
             _echo(
-                f"[test-run-guard] desk hours: capping -n {requested} to {workers} workers "
+                f"[test-run-guard] desk or night-AI hours: capping -n {requested} to {workers} workers "
                 f"({ENV_WORKERS_CAP}=off disables)"
             )
 

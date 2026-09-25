@@ -141,6 +141,10 @@ def test_the_night_tells_the_model_which_measurables_exist(night):
     # "" is the `program` idea's answer: PRESENT and EMPTY, never absent.
     assert set(enum) == set(offered) | {""}
     assert schema["properties"]["ideas"]["maxItems"] == improvement_ideas.MAX_IDEAS_PER_NIGHT
+    # The decoder may only write ids tonight carries: gemma shortened
+    # "ideas_program_card_v1" to "program_card_v1" on 2026-09-24 and lost the night.
+    cited = schema["properties"]["ideas"]["items"]["properties"]["evidence"]["items"]
+    assert cited["enum"] == list(inputs["allowed_source_ids"])
 
 
 # ---------------------------------------------------------------------------

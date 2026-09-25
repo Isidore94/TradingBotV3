@@ -104,3 +104,82 @@ def test_bad_story_citation_keeps_the_prior_verified_file(tmp_path):
     )
     assert result["status"] == "degraded_no_narrative"
     assert target.read_bytes() == before
+
+
+def _direction_packs(root: Path) -> None:
+    """2026-09-24 shape: USO unmeasured, VXX measured down, trader wrote 'VXX going up USO up'."""
+    weekly = {
+        "kind": "weekly",
+        "period_id": "2026-W39",
+        "sessions": [
+            {
+                "session_date": "2026-09-24",
+                "entries": [{"entry_id": "mj-1", "text": "VXX going up USO up TLT down."}],
+                "measured": [
+                    {"symbol": "VXX", "status": "measured", "change_pct": -0.9},
+                    {"symbol": "USO", "status": "unmeasured", "change_pct": None},
+                    {"symbol": "SPY", "status": "measured", "change_pct": -0.07},
+                ],
+            }
+        ],
+    }
+    path = root / "weekly" / "2026-W39.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(weekly), encoding="utf-8")
+
+
+def _story(changes: list[str]):
+    def request(**_kwargs):
+        return {
+            "model": "local-test",
+            "summary": {
+                "summary": "A weak week.",
+                "changes": changes,
+                "open_questions": [],
+                "mentor_question": "What would change your mind?",
+                "sources": ["journal:mj-1"],
+            },
+        }
+
+    return request
+
+
+def test_a_direction_nothing_supports_is_rejected(tmp_path):
+    from ai_jobs.market_story_narration import run_market_story_narration
+
+    _direction_packs(tmp_path / "rollups")
+    result = run_market_story_narration(
+        session_date="2026-09-24",
+        rollups_dir=tmp_path / "rollups",
+        out_dir=tmp_path / "out",
+        request=_story(["VXX increased while USO decreased (journal:mj-1)."]),
+    )
+    assert result["status"] == "degraded_no_narrative"
+    assert "USO" in result["reason"]
+    assert not (tmp_path / "out" / "2026-09-24.json").exists()
+
+
+def test_a_direction_the_trader_or_the_bars_support_passes(tmp_path):
+    from ai_jobs.market_story_narration import run_market_story_narration
+
+    _direction_packs(tmp_path / "rollups")
+    result = run_market_story_narration(
+        session_date="2026-09-24",
+        rollups_dir=tmp_path / "rollups",
+        out_dir=tmp_path / "out",
+        request=_story(["VXX increased and USO rose (journal:mj-1).", "SPY fell slightly.", "TLT fell."]),
+    )
+    assert result["status"] == "ok", result["reason"]
+
+
+def test_an_inline_citation_outside_the_packs_is_rejected(tmp_path):
+    from ai_jobs.market_story_narration import run_market_story_narration
+
+    _direction_packs(tmp_path / "rollups")
+    result = run_market_story_narration(
+        session_date="2026-09-24",
+        rollups_dir=tmp_path / "rollups",
+        out_dir=tmp_path / "out",
+        request=_story(["SPY fell (journal:mj-made-up)."]),
+    )
+    assert result["status"] == "degraded_no_narrative"
