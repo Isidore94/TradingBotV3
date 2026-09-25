@@ -58,9 +58,14 @@ def test_a_day_pack_over_the_budget_is_trimmed_deterministically(tmp_path):
     assert trimmed == list(narration.DAY_TRIM_ORDER[: len(trimmed)])
     assert trimmed[0] == "report_card"
     assert first["pack"]["report_card"] != whole["report_card"]
-    # Everything the verifier needs is still in front of the model.
+    # A dropped part's ids leave the citable list; every other id stays.
+    card_ids = {line["source_id"] for line in pack["report_card"]["lines"]}
+    allowed = set(first["allowed_source_ids"])
+    assert not (card_ids & allowed)
+    assert trimmed == ["report_card"], "fixture drift: only the report card should drop"
     for source_id in day_review_pack.allowed_source_ids(pack):
-        assert json.dumps(source_id) in text
+        if source_id not in card_ids:
+            assert source_id in allowed and json.dumps(source_id) in text
     assert first["pack"]["reads"] == pack["reads"]
     assert first["pack"]["trader_said"] == pack["trader_said"]
 
@@ -101,6 +106,38 @@ def test_a_trimmed_day_pack_still_verifies_and_the_ledger_names_what_was_sent(tm
     assert "bytes (~" in outcome["reason"] and "tokens est.)" in outcome["reason"]
     assert "dropped report_card" in outcome["reason"]
     assert narration.narration_path(day_fx.SESSION, root=root).exists()
+
+
+def test_a_story_citing_a_dropped_part_is_rejected_and_names_the_part(tmp_path):
+    """The model never saw the report card, so it may not cite it."""
+    import day_review_pack
+    from ai_jobs import day_review_narration as narration
+
+    root = tmp_path / "day_review"
+    pack = _bulky_pack()
+    day_review_pack.write_pack(pack, root=root)
+    prior = narration.narration_path(day_fx.SESSION, root=root)
+    prior.parent.mkdir(parents=True, exist_ok=True)
+    prior.write_bytes(b'{"verified":"keep"}\n')
+    card_id = pack["report_card"]["lines"][0]["source_id"]
+
+    def request(**kwargs):
+        answer = _v2_answer(kwargs["evidence"])
+        answer["sources"] = [*answer["sources"], card_id]
+        return {"summary": answer, "model": "fake-12b"}
+
+    outcome = narration.run_day_review_narration(
+        session_date=day_fx.SESSION, now=day_fx.OVERNIGHT, root=root,
+        request=request, only_this_session=True,
+    )
+
+    assert outcome["status"] == "degraded_no_narrative", outcome
+    assert card_id in outcome["reason"]
+    assert "report_card" in outcome["reason"] and "dropped" in outcome["reason"]
+    assert prior.read_bytes() == b'{"verified":"keep"}\n'
+    # Dropping only the forecast text keeps its parsed fields' ids citable.
+    assert pack["forecast"]["fields"]
+    assert narration._dropped_source_ids(pack, ["forecast_text"]) == {}
 
 
 def test_a_failed_day_call_still_names_the_size_it_sent(tmp_path):

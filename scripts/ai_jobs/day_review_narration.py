@@ -619,8 +619,9 @@ CHARS_PER_TOKEN = 2.1
 
 #: Pack parts dropped, in this order, until the evidence fits. The live stories
 #: of 2026-09-23/24 cited none of the first four; trades go last because they
-#: carry the trader's words. Every dropped id stays in `allowed_source_ids`,
-#: and reads, trader_said, measured, internals, environment and mood never drop.
+#: carry the trader's words. A dropped part's ids leave `allowed_source_ids` and
+#: a story citing one is rejected; the forecast's parsed fields keep theirs.
+#: reads, trader_said, measured, internals, environment and mood never drop.
 DAY_TRIM_ORDER: tuple[str, ...] = (
     "report_card",
     "congruence",
@@ -785,6 +786,11 @@ def _day_evidence(pack: Mapping[str, Any], root: Path) -> dict[str, Any]:
         if _trim_part(evidence["pack"], part):
             trimmed.append(part)
             evidence["pack_trimmed"] = list(trimmed)
+            # The model may cite only what it was shown.
+            dropped_ids = _dropped_source_ids(pack, trimmed)
+            evidence["allowed_source_ids"] = [
+                item for item in allowed if item not in dropped_ids
+            ]
             size = _evidence_chars(evidence)
     if size > MAX_DAY_EVIDENCE_CHARS:
         # Refused before the model loads: a prompt this size times out instead.
@@ -794,6 +800,45 @@ def _day_evidence(pack: Mapping[str, Any], root: Path) -> dict[str, Any]:
             f"at most {MAX_DAY_EVIDENCE_CHARS} inside the {TIMEOUT_SECONDS}s call"
         )
     return evidence
+
+
+def _dropped_source_ids(pack: Mapping[str, Any], trimmed) -> dict[str, str]:
+    """{id: part} for ids only the dropped parts carry; forecast text drops no id."""
+    import day_review_pack
+
+    sections = [part for part in trimmed or () if part in day_review_pack.SECTIONS]
+    if not sections:
+        return {}
+    kept = set(
+        day_review_pack.allowed_source_ids(
+            {key: value for key, value in pack.items() if key not in sections}
+        )
+    )
+    out: dict[str, str] = {}
+    for part in sections:
+        for source_id in day_review_pack.allowed_source_ids({part: pack.get(part)}):
+            if source_id not in kept:
+                out.setdefault(source_id, part)
+    return out
+
+
+def _check_not_dropped(narration: Mapping[str, Any], dropped: Mapping[str, str]) -> None:
+    """Reject a story citing an id whose part was dropped before the model saw it."""
+    if not dropped:
+        return
+    cited = [str(item) for item in narration.get("sources") or ()]
+    for claim in narration.get("were_you_right") or ():
+        if isinstance(claim, Mapping):
+            cited += [str(claim.get("source_id") or ""), str(claim.get("evidence_id") or "")]
+    chased = narration.get("chased_against_news")
+    if isinstance(chased, Mapping):
+        cited.append(str(chased.get("evidence_id") or ""))
+    hits = sorted({item for item in cited if item in dropped})
+    if hits:
+        named = ", ".join(f"{item} ({dropped[item]})" for item in hits)
+        raise NarrationRejected(
+            f"the narration cited id(s) from a part dropped to fit the call: {named}"
+        )
 
 
 def _evidence_chars(evidence: Mapping[str, Any]) -> int:
@@ -811,7 +856,7 @@ def _trim_part(view: dict[str, Any], part: str) -> bool:
         return True
     if not view.get(part):
         return False
-    view[part] = {"dropped": "this section was dropped to fit the call; its ids stay citable"}
+    view[part] = {"dropped": "this section was dropped to fit the call; do not cite its ids"}
     return True
 
 
@@ -1216,6 +1261,7 @@ def _run_day_story(
             narration = _validate(
                 reply, _legacy_narration_schema_for(pack), name="legacy day story"
             )
+        _check_not_dropped(narration, _dropped_source_ids(pack, evidence.get("pack_trimmed")))
         _check_day_narration(narration, pack)
         payload = {
             "schema": SCHEMA,
