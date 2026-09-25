@@ -6,6 +6,7 @@ import time
 import json
 import bisect
 import re
+import heapq
 import math
 import csv
 import collections
@@ -12187,11 +12188,18 @@ def build_scan_factor_leaderboard_rows(
     }
 
     factor_observations = []
+    # One scan row feeds up to four horizons; its factor list is computed once.
+    factor_items_by_row_id: dict[str, list[dict]] = {}
     for obs in recent_obs.to_dict("records"):
-        source_row = source_rows.get(str(obs.get("scan_row_id") or ""))
+        scan_row_id = str(obs.get("scan_row_id") or "")
+        source_row = source_rows.get(scan_row_id)
         if not source_row:
             continue
-        for factor in _scan_factor_items_from_row(source_row):
+        factor_items = factor_items_by_row_id.get(scan_row_id)
+        if factor_items is None:
+            factor_items = _scan_factor_items_from_row(source_row)
+            factor_items_by_row_id[scan_row_id] = factor_items
+        for factor in factor_items:
             merged = dict(obs)
             merged.update(factor)
             factor_observations.append(merged)
@@ -12256,14 +12264,21 @@ def build_scan_factor_leaderboard_rows(
             + abs(spy_relative_edge_pct or 0.0)
         ) * math.log1p(max(1, observation_count))
 
-        sample_rows = unique_df.to_dict("records")
-        sample_rows.sort(
+        # Only the four sample columns are boxed, and only the top 8 are kept:
+        # `heapq.nlargest` equals `sorted(..., reverse=True)[:8]`, ties included.
+        sample_columns = [
+            column
+            for column in ("symbol", "scan_date", "future_scan_date", "side_return_pct")
+            if column in unique_df.columns
+        ]
+        sample_rows = heapq.nlargest(
+            8,
+            unique_df[sample_columns].to_dict("records"),
             key=lambda item: (
                 str(item.get("scan_date") or ""),
                 _scan_factor_number(item.get("side_return_pct")) or -9999.0,
                 str(item.get("symbol") or ""),
             ),
-            reverse=True,
         )
         samples = []
         for item in sample_rows:
@@ -12272,8 +12287,6 @@ def build_scan_factor_leaderboard_rows(
             if side_return is not None:
                 sample += f" ({side_return:+.2f}%)"
             samples.append(sample)
-            if len(samples) >= 8:
-                break
 
         rows.append(
             {
