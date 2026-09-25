@@ -3,7 +3,7 @@
     python scripts/setup_permutation_backfill.py --scratch <dir> \
         --features <copy of d1_features_history.csv> \
         (--horizons <copy of master_avwap_session_horizon_outcomes.csv> | --daily-bars <copy of daily_bars dir>) \
-        [--m5-outcomes <copy of intraday_bounce_outcomes.csv>] [--review-events <copy>] \
+        [--m5-outcomes <copy of intraday_bounce_outcomes.csv>] [--m5-stamps <copy>] [--review-events <copy>] \
         [--scan-reports <copy dir>] [--environment <copy of the d1 environment store>] \
         --out <scratch>/permutation_outcomes.parquet
 
@@ -21,7 +21,9 @@ was on the scan date (``f_<facet>`` columns):
   family = its bounce type, ``win`` = the level held 30 minutes, ``r`` = the
   episode's MFE_R (held_run_score's MFE rule). Its facets come from the
   PREVIOUS session's last scan row for the name and side - the D1 picture the
-  trader had before the alert, never the same day's later scan.
+  trader had before the alert, never the same day's later scan. With
+  ``--m5-stamps`` the live alert-time stamp (`m5_setup_key_stamp`, same rule)
+  is joined on event_id and wins; no usable stamp record = the recompute.
 
 Refuses any input or output inside a live store: copy first.
 """
@@ -156,13 +158,18 @@ def _read_rows(path: Path) -> Iterable[dict]:
 
 
 def session_representatives(features_path: Path) -> dict[int, tuple[str, str, str]]:
-    """``{input row index: (symbol, side, session)}`` for each session's LAST valid scan row.
+    """``{input row index: (symbol, side, session)}`` for each session's LAST valid scan row."""
+    return representatives_of(_read_rows(features_path))
+
+
+def representatives_of(rows: Iterable[Mapping[str, Any]]) -> dict[int, tuple[str, str, str]]:
+    """The rule over rows in file order (shared with the live M5 stamp, `m5_setup_key_stamp`).
 
     The v2 build's choice: valid rows (symbol, date, close > 0), ordered by
     run_timestamp, run_id, input order; the last one per (symbol, side, date).
     """
     best: dict[tuple[str, str, str], tuple[tuple[str, str, int], int]] = {}
-    for index, row in enumerate(_read_rows(features_path)):
+    for index, row in enumerate(rows):
         symbol = _text(row.get("symbol")).upper()
         session = _scan_date(row)
         close = _number(row.get("last_close"))
@@ -282,6 +289,17 @@ class KeyedRow:
     rule_version: str
 
 
+def key_scan_row(row: Mapping[str, Any], symbol: str, side: str, session: str, context: Any) -> "sp.PermutationKey":
+    """One representative scan row's key; ``context`` is a `SessionContext` for ``session``."""
+    view = dict(row)
+    view["side"] = side
+    view.setdefault("run_date", session)
+    if not _text(view.get("run_date")):
+        view["run_date"] = session
+    stamped = bool(_text(row.get("permutation_rule_version")))
+    return sp.facets_for_row(sp.scan_row_view(view, has_ma_columns=stamped), context.ctx_for(symbol, side))
+
+
 def key_representatives(
     features_path: Path, representatives: Mapping[int, tuple[str, str, str]], stores: ContextStores
 ) -> dict[tuple[str, str, str], KeyedRow]:
@@ -291,14 +309,7 @@ def key_representatives(
         if identity is None:
             continue
         symbol, side, session = identity
-        view = dict(row)
-        view["side"] = side
-        view.setdefault("run_date", session)
-        if not _text(view.get("run_date")):
-            view["run_date"] = session
-        stamped = bool(_text(row.get("permutation_rule_version")))
-        context = stores.session_context(session).ctx_for(symbol, side)
-        key = sp.facets_for_row(sp.scan_row_view(view, has_ma_columns=stamped), context)
+        key = key_scan_row(row, symbol, side, session, stores.session_context(session))
         keyed[identity] = KeyedRow(
             symbol=symbol,
             side=side,
@@ -404,13 +415,45 @@ def swing_rows_from_daily_bars(
     return out
 
 
-def m5_rows(
-    m5_path: Path, keyed: Mapping[tuple[str, str, str], KeyedRow], *, as_of: date
-) -> list[dict]:
-    import held_run_score
+def previous_session_text(session: str) -> str:
+    """The session before ``session`` ("" outside the calendar): the D1 picture an M5 alert had."""
     import market_calendar
 
+    try:
+        return market_calendar.previous_session(date.fromisoformat(_text(session)[:10])).isoformat()
+    except Exception:  # noqa: BLE001 - outside the calendar: no D1 picture
+        return ""
+
+
+def live_stamp_facets(record: Mapping[str, Any] | None) -> dict[str, str] | None:
+    """The facets an M5 sidecar record stamped at alert time, or None when it holds no usable key."""
+    import m5_setup_key_stamp
+
+    if not isinstance(record, Mapping) or record.get("status") != m5_setup_key_stamp.STATUS_STAMPED:
+        return None
+    if record.get("permutation_rule_version") != sp.PERMUTATION_RULE_VERSION:
+        return None
+    facets = record.get("facets")
+    if not isinstance(facets, Mapping):
+        return None
+    return {name: _text(facets.get(name)) or sp.UNKNOWN for name in sp.FACETS}
+
+
+def m5_rows(
+    m5_path: Path,
+    keyed: Mapping[tuple[str, str, str], KeyedRow],
+    *,
+    as_of: date,
+    stamps: Mapping[str, Mapping[str, Any]] | None = None,
+    counts: dict[str, int] | None = None,
+) -> list[dict]:
+    """One row per measured M5 episode. ``stamps`` (the live sidecar, by event_id) wins when usable."""
+    import held_run_score
+
     unknown = {name: sp.UNKNOWN for name in sp.FACETS}
+    tally = counts if counts is not None else {}
+    tally.setdefault("m5_live_stamped", 0)
+    tally.setdefault("m5_live_stamp_disagreed", 0)
     out = []
     previous: dict[str, str] = {}
     for episode in held_run_score.build_episodes(_read_rows(m5_path), as_of=as_of):
@@ -421,11 +464,14 @@ def m5_rows(
         if not side or not session:
             continue
         if session not in previous:
-            try:
-                previous[session] = market_calendar.previous_session(date.fromisoformat(session)).isoformat()
-            except Exception:  # noqa: BLE001 - outside the calendar: no D1 picture
-                previous[session] = ""
+            previous[session] = previous_session_text(session)
         d1 = keyed.get((episode.symbol, side, previous[session]))
+        facets = d1.facets if d1 else unknown
+        live = live_stamp_facets((stamps or {}).get(episode.event_id))
+        if live is not None:
+            tally["m5_live_stamped"] += 1
+            tally["m5_live_stamp_disagreed"] += int(live != facets)
+            facets = live
         out.append({
             "population": POPULATION_M5,
             "episode_id": episode.event_id,
@@ -440,7 +486,7 @@ def m5_rows(
             "outcome_kind": held_run_score.HELD_RUN_OUTCOME_KIND,
             "permutation_rule_version": sp.PERMUTATION_RULE_VERSION,
             "backfill_version": BACKFILL_VERSION,
-            **{facet_column(name): value for name, value in (d1.facets if d1 else unknown).items()},
+            **{facet_column(name): value for name, value in facets.items()},
         })
     return out
 
@@ -462,10 +508,11 @@ def build_permutation_outcomes(
     m5_outcomes: Path | None = None,
     stores: ContextStores | None = None,
     last_completed: date | None = None,
+    m5_stamps: Path | None = None,
 ) -> BackfillResult:
     """Every population row. Refuses live paths before it opens anything."""
     stores = stores or ContextStores()
-    refuse_live([features, horizons, daily_bars, m5_outcomes, *stores.paths()])
+    refuse_live([features, horizons, daily_bars, m5_outcomes, m5_stamps, *stores.paths()])
     if horizons is None and daily_bars is None:
         raise ValueError("give --horizons or --daily-bars for the swing outcomes")
     representatives = session_representatives(Path(features))
@@ -477,10 +524,17 @@ def build_permutation_outcomes(
 
         finished = last_completed or market_calendar.last_completed_session(datetime.now(market_calendar.MARKET_TZ))
         swing = swing_rows_from_daily_bars(Path(daily_bars), keyed, last_completed=finished)
-    m5 = m5_rows(Path(m5_outcomes), keyed, as_of=last_completed or date.today()) if m5_outcomes else []
+    stamp_counts: dict[str, int] = {}
+    m5 = []
+    if m5_outcomes:
+        import m5_setup_key_stamp
+
+        stamps = m5_setup_key_stamp.read_stamps(Path(m5_stamps)) if m5_stamps else None
+        m5 = m5_rows(Path(m5_outcomes), keyed, as_of=last_completed or date.today(), stamps=stamps,
+                     counts=stamp_counts)
     return BackfillResult(
         rows=[*swing, *m5],
-        counts={"scan_rows_keyed": len(keyed), "swing_rows": len(swing), "m5_rows": len(m5)},
+        counts={"scan_rows_keyed": len(keyed), "swing_rows": len(swing), "m5_rows": len(m5), **stamp_counts},
     )
 
 
@@ -511,6 +565,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--horizons", type=Path)
     parser.add_argument("--daily-bars", type=Path)
     parser.add_argument("--m5-outcomes", type=Path)
+    parser.add_argument("--m5-stamps", type=Path, help="copy of m5_setup_key_stamps.jsonl (joined on event_id)")
     parser.add_argument("--review-events", type=Path)
     parser.add_argument("--scan-reports", type=Path)
     parser.add_argument("--environment", type=Path)
@@ -519,7 +574,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     stores = ContextStores(reports_dir=args.scan_reports, review_events=args.review_events,
                            m5_outcomes=args.m5_outcomes, environment=args.environment)
-    everything = [args.scratch, args.features, args.horizons, args.daily_bars, args.out, *stores.paths()]
+    everything = [args.scratch, args.features, args.horizons, args.daily_bars, args.out, args.m5_stamps,
+                  *stores.paths()]
     roots = live_roots()  # taken before LOCALAPPDATA is pointed at scratch
     try:
         refuse_live(everything, roots)
@@ -540,7 +596,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     result = build_permutation_outcomes(
         args.features, horizons=args.horizons, daily_bars=args.daily_bars, m5_outcomes=args.m5_outcomes,
-        stores=stores, last_completed=args.last_completed,
+        stores=stores, last_completed=args.last_completed, m5_stamps=args.m5_stamps,
     )
     write_parquet(result.rows, args.out)
     print(json.dumps({"out": str(args.out), **result.counts}))
