@@ -442,6 +442,17 @@ WEEK_ANSWERS_FILE = PERSISTENT_DATA_DIR / "week_answers.jsonl"
 # queue or `review_policy.json` (plan.md sec 5).
 AI_IDEAS_FILE = PERSISTENT_DATA_DIR / "ai_ideas.jsonl"
 AI_IDEAS_STATE_FILE = PERSISTENT_DATA_DIR / "ai_ideas_state.json"
+# P1-7: the trader's own trading plan (Markdown, edited in any editor) and its
+# append-only history, one `<stamp>_<hash>.md` per content change. `trading_plan.py`
+# owns both. The night's challenges to the plan are append-only; the trader's
+# accept/reject answers are a separate append-only file written by the desk only.
+TRADING_PLAN_FILE = PERSISTENT_DATA_DIR / "trading_plan.md"
+TRADING_PLAN_HISTORY_DIR = PERSISTENT_DATA_DIR / "trading_plan_history"
+PLAN_CHALLENGES_FILE = PERSISTENT_DATA_DIR / "plan_challenges.jsonl"
+PLAN_CHALLENGE_ANSWERS_FILE = PERSISTENT_DATA_DIR / "plan_challenge_answers.jsonl"
+# P1-4's setup permutation report, read (never written) by the `plan_review` slot
+# when it exists.
+PERMUTATION_REPORT_FILE = PERSISTENT_DATA_DIR / "permutation_report.json"
 # TJ-17D: explicit, trader-entered follow-through on a selected weekly process
 # change.  Append-only evidence beside the ideas state; it cannot affect any
 # detector, score, alert, queue, Focus list or policy.
