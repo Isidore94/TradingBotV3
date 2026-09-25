@@ -1,4 +1,5 @@
-"""The Movers board's pure model: pops, SPY pullback state, dip-strong and dip-weak names.
+"""The Movers board's pure model: pops, SPY pullback/bounce/rally state, and the
+strong/weak lists for each turn (Dip-*, Bounce-*, Rip-*).
 
 Display-only ranking (trader, 2026-09-23: "what's the strongest thing moving
 right now" and "what's strong during a SPY pullback"). No Qt, no network, no
@@ -213,7 +214,8 @@ class MarketState:
     state: str  # "unknown" | "up_day" | "down_day" | "flat"
     pullback: bool = False  # up day, SPY off its high
     bounce: bool = False  # down day, SPY off its low
-    extreme_time: str = ""  # HH:MM NY of the pullback/bounce start bar
+    rally: bool = False  # either day, SPY up off its last swing low
+    extreme_time: str = ""  # HH:MM NY of the pullback/bounce/rally start bar
     extreme_price: float | None = None
     start_dt: datetime | None = None
     spy_from_extreme_pct: float | None = None  # last close vs the high/low
@@ -246,8 +248,11 @@ def market_state(
     Pullback: SPY's session high made while above the running session VWAP,
     and now >= PULLBACK_MIN_PCT off that high (it may be below VWAP or the
     open now). Bounce mirrors it off the session low; when both qualify, the
-    later turn wins. Up/down day is SPY vs its session open. SPY bars older
-    than `fresh_after` make the state unknown.
+    later turn wins. Rally: SPY now >= PULLBACK_MIN_PCT above its last swing
+    low (`last_swing_low`), on either day type; it beats a pullback or bounce
+    only when its low is the later turn (a bounce off the same low stays a
+    bounce). Up/down day is SPY vs its session open. SPY bars older than
+    `fresh_after` make the state unknown.
     """
     prior, today = split_today(spy_bars, today_date)
     if not today:
@@ -296,7 +301,16 @@ def market_state(
     if pull and bounce:
         # Both turns qualify (chop): the later one is the live one.
         pull, bounce = high_index > low_index, low_index > high_index
-    live = pull or bounce
+    swing_index = last_swing_low(today)
+    swing_low = today[swing_index]["low"]
+    off_swing = _pct(last, swing_low)
+    rally = turn_on(swing_index, off_swing,
+                    off_swing is not None and off_swing >= PULLBACK_MIN_PCT)
+    if rally and ((pull and high_index >= swing_index) or (bounce and low_index >= swing_index)):
+        rally = False  # the pullback/bounce turn is as late or later
+    if rally:
+        pull = bounce = False
+    live = pull or bounce or rally
     if last > session_open and (live or last > vwap):
         day = "up_day"
     elif last < session_open and (live or last < vwap):
@@ -305,13 +319,35 @@ def market_state(
         day = "flat"
     else:
         return MarketState("flat", **common)
-    use_high = pull or (not bounce and day == "up_day")
+    use_high = pull or (not bounce and not rally and day == "up_day")
     index, extreme, off = (high_index, high, off_high) if use_high else (low_index, low, off_low)
+    if rally:
+        index, extreme, off = swing_index, swing_low, off_swing
     return MarketState(
-        day, pullback=pull, bounce=bounce, extreme_time=today[index]["dt"].strftime("%H:%M"),
+        day, pullback=pull, bounce=bounce, rally=rally,
+        extreme_time=today[index]["dt"].strftime("%H:%M"),
         extreme_price=extreme, start_dt=today[index]["dt"] if live else None,
         spy_from_extreme_pct=off, **common,
     )
+
+
+def last_swing_low(today: Sequence[Mapping[str, Any]]) -> int:
+    """Index of SPY's last swing low: the session low, or a later low that nothing
+    after it undercut and that a down leg of >= PULLBACK_MIN_PCT led into."""
+    if not today:
+        return 0
+    best = min(range(len(today)), key=lambda i: (today[i]["low"], i))
+    for j in range(best + 1, len(today)):
+        low = today[j]["low"]
+        if any(today[k]["low"] < low for k in range(j + 1, len(today))):
+            continue
+        if j - best < 2:
+            continue
+        peak = max(today[k]["high"] for k in range(best + 1, j))
+        drop = _pct(low, peak)
+        if drop is not None and drop <= -PULLBACK_MIN_PCT:
+            best = j
+    return best
 
 
 # ---------------------------------------------------------------- rows
@@ -326,7 +362,7 @@ class MoverRow:
     vs_spy15_pct: float | None = None
     atr: float | None = None
     pop_score: float | None = None  # signed, ATRs x RVOL weight
-    since_start_pct: float | None = None  # since the pullback/bounce start bar
+    since_start_pct: float | None = None  # since the pullback/bounce/rally start bar
     dip_score: float | None = None  # signed excess vs SPY since start, ATRs x weight
     session_volume: float | None = None
     passes_floors: bool = False
@@ -493,7 +529,7 @@ def short_group(industry: str) -> str:
 def apply_group_tags(board: dict[str, Any], industry_by_symbol: Mapping[str, str]) -> dict[str, Any]:
     """Tag rows whose industry has GROUP_MIN_COUNT+ names in a list's top GROUP_TOP_N."""
     groups: dict[str, dict[str, list]] = {}
-    for mode in ("pop", "dip"):
+    for mode in ("pop", "dip", "rip"):
         groups[mode] = {}
         for side in ("long", "short"):
             rows = ((board.get(mode) or {}).get(side)) or []
@@ -521,7 +557,7 @@ def apply_persistence(board: dict[str, Any], memory: dict[str, Any], *, session:
         memory = {"session": session, "lists": {}}
     lists = memory["lists"]
     fresh: dict[str, dict[str, tuple[int, int]]] = {}
-    for mode in ("pop", "dip"):
+    for mode in ("pop", "dip", "rip"):
         for side in ("long", "short"):
             key = f"{mode}:{side}"
             before = lists.get(key, {})
@@ -552,8 +588,9 @@ def build_movers_board(
     """The whole board as plain dicts (safe to emit across threads).
 
     `focus_by_side` is {"long": [...], "short": [...]} of the trader's Focus
-    names; `earnings` the names to tag ER. Lists: pop/dip/mine, each
-    {"long": rows, "short": rows}.
+    names; `earnings` the names to tag ER. Lists: pop/dip/rip/mine, each
+    {"long": rows, "short": rows}; dip is lit by a pullback or bounce, rip by a
+    rally (long = Rip-strong, short = Rip-weak).
     """
     baselines = baselines or {}
     er_names = {str(s or "").strip().upper() for s in earnings or ()}
@@ -594,19 +631,20 @@ def build_movers_board(
     )
     # Dip lists, lit by a pullback or a bounce: long = beating SPY since the
     # turn (strong), short = lagging it (weak).
-    dip_long: list[MoverRow] = []
-    dip_short: list[MoverRow] = []
-    if state.pullback or state.bounce:
-        dip_long = sorted(
-            (r for r in rows.values() if rankable(r) and r.dip_score is not None
-             and r.dip_score >= 0),
-            key=lambda r: (-r.dip_score, r.symbol),
-        )
-        dip_short = sorted(
-            (r for r in rows.values() if rankable(r) and r.dip_score is not None
-             and r.dip_score < 0),
-            key=lambda r: (r.dip_score, r.symbol),
-        )
+    turn_long = sorted(
+        (r for r in rows.values() if rankable(r) and r.dip_score is not None
+         and r.dip_score >= 0),
+        key=lambda r: (-r.dip_score, r.symbol),
+    )
+    turn_short = sorted(
+        (r for r in rows.values() if rankable(r) and r.dip_score is not None
+         and r.dip_score < 0),
+        key=lambda r: (r.dip_score, r.symbol),
+    )
+    dip_on = state.pullback or state.bounce
+    dip_long, dip_short = (turn_long, turn_short) if dip_on else ([], [])
+    # Rip lists, lit by a rally: same score since the rally start bar.
+    rip_long, rip_short = (turn_long, turn_short) if state.rally else ([], [])
 
     mine: dict[str, list[dict[str, Any]]] = {"long": [], "short": []}
     for side in ("long", "short"):
@@ -631,6 +669,8 @@ def build_movers_board(
                 "short": [r.to_dict() for r in pop_short[:top_n]]},
         "dip": {"long": [r.to_dict() for r in dip_long[:top_n]],
                 "short": [r.to_dict() for r in dip_short[:top_n]]},
+        "rip": {"long": [r.to_dict() for r in rip_long[:top_n]],
+                "short": [r.to_dict() for r in rip_short[:top_n]]},
         "mine": mine,
         "measured": sum(1 for r in rows.values() if r.pop_score is not None),
         "offered": len(normalised),
