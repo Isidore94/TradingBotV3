@@ -325,3 +325,270 @@ def test_plus_focus_on_a_rip_only_row_goes_through_the_gate(tmp_path, app):
     panel.movers_board.focusAddRequested.emit("SINK", "short")
     assert "no longer on the board" not in panel.movers_board.status_label.text()
     assert panel.focus_service.added == [("SINK", "short")]
+
+
+# ------------------------------------------------------------------ outcome logs
+OPEN_NY = datetime(2026, 9, 22, 9, 30, tzinfo=NY)
+
+
+def _ny_bars(closes, *, start=OPEN_NY, highs=None, lows=None):
+    out, prev = [], closes[0]
+    for i, close in enumerate(closes):
+        out.append({"dt": start + timedelta(minutes=5 * i), "open": prev,
+                    "high": (highs or {}).get(i, max(prev, close) + 0.1),
+                    "low": (lows or {}).get(i, min(prev, close) - 0.1),
+                    "close": close, "volume": 1000.0})
+        prev = close
+    return out
+
+
+def _pop_board(long_rows=(), short_rows=()):
+    def row(symbol, **extra):
+        base = {"symbol": symbol, "move15_pct": 1.2, "rvol": 2.5, "from_vwap_atr": 1.1,
+                "atr": 0.5, "last": 101.0, "pop_score": 2.0}
+        base.update(extra)
+        return base
+
+    return {"state": {"state": "up_day"},
+            "pop": {"long": [row(s) for s in long_rows],
+                    "short": [row(s, move15_pct=-1.0, pop_score=-2.0) for s in short_rows]}}
+
+
+RUN = _ny_bars([100.0] * 10 + [101.0] + [101.2, 101.5, 101.0, 101.4, 101.6, 102.0,
+                                         101.8, 102.2, 102.4, 102.1, 102.5, 102.6],
+               highs={12: 102.3}, lows={13: 100.6})
+
+
+def _pop_tick(tracker, upto, board, series=None):
+    series = series if series is not None else {"RUN": RUN[: upto + 1]}
+    now = RUN[upto]["dt"] + timedelta(minutes=5, seconds=20)
+    return tracker.observe(board, series, RUN[: upto + 1], now=now)
+
+
+def test_pop_tracker_flags_once_and_writes_15_30_60_minute_outcomes_in_atr():
+    import movers_outcomes as mo
+
+    tracker = mo.PopOutcomeTracker()
+    rows = _pop_tick(tracker, 10, _pop_board(["RUN"]))
+    assert [r["kind"] for r in rows] == ["flag"]
+    flag = rows[0]
+    assert flag["symbol"] == "RUN" and flag["side"] == "long" and flag["rank"] == 1
+    assert flag["flagged_bar"] == RUN[10]["dt"].isoformat()
+    for key in ("move15_pct", "rvol", "from_vwap_atr"):
+        assert flag[key] is not None, key
+    outcomes = []
+    for upto in range(11, 23):
+        got = _pop_tick(tracker, upto, _pop_board(["RUN"]))
+        assert all(r["kind"] == "outcome" for r in got)  # never re-flagged while listed
+        outcomes += got
+    assert [r["horizon_min"] for r in outcomes] == [15, 30, 60]
+    base, atr = RUN[10]["close"], 0.5
+    fifteen = outcomes[0]
+    assert fifteen["move_pct"] == pytest.approx((RUN[13]["close"] / base - 1) * 100)
+    assert fifteen["move_atr"] == pytest.approx((RUN[13]["close"] - base) / atr)
+    assert fifteen["mfe_atr"] == pytest.approx((102.3 - base) / atr)  # bar 12's high
+    assert fifteen["mae_atr"] == pytest.approx((base - 100.6) / atr)  # bar 13's low
+    sixty = outcomes[2]
+    assert sixty["move_atr"] == pytest.approx((RUN[22]["close"] - base) / atr)
+    assert tracker.pending == {}
+
+
+def test_pop_short_side_measures_in_the_short_direction():
+    import movers_outcomes as mo
+
+    tracker = mo.PopOutcomeTracker()
+    _pop_tick(tracker, 10, _pop_board(short_rows=["RUN"]))
+    out = []
+    for upto in range(11, 14):
+        out += _pop_tick(tracker, upto, _pop_board())
+    assert out[0]["side"] == "short"
+    assert out[0]["move_atr"] == pytest.approx((RUN[10]["close"] - RUN[13]["close"]) / 0.5)
+    assert out[0]["mfe_atr"] == pytest.approx((RUN[10]["close"] - 100.6) / 0.5)
+
+
+def test_pop_reflags_only_after_leaving_the_list_and_resolving():
+    import movers_outcomes as mo
+
+    tracker = mo.PopOutcomeTracker()
+    assert len(_pop_tick(tracker, 10, _pop_board(["RUN"]))) == 1
+    _pop_tick(tracker, 11, _pop_board())  # off the list
+    # Back on while its +60 is still pending: same episode, no new flag.
+    assert [r["kind"] for r in _pop_tick(tracker, 12, _pop_board(["RUN"]))] == []
+    for upto in range(13, 23):
+        _pop_tick(tracker, upto, _pop_board())
+    assert tracker.pending == {}
+    long_run = RUN + _ny_bars([102.7, 102.8], start=RUN[-1]["dt"] + timedelta(minutes=5))
+    now = long_run[23]["dt"] + timedelta(minutes=5, seconds=20)
+    rows = tracker.observe(_pop_board(["RUN"]), {"RUN": long_run[:24]}, long_run[:24], now=now)
+    assert [r["kind"] for r in rows] == ["flag"]
+
+
+def test_pop_session_close_writes_unknown_for_missing_horizons():
+    import movers_outcomes as mo
+
+    late = OPEN_NY.replace(hour=15, minute=40)
+    bars = _ny_bars([100.0, 100.5, 101.0, 101.2], start=late)  # last bar 15:55
+    tracker = mo.PopOutcomeTracker()
+    now = bars[1]["dt"] + timedelta(minutes=5, seconds=20)
+    tracker.observe(_pop_board(["RUN"]), {"RUN": bars[:2]}, bars[:2], now=now)
+    now = bars[3]["dt"] + timedelta(minutes=5, seconds=20)
+    rows = tracker.observe(_pop_board(["RUN"]), {"RUN": bars}, bars, now=now)
+    assert [r["horizon_min"] for r in rows] == [15, 30, 60]
+    assert rows[0]["complete"] is False and rows[0]["move_atr"] is None  # only 2 bars after
+    assert rows[1]["move_atr"] is None and rows[2]["complete"] is False
+
+
+def test_pop_restart_does_not_reflag_and_still_resolves():
+    import movers_outcomes as mo
+
+    first = mo.PopOutcomeTracker()
+    flags = _pop_tick(first, 10, _pop_board(["RUN"]))
+    fresh = mo.PopOutcomeTracker()
+    fresh.restore(flags, session=OPEN_NY.date(), now=OPEN_NY)
+    out = []
+    for upto in range(11, 23):
+        out += _pop_tick(fresh, upto, _pop_board(["RUN"]))
+    assert [r["kind"] for r in out] == ["outcome"] * 3
+
+
+def test_pop_rows_are_timezone_stamped_and_the_log_is_a_project_paths_constant():
+    import movers_outcomes as mo
+    import project_paths
+
+    rows = _pop_tick(mo.PopOutcomeTracker(), 10, _pop_board(["RUN"]))
+    assert rows[0]["recorded_at"].endswith("-04:00")
+    assert project_paths.MOVERS_POP_OUTCOMES_FILE.name == "movers_pop_outcomes.jsonl"
+
+
+# Dip tracker learns the rally lists.
+SPY_R = _ny_bars([400.0, 400.0, 400.5, 401.0, 401.5, 402.0, 402.2, 402.4, 402.6, 402.8,
+                  403.0, 403.2], lows={2: 399.5})
+R_START = SPY_R[2]["dt"]
+
+
+def _rally_board(on=True):
+    state = {"state": "up_day", "pullback": False, "bounce": False, "rally": on,
+             "start_dt": R_START.isoformat() if on else "", "extreme_price": 399.5,
+             "spy_from_extreme_pct": 0.4}
+    rip = {"long": [{"symbol": "LEAD", "dip_score": 1.0}],
+           "short": [{"symbol": "SINK", "dip_score": -1.2}]} if on else {"long": [], "short": []}
+    return {"state": state, "dip": {"long": [], "short": []}, "rip": rip}
+
+
+def test_dip_tracker_flags_both_rip_lists_with_state_rally():
+    import movers_outcomes as mo
+
+    tracker = mo.DipOutcomeTracker()
+    series = {"LEAD": SPY_R, "SINK": SPY_R}
+    now = SPY_R[4]["dt"] + timedelta(minutes=5, seconds=20)
+    rows = tracker.observe(_rally_board(), {k: v[:5] for k, v in series.items()}, SPY_R[:5],
+                           now=now)
+    assert sorted((r["side"], r["symbol"], r["state"]) for r in rows) == [
+        ("long", "LEAD", "rally"), ("short", "SINK", "rally")]
+    assert all(r["kind"] == "flag" for r in rows)
+    out = []
+    for upto in range(5, 12):
+        now = SPY_R[upto]["dt"] + timedelta(minutes=5, seconds=20)
+        out += tracker.observe(_rally_board(), {k: v[: upto + 1] for k, v in series.items()},
+                               SPY_R[: upto + 1], now=now)
+    outcomes = [r for r in out if r["kind"] == "outcome"]
+    assert sorted(r["symbol"] for r in outcomes) == ["LEAD", "SINK"]
+    assert all(r["state"] == "rally" for r in outcomes)
+    assert all(r["end_reason"] == "six_bars" for r in outcomes)
+
+
+def test_a_rally_episode_ends_when_spy_loses_the_rally_low():
+    import movers_outcomes as mo
+
+    tracker = mo.DipOutcomeTracker()
+    now = SPY_R[4]["dt"] + timedelta(minutes=5, seconds=20)
+    tracker.observe(_rally_board(), {"LEAD": SPY_R[:5], "SINK": SPY_R[:5]}, SPY_R[:5], now=now)
+    spy = SPY_R[:5] + _ny_bars([399.0], start=SPY_R[4]["dt"] + timedelta(minutes=5))
+    now = spy[-1]["dt"] + timedelta(minutes=5, seconds=20)
+    tracker.observe(_rally_board(), {"LEAD": spy, "SINK": spy}, spy, now=now)
+    reasons = {ep["end_reason"] for ep in tracker.episodes.values()}
+    assert reasons == {"spy_lost_rally_low"}
+
+
+def test_restore_keeps_the_rally_state():
+    import movers_outcomes as mo
+
+    tracker = mo.DipOutcomeTracker()
+    now = SPY_R[4]["dt"] + timedelta(minutes=5, seconds=20)
+    flags = tracker.observe(_rally_board(), {"LEAD": SPY_R[:5], "SINK": SPY_R[:5]},
+                            SPY_R[:5], now=now)
+    fresh = mo.DipOutcomeTracker()
+    fresh.restore(flags, session=R_START.date(), now=now)
+    assert {ep["state"] for ep in fresh.episodes.values()} == {"rally"}
+
+
+def test_summary_keeps_rally_apart_and_the_cli_covers_both_files(tmp_path, capsys):
+    import json
+
+    import movers_outcomes as mo
+
+    dip_rows = [
+        {"kind": "outcome", "session": "2026-09-22", "episode": "a", "side": "long",
+         "excess3_pct": 0.2, "excess6_pct": 0.5},
+        {"kind": "outcome", "session": "2026-09-22", "episode": "b", "side": "short",
+         "state": "rally", "excess3_pct": -0.1, "excess6_pct": -0.3},
+    ]
+    summary = mo.summarize(dip_rows)
+    assert summary["all"]["outcomes"] == 1  # the pullback/bounce lists only
+    assert summary["rally"]["all"]["outcomes"] == 1
+    assert summary["rally"]["short"]["hit_rate"] == 0.0
+    pop_rows = [
+        {"kind": "flag", "session": "2026-09-22", "symbol": "RUN", "side": "long"},
+        {"kind": "outcome", "session": "2026-09-22", "symbol": "RUN", "side": "long",
+         "horizon_min": 15, "move_atr": 0.8, "mfe_atr": 1.0, "mae_atr": 0.2, "complete": True},
+        {"kind": "outcome", "session": "2026-09-22", "symbol": "RUN", "side": "long",
+         "horizon_min": 30, "move_atr": -0.4, "mfe_atr": 1.0, "mae_atr": 0.9, "complete": True},
+        {"kind": "outcome", "session": "2026-09-22", "symbol": "RUN", "side": "long",
+         "horizon_min": 60, "move_atr": None, "complete": False},
+    ]
+    pop = mo.summarize_pop(pop_rows)
+    assert pop["flags"] == 1
+    assert pop["by_horizon"]["15"]["hit_rate"] == 1.0
+    assert pop["by_horizon"]["30"]["avg_mae_atr"] == pytest.approx(0.9)
+    assert pop["by_horizon"]["60"]["graded"] == 0
+    dip_path = tmp_path / "movers_dip_outcomes.jsonl"
+    mo.append_records(dip_path, dip_rows)
+    mo.append_records(tmp_path / "movers_pop_outcomes.jsonl", pop_rows)
+    assert mo.main(["--summary", "--path", str(dip_path)]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["all"]["outcomes"] == 1
+    assert printed["pop"]["flags"] == 1
+    assert printed["pop"]["path"].endswith("movers_pop_outcomes.jsonl")
+
+
+def test_service_appends_pop_rows_and_a_failed_pop_write_keeps_the_board(tmp_path, monkeypatch):
+    from datetime import datetime as dt
+
+    from ui.services import movers_service as svc
+
+    now = dt(2026, 9, 22, 10, 40, 20, tzinfo=NY)
+
+    class Bot:
+        is_process_proxy = False
+
+        def get_scan_symbol_set(self):
+            return []
+
+        def m5_chart_bars(self, symbol, max_sessions=2):
+            return [dict(b) for b in RUN[:12]] if symbol == "SPY" else []
+
+    service = svc.MoversService(
+        bot_provider=lambda: Bot(), downloader=lambda *a, **k: {},
+        universe_provider=lambda: [], clock=lambda: now, autostart=False,
+        outcomes_path=tmp_path / "movers_dip_outcomes.jsonl", scanner=lambda: {},
+        industry_provider=dict, earnings_provider=lambda _d: set(),
+    )
+    assert service._pop_outcomes_path == tmp_path / "movers_pop_outcomes.jsonl"
+    monkeypatch.setattr(service._pop_tracker, "observe",
+                        lambda *a, **k: [{"kind": "flag", "symbol": "X"}])
+    service._run_once({"long": [], "short": []})
+    text = (tmp_path / "movers_pop_outcomes.jsonl").read_text(encoding="utf-8")
+    assert text.count('"flag"') == 1
+    service._pop_outcomes_path = tmp_path  # a directory: the write fails
+    service._run_once({"long": [], "short": []})
+    assert service.board() and "state" in service.board()
