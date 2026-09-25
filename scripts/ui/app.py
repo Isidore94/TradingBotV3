@@ -448,6 +448,12 @@ class MainWindow(QMainWindow):
         # local file reads, never touches IB or the UI.
         QTimer.singleShot(5000, self._refresh_review_learning)
 
+        # P2-11d: move the OpenAI key and ntfy token into Windows Credential
+        # Manager. A daemon thread: the first keyring use costs ~0.2 s.
+        import secret_store
+
+        secret_store.migrate_in_background()
+
     def _refresh_review_learning(self) -> None:
         def worker() -> None:
             try:

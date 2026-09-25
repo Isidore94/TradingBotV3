@@ -70,6 +70,34 @@ os.environ["TRADINGBOT_DISABLE_BACKGROUND_MAINTENANCE"] = "1"
 # publication *mechanics* exercise the happy path. Tests about the role gate
 # itself (tests/test_writer_lease_adversarial.py) clear these variables through
 # monkeypatch and set their own, so this default cannot mask them.
+# P2-11d: no test may read or write the real Windows Credential Manager. This
+# process gets an in-memory keyring; child processes get keyring's null backend.
+os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
+try:
+    import keyring as _keyring
+    from keyring.backend import KeyringBackend as _KeyringBackend
+except ImportError:  # keyring not installed: secret_store falls back to JSON
+    _keyring = None
+if _keyring is not None:
+
+    class _MemoryKeyring(_KeyringBackend):
+        priority = 1
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.values: dict[tuple[str, str], str] = {}
+
+        def get_password(self, service, username):
+            return self.values.get((service, username))
+
+        def set_password(self, service, username, password):
+            self.values[(service, username)] = password
+
+        def delete_password(self, service, username):
+            self.values.pop((service, username), None)
+
+    _keyring.set_keyring(_MemoryKeyring())
+
 os.environ.setdefault("TRADINGBOT_DESIGNATED_WRITER", socket.gethostname())
 os.environ.setdefault("TRADINGBOT_WRITER_ROLE", "designated_writer")
 

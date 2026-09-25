@@ -275,6 +275,15 @@ def resolve_openai_api_key(config: MarketPrepConfig | None) -> str:
 
 
 def _local_openai_api_key() -> str:
+    # Windows Credential Manager first (P2-11d); scripts/ may be off sys.path standalone.
+    try:
+        from secret_store import read_keyring_secret
+
+        stored = read_keyring_secret(OPENAI_LOCAL_SETTING_KEY).strip()
+        if stored:
+            return stored
+    except ImportError:
+        logging.getLogger("market_prep").debug("secret_store unavailable; reading the settings file only")
     try:
         payload = json.loads(_local_settings_file().read_text(encoding="utf-8"))
     except Exception:

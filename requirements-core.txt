@@ -7,3 +7,5 @@ requests
 yfinance
 lxml
 openai
+# Windows Credential Manager for the market-prep OpenAI key and the ntfy token (P2-11d).
+keyring

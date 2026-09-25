@@ -43,18 +43,27 @@ def load_push_config() -> dict[str, str]:
     """Current push settings; import is deferred so tests can run headless."""
     try:
         from project_paths import get_local_setting
+        from secret_store import read_secret_setting
 
         return {
             "server": str(get_local_setting(PUSH_SERVER_SETTING, DEFAULT_NTFY_SERVER) or DEFAULT_NTFY_SERVER),
             "topic": str(get_local_setting(PUSH_TOPIC_SETTING, "") or "").strip(),
-            "token": str(get_local_setting(PUSH_TOKEN_SETTING, "") or "").strip(),
+            # Credential Manager first, then the legacy JSON value (P2-11d).
+            "token": read_secret_setting(PUSH_TOKEN_SETTING),
         }
     except Exception:
         return {"server": DEFAULT_NTFY_SERVER, "topic": "", "token": ""}
 
 
 def push_configured(config: Mapping[str, str] | None = None) -> bool:
-    config = config if config is not None else load_push_config()
+    """True when a topic is set. Reads only the topic: no credential-store call."""
+    if config is None:
+        try:
+            from project_paths import get_local_setting
+
+            return bool(str(get_local_setting(PUSH_TOPIC_SETTING, "") or "").strip())
+        except Exception:
+            return False
     return bool(str(config.get("topic") or "").strip())
 
 

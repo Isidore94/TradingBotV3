@@ -145,6 +145,8 @@ LOCAL_SETTINGS_FILE = LOCAL_SETTINGS_DIR / "local_settings.json"
 #: next call and an unchanged file is never parsed twice.
 _local_settings_cache: tuple[int, int, dict] | None = None
 _local_settings_lock = threading.Lock()
+#: Serialises in-process read-modify-write of the settings file (P2-11d).
+_local_settings_write_lock = threading.Lock()
 
 
 def _load_local_settings() -> dict:
@@ -921,12 +923,13 @@ def save_local_settings(values: dict) -> None:
     if not values:
         return
     LOCAL_SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
-    payload = _load_local_settings()
-    payload.update(values)
-    tmp = LOCAL_SETTINGS_FILE.with_name(LOCAL_SETTINGS_FILE.name + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(tmp, LOCAL_SETTINGS_FILE)
-    invalidate_local_settings_cache()
+    with _local_settings_write_lock:
+        payload = _load_local_settings()
+        payload.update(values)
+        tmp = LOCAL_SETTINGS_FILE.with_name(LOCAL_SETTINGS_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp, LOCAL_SETTINGS_FILE)
+        invalidate_local_settings_cache()
 
 
 def open_path_in_file_manager(path: Path) -> None:
