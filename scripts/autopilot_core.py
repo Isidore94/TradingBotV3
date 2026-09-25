@@ -78,7 +78,8 @@ AUTOPILOT_WATCHLIST_CAP = 40  # per side; protects BounceBot's IB pacing
 # every session since 07-10 while pick quality held up, so the cap - not the
 # gap/RS gates - was the binding constraint. Raise further only after a live
 # session confirms the pacing governor stays quiet at this size.)
-AUTOPILOT_OPEN_SCAN_MAX_SYMBOLS = 1200
+# P1-5 5c: above universe_all.txt's healthy size (~1,470), so the sweep reads all of it.
+AUTOPILOT_OPEN_SCAN_MAX_SYMBOLS = 2500
 AUTOPILOT_OPEN_SCAN_CHUNK_SIZE = 150
 
 # Near-HOD/LOD adds during regime pauses.
@@ -1060,22 +1061,49 @@ def build_watchlists_from_moves(
     }
 
 
-def load_universe_pool(max_symbols: int = AUTOPILOT_OPEN_SCAN_MAX_SYMBOLS) -> list[str]:
-    """Candidate pool for the open scan: the self-built universe lists."""
+def load_universe_pool(
+    max_symbols: int = AUTOPILOT_OPEN_SCAN_MAX_SYMBOLS,
+    *,
+    priority: Iterable[str] = (),
+) -> list[str]:
+    """Candidate pool for the open scan (yfinance only, no IB).
+
+    P1-5 5c: `priority` names (Focus and typed) first and never cut by the cap,
+    then all of `universe_all.txt`, then any long/short universe extras.
+    """
     symbols: list[str] = []
     seen: set[str] = set()
-    for path in (UNIVERSE_LONGS_FILE, UNIVERSE_SHORTS_FILE, UNIVERSE_ALL_FILE):
+
+    def add(symbol: Any) -> None:
+        symbol = str(symbol or "").strip().upper()
+        if symbol and symbol not in seen:
+            seen.add(symbol)
+            symbols.append(symbol)
+
+    for symbol in priority or ():
+        add(symbol)
+    keep = max(int(max_symbols), len(symbols))
+    for path in (UNIVERSE_ALL_FILE, UNIVERSE_LONGS_FILE, UNIVERSE_SHORTS_FILE):
+        if len(symbols) >= keep:
+            break
         try:
             for symbol in read_watchlist_symbols(Path(path)):
-                symbol = str(symbol or "").strip().upper()
-                if symbol and symbol not in seen:
-                    seen.add(symbol)
-                    symbols.append(symbol)
+                add(symbol)
         except Exception:
             continue
-        if len(symbols) >= max_symbols:
-            break
-    return symbols[:max_symbols]
+    return symbols[:keep]
+
+
+def prioritise_pool(priority: Iterable[str], pool: Iterable[str]) -> list[str]:
+    """`priority` names first, then the pool, each name once. Nothing is dropped."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for symbol in [*(priority or ()), *(pool or ())]:
+        symbol = str(symbol or "").strip().upper()
+        if symbol and symbol not in seen:
+            seen.add(symbol)
+            out.append(symbol)
+    return out
 
 
 def _default_downloader(symbols: list[str], *, period: str, interval: str):

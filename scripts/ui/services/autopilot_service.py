@@ -20,6 +20,8 @@ from project_paths import (
     AUTOPILOT_REPORT_FILE,
     AUTOPILOT_SCORECARD_FILE,
     AUTOPILOT_STATE_FILE,
+    FOCUS_LONGS_FILE,
+    FOCUS_SHORTS_FILE,
     INDUSTRY_BOARD_STATE_FILE,
     INDUSTRY_INTRADAY_RS_STATE_FILE,
     INTRADAY_BOUNCE_CANDIDATES_FILE,
@@ -955,6 +957,8 @@ class AutopilotService(QObject):
                 if not pool:
                     self._log("Universe files are empty/missing - keeping the existing watchlists. Run the Universe builder.")
                     return
+                # P1-5 5c: Focus and typed names are swept first, never cut.
+                pool = core.prioritise_pool(self._open_sweep_priority_names(), pool)
                 moves = core.fetch_open_scan_moves(pool, log=self._log)
                 if not moves:
                     self._log("Open scan returned no data - keeping the existing watchlists.")
@@ -1064,6 +1068,8 @@ class AutopilotService(QObject):
                     self._state["suggested_at"] = "skipped (no universe)"
                     self._save_state()
                     return
+                # P1-5 5c: Focus and typed names are swept first, never cut.
+                pool = core.prioritise_pool(self._open_sweep_priority_names(), pool)
                 moves = core.fetch_open_scan_moves(pool, log=self._log)
                 spy_move = (moves or {}).get("SPY")
                 spy_session = (spy_move or {}).get("session_date")
@@ -2151,6 +2157,17 @@ class AutopilotService(QObject):
             return list(_memoized_file_read(Path(path), read_watchlist_symbols))
         except Exception:
             return []
+
+    def _open_sweep_priority_names(self) -> list[str]:
+        """P1-5 5c: typed longs/shorts, then M5 Focus names - swept first, never cut."""
+        longs, shorts = self._read_watchlists()
+        names = [*longs, *shorts]
+        for path in (FOCUS_LONGS_FILE, FOCUS_SHORTS_FILE):
+            try:
+                names.extend(read_watchlist_symbols(Path(path)))
+            except Exception:  # noqa: BLE001 - a missing Focus file is "no Focus names"
+                continue
+        return names
 
     def _read_watchlists(self) -> tuple[list[str], list[str]]:
         try:
