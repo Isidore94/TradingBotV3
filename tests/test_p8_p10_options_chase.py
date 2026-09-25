@@ -486,6 +486,87 @@ def test_a_failing_chase_leaves_the_board_alone():
     assert emitted == [] and service.board() == _movers_board()
 
 
+# ---------------------------------------------------------------- the Opt column
+@pytest.fixture(scope="module")
+def qapp():
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
+def _board_widget(board):
+    from ui.widgets.movers_board import MoversBoard
+
+    widget = MoversBoard(persist=False)
+    widget.resize(420, 400)
+    widget.update_board(board)
+    widget.flush_pending_refresh()
+    return widget
+
+
+def _opt_index(widget, symbol):
+    columns = [k for k, _h in widget.model._columns]
+    row = [r["symbol"] for r in widget.model.rows()].index(symbol)
+    return widget.model.index(row, columns.index("opt"))
+
+
+def _chased_board(tmp_path):
+    board = {"as_of": "2026-09-28T10:40:00-04:00",
+             "state": {"state": "up_day", "pullback": False, "bounce": False},
+             **_movers_board(), "dip": {"long": [], "short": []}}
+    service = _service(tmp_path, FakeClient())
+    service.run(board, {}, now=NOW)
+    return service.annotate(board)
+
+
+def test_pop_table_has_an_opt_column_with_candidate_text_and_full_hover(qapp, tmp_path):
+    from PySide6.QtCore import Qt
+    from ui.widgets.movers_board import COLUMNS
+
+    assert [k for k, _h in COLUMNS["pop"]][:5] == ["symbol", "move15_pct", "rvol", "lvl", "opt"]
+    widget = _board_widget(_chased_board(tmp_path))
+    index = _opt_index(widget, "AAA")
+    assert widget.model.data(index) == "27C 10/02 · 0.85x0.95 · 11% · IV 62 (HV 41)"
+    hover = widget.model.data(index, Qt.ItemDataRole.ToolTipRole)
+    assert "candidate: 27C 10/02" in hover and "delta 0.26" in hover and "IV/HV 1.51x" in hover
+    unchecked = _opt_index(widget, "CCC")
+    assert widget.model.data(unchecked) == "—"
+    assert "not checked" in widget.model.data(unchecked, Qt.ItemDataRole.ToolTipRole)
+    assert not widget.table.isColumnHidden(index.column())  # fits the 420 px board
+
+
+def test_opt_column_shows_no_option_data_and_the_refusal_reason(qapp, tmp_path):
+    from PySide6.QtCore import Qt
+
+    board = _chased_board(tmp_path)
+    board["pop"]["long"][0]["opt"] = oc.no_data(_pop(symbol="AAA"), "IB not connected")
+    board["pop"]["long"][2]["opt"] = oc.pick_candidate(
+        _pop(symbol="BBB", rvol=1.4), _chain(), today=TODAY)
+    widget = _board_widget(board)
+    assert widget.model.data(_opt_index(widget, "AAA")) == "no option data (IB not connected)"
+    index = _opt_index(widget, "BBB")
+    assert widget.model.data(index) == "no chase (RVOL 1.4 < 2)"
+    assert "refused: RVOL 1.4 < 2" in widget.model.data(index, Qt.ItemDataRole.ToolTipRole)
+
+
+def test_clicking_the_opt_cell_only_copies_its_text(qapp, tmp_path):
+    from PySide6.QtWidgets import QApplication
+
+    widget = _board_widget(_chased_board(tmp_path))
+    opened, focus = [], []
+    widget.symbolActivated.connect(lambda *a: opened.append(a))
+    widget.focusAddRequested.connect(lambda *a: focus.append(a))
+    source = _opt_index(widget, "AAA")
+    widget._on_clicked(widget.proxy.mapFromSource(source))
+    assert QApplication.clipboard().text() == "27C 10/02 · 0.85x0.95 · 11% · IV 62 (HV 41)"
+    assert opened == [] and focus == []
+    assert "Copied" in widget.status_label.text()
+    # Any other cell still opens the chart, as before.
+    symbol_cell = widget.model.index(source.row(), 0)
+    widget._on_clicked(widget.proxy.mapFromSource(symbol_cell))
+    assert opened == [("AAA", "LONG")]
+
+
 def test_the_desk_wires_one_options_chase_into_the_movers_service():
     source = (SCRIPTS_DIR / "ui" / "app.py").read_text(encoding="utf-8")
     assert source.count("OptionsChaseService(") == 1
