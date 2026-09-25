@@ -2165,3 +2165,75 @@ def snapshot_cell_lines(payload: Mapping[str, Any] | None) -> list[str]:
                 # it is simply shown as the mapping it is.
                 lines.append(", ".join(f"{key}={value}" for key, value in sorted(cell.items())))
     return lines
+
+
+# ---------------------------------------------------------------------------
+# hold-out view (P2-9 9b) - read-only, beside the snapshot
+# ---------------------------------------------------------------------------
+
+#: What a window with no cell for a key says.
+HOLDOUT_NOT_IN_WINDOW = "none in this window"
+
+
+def _cell_value(cell: Any, name: str) -> Any:
+    return cell.get(name) if isinstance(cell, Mapping) else getattr(cell, name, None)
+
+
+def _holdout_key(cell: Any) -> tuple[str, str, str]:
+    return (
+        str(_cell_value(cell, "kind") or ""),
+        str(_cell_value(cell, "side") or "").upper(),
+        str(_cell_value(cell, "family") or ""),
+    )
+
+
+def holdout_text(cell: Any) -> str:
+    """One cell as the hold-out column prints it. Under its floor says so."""
+    if cell is None:
+        return HOLDOUT_NOT_IN_WINDOW
+    graded = int(_cell_value(cell, "n_graded") or 0)
+    n = graded or int(_cell_value(cell, "n_eligible") or 0)
+    floor = int(_cell_value(cell, "n_floor") or 0)
+    if not _cell_value(cell, "meets_floor"):
+        return f"n<{floor} (n={n})" if floor else f"below its floor (n={n})"
+    statistic = _cell_value(cell, "statistic")
+    if statistic is None:
+        return f"unmeasured (n={n})"
+    low = _cell_value(cell, "uncertainty_low")
+    bound = "" if low is None else f" (>= {float(low):.2f})"
+    return f"{float(statistic):.2f}{bound} n={n}"
+
+
+def _holdout_order(cells: Iterable[Any]) -> list[Any]:
+    def rank(cell: Any) -> tuple:
+        kind = _holdout_key(cell)[0]
+        return (
+            SNAPSHOT_KINDS.index(kind) if kind in SNAPSHOT_KINDS else len(SNAPSHOT_KINDS),
+            not bool(_cell_value(cell, "meets_floor")),
+            -float(_cell_value(cell, "uncertainty_low") or 0.0),
+            _holdout_key(cell),
+        )
+
+    return sorted(list(cells or ()), key=rank)
+
+
+def holdout_view(recent_cells: Iterable[Any], prior_cells: Iterable[Any]) -> list[dict[str, Any]]:
+    """Each (kind, SIDE, family) recent cell beside the prior window's.
+
+    Both sides are the SAME cell builders over two date windows; nothing here
+    measures anything. Recent cells lead in rank order, then prior-only ones.
+    """
+    recent = {_holdout_key(cell): cell for cell in _holdout_order(recent_cells)}
+    prior = {_holdout_key(cell): cell for cell in _holdout_order(prior_cells)}
+    keys = list(recent) + [key for key in prior if key not in recent]
+    return [
+        {
+            "kind": key[0],
+            "side": key[1],
+            "family": key[2],
+            "statistic_name": str(_cell_value(recent.get(key) or prior.get(key), "statistic_name") or ""),
+            "recent_text": holdout_text(recent.get(key)),
+            "prior_text": holdout_text(prior.get(key)),
+        }
+        for key in keys
+    ]

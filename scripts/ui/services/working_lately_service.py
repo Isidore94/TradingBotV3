@@ -36,7 +36,7 @@ import json
 import logging
 import os
 import threading
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -227,41 +227,161 @@ def _stream_outcome_rows(window: tuple[str, str]) -> list[dict]:
 
 
 def _prior_m5(prior: tuple[str, str]) -> dict[str, Any]:
-    """The prior window's M5 results. Read once per window, never per build."""
+    """The prior window's M5 results, grades and held x ran cells.
+
+    Read once per window, never per build: the prior window's outcomes are
+    settled. The same builders as the live cells, over the prior dates only.
+    """
     import looking_back
+    import setup_grades
 
     def build() -> dict[str, Any]:
         rows = _stream_outcome_rows(prior)
-        return {"results": looking_back.m5_alert_results(rows)}
+        held: list[Any] = []
+        try:
+            import held_run_score
+
+            episodes = held_run_score.load_episodes(rows=rows, as_of=prior[1])
+            if episodes:
+                held = working_lately.daytrade_held_run_cells(
+                    held_run_score.dimension_summaries(episodes, as_of=prior[1])
+                )
+        except Exception:  # noqa: BLE001 - the held x ran column is absent, not fatal
+            logging.warning("Looking-back prior held-run read failed", exc_info=True)
+        return {
+            "results": looking_back.m5_alert_results(rows),
+            "grades": setup_grades.daytrade_cells(setup_grades.bracket_results(rows)),
+            "held": held,
+        }
 
     return _cached("prior_m5", tuple(prior), build)
 
 
-def read_looking_back() -> dict[str, Any] | None:
-    """Pick equity curves per population, or None when it could not be built.
+def _tracker_reference(recent_rows: Any) -> date:
+    """The day the tracker's recent family rows were built for."""
+    stamps = []
+    for row in recent_rows or ():
+        text = str((row or {}).get("tracker_saved_at") or "")[:10]
+        try:
+            stamps.append(date.fromisoformat(text))
+        except ValueError:
+            continue
+    return max(stamps) if stamps else _last_completed_session()
+
+
+def _swing(recent_reference: date) -> dict[str, Any]:
+    """Swing picks for the curve, and the tracker's family rows for the prior window.
+
+    One read of the compact scoring snapshot, cached on its mtime. The prior
+    rows are the tracker's own `build_recent_tracker_setup_family_rows` at an
+    earlier reference date: the same statistic, split by date.
+    """
+    import looking_back
+    import setup_grades
+    from master_avwap_lib import legacy
+
+    lookback = int(legacy.RECENT_SETUP_TYPE_LOOKBACK_DAYS)
+    prior_reference = looking_back.tracker_prior_reference(recent_reference, lookback)
+
+    def build() -> dict[str, Any]:
+        setups = _scoring_setups()
+        prior_rows = legacy.build_recent_tracker_setup_family_rows(
+            setups,
+            reference_date=prior_reference,
+            lookback_days=lookback,
+            current_regime_label=None,
+        ) if setups else []
+        for row in prior_rows:
+            row["namespace"] = "live"
+        return {
+            "picks": looking_back.swing_pick_results(setups),
+            "grades": setup_grades.swing_cells(prior_rows),
+            "trade_r": working_lately.swing_trade_r_cells(prior_rows),
+            "windows": {
+                "recent": [
+                    (recent_reference - timedelta(days=lookback)).isoformat(),
+                    recent_reference.isoformat(),
+                ],
+                "prior": [
+                    (prior_reference - timedelta(days=lookback)).isoformat(),
+                    prior_reference.isoformat(),
+                ],
+            },
+        }
+
+    return _cached("swing", (_file_key(_scoring_snapshot_path()), prior_reference), build)
+
+
+def _prior_favorable() -> dict[str, Any]:
+    """The favorable-direction cells over the prior window, cached per window."""
+    import looking_back
+    import swing_evidence
+    from project_paths import MASTER_AVWAP_TIER_OUTCOMES_FILE
+
+    policy = swing_evidence.POLICY_SCANROW_V1
+    windows = looking_back.split_windows(sessions=int(policy.window_sessions))
+    path = Path(MASTER_AVWAP_TIER_OUTCOMES_FILE)
+
+    def build() -> dict[str, Any]:
+        cells: list[Any] = []
+        if path.is_file():
+            read = swing_evidence.read_eligible_rows(path, policy, window=windows["prior"])
+            cells = working_lately.swing_favorable_cells(read)
+        return {"cells": cells, "windows": {k: list(v) for k, v in windows.items()}}
+
+    return _cached("prior_favorable", (_file_key(path), windows["prior"]), build)
+
+
+def read_looking_back(
+    *, recent_rows: Any = (), snapshot: Any = None, grades: Mapping[str, Any] | None = None
+) -> dict[str, Any] | None:
+    """Pick equity curves and the hold-out columns, or None when not built.
 
     THE WORKER SIDE. The recent M5 rows are this build's shared window
-    (`_outcome_rows`); the prior window's results are cached per window; the
-    swing picks are cached on the scoring snapshot's mtime.
+    (`_outcome_rows`); every prior-window read is cached. The recent side of
+    each hold-out row is the value this build already published.
     """
     try:
         import looking_back
+        import setup_grades
 
         windows = looking_back.split_windows()
-        swing = _cached(
-            "swing_picks",
-            _file_key(_scoring_snapshot_path()),
-            lambda: looking_back.swing_pick_results(_scoring_setups()),
-        )
+        swing = _swing(_tracker_reference(recent_rows))
         recent_m5 = looking_back.m5_alert_results(
             row
             for row in (_outcome_rows() or ())
             if looking_back.in_window(row.get("trade_date"), windows["recent"])
         )
-        prior_m5 = _prior_m5(windows["prior"])["results"]
+        prior_m5 = _prior_m5(windows["prior"])
+        favorable = _prior_favorable()
+        cells = list(getattr(snapshot, "cells", ()) or ())
+        graded = grades or {}
+
+        def of_kind(*kinds: str) -> list[Any]:
+            return [cell for cell in cells if cell.kind in kinds]
+
+        holdout = {
+            "swing": {
+                "windows": swing["windows"],
+                "favorable_windows": favorable["windows"],
+                "grades": setup_grades.holdout_view(graded.get("swing") or (), swing["grades"]),
+                "working_lately": working_lately.holdout_view(
+                    of_kind("swing_trade_r", "swing_favorable"),
+                    list(swing["trade_r"]) + list(favorable["cells"]),
+                ),
+            },
+            "day": {
+                "windows": {k: list(v) for k, v in windows.items()},
+                "grades": setup_grades.holdout_view(graded.get("daytrade") or (), prior_m5["grades"]),
+                "working_lately": working_lately.holdout_view(
+                    of_kind("daytrade_held_run"), prior_m5["held"]
+                ),
+            },
+        }
         return looking_back.build_payload(
-            swing_results=swing,
-            m5_results=list(prior_m5) + list(recent_m5),
+            swing_results=swing["picks"],
+            m5_results=list(prior_m5["results"]) + list(recent_m5),
+            holdout=holdout,
             as_of=_last_completed_session().isoformat(),
         )
     except Exception:  # noqa: BLE001 - a display reading, never fatal
@@ -478,7 +598,7 @@ class WorkingLatelyService(QObject):
                 previous_verdicts=self.previous_verdicts(),
             )
             grades = read_setup_grades(recent_rows)
-            looking = read_looking_back()
+            looking = read_looking_back(recent_rows=recent_rows, snapshot=snapshot, grades=grades)
         finally:
             _OUTCOME_ROWS_THIS_BUILD = None
         self.publish(snapshot)
