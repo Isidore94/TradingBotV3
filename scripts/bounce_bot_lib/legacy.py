@@ -14612,7 +14612,6 @@ def main():
 
     try:
         import argparse
-        import sys
         print("Imports successful.")
 
         parser = argparse.ArgumentParser()
