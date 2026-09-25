@@ -121,3 +121,69 @@ def test_a_failed_day_call_still_names_the_size_it_sent(tmp_path):
     assert outcome["status"] == "degraded_no_narrative"
     assert "Read timed out" in outcome["reason"]
     assert "bytes (~" in outcome["reason"]
+
+
+# ---------------------------------------------------------------------------
+# 2. econ brief: clock times normalise; a past event in the prose is not today's
+# ---------------------------------------------------------------------------
+BRIEF_0924 = (
+    Path(__file__).resolve().parent / "fixtures" / "day_review" / "forecast_2026-09-24.md"
+).read_text(encoding="utf-8")
+
+
+def _econ_pack(target: str) -> dict:
+    import econ_brief
+
+    forecasts = [{"session": "2026-09-24", "text": BRIEF_0924, "entry_id": "e",
+                  "created_at": "2026-09-24T08:55:00-04:00"}]
+    return econ_brief.build_pack(forecasts, target_session=target)
+
+
+def _auction_reply(pack: dict, text: str) -> dict:
+    rows = list(pack["today"]) + list(pack["week"])
+    auction = next(row["id"] for row in rows if row["kind"] == "auction")
+    assert next(row for row in rows if row["id"] == auction)["time_et"] == "13:00"
+    other = [row["id"] for row in rows if row["id"] != auction][:2]
+    return {"lines": [
+        {"text": text, "event_ids": [auction]},
+        {"text": "Watch the rates tape.", "event_ids": [other[0]]},
+        {"text": "Keep size small.", "event_ids": [other[1]]},
+    ]}
+
+
+def test_every_way_of_writing_one_pm_matches_a_1300_et_event():
+    from ai_jobs import econ_brief_narration as job
+
+    pack = _econ_pack("2026-09-24")  # the brief's own day, when the auction is live
+    for text in (
+        "The 7-year auction is at 1:00 pm ET.",   # rejected live 2026-09-24 23:37
+        "Observe the 1 p.m. Treasury auction.",   # rejected live 2026-09-24 22:35
+        "The 7-year auction lands at 1pm.",
+        "The 7-year auction is at 13:00 ET.",
+        "The 7-year auction is at 1:00 P.M.",
+    ):
+        assert job.validate(_auction_reply(pack, text), pack)[0] == text
+
+
+def test_a_wrong_time_for_the_auction_still_rejects():
+    import pytest
+
+    from ai_jobs import econ_brief_narration as job
+
+    pack = _econ_pack("2026-09-24")
+    with pytest.raises(ValueError, match="is not the time of an event it cites"):
+        job.validate(_auction_reply(pack, "The 7-year auction is at 2:00 pm ET."), pack)
+
+
+def test_the_live_rejection_was_a_past_auction_and_the_model_is_told_so():
+    """The night of 09-24 plans 09-25; the 13:00 auction was on 09-24's brief day."""
+    from ai_jobs import econ_brief_narration as job
+
+    pack = _econ_pack("2026-09-25")
+    kinds = {row["kind"] for row in list(pack["today"]) + list(pack["week"])}
+    assert "auction" not in kinds
+    assert "1 p.m. 7-year auction" in pack["bottom_line"]
+    instructions = job._evidence(pack)["instructions"]
+    assert "2026-09-24" in instructions
+    assert "already past" in instructions
+    assert job.PROMPT_VERSION != "econ_brief_narration_v1"

@@ -19,7 +19,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-PROMPT_VERSION = "econ_brief_narration_v1"
+PROMPT_VERSION = "econ_brief_narration_v2"
 
 MIN_LINES = 3
 MAX_LINES = 6
@@ -131,7 +131,11 @@ def _evidence(pack: Mapping[str, Any]) -> dict[str, Any]:
             "watch today. Use only this pack. Name only events in `today` or `week`, and "
             "put the id of every event a line names in its event_ids. Write a clock time "
             "only if it is that cited event's time_et (ET). Never add a time, number or "
-            "event the pack does not hold. Lead with today's timed events."
+            "event the pack does not hold. Lead with today's timed events. "
+            f"Today is {pack.get('target_session') or 'the target session'}. The brief "
+            f"prose (bottom_line, ranked_signals, turbulence_lines, playbooks) was written "
+            f"on {pack.get('brief_session') or 'an earlier day'} for that day: an event it "
+            "names that is not in `today` or `week` is already past - never mention it."
         ),
         "pack": dict(pack),
     }
