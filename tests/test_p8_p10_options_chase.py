@@ -385,6 +385,14 @@ def _fake_app_class(mode):
             if mode == "denied":
                 self.error(reqId, 354, "Requested market data is not subscribed.")
                 return
+            if mode == "competing":
+                self.error(reqId, 10197, "No market data during competing live session")
+                return
+            if mode == "no_security":
+                self.error(reqId, 200, "No security definition has been found")
+                return
+            if mode == "silent":  # never answers: every snapshot times out
+                return
             delta = max(0.02, 0.5 - 0.18 * (contract.strike - 25.0))
             self.tickPrice(reqId, 1, 0.50, None)
             self.tickPrice(reqId, 2, 0.54, None)
@@ -450,6 +458,55 @@ def test_no_option_permission_stops_requests_for_the_session(tmp_path, caplog):
     assert sum("no option data this session" in r.message for r in caplog.records) == 1
     board = service.annotate(_movers_board())
     assert oc.cell_text(board["pop"]["long"][1]["opt"]) == f"no option data ({reason})"
+
+
+@pytest.mark.parametrize("mode, reason", [("silent", "no quotes (IB timeout)"),
+                                          ("no_security", "no quotes (IB 200)")])
+def test_no_quote_at_all_is_no_option_data_never_a_cached_refusal(tmp_path, mode, reason):
+    ocs = _svc()
+    client, apps = _client(mode)
+    try:
+        with pytest.raises(ocs.OptionDataError) as caught:
+            client.fetch_chain("ABC", side="long", last=25.0, hv=0.41, today=TODAY)
+        assert caught.value.reason == reason
+        service = ocs.OptionsChaseService(
+            client_factory=lambda: client, hv_provider=lambda _s, _d: 0.41,
+            log_path=tmp_path / "log.jsonl", max_per_tick=1)
+        first = service.run(_movers_board(), {}, now=NOW)
+        asked = len(apps[0].requests)
+        service.run(_movers_board(), {}, now=NOW)
+    finally:
+        client.close()
+    assert first["AAA|long"]["status"] == "no_data" and first["AAA|long"]["reason"] == reason
+    assert oc.cell_text(first["AAA|long"]) == f"no option data ({reason})"
+    assert len(apps[0].requests) > asked  # not cached: asked again next tick
+    assert not (tmp_path / "log.jsonl").exists()  # never logged as a refusal
+
+
+def test_competing_live_session_is_retried_next_tick_not_latched_for_the_day(tmp_path):
+    ocs = _svc()
+    client, apps = _client("competing")
+    service = ocs.OptionsChaseService(
+        client_factory=lambda: client, hv_provider=lambda _s, _d: 0.41,
+        log_path=tmp_path / "log.jsonl")
+    try:
+        first = service.run(_movers_board(), {}, now=NOW)
+        asked = len(apps[0].requests)
+        service.run(_movers_board(), {}, now=NOW)
+    finally:
+        client.close()
+    reason = "competing live session (IB 10197)"
+    assert first["AAA|long"]["reason"] == reason and service.down_reason == reason
+    assert len(apps[0].requests) > asked  # retried on the next tick
+    assert 10197 not in ocs.NO_PERMISSION_CODES
+
+
+def test_connection_errors_are_bounded():
+    ocs = _svc()
+    app = ocs._OptionApp()
+    for i in range(300):
+        app.error(-1, 1100, f"lost {i}")
+    assert len(app.connection_errors) == 200 and app.connection_errors[-1] == "1100: lost 299"
 
 
 def test_movers_service_runs_the_chase_after_the_final_board_and_republishes(tmp_path):

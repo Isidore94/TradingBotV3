@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import deque
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -58,7 +59,11 @@ CLIENT_ID_RETRY_COUNT = 3
 CONNECT_TIMEOUT_SECONDS = 5.0
 CLIENT_ID_IN_USE = 326
 #: IB codes that mean "no market-data permission" for the contract.
-NO_PERMISSION_CODES = frozenset({354, 10089, 10090, 10091, 10168, 10186, 10197})
+NO_PERMISSION_CODES = frozenset({354, 10089, 10090, 10091, 10168, 10186})
+#: "Competing live session": another session holds the data; a connection-type miss.
+COMPETING_SESSION_CODES = frozenset({10197})
+#: Connection notices kept for the connect error text (bounded).
+CONNECTION_ERRORS_KEPT = 200
 _INFO_CODES = {2103, 2104, 2105, 2106, 2107, 2108, 2119, 2157, 2158, 165, 10167}
 _CONNECTION_LOST = {504, 1100, 1300, 502}
 #: tickPrice types: bid, ask (live and delayed); tickOptionComputation: model (live, delayed).
@@ -109,7 +114,7 @@ class _OptionApp(EWrapper, EClient):  # type: ignore[misc]
         EClient.__init__(self, self)
         self.ready = threading.Event()
         self.client_id_in_use = False
-        self.connection_errors: list[str] = []
+        self.connection_errors: deque[str] = deque(maxlen=CONNECTION_ERRORS_KEPT)
         self._lock = threading.Lock()
         self._rows: dict[int, list[Any]] = {}
         self._quotes: dict[int, dict[str, float]] = {}
@@ -313,7 +318,7 @@ class IBOptionChainClient:
                 app.reqMarketDataType(MARKET_DATA_TYPE_LIVE)
                 self._app, self._thread, self.client_id = app, thread, client_id
                 return
-            last = "; ".join(app.connection_errors[-2:]) or "no nextValidId"
+            last = "; ".join(list(app.connection_errors)[-2:]) or "no nextValidId"
             self._drop(app, thread)
             if not app.client_id_in_use:
                 break
@@ -402,21 +407,31 @@ class IBOptionChainClient:
             deadline = time.monotonic() + self._quote_timeout
             for _req, _strike, done in requests:
                 done.wait(max(0.0, deadline - time.monotonic()))
-            denied: set[int] = set()
+            codes: set[int] = set()
             for req_id, strike, _done in requests:
                 try:
                     app.cancelMktData(req_id)
                 except Exception as exc:
                     note_swallowed("options chase snapshot cancel failed", exc, quiet=True)
                 _rows, quote, errors = app.take(req_id)
-                denied.update(code for code in errors if code in NO_PERMISSION_CODES)
+                codes.update(errors)
                 if quote:
                     chain["quotes"].append({"expiry": expiry.isoformat(), "strike": strike,
                                             "right": right, **quote})
-            if denied and not any(q.get("bid") is not None or q.get("ask") is not None
-                                  for q in chain["quotes"]):
+            priced = any(q.get("bid") is not None or q.get("ask") is not None
+                         for q in chain["quotes"])
+            denied = codes & NO_PERMISSION_CODES
+            if denied and not priced:
                 raise OptionDataError(
                     f"no option market-data permission (IB {min(denied)})", permission=True)
+            competing = codes & COMPETING_SESSION_CODES
+            if competing and not priced:
+                # Another live session holds the data: retried next tick, never latched.
+                raise OptionDataError(
+                    f"competing live session (IB {min(competing)})", connection=True)
+            if requests and not chain["quotes"]:
+                why = f"IB {min(codes)}" if codes else "IB timeout"
+                raise OptionDataError(f"no quotes ({why})")
             return chain
 
 
