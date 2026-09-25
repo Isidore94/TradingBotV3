@@ -74,7 +74,24 @@ def _with_warehouse_checks(payload: dict[str, Any]) -> dict[str, Any]:
     """Append the warehouse rows and keep the summary counters consistent."""
     if not isinstance(payload, dict):
         return payload
-    rows = warehouse_checks()
+    return _merge_checks(payload, warehouse_checks())
+
+
+def _with_map_freshness_checks(payload: dict[str, Any]) -> dict[str, Any]:
+    """Append the sector/industry map age rows (P2-8 8c); audit worker only."""
+    if not isinstance(payload, dict):
+        return payload
+    try:
+        from map_freshness import health_checks
+
+        rows = health_checks()
+    except Exception:
+        return payload
+    return _merge_checks(payload, rows)
+
+
+def _merge_checks(payload: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Append check rows; red/amber rows may worsen the verdict, never improve it."""
     if not rows:
         return payload
     merged = dict(payload)
@@ -366,6 +383,7 @@ class HealthPanel(QFrame):
         try:
             payload = build_operations_audit()
             payload = _with_warehouse_checks(payload)
+            payload = _with_map_freshness_checks(payload)
             payload = _with_tracker_write_line(payload)
             payload = _with_ai_night_lines(payload)
         except Exception as exc:
