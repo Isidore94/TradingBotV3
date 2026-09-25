@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
+from swallowed import note_swallowed
 
 
 LEVEL_STORE_SCHEMA_VERSION = 1
@@ -36,8 +37,8 @@ def _coerce_float(value) -> float | None:
     try:
         if pd.isna(value):
             return None
-    except TypeError:
-        pass
+    except TypeError as exc:
+        note_swallowed("value not a scalar for isna; converting directly", exc, quiet=True)
     try:
         return float(value)
     except (TypeError, ValueError):
