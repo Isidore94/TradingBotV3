@@ -47,7 +47,6 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from project_paths import OUTPUT_DIR  # noqa: E402
 from setup_playbook_study import (  # noqa: E402
     MIN_PRICE,
     PLAYBOOK,
@@ -60,11 +59,13 @@ from setup_playbook_study import (  # noqa: E402
 )
 from master_avwap_lib.legacy import load_earnings_date_cache  # noqa: E402
 
-FORENSICS_MOVERS_CSV = OUTPUT_DIR / "reports" / "move_forensics_movers.csv"
-FORENSICS_BASELINE_CSV = OUTPUT_DIR / "reports" / "move_forensics_baseline.csv"
-FORENSICS_PATTERNS_CSV = OUTPUT_DIR / "reports" / "move_forensics_patterns.csv"
-FORENSICS_REPORT_TXT = OUTPUT_DIR / "reports" / "move_forensics_report.txt"
-FORENSICS_AI_DIGEST_JSON = OUTPUT_DIR / "reports" / "move_forensics_ai_digest.json"
+from project_paths import (  # noqa: E402
+    FORENSICS_AI_DIGEST_JSON,
+    FORENSICS_BASELINE_CSV,
+    FORENSICS_MOVERS_CSV,
+    FORENSICS_PATTERNS_CSV,
+    FORENSICS_REPORT_TXT,
+)
 
 # A "good move": >= MOVE_MIN_ATR ATRs of favorable travel within
 # MOVE_HORIZON_SESSIONS sessions, with at most MOVE_MAX_ADVERSE_ATR ATRs of

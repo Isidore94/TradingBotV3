@@ -321,6 +321,13 @@ LOCAL_LOG_DIR = LOCAL_SETTINGS_DIR / "logs"
 RUNTIME_DATA_DIR = DATA_DIR / "runtime"
 REPORTS_DIR = OUTPUT_DIR / "reports"
 AI_SUMMARY_EXPORT_DIR = REPORTS_DIR / "ai_summaries"
+# Move forensics exports. Here so the Research page can read them without
+# importing move_forensics (and master_avwap_lib.legacy) at desk boot.
+FORENSICS_MOVERS_CSV = REPORTS_DIR / "move_forensics_movers.csv"
+FORENSICS_BASELINE_CSV = REPORTS_DIR / "move_forensics_baseline.csv"
+FORENSICS_PATTERNS_CSV = REPORTS_DIR / "move_forensics_patterns.csv"
+FORENSICS_REPORT_TXT = REPORTS_DIR / "move_forensics_report.txt"
+FORENSICS_AI_DIGEST_JSON = REPORTS_DIR / "move_forensics_ai_digest.json"
 PERSISTENT_RUNTIME_DATA_DIR = RUNTIME_DATA_DIR
 
 LONGS_FILE = PERSISTENT_DATA_DIR / "longs.txt"

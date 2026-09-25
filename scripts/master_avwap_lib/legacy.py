@@ -1904,24 +1904,6 @@ def build_bouncebot_focus_context(symbol: str, side: str, trade_date: str | None
         "bouncebot_relevant_focus_timeframes": list(relevant_record.get("timeframes") or []),
     }
 WATCHLIST_SKIP_TOKENS = {"LONG", "SHORT", "NONE"}
-YF_EARNINGS_LOGGER_NAMES = (
-    "yfinance",
-    "yfinance.base",
-    "yfinance.scrapers",
-    "yfinance.scrapers.calendar",
-    "yfinance.scrapers.quote",
-)
-IBAPI_NOISY_LOGGER_NAMES = (
-    "ibapi",
-    "ibapi.client",
-    "ibapi.comm",
-    "ibapi.connection",
-    "ibapi.decoder",
-    "ibapi.orderdecoder",
-    "ibapi.reader",
-    "ibapi.utils",
-    "ibapi.wrapper",
-)
 YF_EARNINGS_NO_DATA_MARKERS = (
     "No earnings dates found",
     "symbol may be delisted",
@@ -2009,54 +1991,20 @@ _DAILY_BAR_FETCH_COUNTS: dict[str, int] = {key: 0 for key in DAILY_BAR_FETCH_COU
 _DAILY_BAR_YAHOO_PREFETCH: dict[tuple[str, str], pd.DataFrame] = {}
 DAILY_BAR_YAHOO_BATCH_SIZE = 100
 DAILY_BAR_YAHOO_BATCH_THREADS = 8
-APP_LOG_FORMAT = "%(asctime)s %(levelname)s [%(filename)s]: %(message)s"
 
 # ============================================================================
 # LOGGING
 # ============================================================================
 
-def _configure_third_party_loggers() -> None:
-    # The IB API emits one INFO log per socket send/request, which overwhelms
-    # the console and makes it look like the watchlist itself exploded.
-    for logger_name in IBAPI_NOISY_LOGGER_NAMES:
-        ib_logger = logging.getLogger(logger_name)
-        ib_logger.setLevel(logging.WARNING)
-        ib_logger.propagate = True
-    for logger_name in YF_EARNINGS_LOGGER_NAMES:
-        yf_logger = logging.getLogger(logger_name)
-        yf_logger.setLevel(logging.CRITICAL)
-        yf_logger.propagate = True
-
-
-def configure_logging():
-    logger = logging.getLogger()
-    if logger.handlers:
-        _configure_third_party_loggers()
-        return  # already configured
-
-    logger.setLevel(logging.INFO)
-    fmt = logging.Formatter(APP_LOG_FORMAT)
-
-    ch = logging.StreamHandler()
-    ch.setFormatter(fmt)
-    ch.setLevel(logging.INFO)
-
-    logger.addHandler(ch)
-    try:
-        MASTER_AVWAP_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        fh = SafeRotatingFileHandler(
-            MASTER_AVWAP_LOG_FILE,
-            maxBytes=2_000_000,
-            backupCount=APP_LOG_BACKUP_COUNT,
-        )
-    except OSError as exc:
-        logger.warning(f"File logging disabled for {MASTER_AVWAP_LOG_FILE}: {exc}")
-        return
-
-    fh.setFormatter(fmt)
-    fh.setLevel(logging.INFO)
-    logger.addHandler(fh)
-    _configure_third_party_loggers()
+# Moved unchanged to app_logging (P2-11e) so the package can configure logging
+# without loading this module; re-exported here under the same names.
+from .app_logging import (  # noqa: E402
+    APP_LOG_FORMAT,
+    IBAPI_NOISY_LOGGER_NAMES,
+    YF_EARNINGS_LOGGER_NAMES,
+    _configure_third_party_loggers,
+    configure_logging,
+)
 
 configure_logging()
 

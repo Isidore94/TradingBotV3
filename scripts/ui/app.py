@@ -130,6 +130,12 @@ DAY_REVIEW_PAGE_TITLE = "Day Review"
 class MainWindow(QMainWindow):
     def __init__(self, state: UiState) -> None:
         super().__init__()
+        # P2-11e: master_avwap_lib.legacy (and yfinance) no longer load with
+        # ui.app. Load them once, now, on one worker under safe_import's lock,
+        # so the first real use is neither on the Qt thread nor a race.
+        from ui.services import safe_import
+
+        threading.Thread(target=safe_import.warm, name="engine-warm", daemon=True).start()
         self.state = state
         self.price_alert_toasts = PriceAlertToastManager(self)
         self.setWindowTitle("TradingBotV3 Trading Desk")

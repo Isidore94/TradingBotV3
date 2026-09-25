@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
 
 from human_focus_tracking import snapshot_human_focus_picks
 from pick_feedback import latest_like_origins
-from ui import theme
 from ui.models.bounce import BounceAlert
 from ui.models.rrs import rrs_rows
 from ui.services.focus_service import FocusService
@@ -80,7 +79,7 @@ class FocusPicksPanel(QFrame):
             "Swing Focus",
             "swing",
             "Multi-day picks the bot learns from - synced into the swing watchlists, graded 1/3/5/10 sessions.",
-            accent=theme.color("favorite"),
+            accent="favorite",
         )
         m5_section = self._build_category_section(
             "M5 / Day-Trade Focus",
@@ -211,7 +210,7 @@ class FocusPicksPanel(QFrame):
         title_label = QLabel(title)
         title_label.setObjectName("SectionTitle")
         if accent:
-            title_label.setStyleSheet(f"color: {accent}; font-weight: 700;")
+            title_label.setProperty("accent", accent)
         hint_label = QLabel(hint)
         hint_label.setObjectName("MutedLabel")
         hint_label.setWordWrap(True)
@@ -680,6 +679,14 @@ class FocusSideEditor(QFrame):
         self.statusChanged.emit(f"{self.category.upper()} focus {self.side}s: {message}")
 
 
+def _repolish(widget) -> None:
+    """Re-read theme.qss for one widget after a dynamic property changed."""
+    style = widget.style()
+    style.unpolish(widget)
+    style.polish(widget)
+    widget.update()
+
+
 class FocusStatusChip(QFrame):
     """Ticker chip with optional live BounceBot/RRS status.
 
@@ -713,12 +720,15 @@ class FocusStatusChip(QFrame):
         self.symbol = symbol
         self.tone = tone
         self.setObjectName("FocusStatusChip")
+        # Every look is a theme.qss variant picked by these properties (P2-11e).
+        self.setProperty("chipSide", tone)
         self._look: tuple | None = None
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._open_verdict_menu)
 
         self.title = QLabel(symbol)
-        self.title.setStyleSheet(f"color: {theme.color(tone)}; font-weight: 700;")
+        self.title.setObjectName("FocusChipTitle")
+        self.title.setProperty("chipSide", tone)
         remove_button = QToolButton()
         remove_button.setText("x")
         remove_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -736,11 +746,8 @@ class FocusStatusChip(QFrame):
             "above yesterday's high for a long, below yesterday's low for "
             "a short. Same measurement the adoption gate uses."
         )
-        self.moving_flag.setStyleSheet(
-            f"color: {theme.color('favorite')}; font-weight: 700;"
-        )
         self.live_flag = QLabel("")
-        self.live_flag.setStyleSheet("font-weight: 700;")
+        self.live_flag.setObjectName("FocusLiveFlag")
 
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
@@ -804,14 +811,9 @@ class FocusStatusChip(QFrame):
             # it belongs inside the same guard. Outside it, this ran a
             # stylesheet parse per chip per update - on a 45-name board, every
             # bounce alert and every mover pass.
-            if has_bounce:
-                self.live_flag.setStyleSheet(
-                    f"color: {theme.color('favorite')}; font-weight: 700;"
-                )
-            elif has_rrs:
-                self.live_flag.setStyleSheet(
-                    f"color: {theme.color(accent_tone)}; font-weight: 700;"
-                )
+            if has_bounce or has_rrs:
+                self.live_flag.setProperty("liveTone", "favorite" if has_bounce else accent_tone)
+                _repolish(self.live_flag)
 
         self.moving_flag.setVisible(is_mover)
         if has_bounce:
@@ -832,22 +834,10 @@ class FocusStatusChip(QFrame):
             label.setVisible(bool(text))
 
     def _apply_look(self, has_bounce: bool, has_rrs: bool, accent_tone: str) -> None:
-        """The one expensive call, made only when the accent actually moves."""
-        accent = theme.color("favorite" if has_bounce else accent_tone)
-        side_color = theme.color(self.tone)
-        bg_alpha = 0.20 if has_bounce else 0.14 if has_rrs else 0.10
-        border_alpha = 0.78 if has_bounce else 0.55
-        self.setStyleSheet(
-            f"""
-            QFrame#FocusStatusChip {{
-                background: {theme.with_alpha(accent, bg_alpha)};
-                border: 1px solid {theme.with_alpha(accent, border_alpha)};
-                border-radius: 8px;
-            }}
-            QFrame#FocusStatusChip QLabel {{ background: transparent; }}
-            QFrame#FocusStatusChip QToolButton {{
-                color: {side_color}; border: none; background: transparent; font-weight: 700; padding: 0 2px;
-            }}
-            QFrame#FocusStatusChip QToolButton:hover {{ color: {theme.color('text_primary')}; }}
-            """
-        )
+        """Pick the chip's theme.qss variant; only when the accent actually moves."""
+        if has_bounce:
+            look = "bounce"
+        else:
+            look = f"{'rrs' if has_rrs else 'plain'}-{accent_tone}"
+        self.setProperty("chipLook", look)
+        _repolish(self)

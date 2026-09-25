@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """One-at-a-time first import of the heavy engine modules.
 
-``master_avwap_lib/__init__.py`` imports its own ``legacy`` submodule, so the
-package is only usable once that import has run to completion. While the
-chart path was synchronous this never mattered: everything imported it from
+``master_avwap_lib.legacy`` is heavy. Until P2-11e the package imported it
+eagerly; now it loads on first use, and ``MainWindow`` calls ``warm`` on one
+worker at startup so that first use is here, under this lock. While the
+chart path was synchronous none of this mattered: everything imported it from
 the GUI thread, in order.
 
 Now the snapshot build runs on a pool worker while the D1 backfill and
