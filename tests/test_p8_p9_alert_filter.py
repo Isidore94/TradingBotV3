@@ -368,9 +368,9 @@ def test_focus_or_typed_list_change_redraws_the_bar(panel, env, monkeypatch):
         panel.add_alert(_m5("CEE", "ceetype"))
         panel.add_alert(_m5("DEE", "deetype"))
         assert bar.symbols() == []
-        # CEE joins Focus: the bar redraws with no Show-filter change.
+        # CEE joins Focus: the coalesced Focus reaction redraws the bar.
         monkeypatch.setattr(panel, "_alert_is_focus", lambda alert: alert.symbol in ("FOC", "CEE"))
-        panel._on_show_filter_membership_changed()
+        panel._on_focus_feed_coalesced()
         assert bar.symbols() == ["CEE"]
         # DEE is typed into longs.txt: the next typed-list check redraws.
         Path(project_paths.LONGS_FILE).write_text("TYPED\nDEE\n", encoding="utf-8")
@@ -379,3 +379,58 @@ def test_focus_or_typed_list_change_redraws_the_bar(panel, env, monkeypatch):
         assert set(bar.symbols()) == {"CEE", "DEE"}
     finally:
         bar.deleteLater()
+
+
+def test_a_focus_burst_is_one_coalesced_diff_never_a_rebuild(env, tmp_path, monkeypatch):
+    """Review round 2: a Focus change reaches the Show filter only through the
+    one coalesced Focus reaction (`_sync_feed`), never a rebuild."""
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from focus_picks import FocusPickStore
+    from ui.panels.alert_center_panel import AlertCenterPanel
+    from ui.services.focus_service import FocusService
+    from ui.widgets.m5_alert_bar import M5AlertBar
+
+    focus_dir = tmp_path / "focus"
+    focus_dir.mkdir()
+    service = FocusService(
+        FocusPickStore(
+            focus_longs_path=focus_dir / "focus_longs.txt",
+            focus_shorts_path=focus_dir / "focus_shorts.txt",
+            longs_path=focus_dir / "longs.txt",
+            shorts_path=focus_dir / "shorts.txt",
+            membership_path=focus_dir / "membership.json",
+        )
+    )
+    panel = AlertCenterPanel(
+        focus_service=service,
+        ignored_symbols_path=tmp_path / "ignored.json",
+        parked_symbols_path=tmp_path / "parked.json",
+        review_events_path=tmp_path / "alert_review_events.jsonl",
+    )
+    monkeypatch.setattr(panel, "_auto_mode_now", lambda: "DESK")
+    panel.set_setup_grades(_grades_payload())
+    bar = M5AlertBar()
+    bar.set_show_filter(panel.show_filter_verdict)
+    panel.showFilterChanged.connect(bar.refresh_show_filter)
+    panel.m5AlertPosted.connect(bar.post)
+    try:
+        panel.add_alert(_m5("CEE", "ceetype"))
+        panel.add_alert(_m5("DEE", "deetype"))
+        assert bar.symbols() == []
+        rebuilds: list[int] = []
+        reactions: list[int] = []
+        monkeypatch.setattr(panel, "_rebuild_feed", lambda: rebuilds.append(1))
+        panel.showFilterChanged.connect(lambda: reactions.append(1))
+        for symbol in ("CEE", "AAA", "BBB"):
+            service.store.add(symbol, "long", "m5")
+        assert rebuilds == [] and reactions == [], "nothing before the coalesced reaction"
+        panel.flush_pending_focus_refresh()
+        assert rebuilds == [], "a Focus change is a diff, never a rebuild"
+        assert reactions == [1], "one reaction per burst"
+        assert bar.symbols() == ["CEE"]
+    finally:
+        bar.deleteLater()
+        panel.deleteLater()

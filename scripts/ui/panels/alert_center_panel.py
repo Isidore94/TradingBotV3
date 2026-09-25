@@ -888,7 +888,7 @@ class AlertCenterPanel(QFrame):
             # change. Late-bound so the coalescer calls whatever `_sync_feed`
             # is at fire time - the seam a test spies on is the one that runs.
             self._focus_feed_coalescer = SignalCoalescer(
-                lambda: self._sync_feed(), parent=self
+                lambda: self._on_focus_feed_coalesced(), parent=self
             )
             self.focus_service.focusChanged.connect(
                 self._focus_feed_coalescer.request
@@ -927,8 +927,6 @@ class AlertCenterPanel(QFrame):
         #: `id(alert) -> (alert, (hidden, is_new))`; cleared when any input changes.
         self._show_verdicts: dict = {}
         self._show_typed_seen: frozenset | None = None
-        if self.focus_service is not None:
-            self.focus_service.focusChanged.connect(self._on_show_filter_membership_changed)
         self.show_filter_input = QComboBox()
         self.show_filter_input.setObjectName("AlertShowFilter")
         for value, label in alert_show_filter.MODES:
@@ -1948,17 +1946,30 @@ class AlertCenterPanel(QFrame):
         self._show_filter_inputs_changed(alert_show_filter.BEST_NOW)
 
     def _show_filter_inputs_changed(self, affects: str | None = None) -> None:
-        """An input the verdicts read changed: drop them and redraw if it matters."""
+        """An input the verdicts read changed: drop them and redraw by diff if it matters."""
         self._show_verdicts.clear()
         show_mode = self.show_filter_mode()
         if show_mode == alert_show_filter.ALL or (affects is not None and show_mode != affects):
             return
-        self._rebuild_feed()
+        self._sync_feed()
         self.showFilterChanged.emit()
         self._emit_feed_status()
 
+    def _on_focus_feed_coalesced(self) -> None:
+        """The one reaction to a burst of Focus changes: a diff, never a rebuild.
+
+        Focus membership is a Show-filter input, so the cached verdicts are
+        dropped first; the diff then shows/hides the existing rows and the M5
+        bar redraws from the same answer.
+        """
+        self._show_verdicts.clear()
+        self._sync_feed()
+        if self.show_filter_mode() != alert_show_filter.ALL:
+            self.showFilterChanged.emit()
+            self._emit_feed_status()
+
     def _on_show_filter_membership_changed(self, *_args) -> None:
-        """Focus membership changed: privileged rows may have changed."""
+        """Membership changed outside a Focus burst (typed lists): same diff."""
         self._show_filter_inputs_changed()
 
     def _check_typed_symbols(self) -> None:
