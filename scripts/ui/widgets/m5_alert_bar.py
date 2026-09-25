@@ -41,6 +41,10 @@ Since 2026-09-23 a row whose symbol AND side is also a D1 swing setup carries
 (`swing_context`). The desk hands the map in; nothing here reads a file. With
 the prioritise switch on, swing-backed rows are DRAWN first; the arrival list is
 untouched and the switch off restores arrival order exactly.
+
+P1-6 6a: a row also carries its alert's entry state (``valid``, ``improved``,
+``gone`` or ``unknown``), measured off the Qt thread by the Working-now strip
+from the NEWEST alert on that row. Display only.
 """
 
 from __future__ import annotations
@@ -121,7 +125,13 @@ def alert_grade_label(alert: Any) -> str:
 
 
 def row_text(
-    alert: Any, *, repeats: int = 1, grade: str | None = None, swing: str = ""
+    alert: Any,
+    *,
+    repeats: int = 1,
+    grade: str | None = None,
+    swing: str = "",
+    entry: str = "",
+    size: str = "",
 ) -> str:
     """One line: grade, time, side, ticker, what fired, and take context.
 
@@ -137,6 +147,11 @@ def row_text(
 
     ``swing`` is `swing_context.suffix` (``· D1 A ★``), or blank when the name
     and side are not a D1 swing setup.
+
+    ``entry`` is the P1-6 entry chip (``valid`` / ``improved`` / ``gone``),
+    blank until the state has been measured. ``size`` is the P1-6 size at the
+    trader's fixed risk with its notional (``· 120 sh · $12.0k``), blank when
+    sizing is off or the alert has no usable stop. A size, never an order.
     """
     time_text = str(getattr(alert, "time_text", "") or "")[:5]
     side = str(getattr(alert, "side", "") or "")
@@ -148,6 +163,10 @@ def row_text(
     )
     if swing:
         line += f"  {swing}"
+    if entry:
+        line += f"  · {entry}"
+    if size:
+        line += f"  · {size}"
     if repeats > 1:
         line += f"  ×{repeats}"
     probability = take_probability(alert)
@@ -189,6 +208,10 @@ class M5AlertBar(QWidget):
         #: `{(SYMBOL, SIDE): {"grade", "family", "claimed"}}` from the desk's
         #: setups table (`swing_context`). Display and draw order only.
         self._swing_context: dict = {}
+        #: `{(SYMBOL, SIDE): entry_state dict}` from the Working-now worker (6a).
+        self._entry_states: dict = {}
+        #: P1-6 6c: fixed risk per trade in dollars; None = sizing off.
+        self._risk_dollars: float | None = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
@@ -323,6 +346,59 @@ class M5AlertBar(QWidget):
                 self._write_item(item, alert, int(item.data(_REPEAT_ROLE) or 1))
         self._render_order()
 
+    def set_entry_states(self, mapping) -> None:
+        """The newest alert's entry state per (symbol, side). Rewrites changed rows only."""
+        mapping = dict(mapping or {})
+        old, self._entry_states = self._entry_states, mapping
+        for item in self._arrival:
+            alert = item.data(_ALERT_ROLE)
+            if alert is None:
+                continue
+            key = self._entry_key(alert)
+            if old.get(key) != mapping.get(key):
+                self._write_item(item, alert, int(item.data(_REPEAT_ROLE) or 1))
+
+    def set_risk_per_trade(self, value) -> None:
+        """`risk_per_trade_dollars` changed (None = off). Rewrites every row."""
+        import entry_plan
+
+        risk = entry_plan.parse_risk_dollars(value)
+        if risk == self._risk_dollars:
+            return
+        self._risk_dollars = risk
+        for item in self._arrival:
+            alert = item.data(_ALERT_ROLE)
+            if alert is not None:
+                self._write_item(item, alert, int(item.data(_REPEAT_ROLE) or 1))
+
+    def _size_for(self, alert: Any) -> str:
+        """`N sh · $notional` at the fixed risk from this alert's own entry and stop, or ''.
+
+        A stop on the wrong side of the entry for the alert's side sizes nothing.
+        """
+        if self._risk_dollars is None:
+            return ""
+        import entry_plan
+
+        payload = getattr(alert, "payload", None)
+        feedback = payload.get("feedback") if isinstance(payload, dict) else None
+        feedback = feedback if isinstance(feedback, dict) else {}
+        side = getattr(alert, "side", "") or feedback.get("direction")
+        entry = feedback.get("entry_price")
+        shares = entry_plan.shares_for(self._risk_dollars, entry, feedback.get("stop_price"), side)
+        return entry_plan.size_text(shares, entry)
+
+    @staticmethod
+    def _entry_key(alert: Any) -> tuple[str, str]:
+        symbol = str(getattr(alert, "symbol", "") or "").strip().upper()
+        side = str(getattr(alert, "side", "") or "").strip().upper()
+        side = {"BUY": "LONG", "SELL": "SHORT"}.get(side, side)
+        return (symbol, side)
+
+    def _entry_for(self, alert: Any):
+        """This row's entry state dict, or None before it is measured."""
+        return self._entry_states.get(self._entry_key(alert)) if self._entry_states else None
+
     def _swing_for(self, alert: Any):
         """This alert's swing context, or None."""
         if not self._swing_context:
@@ -415,13 +491,18 @@ class M5AlertBar(QWidget):
         """Fill one row IN PLACE - never a rebuilt widget (fluidity rules)."""
         import swing_context
 
+        import entry_state
+
         swing = self._swing_for(alert)
+        state = self._entry_for(alert)
         item.setText(
             row_text(
                 alert,
                 repeats=repeats,
                 grade=self._grade_for(alert),
                 swing=swing_context.suffix(swing),
+                entry=entry_state.chip_text(state) if state is not None else "",
+                size=self._size_for(alert),
             )
         )
         item.setData(_ALERT_ROLE, alert)
@@ -443,6 +524,8 @@ class M5AlertBar(QWidget):
         swing_line = swing_context.tooltip_line(swing)
         if swing_line:
             grade_help = f"{swing_line}\n\n{grade_help}"
+        if state is not None:
+            grade_help = f"{entry_state.chip_detail(state)}\n\n{grade_help}"
         item.setToolTip(f"{grade_help}{raw}")
         side = str(getattr(alert, "side", "") or "")
         token = "long" if side == "LONG" else "short" if side == "SHORT" else "text_muted"

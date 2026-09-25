@@ -6,6 +6,7 @@ import time
 import json
 import bisect
 import re
+import heapq
 import math
 import csv
 import collections
@@ -2000,6 +2001,13 @@ _IBKR_HISTORICAL_YAHOO_ONLY = False
 # absent or anything else keeps today's behaviour (R10.0b §1.3).
 DAILY_BARS_SOURCE_SETTING = "daily_bars_source"
 _DAILY_BAR_PIN_ANNOUNCED = False
+# P0-2 2e: one scan's daily-bar cache accounting (hit / miss / refresh / batch).
+DAILY_BAR_FETCH_COUNT_KEYS = ("hits", "misses", "refreshes", "served_from_batch", "batch_calls")
+_DAILY_BAR_FETCH_COUNTS: dict[str, int] = {key: 0 for key in DAILY_BAR_FETCH_COUNT_KEYS}
+# Raw single-ticker Yahoo frames fetched in batch, keyed by (symbol, period); each is used once.
+_DAILY_BAR_YAHOO_PREFETCH: dict[tuple[str, str], pd.DataFrame] = {}
+DAILY_BAR_YAHOO_BATCH_SIZE = 100
+DAILY_BAR_YAHOO_BATCH_THREADS = 8
 APP_LOG_FORMAT = "%(asctime)s %(levelname)s [%(filename)s]: %(message)s"
 
 # ============================================================================
@@ -2993,6 +3001,27 @@ def reset_ibkr_historical_failure_circuit() -> None:
     # Same lifetime as the circuit: this runs once at the head of each scan, so
     # the pin announces itself once per scan rather than once per symbol.
     _DAILY_BAR_PIN_ANNOUNCED = False
+    reset_daily_bar_fetch_counts()
+
+
+def reset_daily_bar_fetch_counts() -> None:
+    """Zero the per-scan daily-bar counters and drop any unused batch frames."""
+    for key in DAILY_BAR_FETCH_COUNT_KEYS:
+        _DAILY_BAR_FETCH_COUNTS[key] = 0
+    _DAILY_BAR_YAHOO_PREFETCH.clear()
+
+
+def daily_bar_fetch_summary_line() -> str:
+    """The one per-scan line: cache hits, misses, refreshes and how many came from a batch."""
+    counts = _DAILY_BAR_FETCH_COUNTS
+    looked_up = counts["hits"] + counts["misses"] + counts["refreshes"]
+    rate = f"{(100.0 * counts['hits'] / looked_up):.0f}%" if looked_up else "n/a"
+    return (
+        f"[daily-bar cache] lookups={looked_up} hits={counts['hits']} ({rate}) "
+        f"misses={counts['misses']} refreshes={counts['refreshes']} "
+        f"served_from_batch={counts['served_from_batch']} batch_calls={counts['batch_calls']} "
+        f"unused_batch_frames={len(_DAILY_BAR_YAHOO_PREFETCH)}"
+    )
 
 
 def _ibkr_historical_yahoo_only() -> bool:
@@ -12187,11 +12216,18 @@ def build_scan_factor_leaderboard_rows(
     }
 
     factor_observations = []
+    # One scan row feeds up to four horizons; its factor list is computed once.
+    factor_items_by_row_id: dict[str, list[dict]] = {}
     for obs in recent_obs.to_dict("records"):
-        source_row = source_rows.get(str(obs.get("scan_row_id") or ""))
+        scan_row_id = str(obs.get("scan_row_id") or "")
+        source_row = source_rows.get(scan_row_id)
         if not source_row:
             continue
-        for factor in _scan_factor_items_from_row(source_row):
+        factor_items = factor_items_by_row_id.get(scan_row_id)
+        if factor_items is None:
+            factor_items = _scan_factor_items_from_row(source_row)
+            factor_items_by_row_id[scan_row_id] = factor_items
+        for factor in factor_items:
             merged = dict(obs)
             merged.update(factor)
             factor_observations.append(merged)
@@ -12256,14 +12292,21 @@ def build_scan_factor_leaderboard_rows(
             + abs(spy_relative_edge_pct or 0.0)
         ) * math.log1p(max(1, observation_count))
 
-        sample_rows = unique_df.to_dict("records")
-        sample_rows.sort(
+        # Only the four sample columns are boxed, and only the top 8 are kept:
+        # `heapq.nlargest` equals `sorted(..., reverse=True)[:8]`, ties included.
+        sample_columns = [
+            column
+            for column in ("symbol", "scan_date", "future_scan_date", "side_return_pct")
+            if column in unique_df.columns
+        ]
+        sample_rows = heapq.nlargest(
+            8,
+            unique_df[sample_columns].to_dict("records"),
             key=lambda item: (
                 str(item.get("scan_date") or ""),
                 _scan_factor_number(item.get("side_return_pct")) or -9999.0,
                 str(item.get("symbol") or ""),
             ),
-            reverse=True,
         )
         samples = []
         for item in sample_rows:
@@ -12272,8 +12315,6 @@ def build_scan_factor_leaderboard_rows(
             if side_return is not None:
                 sample += f" ({side_return:+.2f}%)"
             samples.append(sample)
-            if len(samples) >= 8:
-                break
 
         rows.append(
             {
@@ -19177,21 +19218,27 @@ def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
 
     period = f"{max(days, ATR_LENGTH + 5)}d"
     _provider_count("daily_bars", "attempt", "yahoo")
-    try:
-        df = yf.download(
-            symbol,
-            period=period,
-            interval="1d",
-            auto_adjust=False,
-            progress=False,
-            threads=False,
-            timeout=DAILY_BAR_YAHOO_TIMEOUT_SEC,
-            multi_level_index=False,
-        )
-    except Exception as e:
-        _provider_count("daily_bars", "failure", "yahoo")
-        logging.error(f"{symbol}: failed to download daily bars from Yahoo: {e}")
-        return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_YAHOO)
+    prefetched = _DAILY_BAR_YAHOO_PREFETCH.pop((str(symbol or "").strip().upper(), period), None)
+    if prefetched is not None:
+        # The same request, made earlier in a batch (see `prefetch_daily_bars_from_yahoo`).
+        _DAILY_BAR_FETCH_COUNTS["served_from_batch"] += 1
+        df = prefetched
+    else:
+        try:
+            df = yf.download(
+                symbol,
+                period=period,
+                interval="1d",
+                auto_adjust=False,
+                progress=False,
+                threads=False,
+                timeout=DAILY_BAR_YAHOO_TIMEOUT_SEC,
+                multi_level_index=False,
+            )
+        except Exception as e:
+            _provider_count("daily_bars", "failure", "yahoo")
+            logging.error(f"{symbol}: failed to download daily bars from Yahoo: {e}")
+            return _empty_daily_bar_frame(source=DAILY_BAR_SOURCE_YAHOO)
 
     if df is None or df.empty:
         _provider_count("daily_bars", "failure", "yahoo")
@@ -19228,6 +19275,70 @@ def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
             DAILY_BAR_SOURCE_YAHOO,
         )
     )
+
+
+def _daily_bars_go_straight_to_yahoo(ib: IBApi | None) -> bool:
+    """True when `_fetch_live_daily_bars` would ask Yahoo first (no IB, the pin, or the circuit)."""
+    return ib is None or daily_bars_source_pin() == "yahoo" or _ibkr_historical_yahoo_only()
+
+
+def prefetch_daily_bars_from_yahoo(ib: IBApi | None, days_by_symbol: dict[str, int]) -> int:
+    """Fetch this scan's Yahoo daily-bar requests up front, 100 symbols per `yf.download` call.
+
+    Each symbol gets the exact period `fetch_daily_bars` would ask for, and its frame is used
+    only by the later call that asks for the same (symbol, period). A failed or empty ticker
+    is left to that per-symbol call. Returns how many frames were stored.
+    """
+    if not _daily_bars_go_straight_to_yahoo(ib):
+        return 0
+    symbols_by_period: dict[str, list[str]] = {}
+    for symbol, days in days_by_symbol.items():
+        normalized_symbol = str(symbol or "").strip().upper()
+        if not normalized_symbol:
+            continue
+        _cached, _recent, kind, refresh_days = _daily_bar_fetch_plan(normalized_symbol, days)
+        if kind == "hit" or refresh_days is None:
+            continue
+        period = f"{max(refresh_days, ATR_LENGTH + 5)}d"
+        symbols_by_period.setdefault(period, []).append(normalized_symbol)
+
+    import yahoo_download
+
+    stored = 0
+    for period, period_symbols in sorted(symbols_by_period.items()):
+        if len(period_symbols) < 2:
+            continue  # a lone request gains nothing from a batch
+        for start in range(0, len(period_symbols), DAILY_BAR_YAHOO_BATCH_SIZE):
+            chunk = period_symbols[start : start + DAILY_BAR_YAHOO_BATCH_SIZE]
+            try:
+                frames, errors = yahoo_download.download_frames(
+                    chunk,
+                    yf_module=yf,
+                    period=period,
+                    interval="1d",
+                    auto_adjust=False,
+                    progress=False,
+                    threads=min(DAILY_BAR_YAHOO_BATCH_THREADS, len(chunk)),
+                    timeout=DAILY_BAR_YAHOO_TIMEOUT_SEC,
+                )
+            except Exception as exc:
+                logging.warning(
+                    "Daily-bar batch of %d symbol(s) (period %s) failed; they fetch one by one: %s",
+                    len(chunk), period, exc,
+                )
+                continue
+            _DAILY_BAR_FETCH_COUNTS["batch_calls"] += 1
+            for symbol in chunk:
+                frame = frames.get(symbol)
+                if symbol in errors or frame is None or getattr(frame, "empty", True):
+                    continue
+                # Duplicate dates or all-empty (reindexed) rows: leave it to the per-symbol call.
+                if not frame.index.is_unique or bool(frame.isna().all(axis=1).any()):
+                    continue
+                # The ticker's own frame (not a slice of the joined result), so no NaN padding or dtype change.
+                _DAILY_BAR_YAHOO_PREFETCH[(symbol, period)] = frame.copy()
+                stored += 1
+    return stored
 
 
 def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
@@ -19328,9 +19439,8 @@ def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataF
     return fetch_daily_bars_from_yahoo(symbol, days)
 
 
-def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
-    _provider_count("daily_bars", "lookup")
-    normalized_symbol = str(symbol or "").strip().upper()
+def _daily_bar_fetch_plan(normalized_symbol: str, days: int) -> tuple[pd.DataFrame, bool, str, int | None]:
+    """``(cached, cache_data_is_recent, kind, refresh_days)``; kind is hit, miss or refresh."""
     requested_days = max(int(days), ATR_LENGTH + 5)
     cached = _load_cached_daily_bar_frame(normalized_symbol)
     cache_has_history = _daily_bar_cache_covers_history(cached, requested_days)
@@ -19344,31 +19454,40 @@ def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
         and daily_bar_cache.cache_holds_latest_completed_session(_daily_bar_frame_last_date(cached))
         and _daily_bar_cache_is_recent(normalized_symbol)
     ):
-        _provider_count("daily_bars", "cache_hit")
-        return _set_daily_bar_source(cached.copy(), DAILY_BAR_SOURCE_CACHE)
+        return cached, cache_data_is_recent, "hit", None
 
     if cache_has_history and cache_data_is_recent and _daily_bar_live_failure_in_cooldown(normalized_symbol):
+        return cached, cache_data_is_recent, "hit", None
+
+    if not cache_has_history:
+        return cached, cache_data_is_recent, "miss", requested_days
+    # Fill in only from the last stored bar forward (the delta), plus a small
+    # re-statement buffer for late prints/adjustments. This keeps the fetch
+    # minimal on a daily cadence yet still bridges the gap with no holes if the
+    # bot has been offline for a while, instead of a fixed 20-day window that
+    # could leave the cache with a gap.
+    last_cached_date = _daily_bar_frame_last_date(cached)
+    gap_days = (
+        _weekday_gap(last_cached_date, datetime.now().date())
+        if last_cached_date is not None
+        else DAILY_BAR_CACHE_RECENT_REFRESH_DAYS
+    )
+    refresh_days = min(
+        requested_days,
+        max(DAILY_BAR_CACHE_RECENT_REFRESH_DAYS, gap_days + DAILY_BAR_CACHE_HISTORY_BUFFER_DAYS),
+    )
+    return cached, cache_data_is_recent, "refresh", refresh_days
+
+
+def fetch_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
+    _provider_count("daily_bars", "lookup")
+    normalized_symbol = str(symbol or "").strip().upper()
+    cached, cache_data_is_recent, kind, refresh_days = _daily_bar_fetch_plan(normalized_symbol, days)
+    _DAILY_BAR_FETCH_COUNTS[{"hit": "hits", "miss": "misses"}.get(kind, "refreshes")] += 1
+    if kind == "hit":
         _provider_count("daily_bars", "cache_hit")
         return _set_daily_bar_source(cached.copy(), DAILY_BAR_SOURCE_CACHE)
 
-    if not cache_has_history:
-        refresh_days = requested_days
-    else:
-        # Fill in only from the last stored bar forward (the delta), plus a small
-        # re-statement buffer for late prints/adjustments. This keeps the fetch
-        # minimal on a daily cadence yet still bridges the gap with no holes if the
-        # bot has been offline for a while, instead of a fixed 20-day window that
-        # could leave the cache with a gap.
-        last_cached_date = _daily_bar_frame_last_date(cached)
-        gap_days = (
-            _weekday_gap(last_cached_date, datetime.now().date())
-            if last_cached_date is not None
-            else DAILY_BAR_CACHE_RECENT_REFRESH_DAYS
-        )
-        refresh_days = min(
-            requested_days,
-            max(DAILY_BAR_CACHE_RECENT_REFRESH_DAYS, gap_days + DAILY_BAR_CACHE_HISTORY_BUFFER_DAYS),
-        )
     fresh = _fetch_live_daily_bars(ib, normalized_symbol, refresh_days)
     if fresh is not None and not fresh.empty:
         if _daily_bar_cache_data_is_recent(fresh):

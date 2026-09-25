@@ -129,6 +129,30 @@ def rule_for_date(day: Any, *, path: Any = None) -> dict[str, Any] | None:
     }
 
 
+def write_rule_to_plan(
+    rule_row: Mapping[str, Any], *, now: datetime | None = None, path: Any = None, plan_path: Any = None
+) -> dict[str, Any]:
+    """P1-7 7d: put the recap's "one rule for tomorrow" under the plan's "What I am testing".
+
+    Written only when this row is the newest effective rule (an edit of an
+    older recap's rule leaves the plan alone). Worker only. Raises
+    `trading_plan.PlanWriteError` when the plan cannot be written.
+    """
+    import market_calendar
+    import recap_store
+    import trading_plan
+
+    session = _text(rule_row.get("session_date"))[:10]
+    try:
+        for_day = market_calendar.next_session(date.fromisoformat(session))
+    except (ValueError, TypeError):
+        return {"changed": False, "reason": "the rule has no readable session"}
+    newest = recap_store.latest_rule_before("9999-12-31", path=path) or {}
+    if _text(newest.get("id")) != _text(rule_row.get("id")) or not _text(newest.get("text")):
+        return {"changed": False, "reason": "a later rule is already in force"}
+    return trading_plan.set_testing_rule(newest["text"], for_day=for_day, now=now, path=plan_path)
+
+
 # ---------------------------------------------------------------------------
 # words
 # ---------------------------------------------------------------------------

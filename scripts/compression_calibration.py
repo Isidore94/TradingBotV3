@@ -111,6 +111,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import statistics
 import sys
 from datetime import date, datetime
@@ -126,6 +127,23 @@ COMPRESSION_VETO_CODES = frozenset({"compressed", "support_resistance_cluttered"
 
 #: The tracker sections that hold per-(symbol, session) scan rows.
 TRACKER_RECORD_SECTIONS = ("setups", "control_setups", "study_setups")
+
+#: The only record fields the population pass reads (P0-2 2d(4)).
+TRACKER_POPULATION_FIELDS = (
+    "symbol",
+    "side",
+    "scan_date",
+    "entry_trade_date",
+    "last_replayed_session",
+    "anchor_date",
+    "compression_flag",
+    "compression_score",
+    "compression_summary",
+    "entry_feature_snapshot",
+    "compression_stdev_atr_ratio",
+    "compression_range_atr_ratio",
+    "compression_close_range_atr_ratio",
+)
 
 #: One printed block per key, in this order. The first three are the scan's own
 #: anchor ratios; the rest are the candidates the packet named.
@@ -472,6 +490,27 @@ def iter_tracker_records(path: Path | str, *, chunk_size: int = TRACKER_CHUNK_BY
             return
 
 
+def iter_population_records(path: Path | str, *, db_path: Path | str | None = None) -> Iterator[dict]:
+    """The population fields of every tracker record, from the SQLite mirror when fresh.
+
+    The mirror answers only when it is an exact copy of ``path``; otherwise the
+    JSON is streamed and the reason is logged.
+    """
+    try:
+        from tracker_store import load_fresh_projection
+
+        projected, reason = load_fresh_projection(
+            path, TRACKER_POPULATION_FIELDS, sections=TRACKER_RECORD_SECTIONS, db_path=db_path
+        )
+    except Exception as exc:  # noqa: BLE001 - any store failure falls back to the JSON
+        projected, reason = None, f"store reader unavailable: {exc}"
+    if projected is not None:
+        yield from projected
+        return
+    logging.warning("Compression calibration streamed the setup tracker JSON, not the SQLite store: %s", reason)
+    yield from iter_tracker_records(path)
+
+
 def record_active_window(record: dict) -> tuple[str, str]:
     """The first and last session a tracker record was being carried.
 
@@ -767,7 +806,7 @@ def build_rows(*, since: str) -> tuple[list[dict], dict]:
     # Pass 1: stream the tracker once and keep only what each measured session
     # needs. A record is kept per (symbol, session) it was ACTIVE on.
     population: dict[str, dict[tuple[str, str], dict]] = {}
-    for record in iter_tracker_records(project_paths.MASTER_AVWAP_SETUP_TRACKER_FILE):
+    for record in iter_population_records(project_paths.MASTER_AVWAP_SETUP_TRACKER_FILE):
         symbol = str(record.get("symbol") or "").strip().upper()
         if not symbol:
             continue

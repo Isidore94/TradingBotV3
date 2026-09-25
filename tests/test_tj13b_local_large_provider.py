@@ -434,6 +434,8 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         "week_questions",
         "journal_enrichment",
         "review_policy_draft",
+        # P1-7 7b (2026-09-25): plan challenges, a stage 3 model slot.
+        "plan_review",
         # TJ-6 (2026-09-20) appended after `setup_research`, last of stage 3.
         "setup_research",
         "improvement_ideas",

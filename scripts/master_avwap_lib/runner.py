@@ -14,6 +14,9 @@ from . import legacy as _legacy
 from .d1_zone_arms import build_d1_zone_arms
 from .setup_tagging import apply_setup_tag_payload, canonicalize_priority_setup_tags
 from master_avwap_shared import build_active_bounce_summary, load_master_avwap_events_for_date
+from setup_permutation_context import stamp_scan_rows as stamp_permutation_scan_rows
+from setup_permutations import SCAN_ROW_COLUMNS as PERMUTATION_SCAN_ROW_COLUMNS
+from setup_permutations import ma_distance_columns as permutation_ma_distance_columns
 from tracker_store import record_write_failure as record_setup_tracker_write_failure
 from tracker_store import record_write_success as record_setup_tracker_write_success
 # Packet WS-TH (2026-09-12). The theta picks the scan just printed, recorded as
@@ -42,6 +45,21 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+
+
+def _scan_daily_days_needed(curr_iso, prev_iso, today_run) -> int:
+    """Days of daily bars one scan symbol needs: ATR warm-up, or back past its oldest anchor."""
+    days_needed = ATR_LENGTH + 5
+    anchor_dates = []
+    if curr_iso:
+        anchor_dates.append(datetime.fromisoformat(curr_iso).date())
+    if prev_iso:
+        anchor_dates.append(datetime.fromisoformat(prev_iso).date())
+
+    if anchor_dates:
+        max_span = max((today_run - d).days for d in anchor_dates)
+        days_needed = max(days_needed, max_span + 5)
+    return days_needed
 
 
 def load_setup_tracker_payload() -> dict:
@@ -1029,6 +1047,21 @@ def _run_master_impl(
     }
 
     long_set, short_set, theta_long_set = set(longs), set(shorts), set(theta_longs)
+    # P0-2 2e: the loop's Yahoo daily-bar requests, fetched up front in batches of 100.
+    # A failure here only means each symbol fetches on its own, as before. Skipped when the
+    # fetch is stubbed: the batch would bypass whoever supplies the bars.
+    try:
+        if fetch_daily_bars is _legacy.fetch_daily_bars:
+            prefetch_daily_bars_from_yahoo(
+                ib,
+                {
+                    sym: _scan_daily_days_needed(curr_cache.get(sym), prev_cache.get(sym), today_run)
+                    for sym in symbols
+                    if curr_cache.get(sym) or prev_cache.get(sym)
+                },
+            )
+    except Exception:
+        logging.warning("Daily-bar batch prefetch failed; symbols fetch one by one.", exc_info=True)
     for sym in symbols:
         # `side` is unchanged from list membership; `theta_side` is the only
         # thing thetalongs.txt moves, and it moves it for the two premium
@@ -1041,18 +1074,7 @@ def _run_master_impl(
             logging.warning(f"{sym}: no earnings anchors available.")
             continue
 
-        # Determine days needed for a single daily fetch
-        days_needed = ATR_LENGTH + 5
-        anchor_dates = []
-        if curr_iso:
-            anchor_dates.append(datetime.fromisoformat(curr_iso).date())
-        if prev_iso:
-            anchor_dates.append(datetime.fromisoformat(prev_iso).date())
-
-        if anchor_dates:
-            max_span = max((today_run - d).days for d in anchor_dates)
-            days_needed = max(days_needed, max_span + 5)
-
+        days_needed = _scan_daily_days_needed(curr_iso, prev_iso, today_run)
         df = fetch_daily_bars(ib, sym, days_needed)
         if df.empty:
             logging.warning(f"{sym}: no daily bars returned.")
@@ -2237,6 +2259,8 @@ def _run_master_impl(
             "favorite_context_signals": ";".join(priority_summary["context_signals"]),
             "events_today": ";".join(symbol_events_today),
         }
+        # P1-4 4a: shadow MA distances in ATR for the permutation key; nothing scores on them.
+        feature_row.update(permutation_ma_distance_columns(last_close, atr20, entry_feature_snapshot))
         symbol_entry["feature_row"] = feature_row
         for preview_row in (priority_summary, symbol_entry, feature_row):
             stamp_daily_bar_status(
@@ -2309,6 +2333,7 @@ def _run_master_impl(
         ai_state=ai_state,
         feature_rows_by_symbol=feature_rows_by_symbol,
     )
+    logging.info(daily_bar_fetch_summary_line())
     _phase_t = _log_phase_duration("prep+fetch+priority", _phase_t)
     htf_trend_study_rows = enrich_priority_rows_with_htf_trend_context(
         priority_rows,
@@ -3033,6 +3058,8 @@ def _run_master_impl(
         # `derived_from_bucket`, which is what `tier_for_tracker_row` already
         # says it should do.
         ASSIGNED_TIER_FIELD,
+        # P1-4 4a: shadow permutation inputs and key, appended last.
+        *PERMUTATION_SCAN_ROW_COLUMNS,
     ]
 
     # R1 / P4 B4: carry the SHIPPED tier onto the feature row.
@@ -3051,7 +3078,13 @@ def _run_master_impl(
         if isinstance(feature_row, dict) and row.get(ASSIGNED_TIER_FIELD):
             feature_row[ASSIGNED_TIER_FIELD] = row.get(ASSIGNED_TIER_FIELD)
 
-    df_features = pd.DataFrame(feature_rows, columns=feature_columns)
+    # P1-4 4a: stamp the shadow permutation key last, after every enricher; never fails the scan.
+    try:
+        stamp_permutation_scan_rows(feature_rows, session=today_run)
+    except Exception:
+        logging.warning("Setup permutation stamp skipped for this scan.", exc_info=True)
+
+    df_features =pd.DataFrame(feature_rows, columns=feature_columns)
     _write_dataframe_csv_atomic(df_features, D1_FEATURES_FILE, index=False)
     append_d1_feature_history(
         df_features,

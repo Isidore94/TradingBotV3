@@ -378,7 +378,29 @@ class _AiStateCompressionWorker(QThread):
             changed = bool(ai_state_levels.warm_cache())
         except Exception:  # noqa: BLE001 - one chip, never the table
             changed = False
+        try:
+            # P1-5 5a: the setup-key labels ride the same off-thread warm.
+            import setup_key_labels
+
+            changed = bool(setup_key_labels.warm_cache()) or changed
+        except Exception:  # noqa: BLE001 - a label never costs the table
+            pass
         self.done.emit(changed)
+
+
+class _EntryTimingWorker(QThread):
+    """P1-6 6d: read the chart-watch store and the review-event tail OFF the Qt thread."""
+
+    done = Signal(object)
+
+    def run(self) -> None:  # pragma: no cover - exercised through its seam
+        try:
+            import entry_timing
+
+            mapping = entry_timing.load_timing()
+        except Exception:  # noqa: BLE001 - a chip never costs the table
+            mapping = None
+        self.done.emit(mapping)
 
 
 class _PointsProjectionWorker(QThread):
@@ -688,6 +710,8 @@ class MasterAvwapPanel(QWidget):
         self.report_poll_timer.timeout.connect(self._check_decision_day_roll)
         # The Oil & Gas / Real Estate switch is shared; follow a flip made elsewhere.
         self.report_poll_timer.timeout.connect(self.sync_sector_switch)
+        # P1-6 6d: the timing chips re-read on the same 30 s tick (worker only).
+        self.report_poll_timer.timeout.connect(self._start_entry_timing_read)
         start_staggered(self.report_poll_timer, 43_000)
         self.scheduler_timer = QTimer(self)
         self.scheduler_timer.setInterval(15_000)
@@ -1240,9 +1264,21 @@ class MasterAvwapPanel(QWidget):
         self._column_profile = profile
         header = self.table.horizontalHeader()
         key_level_column = _column_index("key_level")
+        has_setup_keys = self.model.has_setup_keys()
+        has_plans = profile == "full" and self.model.has_plans()
         for column, (key, _label) in enumerate(self.model.COLUMNS):
             self.table.setColumnHidden(column, False)
             if profile == "compact" and key in COMPACT_HIDDEN_COLUMNS:
+                self.table.setColumnHidden(column, True)
+            if key == "setup_key" and (profile == "compact" or not has_setup_keys):
+                # P1-5 5a: full profile only, and only when a row carries a stamped label.
+                self.table.setColumnHidden(column, True)
+            if key in self.model.PLAN_COLUMNS and not has_plans:
+                # P1-6 6b: full profile only, once the scan's levels have landed;
+                # compact reads the same plan in the key-level tooltip.
+                self.table.setColumnHidden(column, True)
+            if key == "timing" and (profile == "compact" or not self.model.has_timing()):
+                # P1-6 6d: same rule; the chip rides the key-level tooltip in compact.
                 self.table.setColumnHidden(column, True)
         if profile == "compact":
             # The compact profile is untouched by G2b, elision included.
@@ -1763,8 +1799,29 @@ class MasterAvwapPanel(QWidget):
         if bool(changed):
             self.refresh_from_reports(emit_empty=False)
 
+    def _start_entry_timing_read(self) -> None:
+        """One timing read at a time; the Qt thread only starts it."""
+        worker = getattr(self, "_entry_timing_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        worker = _EntryTimingWorker(self)
+        worker.done.connect(self._on_entry_timing_ready)
+        worker.finished.connect(worker.deleteLater)
+        self._entry_timing_worker = worker
+        worker.start()
+
+    def _on_entry_timing_ready(self, mapping: object) -> None:
+        """Apply the chips; re-apply the column profile only when they changed."""
+        self._entry_timing_worker = None
+        if mapping is None or not self.model.set_entry_timing(mapping):
+            return
+        profile = self._column_profile or "compact"
+        self._column_profile = ""
+        self.set_column_profile(profile)
+
     def refresh_from_reports(self, emit_empty: bool = True) -> None:
         self._start_family_record_read()
+        self._start_entry_timing_read()
         self._start_scan_freshness_read()
         self._start_ai_state_compression_read()
         self._start_points_projection_read()
@@ -1879,6 +1936,26 @@ class MasterAvwapPanel(QWidget):
             )
         ]
 
+    def _push_plan_context(self, *, reset: bool = True) -> None:
+        """P1-6: hand the model the in-memory scan levels and the fixed risk. No file read."""
+        try:
+            import entry_plan
+            from ui.services import ai_state_levels
+
+            levels = ai_state_levels.cached_symbol_levels()
+            risk = entry_plan.risk_per_trade_dollars()
+        except Exception:  # noqa: BLE001 - plan cells never cost the table
+            return
+        self.model.set_plan_context(levels, risk, reset=reset)
+
+    def set_risk_per_trade(self, value) -> None:
+        """The Settings page changed `risk_per_trade_dollars`: re-size every plan."""
+        import entry_plan
+
+        self.model.set_plan_context(
+            self.model.plan_levels(), entry_plan.parse_risk_dollars(value)
+        )
+
     def set_rows(self, rows: list[SetupRow]) -> None:
         if self._uses_default_feedback_paths:
             _apply_reviewed_today_badges(rows)
@@ -1891,6 +1968,7 @@ class MasterAvwapPanel(QWidget):
         rows = self._by_points(
             self._prioritised(self._merge_active_claims(self._working_lately_source_rows))
         )
+        self._push_plan_context(reset=False)
         self.model.set_rows(rows)
         self._refresh_bucket_filter(rows)
         self._apply_filters()

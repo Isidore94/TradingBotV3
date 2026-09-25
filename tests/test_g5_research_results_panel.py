@@ -90,6 +90,8 @@ EXISTING_TABS = (
     "ticker_lookup_panel",
     "price_alerts_panel",
     "warehouse_readout_panel",
+    # P1-4 4c (2026-09-25): Research -> Setup keys, appended last.
+    "setup_keys_panel",
 )
 
 

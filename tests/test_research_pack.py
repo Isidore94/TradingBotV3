@@ -478,3 +478,83 @@ def test_export_writes_the_pack_and_touches_no_source(sources, tmp_path, fmt):
     assert saved["join"]["d1_matched"] == 2
     assert saved["join"]["m5_matched"] == 1
     assert "point_in_time" in saved
+
+
+# ---------------------------------------------------------------------------
+# P1-7 7c: the plan and the week's challenges and answers
+# ---------------------------------------------------------------------------
+def _plan_sources(tmp_path):
+    home = tmp_path / "home"
+    history = home / "trading_plan_history"
+    history.mkdir(parents=True)
+    (home / "trading_plan.md").write_text("## Rules\n- current rule\n", encoding="utf-8")
+    (history / "20260920T200000Z_00001_aaaaaaaa.md").write_text("## Rules\n- old rule\n", encoding="utf-8")
+
+    def challenge(cid, session, created):
+        return {"schema": "plan_challenge_v1", "kind": "challenge", "challenge_id": cid,
+                "session_date": session, "created_at": created, "plan_line": "plan:rules:1",
+                "plan_line_text": "current rule", "evidence": "measured:x", "text": f"challenge {cid}"}
+
+    rows = [
+        challenge("pc-old", "2026-09-10", "2026-09-11T06:00:00+00:00"),
+        challenge("pc-acc", "2026-09-21", "2026-09-22T06:00:00+00:00"),
+        challenge("pc-rej", "2026-09-22", "2026-09-23T06:00:00+00:00"),
+        challenge("pc-open", "2026-09-23", "2026-09-24T06:00:00+00:00"),
+        {"kind": "night", "session_date": "2026-09-23"},
+    ]
+    (home / "plan_challenges.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    answers = [
+        {"challenge_id": "pc-acc", "decision": "accepted", "reason": "",
+         "answered_at": "2026-09-22T14:00:00+00:00"},
+        {"challenge_id": "pc-rej", "decision": "rejected", "reason": "reject_too_few",
+         "answered_at": "2026-09-23T14:00:00+00:00"},
+    ]
+    (home / "answers.jsonl").write_text("".join(json.dumps(r) + "\n" for r in answers), encoding="utf-8")
+    sources = rp.Sources(
+        lake_root=None, journal_db=None, bounce_outcomes_csv=None, bounces_csv=None,
+        extra_files={}, ai_store_root=None, protected=(home,),
+        trading_plan=home / "trading_plan.md", plan_history_dir=history,
+        plan_challenges=home / "plan_challenges.jsonl", plan_answers=home / "answers.jsonl",
+    )
+    return sources, home
+
+
+def test_the_pack_carries_the_plan_and_the_weeks_challenges_and_answers(tmp_path):
+    sources, home = _plan_sources(tmp_path)
+    before = _mtimes([home])
+    out = tmp_path / "out"
+    out.mkdir()
+    info = rp.export_plan(sources, out, today=date(2026, 9, 24))
+
+    assert (out / "trading_plan.md").read_text(encoding="utf-8") == "## Rules\n- current rule\n"
+    assert info["plan"]["source"] == "current"
+    payload = json.loads((out / "plan_challenges.json").read_text(encoding="utf-8"))
+    by_id = {row["challenge_id"]: row for row in payload["challenges"]}
+    assert set(by_id) == {"pc-acc", "pc-rej", "pc-open"}, "a challenge from before the week stays out"
+    assert by_id["pc-acc"]["status"] == "accepted"
+    assert by_id["pc-rej"]["status"] == "rejected"
+    assert by_id["pc-rej"]["decision_reason"] == "reject_too_few"
+    assert by_id["pc-open"]["status"] in ("open", "expired")
+    assert _mtimes([home]) == before
+
+
+def test_as_of_uses_the_plan_snapshot_and_hides_later_answers(tmp_path):
+    sources, _home = _plan_sources(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    as_of = datetime(2026, 9, 22, 20, 0, tzinfo=UTC)
+    info = rp.export_plan(sources, out, as_of=as_of)
+
+    assert (out / "trading_plan.md").read_text(encoding="utf-8") == "## Rules\n- old rule\n"
+    assert info["plan"]["source"].startswith("snapshot ")
+    by_id = {row["challenge_id"]: row for row in
+             json.loads((out / "plan_challenges.json").read_text(encoding="utf-8"))["challenges"]}
+    assert set(by_id) == {"pc-acc"}
+    assert by_id["pc-acc"]["status"] == "accepted"
+
+
+def test_export_pack_lists_the_plan_in_the_manifest(tmp_path):
+    sources, _home = _plan_sources(tmp_path)
+    manifest = rp.export_pack(sources, tmp_path / "pack")
+    assert manifest["trading_plan"]["plan"]["status"] == "ok"
+    assert (tmp_path / "pack" / "trading_plan.md").exists()

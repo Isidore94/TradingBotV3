@@ -14,7 +14,8 @@ the live CSV header. Sign conventions on the row:
 - ``distance_from_current_<level>`` = close - level (positive: price above).
 - ``hv_level_nearest_distance_atr`` / ``cloud_level_nearest_distance_atr`` =
   (level - price) / ATR (positive: level above price), from ``levels.levels_near``.
-- ``dist_<ma>_atr`` (not on the row yet) follows the research warehouse:
+- ``perm_dist_<ma>_atr`` (written by the enrichment step since 4a; ``dist_<ma>_atr`` is read as a
+  fallback) follows the research warehouse:
   (close - ma) / ATR (positive: price above the MA).
 - ``current_band_zone`` is "A to B" with the order flipped for shorts, so the zone
   is normalised to low-to-high band order before it becomes a value.
@@ -83,6 +84,12 @@ class PermutationKey:
     def key(self) -> str:
         """Full stable key string: every facet, unknowns included."""
         body = ";".join(f"{name}={value}" for name, value in self.facets)
+        return f"{self.permutation_rule_version}|{self.family}|{self.side}|{body}"
+
+    @property
+    def compact_key(self) -> str:
+        """The key with unknown facets left out (absent means unknown); what a row stores."""
+        body = ";".join(f"{name}={value}" for name, value in self.facets if value != UNKNOWN)
         return f"{self.permutation_rule_version}|{self.family}|{self.side}|{body}"
 
     @property
@@ -272,13 +279,15 @@ def _lower1_distance(row, ctx, side):
 
 # --- D1 structure: moving averages
 
-#: The support-side MA set. Each needs ``dist_<ma>_atr`` on the row; ``ema21`` can
+#: The support-side MA set. Each needs ``perm_dist_<ma>_atr`` (or ``dist_<ma>_atr``) on the row; ``ema21`` can
 #: also be derived from the ``ema21`` / ``last_close`` / ``atr20`` columns.
 SUPPORT_MAS = ("sma20", "sma50", "sma100", "sma200", "ema8", "ema15", "ema21")
 
 
 def _ma_distance_atr(row: Mapping[str, Any], ma: str) -> float | None:
-    distance = _num(row.get(f"dist_{ma}_atr"))
+    distance = _num(row.get(f"perm_dist_{ma}_atr"))
+    if distance is None:
+        distance = _num(row.get(f"dist_{ma}_atr"))
     if distance is not None:
         return distance
     level = _num(row.get(ma))
@@ -324,7 +333,7 @@ def _price_vs_ema21(row, ctx, side):
 
 @facet("ma_order", "ma_stack", in_label=False)
 def _ma_order(row, ctx, side):
-    # Needs dist_sma50_atr and dist_sma200_atr (or sma50/sma200 values) on the row.
+    # Needs the SMA50 and SMA200 distances (or sma50/sma200 values) on the row.
     distances = {"ema21": _ma_distance_atr(row, "ema21"), "sma50": _ma_distance_atr(row, "sma50"),
                  "sma200": _ma_distance_atr(row, "sma200")}
     if any(value is None for value in distances.values()):
@@ -354,8 +363,10 @@ def _weekly_sma50_retest(row, ctx, side):
 
 @facet("weekly_ema8_streak", "weekly", quiet=("weekly_ema8_hold_0w",))
 def _weekly_ema8_streak(row, ctx, side):
-    # `weekly_ema8_hold_weeks` is computed by the scan but not written to d1_features_history yet.
-    weeks = _num(row.get("weekly_ema8_hold_weeks"))
+    # The scan's streak, written as `perm_weekly_ema8_hold_weeks` since 4a (LONG rows only).
+    weeks = _num(row.get("perm_weekly_ema8_hold_weeks"))
+    if weeks is None:
+        weeks = _num(row.get("weekly_ema8_hold_weeks"))
     if weeks is None or weeks < 0:
         return UNKNOWN
     return _band(weeks, (1.0, 3.0, 6.0), ("weekly_ema8_hold_0w", "weekly_ema8_hold_1_2w",
@@ -536,7 +547,7 @@ def _htf_retest(row, ctx, side):
     return "htf_retest_" + "+".join(sorted(parts))
 
 
-@facet("entry_trigger", "entry")
+@facet("entry_trigger", "entry", quiet=("no_trigger",))
 def _entry_trigger(row, ctx, side):
     # From alert_chart_watches.json history / review events: the trigger that fired before entry.
     trigger = _text(ctx.get("entry_trigger"))
@@ -599,3 +610,133 @@ def _weekday(row, ctx, side):
 def _side_aligned_day(row, ctx, side):
     # The writer leaves side_aligned_day blank in every live row so far (2026-09-24).
     return _yes_no(row.get("side_aligned_day"), "side_aligned_day", "side_not_aligned_day")
+
+
+# --- 4f: wider facets (only where the row or its ctx holds the data at scan time)
+
+
+@facet("earnings_gap_size", "earnings", in_label=False)
+def _earnings_gap_size(row, ctx, side):
+    # Written only inside the post-earnings window; blank elsewhere is unknown, never "no gap".
+    value = _num(row.get("post_earnings_gap_atr_multiple"))
+    if value is None:
+        return UNKNOWN
+    return _band(abs(value), (1.0, 2.0, 4.0), ("gap_below_1atr", "gap_1_2atr", "gap_2_4atr", "gap_4atr_plus"))
+
+
+@facet("pullback_52w", "weekly", in_label=False)
+def _pullback_52w(row, ctx, side):
+    # Weekly close vs the 52-week high, in %; the scan writes it only when the TOP weekly structure holds.
+    value = _num(row.get("top_pattern_weekly_pullback_from_52w_high_pct"))
+    if value is None or value < 0:
+        return UNKNOWN
+    return _band(value, (5.0, 15.0, 30.0), ("off_52w_high_0_5pct", "off_52w_high_5_15pct",
+                                            "off_52w_high_15_30pct", "off_52w_high_30pct_plus"))
+
+
+@facet("htf_retest_age", "htf", in_label=False)
+def _htf_retest_age(row, ctx, side):
+    # Intraday bars since the HTF retest; only meaningful when a retest was confirmed.
+    if not _flag(row.get("htf_retest_confirmed")):
+        return UNKNOWN
+    bars = _num(row.get("htf_retest_age_bars"))
+    if bars is None or bars < 0:
+        return UNKNOWN
+    return _band(bars, (3.0, 8.0, 20.0), ("htf_retest_0_2bars", "htf_retest_3_7bars",
+                                          "htf_retest_8_19bars", "htf_retest_20bars_plus"))
+
+
+@facet("industry_rs_consistent", "strength", in_label=False)
+def _industry_rs_consistent(row, ctx, side):
+    # The writer stores False when the industry ETF or rs_vs_industry is missing; that is unknown.
+    if not _text(row.get("industry_etf")) or _num(row.get("rs_vs_industry")) is None:
+        return UNKNOWN
+    return _yes_no(row.get("industry_rs_consistent"), "industry_rs_consistent", "industry_rs_mixed")
+
+
+ENTRY_TRIGGER_CHECKPOINTS = ("open", "midday", "final hour", "close")
+
+
+@facet("entry_trigger_time", "entry", in_label=False)
+def _entry_trigger_time(row, ctx, side):
+    # From ctx: the exchange-clock checkpoint of the first watch_fired that session.
+    checkpoint = (_text(ctx.get("entry_trigger_checkpoint")) or "").lower()
+    if checkpoint not in ENTRY_TRIGGER_CHECKPOINTS:
+        return UNKNOWN
+    return "trigger_" + checkpoint.replace(" ", "_")
+
+
+# --- stamping (4a): the scan-row columns and the honest input view
+
+#: `perm_dist_<ma>_atr` columns the enrichment step writes: (close - ma) / ATR20. The `perm_`
+#: prefix keeps them out of every legacy reader (`dist_sma50/200_atr` are scan-factor fields).
+MA_DISTANCE_COLUMNS = tuple(f"perm_dist_{ma}_atr" for ma in SUPPORT_MAS)
+#: The weekly EMA8 hold streak, copied from the scan's own feature-row value under a new name.
+WEEKLY_STREAK_COLUMN = "perm_weekly_ema8_hold_weeks"
+#: The compact key (unknown facets omitted), its short label and its rule version, as written on a row.
+STAMP_COLUMNS = ("permutation_key", "permutation_label", "permutation_rule_version")
+#: Every column 4a appends to `d1_features_history.csv`, in order.
+SCAN_ROW_COLUMNS = (*MA_DISTANCE_COLUMNS, WEEKLY_STREAK_COLUMN, *STAMP_COLUMNS)
+
+_WEEKLY_TOP_PATTERN_FLAGS = (
+    "top_pattern_weekly_ema15_hold",
+    "top_pattern_weekly_above_sma100",
+    "top_pattern_weekly_sma50_retest_recent",
+)
+
+
+def ma_distance_columns(close: Any, atr: Any, levels: Mapping[str, Any] | None) -> dict[str, float | None]:
+    """``perm_dist_<ma>_atr`` for every support MA; None when close, ATR or the MA is missing."""
+    close_value = _num(close)
+    atr_value = _num(atr)
+    source = levels if isinstance(levels, Mapping) else {}
+    out: dict[str, float | None] = {}
+    for ma in SUPPORT_MAS:
+        level = _num(source.get(ma))
+        if close_value is None or level is None or not atr_value or atr_value <= 0:
+            out[f"perm_dist_{ma}_atr"] = None
+        else:
+            out[f"perm_dist_{ma}_atr"] = round((close_value - level) / atr_value, 6)
+    return out
+
+
+def scan_row_view(row: Mapping[str, Any], *, has_ma_columns: bool) -> dict[str, Any]:
+    """A copy of ``row`` with yes/no columns blanked where the scan wrote False without computing.
+
+    The CSV keeps those False values (legacy readers take ``bool(value)`` and NaN
+    is truthy); only the key's input is made honest. ``has_ma_columns`` says the
+    row was written with the ``perm_dist_<ma>_atr`` columns, so a blank one means the
+    MA was really missing rather than "row older than the column".
+    """
+    view = dict(row)
+    if has_ma_columns and (
+        _num(row.get("last_close")) is None
+        or _num(row.get("perm_dist_ema15_atr")) is None
+        or _num(row.get("perm_dist_sma20_atr")) is None
+    ):
+        view["trend_ma_alignment"] = None
+    # The weekly flags are only computed when the TOP weekly structure holds; the ratio says so.
+    if _num(row.get("top_pattern_weekly_ema15_hold_ratio")) is None:
+        for column in _WEEKLY_TOP_PATTERN_FLAGS:
+            view[column] = None
+    side = _side(row.get("side"))
+    level_column = {"LONG": "previous_day_high", "SHORT": "previous_day_low"}.get(side)
+    if level_column in row and (_num(row.get(level_column)) is None or _num(row.get("last_close")) is None):
+        view["previous_day_range_break"] = None
+    return view
+
+
+def stamp_fields(
+    row: Mapping[str, Any],
+    ctx: Mapping[str, Any] | None = None,
+    *,
+    has_ma_columns: bool = True,
+) -> dict[str, str]:
+    """The three stamp columns for one scan row, through the honest input view."""
+    key = facets_for_row(scan_row_view(row, has_ma_columns=has_ma_columns), ctx)
+    return {
+        # Compact: ~1 KB per row saved on a file that grows by thousands of rows a day.
+        "permutation_key": key.compact_key,
+        "permutation_label": key.label,
+        "permutation_rule_version": key.permutation_rule_version,
+    }

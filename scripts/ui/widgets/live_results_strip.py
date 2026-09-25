@@ -13,6 +13,11 @@ belong on the Qt thread. One worker at a time; the widget owns it and its
 60-second timer, which runs only while the strip is on screen.
 
 The variant is a dynamic property in `theme.qss`, never a per-tick stylesheet.
+
+P1-6 6a: the same worker also reads each alert's entry state (`entry_state`:
+valid / improved / gone / unknown) - for the first alert per name and side
+(this strip's tooltip) and for the NEWEST one (the M5 bar's row chip, sent out
+as `entryStatesChanged`).
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ from typing import Any, Callable
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
 
+import entry_state as es
 import live_alert_results as lar
 
 REFRESH_MS = 60_000
@@ -40,6 +46,8 @@ class LiveResultsStrip(QFrame):
 
     #: (generation, results) from the worker - queued onto the Qt thread.
     _resultsReady = Signal(int, object)
+    #: `{(SYMBOL, SIDE): entry_state dict}` for the NEWEST alert per name+side (6a).
+    entryStatesChanged = Signal(object)
 
     def __init__(self, parent=None, *, threaded: bool = True, clock: Callable[[], datetime] | None = None) -> None:
         super().__init__(parent)
@@ -51,6 +59,10 @@ class LiveResultsStrip(QFrame):
         self._grades: dict[str, Any] = {}
         self._provider: BarsProvider | None = None
         self._results: list[dict[str, Any]] = []
+        #: The newest alert per (symbol, side), and its state (6a).
+        self._latest: dict[tuple[str, str], dict[str, Any]] = {}
+        self._first_states: list[dict[str, Any]] = []
+        self._latest_states: dict[tuple[str, str], dict[str, Any]] = {}
         self._generation = 0
         self._busy = False
         self._pending = False
@@ -80,7 +92,12 @@ class LiveResultsStrip(QFrame):
         except Exception:  # noqa: BLE001 - a display strip never costs the desk
             pass
         received_at = self._clock()
+        latest = lar.entry_from_alert(alert, received_at)
+        if latest is not None:
+            self._latest[(latest["symbol"], latest["side"])] = latest
         if not self._book.add(alert, received_at):
+            if latest is not None and self.isVisible():
+                self.refresh()
             return
         entry = self._book.entries()[-1]
         self._grade_keys[self._key(entry)] = self._grade_key(alert)
@@ -95,8 +112,12 @@ class LiveResultsStrip(QFrame):
         self._book.clear()
         self._grade_keys.clear()
         self._results = []
+        self._latest.clear()
+        self._first_states = []
+        self._latest_states = {}
         self._generation += 1
         self._render()
+        self.entryStatesChanged.emit({})
 
     def set_setup_grades(self, payload: Any) -> None:
         import setup_grades
@@ -113,8 +134,11 @@ class LiveResultsStrip(QFrame):
         entries = self._book.entries()
         if not entries:
             return
+        latest = dict(self._latest)
         if not self._threaded:
-            self._on_results(self._generation, self._compute(entries, self._provider, self._clock()))
+            self._on_results(
+                self._generation, self._measure(entries, latest, self._provider, self._clock())
+            )
             return
         if self._busy:
             self._pending = True
@@ -122,15 +146,15 @@ class LiveResultsStrip(QFrame):
         self._busy = True
         worker = threading.Thread(
             target=self._work,
-            args=(self._generation, entries, self._provider, self._clock()),
+            args=(self._generation, entries, latest, self._provider, self._clock()),
             name="live-results-strip",
             daemon=True,
         )
         worker.start()
 
-    def _work(self, generation: int, entries, provider, now) -> None:
+    def _work(self, generation: int, entries, latest, provider, now) -> None:
         try:
-            results = self._compute(entries, provider, now)
+            results = self._measure(entries, latest, provider, now)
         except Exception:  # noqa: BLE001 - never let the worker die silently busy
             results = None
         try:
@@ -139,27 +163,49 @@ class LiveResultsStrip(QFrame):
             pass
 
     @staticmethod
-    def _compute(entries, provider, now) -> list[dict[str, Any]]:
+    def _bars_for(bars_by_symbol: dict[str, Any], entry, provider) -> list:
+        """One cached-bar read per symbol per pass; no bars is "no data"."""
+        symbol = entry["symbol"]
+        if symbol not in bars_by_symbol:
+            bars = []
+            if provider is not None and entry.get("status") == lar.OK:
+                try:
+                    bars = list(provider(symbol) or ())
+                except Exception:  # noqa: BLE001 - no bars is "no data", never an error
+                    bars = []
+            bars_by_symbol[symbol] = bars
+        return bars_by_symbol[symbol]
+
+    @classmethod
+    def _compute(cls, entries, provider, now) -> list[dict[str, Any]]:
+        return cls._measure(entries, {}, provider, now)["results"]
+
+    @classmethod
+    def _measure(cls, entries, latest, provider, now) -> dict[str, Any]:
+        """Results and entry states for the first alerts; states for the newest."""
         zone = lar.desk_zone()
         bars_by_symbol: dict[str, Any] = {}
-        results = []
+        results, first_states = [], []
         for entry in entries:
-            symbol = entry["symbol"]
-            if symbol not in bars_by_symbol:
-                bars = []
-                if provider is not None and entry.get("status") == lar.OK:
-                    try:
-                        bars = list(provider(symbol) or ())
-                    except Exception:  # noqa: BLE001 - no bars is "no data", never an error
-                        bars = []
-                bars_by_symbol[symbol] = bars
-            results.append(lar.result_for(entry, bars_by_symbol[symbol], now, naive_zone=zone))
-        return results
+            bars = cls._bars_for(bars_by_symbol, entry, provider)
+            results.append(lar.result_for(entry, bars, now, naive_zone=zone))
+            first_states.append(es.entry_state(entry, bars, now, naive_zone=zone))
+        latest_states = {
+            key: es.entry_state(
+                entry, cls._bars_for(bars_by_symbol, entry, provider), now, naive_zone=zone
+            )
+            for key, entry in (latest or {}).items()
+        }
+        return {"results": results, "first_states": first_states, "latest_states": latest_states}
 
-    def _on_results(self, generation: int, results: Any) -> None:
+    def _on_results(self, generation: int, measured: Any) -> None:
         self._busy = False
-        if generation == self._generation and results is not None:
-            results = list(results)
+        if generation == self._generation and measured is not None:
+            results = list(measured["results"])
+            self._first_states = list(measured["first_states"])
+            if measured["latest_states"] != self._latest_states:
+                self._latest_states = dict(measured["latest_states"])
+                self.entryStatesChanged.emit(dict(self._latest_states))
             # An alert recorded while the worker ran keeps its "no data" row
             # until the next read, rather than vanishing for a minute.
             for entry in self._book.entries()[len(results):]:
@@ -203,12 +249,26 @@ class LiveResultsStrip(QFrame):
     def results(self) -> list[dict[str, Any]]:
         return self._graded()
 
+    def entry_states(self) -> dict[tuple[str, str], dict[str, Any]]:
+        """The newest alert's entry state per (symbol, side) - 6a."""
+        return dict(self._latest_states)
+
+    def _states_for(self, rows) -> list[Any]:
+        """The first alert's entry state per row; None until it is measured."""
+        states = list(self._first_states[: len(rows)])
+        return states + [None] * (len(rows) - len(states))
+
     def line_text(self) -> str:
         return self.line_label.text()
 
     def _render(self) -> None:
         rows = self._graded()
         text = lar.strip_text(lar.summarize(rows))
+        takeable = sum(
+            1 for state in self._states_for(rows) if es.chip_text(state) in (es.VALID, es.IMPROVED)
+        )
+        if takeable:
+            text += f" · {takeable} entry valid"
         if rows:
             tooltip = "\n".join(
                 [
@@ -216,7 +276,10 @@ class LiveResultsStrip(QFrame):
                     "(completed M5 bars only; first alert per name and side).",
                     "",
                 ]
-                + [lar.tooltip_line(row) for row in rows]
+                + [
+                    f"{lar.tooltip_line(row)} · {es.chip_detail(state)}"
+                    for row, state in zip(rows, self._states_for(rows))
+                ]
             )
         else:
             tooltip = "No M5 alerts yet today."

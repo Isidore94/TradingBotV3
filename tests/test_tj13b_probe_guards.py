@@ -668,6 +668,9 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
         # Econ morning brief (2026-09-24): `econ_brief`, pinned by
         # `EXPECTED_SLOT_ORDER` last in stage 2 and set aside here.
         "econ_brief",
+        # P1-7 7b (2026-09-25): `plan_review`, pinned by `EXPECTED_SLOT_ORDER`
+        # in stage 3 and set aside here.
+        "plan_review",
     )
     assert slate[slate.index("market_story_narration") + 1] == "week_questions"
     today = tuple(name for name in slate if name not in set_aside)

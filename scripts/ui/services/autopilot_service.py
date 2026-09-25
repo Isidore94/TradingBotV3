@@ -20,6 +20,8 @@ from project_paths import (
     AUTOPILOT_REPORT_FILE,
     AUTOPILOT_SCORECARD_FILE,
     AUTOPILOT_STATE_FILE,
+    FOCUS_LONGS_FILE,
+    FOCUS_SHORTS_FILE,
     INDUSTRY_BOARD_STATE_FILE,
     INDUSTRY_INTRADAY_RS_STATE_FILE,
     INTRADAY_BOUNCE_CANDIDATES_FILE,
@@ -955,6 +957,8 @@ class AutopilotService(QObject):
                 if not pool:
                     self._log("Universe files are empty/missing - keeping the existing watchlists. Run the Universe builder.")
                     return
+                # P1-5 5c: M5 Focus names are swept first, never cut.
+                pool = core.prioritise_pool(self._open_sweep_priority_names(), pool)
                 moves = core.fetch_open_scan_moves(pool, log=self._log)
                 if not moves:
                     self._log("Open scan returned no data - keeping the existing watchlists.")
@@ -971,18 +975,21 @@ class AutopilotService(QObject):
                     return
                 trend_context = core.load_daily_context(list(moves.keys()))
                 built = core.build_watchlists_from_moves(moves, spy_move, trend_context=trend_context)
-                longs = built["longs"]
-                shorts = built["shorts"]
+                # Keep the trader's hand-added names: replace only what Auto
+                # Pilot itself wrote last time. A typed name is never an auto
+                # pick on either side, so it is never recorded and never dropped.
+                written = self._state.get("autopilot_written") or {}
+                current_longs, current_shorts = self._read_watchlists()
+                plan = core.plan_watchlist_write(
+                    built["longs"], built["shorts"], current_longs, current_shorts, written
+                )
+                longs = plan["longs"]
+                shorts = plan["shorts"]
                 if not longs and not shorts:
                     self._log(f"Open scan found no gap/RS movers across {built['scanned']} names - watchlists unchanged.")
                     return
-
-                # Keep the trader's hand-added names: replace only what Auto
-                # Pilot itself wrote last time.
-                written = self._state.get("autopilot_written") or {}
-                current_longs, current_shorts = self._read_watchlists()
-                merged_longs = core.merge_autopilot_watchlist(longs, current_longs, written.get("longs", []))
-                merged_shorts = core.merge_autopilot_watchlist(shorts, current_shorts, written.get("shorts", []))
+                merged_longs = plan["merged_longs"]
+                merged_shorts = plan["merged_shorts"]
                 wrote = core.write_bouncebot_watchlists(
                     merged_longs["symbols"], merged_shorts["symbols"]
                 )
@@ -1000,7 +1007,7 @@ class AutopilotService(QObject):
                         "designated writer for the home folder."
                     )
                     return
-                self._state["autopilot_written"] = {"longs": list(longs), "shorts": list(shorts)}
+                self._state["autopilot_written"] = plan["written"]
                 self._state["watchlist_built_at"] = datetime.now().strftime("%H:%M:%S")
                 self._save_state()
 
@@ -1064,6 +1071,8 @@ class AutopilotService(QObject):
                     self._state["suggested_at"] = "skipped (no universe)"
                     self._save_state()
                     return
+                # P1-5 5c: M5 Focus names are swept first, never cut.
+                pool = core.prioritise_pool(self._open_sweep_priority_names(), pool)
                 moves = core.fetch_open_scan_moves(pool, log=self._log)
                 spy_move = (moves or {}).get("SPY")
                 spy_session = (spy_move or {}).get("session_date")
@@ -1940,6 +1949,13 @@ class AutopilotService(QObject):
             swing_data_date = str(swing_feed.get("data_date") or "")
             current_session_data = swing_data_date == datetime.now().date().isoformat()
             swing_rows = list(swing_feed.get("rows") or []) if current_session_data else []
+            # P1-5 5a: the setup key's short label, when the scan stamped one (worker thread).
+            try:
+                import setup_key_labels
+
+                setup_key_labels.attach_labels(swing_rows, allow_read=True)
+            except Exception:
+                logging.warning("Setup key labels skipped for this digest.", exc_info=True)
             # WS-PT4: ONE projection, in `autopilot_core`, so the digest's pick
             # rows carry the point system's inputs (the scan row plus the two
             # group-context readings) as well as the six display fields. The
@@ -1957,7 +1973,7 @@ class AutopilotService(QObject):
                 }
                 for row in swing_rows
             ]
-            # The top-ten cap is applied by `hide_sector_names` below, AFTER the
+            # The top-ten cap is applied by `core.rank_digest_picks` below, AFTER the
             # Oil & Gas / Real Estate view filter, so a hidden name costs no slot.
             picks = [pick for pick in picks if pick["symbol"]]
             # ONE read of the tier outcomes for both the ranking and the line
@@ -2057,11 +2073,21 @@ class AutopilotService(QObject):
             except Exception:
                 logging.exception("Night AI line unreadable; the report goes out without it.")
             try:
-                payload = core.hide_sector_names(payload, pick_limit=10)
+                payload = core.hide_sector_names(payload)
             except Exception:
                 # The view filter never costs the report; fall back to the cap alone.
                 logging.exception("Away report sector filter failed; publishing unfiltered.")
-                payload["swing_picks"] = list(payload.get("swing_picks") or [])[:10]
+            # P1-5 5a: the top ten are chosen by rank with a family+side cap,
+            # AFTER the sector filter so a hidden name never costs a slot.
+            try:
+                payload["swing_picks"], _order = core.rank_digest_picks(
+                    payload.get("swing_picks") or [], swing_family_records
+                )
+            except Exception:
+                logging.exception("Digest top-ten ranking failed; publishing the first ten.")
+                payload["swing_picks"] = list(payload.get("swing_picks") or [])[
+                    : core.DIGEST_TOP_PICKS
+                ]
             publish = core.publish_away_report(payload)
             self._last_report_attempt = datetime.now()
             if publish.get("ok"):
@@ -2134,6 +2160,19 @@ class AutopilotService(QObject):
             return list(_memoized_file_read(Path(path), read_watchlist_symbols))
         except Exception:
             return []
+
+    def _open_sweep_priority_names(self) -> list[str]:
+        """P1-5 5c: the M5 Focus names, swept first and never cut.
+
+        Typed longs/shorts are NOT pooled: a typed name must never become an auto pick.
+        """
+        names: list[str] = []
+        for path in (FOCUS_LONGS_FILE, FOCUS_SHORTS_FILE):
+            try:
+                names.extend(read_watchlist_symbols(Path(path)))
+            except Exception:  # noqa: BLE001 - a missing Focus file is "no Focus names"
+                continue
+        return names
 
     def _read_watchlists(self) -> tuple[list[str], list[str]]:
         try:

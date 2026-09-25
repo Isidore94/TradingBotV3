@@ -442,6 +442,14 @@ WEEK_ANSWERS_FILE = PERSISTENT_DATA_DIR / "week_answers.jsonl"
 # queue or `review_policy.json` (plan.md sec 5).
 AI_IDEAS_FILE = PERSISTENT_DATA_DIR / "ai_ideas.jsonl"
 AI_IDEAS_STATE_FILE = PERSISTENT_DATA_DIR / "ai_ideas_state.json"
+# P1-7: the trader's own trading plan (Markdown, edited in any editor) and its
+# append-only history, one `<stamp>_<hash>.md` per content change. `trading_plan.py`
+# owns both. The night's challenges to the plan are append-only; the trader's
+# accept/reject answers are a separate append-only file written by the desk only.
+TRADING_PLAN_FILE = PERSISTENT_DATA_DIR / "trading_plan.md"
+TRADING_PLAN_HISTORY_DIR = PERSISTENT_DATA_DIR / "trading_plan_history"
+PLAN_CHALLENGES_FILE = PERSISTENT_DATA_DIR / "plan_challenges.jsonl"
+PLAN_CHALLENGE_ANSWERS_FILE = PERSISTENT_DATA_DIR / "plan_challenge_answers.jsonl"
 # TJ-17D: explicit, trader-entered follow-through on a selected weekly process
 # change.  Append-only evidence beside the ideas state; it cannot affect any
 # detector, score, alert, queue, Focus list or policy.
@@ -716,6 +724,14 @@ MASTER_AVWAP_TIER_OUTCOMES_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_ti
 MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE = (
     PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_session_horizon_outcomes.csv"
 )
+# P1-4 4c: the setup-permutation search report (shadow only). Written by
+# `setup_permutation_search.py --out`; read by Research -> Setup keys and the
+# Saturday `setup_keys_narration` slot. Nothing ranks, filters or alerts on it.
+SETUP_PERMUTATION_REPORT_FILE = PERSISTENT_RUNTIME_DATA_DIR / "permutation_report.json"
+# The same report, under the name the `plan_review` slot reads.
+PERMUTATION_REPORT_FILE = SETUP_PERMUTATION_REPORT_FILE
+# P1-4 4d: the Saturday slot's cited sentences per family over that report.
+SETUP_KEYS_NARRATION_FILE = PERSISTENT_RUNTIME_DATA_DIR / "setup_keys_narration.json"
 # Packet WS-TH (2026-09-12). The theta picks graded forward: held above the sold
 # strike at the exact 5/10/20-session endpoints and at the option's own expiry,
 # maximum adverse excursion in ATR, and which support broke first. Written

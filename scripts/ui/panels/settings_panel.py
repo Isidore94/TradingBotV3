@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QTabWidget,
@@ -68,6 +69,8 @@ class SettingsPanel(QFrame):
     #: owned by the window (it holds the timer and the state file), and a panel
     #: that wrote that state itself would be a second owner of it.
     mentorPauseRequested = Signal()
+    #: P1-6 6c: `risk_per_trade_dollars` was saved - a float, or None for off.
+    riskPerTradeChanged = Signal(object)
 
     def __init__(
         self,
@@ -137,6 +140,23 @@ class SettingsPanel(QFrame):
         )
         self.trade_mentor_pause.clicked.connect(self.mentorPauseRequested)
 
+        # P1-6 6c (trader, 2026-09-24): fixed dollars risked per trade. One
+        # local setting; no account size is stored. Sizes plans, never orders.
+        import entry_plan
+
+        saved_risk = entry_plan.risk_per_trade_dollars()
+        self.risk_input = QLineEdit(f"{saved_risk:g}" if saved_risk is not None else "")
+        self.risk_input.setPlaceholderText("blank = off")
+        self.risk_input.setMaximumWidth(140)
+        self.risk_input.setToolTip(
+            "Dollars you risk on one trade. Plans show shares = this / (entry - stop), "
+            "rounded down. Blank turns sizing off. Nothing is ever ordered."
+        )
+        self.risk_input.editingFinished.connect(self._save_risk_per_trade)
+        self.risk_hint = QLabel("Shares on every plan = risk / (entry - stop), rounded down.")
+        self.risk_hint.setObjectName("MutedLabel")
+        self.risk_hint.setWordWrap(True)
+
         details = get_tracker_storage_details()
         self.data_dir_label = QLabel(details.get("data_dir", ""))
         self.data_dir_label.setWordWrap(True)
@@ -174,6 +194,8 @@ class SettingsPanel(QFrame):
         mentor_row.addWidget(self.trade_mentor_pause)
         mentor_row.addStretch(1)
         form.addRow("", mentor_row)
+        form.addRow("Risk per trade ($)", self.risk_input)
+        form.addRow("", self.risk_hint)
         form.addRow("Data folder", self.data_dir_label)
         form.addRow("Storage source", self.source_label)
 
@@ -316,6 +338,29 @@ class SettingsPanel(QFrame):
         self.state.save()
         self._sync_scale_hint()
         self.stateChanged.emit()
+
+    def _save_risk_per_trade(self) -> bool:
+        """Validate and save `risk_per_trade_dollars`. Blank = off; bad input is refused."""
+        import entry_plan
+
+        ok, value = entry_plan.validate_risk_text(self.risk_input.text())
+        if not ok:
+            self.risk_hint.setText("Not saved: type a positive dollar amount, or leave it blank for off.")
+            return False
+        if value == entry_plan.risk_per_trade_dollars():
+            return True
+        try:
+            from project_paths import save_local_setting
+
+            save_local_setting(entry_plan.RISK_SETTING, value)
+        except Exception as exc:  # noqa: BLE001 - said on the page, never swallowed
+            self.risk_hint.setText(f"Not saved: {exc}")
+            return False
+        self.risk_hint.setText(
+            f"Saved: ${value:,.2f} per trade." if value is not None else "Saved: sizing is off."
+        )
+        self.riskPerTradeChanged.emit(value)
+        return True
 
     def set_next_prompt_at(self, moment) -> None:
         """Say when the next Trade Mentor prompt is, or that there is none left.
