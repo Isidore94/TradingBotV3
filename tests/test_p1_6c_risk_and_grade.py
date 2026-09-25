@@ -115,7 +115,7 @@ def test_each_m5_row_shows_shares_from_its_own_entry_and_stop(app):
     assert all(" sh" not in bar.list.item(i).text() for i in range(bar.count()))
     bar.set_risk_per_trade(200)
     texts = {bar.list.item(i).data(0x0100).symbol: bar.list.item(i).text() for i in range(bar.count())}
-    assert texts["NVDA"].endswith("· 400 sh")
+    assert texts["NVDA"].endswith("· 400 sh · $40.0k")
     assert " sh" not in texts["AMD"]
     bar.set_risk_per_trade(None)
     assert all(" sh" not in bar.list.item(i).text() for i in range(bar.count()))

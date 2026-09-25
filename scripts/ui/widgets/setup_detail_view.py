@@ -219,10 +219,12 @@ class SetupDetailView(QTextBrowser):
             import entry_plan
 
             risk_dollars = entry_plan.risk_per_trade_dollars()
-            shares = entry_plan.shares_for(risk_dollars, plan.get("entry_reference"), plan.get("stop_price"))
+            shares = entry_plan.shares_for(
+                risk_dollars, plan.get("entry_reference"), plan.get("stop_price"), side
+            )
             if shares is not None:
                 parts.append(
-                    f"<div><b>Shares at ${risk_dollars:,.2f} risk:</b> {shares} "
+                    f"<div><b>Shares at ${risk_dollars:,.2f} risk:</b> {entry_plan.size_text(shares, plan.get('entry_reference'))} "
                     f"<span style='color:{muted}'>(risk ÷ (entry − stop), rounded down)</span></div>"
                 )
         else:

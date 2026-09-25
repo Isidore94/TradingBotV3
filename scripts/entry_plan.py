@@ -56,11 +56,23 @@ def risk_per_trade_dollars() -> float | None:
         return None
 
 
-def shares_for(risk_dollars: Any, entry: Any, stop: Any) -> int | None:
-    """floor(risk / |entry - stop|), or None when any input is missing or the gap is zero."""
+_SIDES = {"LONG": "LONG", "BUY": "LONG", "SHORT": "SHORT", "SELL": "SHORT"}
+
+
+def shares_for(risk_dollars: Any, entry: Any, stop: Any, side: Any = None) -> int | None:
+    """floor(risk / |entry - stop|), or None when any input is missing or the gap is zero.
+
+    With a side, a stop on the wrong side of the entry (a long's stop above it,
+    a short's below) sizes nothing - the same rule the D1 plan's stale flag keeps.
+    """
     risk = parse_risk_dollars(risk_dollars)
     entry_value, stop_value = _number(entry), _number(stop)
     if risk is None or entry_value is None or stop_value is None:
+        return None
+    direction = _SIDES.get(str(side or "").strip().upper())
+    if direction == "LONG" and stop_value >= entry_value:
+        return None
+    if direction == "SHORT" and stop_value <= entry_value:
         return None
     gap = abs(entry_value - stop_value)
     if gap <= 0:
@@ -68,8 +80,24 @@ def shares_for(risk_dollars: Any, entry: Any, stop: Any) -> int | None:
     return int(math.floor(risk / gap + 1e-9))
 
 
-def shares_text(shares: int | None) -> str:
-    return f"{shares} sh" if shares is not None else ""
+def notional_text(value: float | None) -> str:
+    """`$800`, `$10.0k`, `$2.0M` - the dollars a size puts to work. No cap: the trader decides."""
+    if value is None:
+        return ""
+    if value >= 999_950:
+        return f"${value / 1_000_000:,.1f}M"
+    if value >= 1_000:
+        return f"${value / 1_000:,.1f}k"
+    return f"${value:,.0f}"
+
+
+def size_text(shares: int | None, entry: Any = None) -> str:
+    """`1,000 sh · $10.0k` (shares and notional), `10 sh` with no price, '' with no size."""
+    if shares is None:
+        return ""
+    price = _number(entry)
+    text = f"{shares:,} sh"
+    return f"{text} · {notional_text(shares * price)}" if price else text
 
 
 # ---------------------------------------------------------------- 6b plan
@@ -106,6 +134,7 @@ def plan_for_row(
     stop = _number(plan.get("stop_price"))
     risk = _number(plan.get("risk_per_share"))
     return {
+        "side": str(plan.get("side") or side or "LONG"),
         "entry": entry,
         "stop": stop,
         "stop_label": str(plan.get("stop_label") or ""),
@@ -143,14 +172,21 @@ def plan_cells(plan: Mapping[str, Any] | None, risk_dollars: Any = None) -> dict
         return {"plan_entry": "", "plan_stop": "", "plan_tp1": "", "plan_r": "", "plan_shares": ""}
     tp1_r = plan.get("tp1_r")
     r_text = "stale" if plan.get("stale") else (f"{tp1_r:+.1f}R" if tp1_r is not None else "")
-    shares = None if plan.get("stale") else shares_for(risk_dollars, plan.get("entry"), plan.get("stop"))
+    shares = plan_shares(plan, risk_dollars)
     return {
         "plan_entry": _price(plan.get("entry")),
         "plan_stop": _price(plan.get("stop")),
         "plan_tp1": _price(plan.get("tp1")),
         "plan_r": r_text,
-        "plan_shares": str(shares) if shares is not None else "",
+        "plan_shares": size_text(shares, plan.get("entry")),
     }
+
+
+def plan_shares(plan: Mapping[str, Any] | None, risk_dollars: Any = None) -> int | None:
+    """Shares for a plan: blank when stale, the stop is unknown, or it sits on the wrong side."""
+    if not plan or plan.get("stale"):
+        return None
+    return shares_for(risk_dollars, plan.get("entry"), plan.get("stop"), plan.get("side"))
 
 
 def plan_line(plan: Mapping[str, Any] | None, risk_dollars: Any = None) -> str:
@@ -164,7 +200,7 @@ def plan_line(plan: Mapping[str, Any] | None, risk_dollars: Any = None) -> str:
     tp1 = cells["plan_tp1"] or "?"
     parts.append(f"TP1 {tp1}" + (f" ({cells['plan_r']})" if cells["plan_r"] else ""))
     if cells["plan_shares"]:
-        parts.append(f"{cells['plan_shares']} sh")
+        parts.append(cells["plan_shares"])
     return "Plan: " + " · ".join(parts)
 
 

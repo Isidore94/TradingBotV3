@@ -54,7 +54,7 @@ def test_the_plan_projects_the_detail_panes_numbers():
     assert plan["stale"] is False
     assert entry_plan.plan_cells(plan, 500) == {
         "plan_entry": "100.00", "plan_stop": "95.00", "plan_tp1": "110.00",
-        "plan_r": "+2.0R", "plan_shares": "100",
+        "plan_r": "+2.0R", "plan_shares": "100 sh · $10.0k",
     }
 
 
@@ -115,11 +115,11 @@ def test_the_model_shows_plan_cells_and_the_key_level_tooltip_carries_the_plan(a
     def cell(row, key, role=Qt.ItemDataRole.DisplayRole):
         return model.data(model.index(row, columns.index(key)), role)
 
-    assert [cell(0, key) for key in model.PLAN_COLUMNS] == ["100.00", "95.00", "110.00", "+2.0R", "100"]
+    assert [cell(0, key) for key in model.PLAN_COLUMNS] == ["100.00", "95.00", "110.00", "+2.0R", "100 sh · $10.0k"]
     assert [cell(1, key) for key in model.PLAN_COLUMNS] == ["", "", "", "", ""]
     tooltip = cell(0, "key_level", Qt.ItemDataRole.ToolTipRole)
     assert tooltip.startswith("$95 AVWAPE")
-    assert "Plan: entry 100.00 · stop 95.00 (LOWER_1) · TP1 110.00 (+2.0R) · 100 sh" in tooltip
+    assert "Plan: entry 100.00 · stop 95.00 (LOWER_1) · TP1 110.00 (+2.0R) · 100 sh · $10.0k" in tooltip
     assert cell(1, "key_level", Qt.ItemDataRole.ToolTipRole) == "$10"
     assert model.has_plans()
 

@@ -103,13 +103,19 @@ def chip_text(state: Mapping[str, Any] | str | None) -> str:
     return value if value in STATES else UNKNOWN
 
 
-def chip_detail(state: Mapping[str, Any] | None) -> str:
-    """One tooltip line: the chip, why, and the bar it was read on."""
+def chip_detail(state: Mapping[str, Any] | None, *, zone: tzinfo | None = None) -> str:
+    """One tooltip line: the chip, why, and the bar it was read on, in market-local time.
+
+    `zone` defaults to the desk's market-local zone (`market_session`), the clock
+    the bars and the timing chips use; a naive stamp is already in it.
+    """
     if not isinstance(state, Mapping):
         return "entry: unknown (not measured yet)"
     text = f"entry: {chip_text(state)}"
     reason = str(state.get("reason") or "")
     at = state.get("at")
+    if isinstance(at, datetime) and at.tzinfo is not None:
+        at = at.astimezone(zone or lar.desk_zone())
     clock = at.strftime("%H:%M") if isinstance(at, datetime) else ""
     if reason:
         text += f" ({reason}{' ' + clock if clock else ''})"

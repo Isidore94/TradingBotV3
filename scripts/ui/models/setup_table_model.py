@@ -402,8 +402,10 @@ class SetupTableModel(QAbstractTableModel):
             if field is not None:
                 value = None if (key == "plan_r" and plan.get("stale")) else plan.get(field)
                 return float(value) if value is not None else -999999.0
-            text = self._display_value(row, key)
-            return float(text) if text else -1.0
+            import entry_plan
+
+            shares = entry_plan.plan_shares(self.plan_for(row), self._risk_dollars)
+            return float(shares) if shares is not None else -1.0
         return self._display_value(row, key)
 
 

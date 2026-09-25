@@ -131,7 +131,7 @@ def row_text(
     grade: str | None = None,
     swing: str = "",
     entry: str = "",
-    shares: int | None = None,
+    size: str = "",
 ) -> str:
     """One line: grade, time, side, ticker, what fired, and take context.
 
@@ -149,9 +149,9 @@ def row_text(
     and side are not a D1 swing setup.
 
     ``entry`` is the P1-6 entry chip (``valid`` / ``improved`` / ``gone``),
-    blank until the state has been measured. ``shares`` is the P1-6 size at the
-    trader's fixed risk (``· 120 sh``), blank when sizing is off or the alert
-    has no stop. A size, never an order.
+    blank until the state has been measured. ``size`` is the P1-6 size at the
+    trader's fixed risk with its notional (``· 120 sh · $12.0k``), blank when
+    sizing is off or the alert has no usable stop. A size, never an order.
     """
     time_text = str(getattr(alert, "time_text", "") or "")[:5]
     side = str(getattr(alert, "side", "") or "")
@@ -165,8 +165,8 @@ def row_text(
         line += f"  {swing}"
     if entry:
         line += f"  · {entry}"
-    if shares is not None:
-        line += f"  · {shares} sh"
+    if size:
+        line += f"  · {size}"
     if repeats > 1:
         line += f"  ×{repeats}"
     probability = take_probability(alert)
@@ -371,18 +371,22 @@ class M5AlertBar(QWidget):
             if alert is not None:
                 self._write_item(item, alert, int(item.data(_REPEAT_ROLE) or 1))
 
-    def _shares_for(self, alert: Any) -> int | None:
-        """Shares at the fixed risk from this alert's own entry and stop, or None."""
+    def _size_for(self, alert: Any) -> str:
+        """`N sh · $notional` at the fixed risk from this alert's own entry and stop, or ''.
+
+        A stop on the wrong side of the entry for the alert's side sizes nothing.
+        """
         if self._risk_dollars is None:
-            return None
+            return ""
         import entry_plan
 
         payload = getattr(alert, "payload", None)
         feedback = payload.get("feedback") if isinstance(payload, dict) else None
         feedback = feedback if isinstance(feedback, dict) else {}
-        return entry_plan.shares_for(
-            self._risk_dollars, feedback.get("entry_price"), feedback.get("stop_price")
-        )
+        side = getattr(alert, "side", "") or feedback.get("direction")
+        entry = feedback.get("entry_price")
+        shares = entry_plan.shares_for(self._risk_dollars, entry, feedback.get("stop_price"), side)
+        return entry_plan.size_text(shares, entry)
 
     @staticmethod
     def _entry_key(alert: Any) -> tuple[str, str]:
@@ -498,7 +502,7 @@ class M5AlertBar(QWidget):
                 grade=self._grade_for(alert),
                 swing=swing_context.suffix(swing),
                 entry=entry_state.chip_text(state) if state is not None else "",
-                shares=self._shares_for(alert),
+                size=self._size_for(alert),
             )
         )
         item.setData(_ALERT_ROLE, alert)
