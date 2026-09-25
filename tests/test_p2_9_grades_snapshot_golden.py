@@ -1,18 +1,15 @@
 """P2-9 golden: the looking-back views add columns and change no computed value.
 
 `setup_grades.build_payload` and `working_lately.build_snapshot` are pinned
-byte-for-byte on one fixed fixture. The golden file was written from `origin/main`
-(a793f661) BEFORE the P2-9 read-only views were added, so any change to a grade,
-a cell or a verdict fails here.
-
-Regenerate only on a deliberate, reviewed scoring change:
-`P2_9_WRITE_GOLDEN=1 pytest tests/test_p2_9_grades_snapshot_golden.py`.
+byte-for-byte on one fixed fixture. The expected block was written from
+`origin/main` (a793f661) BEFORE the P2-9 read-only views were added, so any
+change to a grade, a cell or a verdict fails here. The fixture is
+contract-bearing: its inputs are hashed and carried in the file.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -21,7 +18,9 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-GOLDEN = Path(__file__).resolve().parent / "fixtures" / "p2_9_grades_snapshot_golden_v1.json"
+from conftest import load_fixture_contract  # noqa: E402
+
+FIXTURE = "p2_9_grades_snapshot_golden_v1"
 AS_OF = date(2026, 9, 18)
 SESSIONS = (
     "2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11", "2026-09-14",
@@ -30,6 +29,7 @@ SESSIONS = (
 
 
 def _recent_rows() -> list[dict]:
+    """The generator the fixture's `recent_rows` were frozen from."""
     rows = []
     for index, (family, wins, losses, flats, rep) in enumerate(
         (
@@ -67,6 +67,7 @@ def _recent_rows() -> list[dict]:
 
 
 def _outcome_rows() -> list[dict]:
+    """The generator the fixture's `outcome_rows` were frozen from."""
     rows = []
     for day_index, session in enumerate(SESSIONS):
         stamp = session.replace("-", "")
@@ -96,6 +97,7 @@ def _outcome_rows() -> list[dict]:
 
 
 def _favorable_rows() -> list[dict]:
+    """The generator the fixture's `favorable_rows` were frozen from."""
     rows = []
     for day_index, session in enumerate(SESSIONS[:6]):
         for n in range(8):
@@ -119,31 +121,33 @@ def _favorable_rows() -> list[dict]:
     return rows
 
 
-def build_outputs(setups_path: Path) -> dict:
+def build_outputs(inputs: dict, setups_path: Path) -> dict:
     import held_run_score
     import setup_grades
     import swing_evidence
     import working_lately
 
-    recent = _recent_rows()
-    outcome = _outcome_rows()
+    as_of = date.fromisoformat(inputs["as_of"])
+    sessions = inputs["sessions"]
+    recent = inputs["recent_rows"]
+    outcome = inputs["outcome_rows"]
     grades = setup_grades.build_payload(
-        recent_rows=recent, outcome_rows=outcome, as_of=AS_OF.isoformat()
+        recent_rows=recent, outcome_rows=outcome, as_of=as_of.isoformat()
     )
     favorable = swing_evidence.read_eligible_rows(
-        _favorable_rows(),
+        inputs["favorable_rows"],
         swing_evidence.POLICY_SCANROW_V1,
-        window=(SESSIONS[0], SESSIONS[-1]),
+        window=(sessions[0], sessions[-1]),
     )
     episodes = held_run_score.load_episodes(
-        rows=outcome, as_of=AS_OF.isoformat(), setups_path=setups_path
+        rows=outcome, as_of=as_of.isoformat(), setups_path=setups_path
     )
-    summaries = held_run_score.dimension_summaries(episodes, as_of=AS_OF.isoformat(), min_n=3)
+    summaries = held_run_score.dimension_summaries(episodes, as_of=as_of.isoformat(), min_n=3)
     snapshot = working_lately.build_snapshot(
         recent_rows=recent,
         favorable_read=favorable,
         held_run_summaries=summaries,
-        last_completed_session=AS_OF,
+        last_completed_session=as_of,
         previous_verdicts={},
     )
     payload = snapshot.to_payload()
@@ -155,9 +159,16 @@ def _canonical(value) -> str:
     return json.dumps(value, sort_keys=True, indent=1, default=str)
 
 
+def test_the_fixture_inputs_are_the_generators_output():
+    contract = load_fixture_contract(FIXTURE)
+    inputs = contract["inputs"]
+    assert inputs["recent_rows"] == _recent_rows()
+    assert inputs["outcome_rows"] == _outcome_rows()
+    assert inputs["favorable_rows"] == _favorable_rows()
+
+
 def test_grades_and_snapshot_are_byte_identical_to_main(tmp_path):
+    contract = load_fixture_contract(FIXTURE)
     # `load_episodes` joins the D1 snapshot; an absent one keeps it off live stores.
-    text = _canonical(build_outputs(tmp_path / "absent_scoring_snapshot.json"))
-    if os.environ.get("P2_9_WRITE_GOLDEN") == "1":
-        GOLDEN.write_text(text, encoding="utf-8")
-    assert text == GOLDEN.read_text(encoding="utf-8")
+    actual = build_outputs(contract["inputs"], tmp_path / "absent_scoring_snapshot.json")
+    assert _canonical(actual) == _canonical(contract["expected"])
