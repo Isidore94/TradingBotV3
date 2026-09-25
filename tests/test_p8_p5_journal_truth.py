@@ -344,3 +344,59 @@ def test_the_day_review_trade_row_shows_the_bot_grade(qapp):
     finally:
         widget.shutdown()
         widget.deleteLater()
+
+
+# ---------------------------------------------------------------------------
+# step 4: the week card's 4-week rollup and thin rows (floors unchanged)
+# ---------------------------------------------------------------------------
+def _week_file(root, week, *, time_rows=(), setup_rows=()):
+    import json
+
+    import day_session_record as dsr
+
+    body = {"schema": dsr.WEEK_SCHEMA, "week": week, "sessions": [], "trades_n": 0,
+            "by_time_of_day": list(time_rows), "by_setup_family": list(setup_rows)}
+    path = dsr.week_path(week, root=root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(body), encoding="utf-8")
+
+
+def _group_row(key, n, pnl, wins, losses):
+    return {"key": key, "n": n, "pnl_known_n": n, "pnl_unknown_n": 0, "pnl_cad": pnl,
+            "wins": wins, "losses": losses, "r_n": 0, "avg_r": None}
+
+
+def test_the_rollup_reaches_n_10_and_thin_rows_are_labelled_not_hidden(tmp_path, qapp):
+    import week_coach
+    from ui.widgets.week_coach_card import WeekCoachCard
+
+    assert week_coach.MIN_N == 10  # the floor is unchanged
+    root = tmp_path / "records"
+    for week in ("2026-W35", "2026-W36", "2026-W37"):
+        _week_file(root, week, time_rows=[_group_row("open", 3, 30.0, 2, 1)])
+    _week_file(root, "2026-W38",
+               time_rows=[_group_row("open", 3, 30.0, 2, 1)],
+               setup_rows=[_group_row("orb", 7, -140.0, 2, 5), _group_row("gap", 4, 90.0, 3, 1)])
+    view = week_coach.read_view("2026-W38", root=root, trades_loader=lambda: [],
+                                questions_path=tmp_path / "q.jsonl", answers_path=tmp_path / "a.jsonl")
+    assert view["edge"] == [] and view["leaks"] == []  # n 3 and n 7 are below the floor
+    assert [row["key"] for row in view["thin"]] == ["orb"]  # n 4 stays "too few to tell"
+    rollup = view["rollup"]
+    assert rollup["weeks"] == ["2026-W35", "2026-W36", "2026-W37", "2026-W38"]
+    assert [(row["key"], row["pnl_known_n"]) for row in rollup["edge"]] == [("open", 12)]
+    assert [row["key"] for row in rollup["thin"]] == ["orb"]
+    month = week_coach.read_view("2026-W38", month=True, root=root, trades_loader=lambda: [],
+                                 questions_path=tmp_path / "q.jsonl", answers_path=tmp_path / "a.jsonl")
+    assert month["rollup"] == {}
+
+    card = WeekCoachCard(read=lambda *_a, **_k: view)
+    try:
+        card.render(view)
+        leaks = card.leaks_label.text()
+        assert "Setup orb: -$140, thin (7), 2 won / 5 lost" in leaks
+        assert leaks.startswith("No row has n 10+ yet (too few to tell).")
+        edge = card.edge_label.text()
+        assert "Last 4 weeks (2026-W35 to 2026-W38):\nTime of day open: +$120 (n 12), 8 won / 4 lost" in edge
+        assert "gap" not in edge
+    finally:
+        card.deleteLater()

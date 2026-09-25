@@ -30,6 +30,8 @@ QUESTION_SCHEMA = "week_question_v1"
 ANSWER_SCHEMA = "week_answer_v1"
 QUESTION_MAX = 500
 TOO_FEW = "too few to tell"
+#: P8-P5: rows with n from here up to MIN_N - 1 are shown as "thin (n)", never ranked.
+THIN_MIN_N = 5
 UNCITED_NOTE = "uncited — not shown"
 
 STATUS_PENDING = "pending"
@@ -160,6 +162,42 @@ def edge_and_leaks(body: Mapping[str, Any], *, k: int = 3) -> dict[str, Any]:
         if int(row.get("pnl_known_n") or 0) < MIN_N
     )
     return {"edge": edge[:k], "leaks": leaks[:k], "thin_rows": thin, "min_n": MIN_N}
+
+
+def thin_rows(body: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Rows with n THIN_MIN_N..MIN_N-1 and a known P&L, biggest first. Shown, never ranked."""
+    rows = []
+    for group, label in GROUPS:
+        for row in body.get(group) or ():
+            key = _text(row.get("key")) or UNKNOWN
+            n_known = int(row.get("pnl_known_n") or 0)
+            pnl = _number(row.get("pnl_cad"))
+            if key == UNKNOWN or pnl is None or not THIN_MIN_N <= n_known < MIN_N:
+                continue
+            rows.append({
+                "group": group, "label": label, "key": key, "pnl_known_n": n_known,
+                "wins": int(row.get("wins") or 0), "losses": int(row.get("losses") or 0),
+                "pnl_cad": pnl, "value": pnl,
+            })
+    rows.sort(key=lambda row: (-abs(row["value"]), row["group"], row["key"]))
+    return rows
+
+
+def thin_line(row: Mapping[str, Any]) -> str:
+    words = str(row["key"]).replace("_", " ")
+    return (
+        f"{row['label']} {words}: {fmt_money(row.get('pnl_cad'))}, thin ({row['pnl_known_n']}), "
+        f"{row['wins']} won / {row['losses']} lost"
+    )
+
+
+def rollup_view(weeks: Sequence[str], root: Path | None = None) -> dict[str, Any]:
+    """Edge, leaks and thin rows over several week files, merged group by group. Worker only."""
+    bodies = [body for body in (load_week(key, root) for key in weeks) if body]
+    if not bodies:
+        return {"weeks": [], "edge": [], "leaks": [], "thin": [], "thin_rows": 0}
+    body = month_rollup(bodies)
+    return {"weeks": list(body.get("weeks") or ()), **edge_and_leaks(body), "thin": thin_rows(body)}
 
 
 def _merge_groups(bodies: Sequence[Mapping[str, Any]], group: str) -> list[dict[str, Any]]:
@@ -650,6 +688,9 @@ def read_view(
         "sessions": list(body.get("sessions") or ()),
         "trades_n": int(body.get("trades_n") or 0),
         **edge_and_leaks(body),
+        "thin": thin_rows(body),
+        # P8-P5: the same builders over the last 4 week files, so cells can reach n 10.
+        "rollup": {} if month else rollup_view(rollup_weeks_for(chosen), root),
         "repeats": repeats(body, records),
         "rule_kept": dict(body.get("rule_kept") or {}),
         "calls": calls_right(records),
