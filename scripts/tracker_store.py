@@ -452,15 +452,18 @@ def load_fresh_projection(
     fields: Iterable[str],
     *,
     section: str = "setups",
+    sections: Iterable[str] | None = None,
     db_path: Path | str | None = None,
 ) -> tuple[list[dict] | None, str]:
     """A few top-level fields of every dict record in ``section``, in the JSON's order.
 
-    SQLite extracts the fields, so no record is parsed whole in Python. A field
-    the record lacks is absent from its row, so ``row.get`` reads ``None`` as it
-    would on the JSON dict. ``(None, reason)`` unless the store mirrors
-    ``json_path`` exactly. Never raises.
+    ``sections`` reads several sections, one after another, from one read
+    snapshot. SQLite extracts the fields, so no record is parsed whole in
+    Python. A field the record lacks is absent from its row, so ``row.get``
+    reads ``None`` as it would on the JSON dict. ``(None, reason)`` unless the
+    store mirrors ``json_path`` exactly. Never raises.
     """
+    wanted_sections = [str(name) for name in sections] if sections is not None else [section]
     names = [str(name) for name in fields]
     json_path = Path(json_path)
     store_path = Path(db_path) if db_path is not None else default_store_path()
@@ -475,18 +478,24 @@ def load_fresh_projection(
             reason = _staleness_reason(meta, json_path)
             if reason:
                 return None, reason
-            by_key: dict[str, dict] = {}
-            for row in conn.execute(
-                f"SELECT key, {columns} FROM records WHERE section = ? ORDER BY rowid", [*paths, section]
-            ):
-                if row[1] != "object":
-                    continue
-                by_key[row[0]] = {name: json.loads(text) for name, text in zip(names, row[2:]) if text is not None}
+            projected: list[dict] = []
+            for name_of_section in wanted_sections:
+                by_key: dict[str, dict] = {}
+                for row in conn.execute(
+                    f"SELECT key, {columns} FROM records WHERE section = ? ORDER BY rowid",
+                    [*paths, name_of_section],
+                ):
+                    if row[1] != "object":
+                        continue
+                    by_key[row[0]] = {
+                        name: json.loads(text) for name, text in zip(names, row[2:]) if text is not None
+                    }
+                projected.extend(_apply_order(by_key, meta.get(ORDER_META_PREFIX + name_of_section)).values())
         finally:
             conn.close()
     except Exception as exc:
         return None, f"store unreadable: {type(exc).__name__}: {exc}"
-    return list(_apply_order(by_key, meta.get(ORDER_META_PREFIX + section)).values()), ""
+    return projected, ""
 
 
 def default_store_path() -> Path:
@@ -609,10 +618,14 @@ def tracker_write_failure_line(state: dict | None = None) -> str:
     )
 
 
-#: The only two stale tracker copies ``--prune-copies`` may delete (decided 2026-09-24).
+#: The only stale tracker copies ``--prune-copies`` may delete (decided 2026-09-24; the
+#: three 2026-09-05 leftovers beside the damaged SQLite added for P0-2).
 PRUNABLE_COPY_NAMES = (
     "master_avwap_setup_tracker.json.bak",
     "master_avwap_setup_tracker.sqlite.damaged-20260905T200233",
+    "master_avwap_setup_tracker.sqlite-shm.damaged-20260905T200233",
+    "master_avwap_setup_tracker.sqlite-wal.damaged-20260905T200233",
+    "master_avwap_setup_tracker_digests.json.damaged-20260905T200233",
 )
 
 
@@ -636,7 +649,7 @@ def prune_copies(
     for name in requested:
         target = root / name
         if name not in PRUNABLE_COPY_NAMES or Path(name).name != name:
-            report["refused"].append({"name": name, "reason": "not one of the two prunable copies"})
+            report["refused"].append({"name": name, "reason": "not one of the prunable copies"})
         elif target.is_symlink() or (target.exists() and not target.is_file()):
             report["refused"].append({"name": name, "reason": "not a plain file"})
     if report["refused"]:
@@ -689,7 +702,7 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--prune-copies",
         action="store_true",
-        help="list the two stale tracker copies (.bak, .damaged-20260905T200233); delete only with --yes",
+        help="list the stale tracker copies (.bak and the .damaged-20260905T200233 leftovers); delete only with --yes",
     )
     parser.add_argument("--yes", action="store_true", help="with --prune-copies: actually delete")
     parser.add_argument("--dry-run", action="store_true", help="with --prune-copies: list only (the default)")
