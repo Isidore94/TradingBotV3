@@ -204,14 +204,14 @@ def test_the_new_scan_columns_append_after_every_older_column():
 def test_m5_time_bucket_in_exchange_time(clock, expected):
     hour, minute = map(int, clock.split(":"))
     when = datetime(2026, 9, 25, hour, minute, tzinfo=ET)
-    assert _m5("m5_time_bucket", entry_time=when.isoformat()) == expected
+    assert _m5("m5_time_bucket", alert_bar_close=when.isoformat()) == expected
     # The facet reads exchange time only; the stamp converts (see test_alert_inputs...).
-    assert _m5("m5_time_bucket", entry_time=when.astimezone(ZoneInfo("Asia/Tokyo")).isoformat()) == sp.UNKNOWN
+    assert _m5("m5_time_bucket", alert_bar_close=when.astimezone(ZoneInfo("Asia/Tokyo")).isoformat()) == sp.UNKNOWN
 
 
 def test_m5_time_bucket_without_a_timezone_is_unknown():
-    assert _m5("m5_time_bucket", entry_time="2026-09-25T10:00:00") == sp.UNKNOWN
-    assert _m5("m5_time_bucket", entry_time="") == sp.UNKNOWN
+    assert _m5("m5_time_bucket", alert_bar_close="2026-09-25T10:00:00") == sp.UNKNOWN
+    assert _m5("m5_time_bucket", alert_bar_close="") == sp.UNKNOWN
 
 
 @pytest.mark.parametrize(("value", "expected"), [
@@ -250,7 +250,7 @@ def test_m5_bounce_type():
 
 def test_the_m5_key_is_its_own_versioned_key_and_its_label_shows_the_m5_part():
     key = sp.m5_facets_for({
-        "entry_time": datetime(2026, 9, 25, 9, 45, tzinfo=ET).isoformat(), "session_rvol": 2.4,
+        "alert_bar_close": datetime(2026, 9, 25, 9, 45, tzinfo=ET).isoformat(), "session_rvol": 2.4,
         "vwap_dist_atr": 0.4, "spy_state": "COUNTERMOVE_ACTIVE", "spy_side_sign": 1, "bounce_type": "ema_15",
     }, "LONG")
     assert key.permutation_rule_version == sp.M5_PERMUTATION_RULE_VERSION
@@ -274,8 +274,11 @@ def _m5_bar(when: datetime, close: float, *, high=None, low=None, volume=1000.0)
 
 
 def _alert_bars() -> list[dict]:
-    """Naive Pacific bars: 12 from the previous afternoon, then 06:30-06:55 today, then one after."""
-    bars = [_m5_bar(datetime(2026, 9, 24, 12, 0) + timedelta(minutes=5 * n), 100.0) for n in range(12)]
+    """Naive Pacific bars stamped at their START: 20 from the previous day, then 06:30-06:55 today.
+
+    The alert bar starts 06:55 (the registered row's ``entry_time``) and closes 07:00.
+    """
+    bars = [_m5_bar(datetime(2026, 9, 24, 11, 20) + timedelta(minutes=5 * n), 100.0) for n in range(20)]
     bars += [_m5_bar(datetime(2026, 9, 25, 6, 30) + timedelta(minutes=5 * n), 100.0) for n in range(5)]
     bars.append(_m5_bar(datetime(2026, 9, 25, 6, 55), 103.0))  # the alert bar, closes 07:00
     return bars
@@ -332,16 +335,19 @@ def test_an_unusable_spy_state_is_unknown(tmp_path):
     assert stamp.SpyStateReader(tmp_path / "missing.jsonl").state_at(datetime(2026, 9, 25, 7, 0, tzinfo=PT)) is None
 
 
-def _registered(event_id="AAA_long_20260925_07_00_00_ema_15", *, rvol="2.4", entry="2026-09-25T07:00:00"):
+def _registered(event_id="AAA_long_20260925_06_55_00_ema_15", *, rvol="2.4", entry="2026-09-25T06:55:00",
+                logged="2026-09-25T07:00:40-07:00"):
+    """A registered row as the bot writes it: ``entry_time`` is the M5 bar START, naive Pacific."""
     return {"event_id": event_id, "event_type": "registered", "trade_date": "2026-09-25", "symbol": "AAA",
-            "direction": "long", "entry_time": entry,
+            "direction": "long", "entry_time": entry, "logged_at": logged,
             "context_json": json.dumps({"session_rvol": rvol, "family": "ema_15", "atr": 0.4})}
 
 
 def test_alert_inputs_come_from_the_registered_row():
     inputs = stamp.alert_inputs(_registered(), PT)
-    # 07:00 Pacific (the bot's naive local stamp) is written as 10:00 exchange time.
-    assert inputs["entry_time"] == "2026-09-25T10:00:00-04:00"
+    # The bar started 06:55 Pacific, so it closed 07:00 Pacific = 10:00 exchange time.
+    assert inputs["alert_bar_close"] == "2026-09-25T10:00:00-04:00"
+    assert inputs["alert_bar_complete"] is True
     assert inputs["session_rvol"] == pytest.approx(2.4)
     assert inputs["bounce_type"] == "ema_15"
     assert inputs["alert_date"] == "2026-09-25"
@@ -576,3 +582,60 @@ def test_the_scan_output_is_identical_with_and_without_the_p11_columns(scan_runs
     for on_row, off_row in zip(stamped["history"], plain["history"], strict=True):
         assert parity._strip(on_row) == parity._strip(off_row)
     assert all(plain["history"][-1][column] == "" for column in sp.D1_HISTORY_COLUMNS)
+
+
+# ---------------------------------------------------------------------------
+# review fix: entry_time is the M5 bar START (only H1 families stamp the close)
+# ---------------------------------------------------------------------------
+def _facets_of(row):
+    return sp.m5_facets_for(stamp.alert_inputs(row, PT), "LONG").as_dict()
+
+
+def test_the_opening_bar_alert_is_first30_not_extended_hours():
+    row = _registered("AAA_long_20260925_06_30_00_ema_15", entry="2026-09-25T06:30:00",
+                      logged="2026-09-25T06:35:20-07:00")
+    assert stamp.alert_inputs(row, PT)["alert_bar_close"] == "2026-09-25T09:35:00-04:00"
+    assert _facets_of(row)["m5_time_bucket"] == "first30"
+
+
+def test_the_last_bar_alert_is_last60():
+    row = _registered("AAA_long_20260925_12_55_00_ema_15", entry="2026-09-25T12:55:00",
+                      logged="2026-09-25T13:00:30-07:00")
+    assert stamp.alert_inputs(row, PT)["alert_bar_close"] == "2026-09-25T16:00:00-04:00"
+    assert _facets_of(row)["m5_time_bucket"] == "last60"
+
+
+def test_an_h1_row_already_carries_its_bar_close():
+    row = _registered("AAA_long_20260925_07_00_00_h1_ema10_bounce", entry="2026-09-25T07:00:00",
+                      logged="2026-09-25T07:01:00-07:00")
+    assert stamp.alert_inputs(row, PT)["alert_bar_close"] == "2026-09-25T10:00:00-04:00"
+
+
+def test_the_opening_bar_alert_measures_vwap_on_its_own_bar(m5_sources):
+    row = _registered("AAA_long_20260925_06_30_00_ema_15", entry="2026-09-25T06:30:00",
+                      logged="2026-09-25T06:35:20-07:00")
+    record = stamp.record_for(row, _StubLookup())
+    # One regular-session bar (06:30, close 100): VWAP = its typical price = 100, close 100.
+    assert record["m5_inputs"]["vwap_dist_atr"] == pytest.approx(0.0)
+    assert record["m5_facets"]["m5_vwap_dist_atr"] == "m5vwap_above_0to1atr"
+
+
+def test_a_bar_still_forming_when_the_alert_was_logged_is_never_measured(m5_sources):
+    # regime_pause rows can be logged under 5 minutes after the bar start: the bar had not closed.
+    row = _registered("AAA_long_20260925_06_55_00_regime_pause_rw", entry="2026-09-25T06:55:00",
+                      logged="2026-09-25T06:57:00-07:00")
+    inputs = stamp.alert_inputs(row, PT)
+    assert inputs["alert_bar_complete"] is False
+    record = stamp.record_for(row, _StubLookup())
+    assert record["m5_facets"]["m5_vwap_dist_atr"] == sp.UNKNOWN
+    assert m5_sources["bot"].calls == []  # the cache is not even read
+    # Without a logged_at the bar's completeness is unknown, so VWAP is too.
+    assert stamp.alert_inputs({**row, "logged_at": ""}, PT)["alert_bar_complete"] is None
+
+
+def test_spy_state_falls_back_to_the_last_usable_row(tmp_path):
+    log = _spy_log(tmp_path / "spy.jsonl", [
+        _spy_row("2026-09-25T06:40:00-07:00", "BULL_IMPULSE", 1),
+        _spy_row("2026-09-25T06:55:00-07:00", "COUNTERMOVE_ACTIVE", 1, usable=False),
+    ])
+    assert stamp.SpyStateReader(log).state_at(datetime(2026, 9, 25, 7, 0, tzinfo=PT)) == ("BULL_IMPULSE", 1)

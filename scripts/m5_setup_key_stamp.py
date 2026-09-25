@@ -293,19 +293,53 @@ def _float(value: Any) -> float | None:
     return None if number != number or number in (float("inf"), float("-inf")) else number
 
 
-def alert_inputs(row: Mapping[str, Any], tz: tzinfo | None = None) -> dict[str, Any]:
-    """The M5 facet inputs one registered outcome row carried: entry time, session RVOL, bounce type.
+def _bounce_type(row: Mapping[str, Any], context: Mapping[str, Any]) -> str:
+    from setup_scoreboard import bounce_type_from_event_id
 
-    ``entry_time`` is the alert bar's CLOSE, naive in the bot's local zone; it is
-    written back in exchange time (America/New_York). The bounce type is the
-    event id's, the same one the M5 population groups by.
+    return bounce_type_from_event_id(_text(row.get("event_id"))) or _text(context.get("family"))
+
+
+def alert_bar_close(row: Mapping[str, Any]) -> datetime | None:
+    """The alert bar's CLOSE, naive in the bot's local zone.
+
+    The bot writes an M5 alert's ``entry_time`` as the bar START (``current_candle["time"]``),
+    so its close is five minutes later; only the H1 families (``h1_`` prefix) stamp the close.
+    """
+    from evidence_rules import H1_FAMILY_PREFIX
+
+    entry = _naive(row.get("entry_time"))
+    if entry is None:
+        return None
+    if _bounce_type(row, {}).lower().startswith(H1_FAMILY_PREFIX):
+        return entry
+    return entry + timedelta(minutes=M5_BAR_MINUTES)
+
+
+def alert_bar_complete(row: Mapping[str, Any], close: datetime | None, tz: tzinfo) -> bool | None:
+    """Had the alert bar closed when the row was logged? None when ``logged_at`` cannot say."""
+    if close is None:
+        return None
+    try:
+        logged = datetime.fromisoformat(_text(row.get("logged_at")))
+    except ValueError:
+        return None
+    if logged.tzinfo is None:
+        return None
+    return close.replace(tzinfo=tz) <= logged
+
+
+def alert_inputs(row: Mapping[str, Any], tz: tzinfo | None = None) -> dict[str, Any]:
+    """The M5 facet inputs one registered outcome row carried: bar close, session RVOL, bounce type.
+
+    ``alert_bar_close`` (see `alert_bar_close`) is written in exchange time
+    (America/New_York); ``alert_bar_complete`` says whether that bar had closed
+    by ``logged_at``. The bounce type is the event id's, the same one the M5
+    population groups by.
     """
     from zoneinfo import ZoneInfo
 
-    from setup_scoreboard import bounce_type_from_event_id
-
     zone = tz if tz is not None else _local_tz()
-    entry = _naive(row.get("entry_time"))
+    close = alert_bar_close(row)
     context: Any = {}
     raw = row.get("context_json")
     if isinstance(raw, str) and raw.strip():
@@ -315,13 +349,13 @@ def alert_inputs(row: Mapping[str, Any], tz: tzinfo | None = None) -> dict[str, 
             context = {}
     if not isinstance(context, Mapping):
         context = {}
-    bounce = bounce_type_from_event_id(_text(row.get("event_id"))) or _text(context.get("family"))
     return {
-        "entry_time": (
-            entry.replace(tzinfo=zone).astimezone(ZoneInfo(_EXCHANGE_TZ)).isoformat() if entry is not None else ""
+        "alert_bar_close": (
+            close.replace(tzinfo=zone).astimezone(ZoneInfo(_EXCHANGE_TZ)).isoformat() if close is not None else ""
         ),
+        "alert_bar_complete": alert_bar_complete(row, close, zone),
         "session_rvol": _float(context.get("session_rvol")),
-        "bounce_type": bounce,
+        "bounce_type": _bounce_type(row, context),
         "alert_date": _text(row.get("trade_date"))[:10],
     }
 
@@ -336,12 +370,12 @@ def _bar_fields(bar: Any) -> tuple[datetime, float, float, float, float] | None:
     return when, high, low, close, volume or 0.0
 
 
-def vwap_distance_atr(bars: Any, entry_time: datetime, tz: tzinfo) -> float | None:
+def vwap_distance_atr(bars: Any, bar_close: datetime, tz: tzinfo) -> float | None:
     """(alert-bar close - session VWAP) / M5 ATR14 at the alert bar; None when the bars cannot say.
 
-    ``bars`` are naive local-time M5 bars stamped at their START; ``entry_time``
-    is the alert bar's CLOSE in the same zone. Only bars that closed at or before
-    it are read, and the last of them must be the alert bar itself.
+    ``bars`` are naive local-time M5 bars stamped at their START; ``bar_close``
+    is the alert bar's CLOSE in the same zone (`alert_bar_close`). Only bars that
+    closed at or before it are read, and the last of them must be the alert bar.
     """
     from zoneinfo import ZoneInfo
 
@@ -349,10 +383,10 @@ def vwap_distance_atr(bars: Any, entry_time: datetime, tz: tzinfo) -> float | No
     kept = []
     for bar in bars or ():
         fields = _bar_fields(bar)
-        if fields is not None and fields[0] + step <= entry_time:
+        if fields is not None and fields[0] + step <= bar_close:
             kept.append(fields)
     kept.sort(key=lambda item: item[0])
-    if not kept or kept[-1][0] + step != entry_time or len(kept) < M5_ATR_LENGTH + 1:
+    if not kept or kept[-1][0] + step != bar_close or len(kept) < M5_ATR_LENGTH + 1:
         return None
     trs = [
         max(high - low, abs(high - kept[index - 1][3]), abs(low - kept[index - 1][3]))
@@ -360,7 +394,7 @@ def vwap_distance_atr(bars: Any, entry_time: datetime, tz: tzinfo) -> float | No
     ]
     atr = sum(trs[-M5_ATR_LENGTH:]) / M5_ATR_LENGTH
     exchange = ZoneInfo(_EXCHANGE_TZ)
-    session_day = entry_time.date()
+    session_day = bar_close.date()
     volume_sum = weighted = 0.0
     for when, high, low, close, volume in kept:
         start = when.replace(tzinfo=tz).astimezone(exchange)
@@ -421,7 +455,7 @@ class SpyStateReader:
         self._signature, self._rows = signature, rows
 
     def state_at(self, alert_close: datetime) -> tuple[str, int] | None:
-        """``(state, side_sign)`` last recorded at or before ``alert_close`` that session, or None."""
+        """``(state, side_sign)`` of the last USABLE row at or before ``alert_close`` that session, or None."""
         try:
             self._load()
         except Exception as exc:  # noqa: BLE001 - a log read costs the facet, never the record
@@ -432,9 +466,9 @@ class SpyStateReader:
         session = alert_close.astimezone(ZoneInfo(_EXCHANGE_TZ)).date().isoformat()
         found = None
         for day, bar, state, sign, usable in self._rows:
-            if day == session and bar <= alert_close and (found is None or bar >= found[0]):
-                found = (bar, state, sign, usable)
-        if found is None or not found[3]:
+            if usable and day == session and bar <= alert_close and (found is None or bar >= found[0]):
+                found = (bar, state, sign)
+        if found is None:
             return None
         return found[1], found[2]
 
@@ -451,14 +485,16 @@ def m5_part(row: Mapping[str, Any], *, symbol: str, side: str) -> dict[str, Any]
     try:
         zone = _local_tz()
         inputs = alert_inputs(row, zone)
-        entry = _naive(row.get("entry_time"))
-        if entry is not None:
-            bars = _cached_bars(symbol)
-            if bars:
-                inputs["vwap_dist_atr"] = vwap_distance_atr(bars, entry, zone)
+        close = alert_bar_close(row)
+        if close is not None:
+            # A bar still forming when the alert was logged is never measured.
+            if inputs.get("alert_bar_complete") is True:
+                bars = _cached_bars(symbol)
+                if bars:
+                    inputs["vwap_dist_atr"] = vwap_distance_atr(bars, close, zone)
             if _spy_reader is None:
                 _spy_reader = SpyStateReader()
-            spy = _spy_reader.state_at(entry.replace(tzinfo=zone))
+            spy = _spy_reader.state_at(close.replace(tzinfo=zone))
             if spy is not None:
                 inputs["spy_state"], inputs["spy_side_sign"] = spy
     except Exception as exc:  # noqa: BLE001 - the M5 part never costs the record
@@ -561,7 +597,7 @@ def _market_today() -> str:
 def submit(row: Mapping[str, Any]) -> bool:
     """Queue the first outcome row of today's event for stamping. Never raises, never waits.
 
-    Only six plain strings are copied off ``row``; the row itself is not kept.
+    Only seven plain strings are copied off ``row``; the row itself is not kept.
     """
     try:
         if not enabled():
@@ -580,6 +616,7 @@ def submit(row: Mapping[str, Any]) -> bool:
             "direction": _text(row.get("direction")),
             "trade_date": _text(row.get("trade_date")),
             "entry_time": _text(row.get("entry_time")),
+            "logged_at": _text(row.get("logged_at")),
             "context_json": context if isinstance(context, str) and len(context) <= MAX_CONTEXT_CHARS else "",
         }
         _ensure_worker()

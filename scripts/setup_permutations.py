@@ -914,7 +914,10 @@ M5_PERMUTATION_RULE_VERSION = "setup_permutations.m5.v1"
 #: name -> spec for the M5 key, in registration order. Never part of the D1 key.
 M5_FACETS: dict[str, FacetSpec] = {}
 #: The alert-time inputs an M5 facet reads (`m5_setup_key_stamp.alert_inputs` builds them).
-M5_INPUT_FIELDS = ("entry_time", "session_rvol", "vwap_dist_atr", "spy_state", "spy_side_sign", "bounce_type")
+M5_INPUT_FIELDS = (
+    "alert_bar_close", "alert_bar_complete", "session_rvol", "vwap_dist_atr", "spy_state", "spy_side_sign",
+    "bounce_type",
+)
 
 
 def m5_facet(name: str, *, quiet: tuple[str, ...] = (), in_label: bool = True) -> Callable[[FacetFn], FacetFn]:
@@ -953,8 +956,8 @@ _EXCHANGE_UTC_OFFSETS = (-4.0, -5.0)
 
 @m5_facet("m5_time_bucket")
 def _m5_time_bucket(inputs, ctx, side):
-    # ``entry_time`` is the alert bar's close in exchange time (`m5_setup_key_stamp.alert_inputs`).
-    text = _text(inputs.get("entry_time"))
+    # ``alert_bar_close`` is the alert bar's close in exchange time (`m5_setup_key_stamp.alert_inputs`).
+    text = _text(inputs.get("alert_bar_close"))
     if not text:
         return UNKNOWN
     try:

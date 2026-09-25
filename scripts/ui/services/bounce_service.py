@@ -1064,10 +1064,13 @@ class BounceService(QObject):
                                 self._make_callback(session),
                                 start_scanning_enabled=self.scanning_enabled,
                             )
-                            from ui.services.bounce_process import _register_setup_key_bar_source
-
                             # P11: the in-process bot's cached bars feed the shadow M5 setup-key stamp.
-                            _register_setup_key_bar_source(bot)
+                            try:
+                                from ui.services.bounce_process import _register_setup_key_bar_source
+
+                                _register_setup_key_bar_source(bot)
+                            except Exception as exc:  # noqa: BLE001 - a shadow hook never fails the bot start
+                                note_swallowed("M5 setup key bar source not registered", exc, quiet=True)
                 finally:
                     # The IB connect is behind us (returned or raised): a new
                     # generation may now safely open its own.  Set before any
