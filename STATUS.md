@@ -4,20 +4,10 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 
 **Updated:** 2026-09-25
 
-- **Live on `main`:** everything through the 2026-09-25 wishlist batch 2: P2-8 breadth + three-axis market read + map ages (#242-#245), P2-9 looking back curves + hold-out (#246-#247), P2-10 journal owed items (#248-#250); on top of batch 1 (P0-2 rest, P1-4 to P1-7, #222-#241). Reviewers GO. Older merges are in `git log`.
-- **Desk:** runs from source on `main`. Down; restart is the trader's call. 2026-09-24: universe restored to 1,455 (from snapshot 20260922T130004) and the tracker `.bak` + `.damaged` copies pruned (2.6 GB). Gates #209-#212.
-- **Last full suite:** 2026-09-25 batch 2 integration: 11,814 passed + 1 load flake (7/7 alone). Ruff clean, smoke 7/7, selftest 101/101 source and frozen.
-- **Compact desk** merged 2026-09-24: Settings > General > Desk layout (New default / Old). Charts 541 px vs 216 px. Gate #208.
-- **Auto modes** merged 2026-09-23 (`48d6cebb`, reviewer GO): DESK sends nothing to the phone; EVENING scans all morning,
-  keeps the queue empty, rings SPY ±1% + price alerts every 10 s until the mode changes, catch-up card on the flip out. Gate #207.
-- **Journal overhaul** merged 2026-09-23 (`6c92b650`, reviewers GO on P&L and auto-fill): Flex times as New York, socket/Flex dup
-  collapse, made-up-entry trades kept but not counted, repair CLIs; setup evidence + Mentor suggestion lane; nightly regime fill;
-  stat cards, long vs short, new calendar, tag chips. Gates #205-206.
-  Owed: Day Review / Weekend Prep / recap totals should use `journal_analytics.counts_in_pnl`; MFE/MAE skipped.
-- **Owed from 09-23:** swing-scan memory numbers; halted-name refetch; movers summary into the night AI; phone-brief rule line;
-  `_mentor_rule_lane` list_trades on the Qt thread; pre-Aug entry_at (outcome code, ask first).
-- **Next action:** read gates #217-#250 live. In flight: M5 setup-key sidecar stamp (#252, in review), then P2-11 cleanup.
-- **Trader actions owed:** desk down + market closed: `journal_pnl_repair.py` (#205) and the options-journal repair (#162);
-  Questrade gap days via a statement import; the Saturday large-model probe, Mentor confirmations, and live
-  click checks.
+- **Live on `main`:** the whole 2026-09-24 wishlist plan (P0-1 to P2-11), in three merges on 2026-09-25: batch 1 (P0-2 rest, P1-4 setup keys, P1-5 best-right-now, P1-6 entry plan, P1-7 trading plan; #222-#241), batch 2 (P2-8 breadth, P2-9 looking back, P2-10 journal; #242-#250), batch 3 (M5 setup-key sidecar #252, P2-11 cleanup: swallowed-error logging, ruff E7/E9/F/B, Health universe + IB rows, secrets in Credential Manager, lazy legacy boot; #253-#256; bounce_bot `main()` sys fix). Reviewers GO. What is left is in `WISHLIST.md`.
+- **Desk:** runs from source on `main`. Restart is the trader's call. First start after batch 3 moves the OpenAI key and ntfy token into Windows Credential Manager. New dependency `keyring` is installed in `.venv`.
+- **Last full suite:** 2026-09-25 batch 3 integration: 11,872 passed; 2 load flakes (pass alone) and `test_st6 ... empty_snapshot` (fails on main too). Ruff clean, smoke 7/7, selftest 104/104 source and frozen.
+- **Owed from 09-23:** halted-name refetch; movers summary into the night AI; phone-brief rule line; pre-Aug entry_at (outcome code, ask first).
+- **Next action:** read gates #217-#256 on the next session, close scan and night (`docs/GATES.md`). Fix the `test_st6` empty-snapshot failure.
+- **Trader actions owed:** set Risk per trade ($) in Settings > General; fill in `trading_plan.md`; stamp the sector/industry maps (`map_freshness.py --apply`); desk down + market closed: `journal_pnl_repair.py` (#205) and the options-journal repair (#162); Questrade gap days via `journal_questrade_gaps.py --statement`; the Saturday large-model probe; live click checks.
 - **Reviews owed:** the per-trade Mentor Save (`182f3e08`).
