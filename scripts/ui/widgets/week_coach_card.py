@@ -83,6 +83,13 @@ class WeekCoachCard(QFrame):
         self.leaks_label = self._block(columns, "Your leaks")
         self.repeats_label = self._block(columns, "Repeats")
         layout.addLayout(columns)
+        #: P8-P5: the journal's truth lines for the week and the 4-week rollup.
+        self.truth_label = QLabel("")
+        self.truth_label.setObjectName("TruthNote")
+        self.truth_label.setWordWrap(True)
+        self.truth_label.setTextFormat(Qt.PlainText)
+        self.truth_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self.truth_label)
 
         self.trend = QTableWidget(0, 4)
         self.trend.setHorizontalHeaderLabels(("Week", "P&L", "Rules kept", "Calls right"))
@@ -239,8 +246,24 @@ class WeekCoachCard(QFrame):
         self.edge_label.setText("\n".join(week_coach.row_line(row) for row in self._view.get("edge") or ()) or none)
         self.leaks_label.setText("\n".join(week_coach.row_line(row) for row in self._view.get("leaks") or ()) or none)
         self.repeats_label.setText(self._repeats_text())
+        self.truth_label.setText(self._truth_text())
         self._render_trend()
         self._render_questions()
+
+    def _truth_text(self) -> str:
+        truth = dict(self._view.get("truth") or {})
+        if truth.get("error"):
+            return f"In words: unknown ({truth['error']})."
+        if not truth:
+            return ""
+        month = str(self._view.get("month") or "")
+        lines = [f"Month {month}:" if month else "This week:"]
+        lines.extend(str(line) for line in truth.get("lines") or ())
+        rollup = list(truth.get("rollup_weeks") or ())
+        if rollup:
+            lines.append(f"Last {len(rollup)} weeks ({rollup[0]} to {rollup[-1]}):")
+            lines.extend(str(line) for line in truth.get("rollup_lines") or ())
+        return "\n".join(lines)
 
     def _repeats_text(self) -> str:
         rep = dict(self._view.get("repeats") or {})

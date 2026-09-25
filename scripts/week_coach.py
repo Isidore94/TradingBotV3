@@ -576,11 +576,55 @@ def answer_row(
 
 
 # ---------------------------------------------------------------------------
+# P8-P5: the journal's truth lines for the week and the 4-week rollup
+# ---------------------------------------------------------------------------
+def _load_journal_trades() -> list[dict[str, Any]]:
+    from journal_store import JournalStore
+
+    return list(JournalStore().list_trades())
+
+
+def truth_view(
+    weeks: Sequence[str], rollup_weeks: Sequence[str], *, trades_loader=None,
+) -> dict[str, Any]:
+    """Stocks/options, longs/shorts and confirmed setups (CAD) for the chosen
+    weeks and for the 4-week rollup. Reads the journal: worker only."""
+    import journal_truth
+
+    try:
+        trades = list((trades_loader or _load_journal_trades)())
+    except Exception as exc:  # noqa: BLE001 - unread is unknown, never zero
+        return {"error": f"the journal could not be read: {exc}"}
+
+    def span(keys: Sequence[str]) -> list[dict[str, Any]]:
+        keys = [key for key in keys if key]
+        if not keys:
+            return []
+        first = week_monday(min(keys))
+        last = week_monday(max(keys)) + timedelta(days=6)
+        return journal_truth.in_window(trades, first, last)
+
+    chosen, rollup = span(weeks), span(rollup_weeks)
+    return {
+        "weeks": list(weeks),
+        "rollup_weeks": list(rollup_weeks),
+        "lines": journal_truth.cad_truth_lines(chosen),
+        "rollup_lines": journal_truth.cad_truth_lines(rollup),
+    }
+
+
+def rollup_weeks_for(week: str, *, weeks: int = TREND_WEEKS) -> list[str]:
+    """The chosen week and the ones before it, oldest first."""
+    return [shift_week(week, -offset) for offset in range(weeks - 1, -1, -1)]
+
+
+# ---------------------------------------------------------------------------
 # the page's one read
 # ---------------------------------------------------------------------------
 def read_view(
     week: str = "", *, month: bool = False, root: Path | None = None,
     questions_path: Path | None = None, answers_path: Path | None = None,
+    trades_loader=None,
 ) -> dict[str, Any]:
     """Everything the Week Review coach section shows. Worker only."""
     available = list_weeks(root)
@@ -607,6 +651,11 @@ def read_view(
         # Month view: the trend ends at the month's last recorded week.
         "trend": trend(covered[-1] if month and covered else chosen, root),
         "questions": read_questions(questions_path=questions_path, answers_path=answers_path),
+        "truth": truth_view(
+            covered if month else [chosen],
+            rollup_weeks_for(covered[-1] if month and covered else chosen),
+            trades_loader=trades_loader,
+        ),
     }
 
 

@@ -324,6 +324,11 @@ class AnalyticsTab(QFrame):
         self.evidence_note = QLabel("")
         self.evidence_note.setObjectName("MutedLabel")
         self.evidence_note.setWordWrap(True)
+        #: P8-P5: stocks vs options, longs vs shorts, confirmed setups, in words.
+        self.truth_note = QLabel("")
+        self.truth_note.setObjectName("TruthNote")
+        self.truth_note.setWordWrap(True)
+        self.truth_note.setTextFormat(Qt.PlainText)
         #: Closed trades with a made-up entry: kept, but not in any total.
         self.not_counted_note = QLabel("")
         self.not_counted_note.setObjectName("CurrencyNote")
@@ -427,6 +432,7 @@ class AnalyticsTab(QFrame):
         layout.addWidget(self.not_counted_note)
         layout.addWidget(cards_host)
         layout.addWidget(self.evidence_note)
+        layout.addWidget(self.truth_note)
         layout.addWidget(curve_host)
         layout.addLayout(picker_row)
         layout.addWidget(self.group_note)
@@ -510,6 +516,11 @@ class AnalyticsTab(QFrame):
             " ".join(part for part in (coverage_line, headline_line) if part)
         )
         self.evidence_note.setVisible(bool(coverage_line or headline_line))
+
+        # P8-P5: in memory over the rows already loaded, in this tab's currency.
+        from journal_truth import truth_lines
+
+        self.truth_note.setText("\n".join(truth_lines(raw, pnl_key, currency if pnl_key else "")))
 
         points = journal_feed.equity_curve(trades, mode)
         if PYQTGRAPH_AVAILABLE:
