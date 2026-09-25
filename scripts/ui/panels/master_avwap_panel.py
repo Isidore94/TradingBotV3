@@ -1248,12 +1248,17 @@ class MasterAvwapPanel(QWidget):
         header = self.table.horizontalHeader()
         key_level_column = _column_index("key_level")
         has_setup_keys = self.model.has_setup_keys()
+        has_plans = profile == "full" and self.model.has_plans()
         for column, (key, _label) in enumerate(self.model.COLUMNS):
             self.table.setColumnHidden(column, False)
             if profile == "compact" and key in COMPACT_HIDDEN_COLUMNS:
                 self.table.setColumnHidden(column, True)
             if key == "setup_key" and (profile == "compact" or not has_setup_keys):
                 # P1-5 5a: full profile only, and only when a row carries a stamped label.
+                self.table.setColumnHidden(column, True)
+            if key in self.model.PLAN_COLUMNS and not has_plans:
+                # P1-6 6b: full profile only, once the scan's levels have landed;
+                # compact reads the same plan in the key-level tooltip.
                 self.table.setColumnHidden(column, True)
         if profile == "compact":
             # The compact profile is untouched by G2b, elision included.
@@ -1890,6 +1895,26 @@ class MasterAvwapPanel(QWidget):
             )
         ]
 
+    def _push_plan_context(self, *, reset: bool = True) -> None:
+        """P1-6: hand the model the in-memory scan levels and the fixed risk. No file read."""
+        try:
+            import entry_plan
+            from ui.services import ai_state_levels
+
+            levels = ai_state_levels.cached_symbol_levels()
+            risk = entry_plan.risk_per_trade_dollars()
+        except Exception:  # noqa: BLE001 - plan cells never cost the table
+            return
+        self.model.set_plan_context(levels, risk, reset=reset)
+
+    def set_risk_per_trade(self, value) -> None:
+        """The Settings page changed `risk_per_trade_dollars`: re-size every plan."""
+        import entry_plan
+
+        self.model.set_plan_context(
+            self.model.plan_levels(), entry_plan.parse_risk_dollars(value)
+        )
+
     def set_rows(self, rows: list[SetupRow]) -> None:
         if self._uses_default_feedback_paths:
             _apply_reviewed_today_badges(rows)
@@ -1902,6 +1927,7 @@ class MasterAvwapPanel(QWidget):
         rows = self._by_points(
             self._prioritised(self._merge_active_claims(self._working_lately_source_rows))
         )
+        self._push_plan_context(reset=False)
         self.model.set_rows(rows)
         self._refresh_bucket_filter(rows)
         self._apply_filters()

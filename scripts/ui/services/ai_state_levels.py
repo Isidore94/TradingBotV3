@@ -141,6 +141,11 @@ def cached_symbol_compression() -> dict[str, dict]:
     return _cache["compression"] or {}
 
 
+def cached_symbol_levels() -> dict[str, dict]:
+    """The level map ALREADY in memory (P1-6 plan columns). Never opens or stats a file."""
+    return _cache["levels"] or {}
+
+
 def cached_symbol_claim_analysis() -> dict[str, dict]:
     """Fresh full-scan score inputs for claimed rows; never reads on Qt."""
     return _cache["claim_analysis"] or {}
