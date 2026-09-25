@@ -276,6 +276,10 @@ def detections_from_tracker(
             # later rescan whose moving AVWAP/SMA level was not known at entry.
             "stop_candidates": candidates,
         }
+        # P1-4 4a: the first scan's permutation key, when its tracker event carries one (shadow only).
+        if str(first_state.get("permutation_rule_version") or "").strip():
+            for name in ("permutation_key", "permutation_label", "permutation_rule_version"):
+                tags[name] = str(first_state.get(name) or "")
         detections.append(
             {
                 "symbol": symbol,

@@ -14,6 +14,9 @@ from . import legacy as _legacy
 from .d1_zone_arms import build_d1_zone_arms
 from .setup_tagging import apply_setup_tag_payload, canonicalize_priority_setup_tags
 from master_avwap_shared import build_active_bounce_summary, load_master_avwap_events_for_date
+from setup_permutation_context import stamp_scan_rows as stamp_permutation_scan_rows
+from setup_permutations import SCAN_ROW_COLUMNS as PERMUTATION_SCAN_ROW_COLUMNS
+from setup_permutations import ma_distance_columns as permutation_ma_distance_columns
 from tracker_store import record_write_failure as record_setup_tracker_write_failure
 from tracker_store import record_write_success as record_setup_tracker_write_success
 # Packet WS-TH (2026-09-12). The theta picks the scan just printed, recorded as
@@ -2237,6 +2240,8 @@ def _run_master_impl(
             "favorite_context_signals": ";".join(priority_summary["context_signals"]),
             "events_today": ";".join(symbol_events_today),
         }
+        # P1-4 4a: shadow MA distances in ATR for the permutation key; nothing scores on them.
+        feature_row.update(permutation_ma_distance_columns(last_close, atr20, entry_feature_snapshot))
         symbol_entry["feature_row"] = feature_row
         for preview_row in (priority_summary, symbol_entry, feature_row):
             stamp_daily_bar_status(
@@ -3033,6 +3038,8 @@ def _run_master_impl(
         # `derived_from_bucket`, which is what `tier_for_tracker_row` already
         # says it should do.
         ASSIGNED_TIER_FIELD,
+        # P1-4 4a: shadow permutation inputs and key, appended last.
+        *PERMUTATION_SCAN_ROW_COLUMNS,
     ]
 
     # R1 / P4 B4: carry the SHIPPED tier onto the feature row.
@@ -3051,7 +3058,13 @@ def _run_master_impl(
         if isinstance(feature_row, dict) and row.get(ASSIGNED_TIER_FIELD):
             feature_row[ASSIGNED_TIER_FIELD] = row.get(ASSIGNED_TIER_FIELD)
 
-    df_features = pd.DataFrame(feature_rows, columns=feature_columns)
+    # P1-4 4a: stamp the shadow permutation key last, after every enricher; never fails the scan.
+    try:
+        stamp_permutation_scan_rows(feature_rows, session=today_run)
+    except Exception:
+        logging.warning("Setup permutation stamp skipped for this scan.", exc_info=True)
+
+    df_features =pd.DataFrame(feature_rows, columns=feature_columns)
     _write_dataframe_csv_atomic(df_features, D1_FEATURES_FILE, index=False)
     append_d1_feature_history(
         df_features,

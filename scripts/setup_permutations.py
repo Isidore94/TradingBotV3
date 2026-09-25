@@ -536,7 +536,7 @@ def _htf_retest(row, ctx, side):
     return "htf_retest_" + "+".join(sorted(parts))
 
 
-@facet("entry_trigger", "entry")
+@facet("entry_trigger", "entry", quiet=("no_trigger",))
 def _entry_trigger(row, ctx, side):
     # From alert_chart_watches.json history / review events: the trigger that fired before entry.
     trigger = _text(ctx.get("entry_trigger"))
@@ -599,3 +599,75 @@ def _weekday(row, ctx, side):
 def _side_aligned_day(row, ctx, side):
     # The writer leaves side_aligned_day blank in every live row so far (2026-09-24).
     return _yes_no(row.get("side_aligned_day"), "side_aligned_day", "side_not_aligned_day")
+
+
+# --- stamping (4a): the scan-row columns and the honest input view
+
+#: `dist_<ma>_atr` columns the enrichment step writes: (close - ma) / ATR20.
+MA_DISTANCE_COLUMNS = tuple(f"dist_{ma}_atr" for ma in SUPPORT_MAS)
+#: The key, its short label and its rule version, as written on a row.
+STAMP_COLUMNS = ("permutation_key", "permutation_label", "permutation_rule_version")
+#: Every column 4a appends to `d1_features_history.csv`, in order.
+SCAN_ROW_COLUMNS = (*MA_DISTANCE_COLUMNS, "weekly_ema8_hold_weeks", *STAMP_COLUMNS)
+
+_WEEKLY_TOP_PATTERN_FLAGS = (
+    "top_pattern_weekly_ema15_hold",
+    "top_pattern_weekly_above_sma100",
+    "top_pattern_weekly_sma50_retest_recent",
+)
+
+
+def ma_distance_columns(close: Any, atr: Any, levels: Mapping[str, Any] | None) -> dict[str, float | None]:
+    """``dist_<ma>_atr`` for every support MA; None when close, ATR or the MA is missing."""
+    close_value = _num(close)
+    atr_value = _num(atr)
+    source = levels if isinstance(levels, Mapping) else {}
+    out: dict[str, float | None] = {}
+    for ma in SUPPORT_MAS:
+        level = _num(source.get(ma))
+        if close_value is None or level is None or not atr_value or atr_value <= 0:
+            out[f"dist_{ma}_atr"] = None
+        else:
+            out[f"dist_{ma}_atr"] = round((close_value - level) / atr_value, 6)
+    return out
+
+
+def scan_row_view(row: Mapping[str, Any], *, has_ma_columns: bool) -> dict[str, Any]:
+    """A copy of ``row`` with yes/no columns blanked where the scan wrote False without computing.
+
+    The CSV keeps those False values (legacy readers take ``bool(value)`` and NaN
+    is truthy); only the key's input is made honest. ``has_ma_columns`` says the
+    row was written with the ``dist_<ma>_atr`` columns, so a blank one means the
+    MA was really missing rather than "row older than the column".
+    """
+    view = dict(row)
+    if has_ma_columns and (
+        _num(row.get("last_close")) is None
+        or _num(row.get("dist_ema15_atr")) is None
+        or _num(row.get("dist_sma20_atr")) is None
+    ):
+        view["trend_ma_alignment"] = None
+    # The weekly flags are only computed when the TOP weekly structure holds; the ratio says so.
+    if _num(row.get("top_pattern_weekly_ema15_hold_ratio")) is None:
+        for column in _WEEKLY_TOP_PATTERN_FLAGS:
+            view[column] = None
+    side = _side(row.get("side"))
+    level_column = {"LONG": "previous_day_high", "SHORT": "previous_day_low"}.get(side)
+    if level_column in row and (_num(row.get(level_column)) is None or _num(row.get("last_close")) is None):
+        view["previous_day_range_break"] = None
+    return view
+
+
+def stamp_fields(
+    row: Mapping[str, Any],
+    ctx: Mapping[str, Any] | None = None,
+    *,
+    has_ma_columns: bool = True,
+) -> dict[str, str]:
+    """The three stamp columns for one scan row, through the honest input view."""
+    key = facets_for_row(scan_row_view(row, has_ma_columns=has_ma_columns), ctx)
+    return {
+        "permutation_key": key.key,
+        "permutation_label": key.label,
+        "permutation_rule_version": key.permutation_rule_version,
+    }

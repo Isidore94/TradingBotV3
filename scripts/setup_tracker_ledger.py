@@ -267,7 +267,20 @@ def _event(
         event["previous_status"] = previous_status
     if note:
         event["note"] = note
+    event.update(_permutation_stamp(record))
     return event
+
+
+#: P1-4 4a: the scan row's permutation stamp, copied onto the episode's events (shadow only).
+PERMUTATION_STAMP_FIELDS = ("permutation_key", "permutation_label", "permutation_rule_version")
+
+
+def _permutation_stamp(record: Mapping[str, Any]) -> dict[str, str]:
+    """The stamp the setup's own scan row carried when the setup opened; empty when it had none."""
+    source = record.get("feature_row")
+    if not isinstance(source, Mapping) or not _text(source.get("permutation_rule_version")):
+        return {}
+    return {field: _text(source.get(field)) for field in PERMUTATION_STAMP_FIELDS}
 
 
 # ---------------------------------------------------------------------------
