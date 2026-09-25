@@ -267,6 +267,7 @@ class MainWindow(QMainWindow):
             ),
         )
         self.trading_panel.alert_center.attach_movers_service(self.movers_service)
+        self.trading_panel.attach_movers_service(self.movers_service)
         # The AWAY Recap charts through the SAME popup, for the same reason: a
         # trader reading the day back needs the chart beside the alert, and a
         # second chart widget on that page would be a second definition of what
