@@ -432,7 +432,10 @@ def _grade_tooltip(cell: dict) -> str:
             f"avg R {avg_r:+.2f}" if avg_r is not None else "avg R unmeasured",
         )
     )
-    return f"Grade {grade} - Setup Tracker, recent window: {facts}.\n\n{rules}"
+    return (
+        f"{setup_grades.cell_line(cell)}\n\n"
+        f"Grade {grade} - Setup Tracker, recent window: {facts}.\n\n{rules}"
+    )
 
 
 def _normalize_family(value) -> str:

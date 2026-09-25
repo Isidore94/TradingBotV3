@@ -243,8 +243,11 @@ class LiveResultsStrip(QFrame):
         rows = []
         for row in self._results:
             types = self._grade_keys.get(self._key(row), row.get("bounce_types", ""))
-            grade = setup_grades.daytrade_grade_for_alert(self._grades, types, row.get("side"))
-            rows.append({**row, "grade": grade})
+            cell = setup_grades.daytrade_cell_for_alert(self._grades, types, row.get("side"))
+            grade = str(cell.get("grade") or setup_grades.NEW) if cell else setup_grades.NEW
+            rows.append(
+                {**row, "grade": grade, "grade_line": setup_grades.cell_line(cell) if cell else ""}
+            )
         return rows
 
     def results(self) -> list[dict[str, Any]]:
@@ -279,6 +282,7 @@ class LiveResultsStrip(QFrame):
                 ]
                 + [
                     f"{lar.tooltip_line(row)} · {es.chip_detail(state)}"
+                    + (f"\n    grade {row['grade_line']}" if row.get("grade_line") else "")
                     for row, state in zip(rows, self._states_for(rows), strict=False)
                 ]
             )
