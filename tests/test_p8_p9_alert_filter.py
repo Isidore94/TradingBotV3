@@ -316,3 +316,66 @@ def test_the_autopilot_service_records_a_verdict_per_alert_line():
     service._on_alert(_m5("CEE", "ceetype"))
     service._on_alert(_m5("PRV", "provtype"))
     assert list(service._alert_show_today) == [(True, False), (False, False)]
+
+
+# --------------------------------------------------------------------------- review round 1
+def test_entry_assist_output_always_shows_and_is_never_counted(panel):
+    from ui.models.bounce import BounceAlert
+
+    assist = BounceAlert(
+        time_text="09:40:00", symbol="", side="WATCH", tag="entry_assist",
+        raw_text="ENTRY ASSIST: window open",
+    )
+    strongest = BounceAlert(
+        time_text="09:41:00", symbol="", side="WATCH", raw_text="STRONGEST 5: NVDA, AMD, MU, AVGO, TSM",
+    )
+    for alert in (assist, strongest):
+        assert panel.show_filter_verdict(alert) == (False, False)
+        panel.add_alert(alert)
+    # Both are symbol-less WATCH rows, which the feed folds to one row by design;
+    # the default filter must show exactly what "All" shows.
+    rows = [alert for _key, alert, _n in panel._feed_target_rows()]
+    assert rows and any(alert is assist for alert in rows)
+    assert panel.show_filter_hidden_counts() == (0, 0)
+    import alert_show_filter
+
+    _choose(panel, alert_show_filter.ALL)
+    assert [alert for _key, alert, _n in panel._feed_target_rows()] == rows
+
+
+def test_a_verdict_is_cached_until_an_input_changes(panel, monkeypatch):
+    alert = _m5("CEE", "ceetype")
+    calls = []
+    real = panel.show_filter_grade
+    monkeypatch.setattr(panel, "show_filter_grade", lambda a: calls.append(a) or real(a))
+    assert panel.show_filter_verdict(alert) == (True, False)
+    assert panel.show_filter_verdict(alert) == (True, False)
+    assert len(calls) == 1, "cached"
+    panel.set_setup_grades({"daytrade": []})
+    assert panel.show_filter_verdict(alert) == (False, False), "grades changed: re-read"
+
+
+def test_focus_or_typed_list_change_redraws_the_bar(panel, env, monkeypatch):
+    import alert_show_filter
+    import project_paths
+    from ui.widgets.m5_alert_bar import M5AlertBar
+
+    bar = M5AlertBar()
+    bar.set_show_filter(panel.show_filter_verdict)
+    panel.showFilterChanged.connect(bar.refresh_show_filter)
+    panel.m5AlertPosted.connect(bar.post)
+    try:
+        panel.add_alert(_m5("CEE", "ceetype"))
+        panel.add_alert(_m5("DEE", "deetype"))
+        assert bar.symbols() == []
+        # CEE joins Focus: the bar redraws with no Show-filter change.
+        monkeypatch.setattr(panel, "_alert_is_focus", lambda alert: alert.symbol in ("FOC", "CEE"))
+        panel._on_show_filter_membership_changed()
+        assert bar.symbols() == ["CEE"]
+        # DEE is typed into longs.txt: the next typed-list check redraws.
+        Path(project_paths.LONGS_FILE).write_text("TYPED\nDEE\n", encoding="utf-8")
+        alert_show_filter.clear_cache()
+        panel._check_typed_symbols()
+        assert set(bar.symbols()) == {"CEE", "DEE"}
+    finally:
+        bar.deleteLater()
