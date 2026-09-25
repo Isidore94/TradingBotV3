@@ -259,6 +259,8 @@ class WeekCoachCard(QFrame):
         month = str(self._view.get("month") or "")
         lines = [f"Month {month}:" if month else "This week:"]
         lines.extend(str(line) for line in truth.get("lines") or ())
+        if truth.get("worst_line"):
+            lines.append(str(truth["worst_line"]))
         rollup = list(truth.get("rollup_weeks") or ())
         if rollup:
             lines.append(f"Last {len(rollup)} weeks ({rollup[0]} to {rollup[-1]}):")

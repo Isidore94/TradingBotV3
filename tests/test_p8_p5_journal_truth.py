@@ -211,3 +211,136 @@ def test_an_unreadable_journal_is_said_on_the_week_card():
 
     truth = week_coach.truth_view(["2026-W38"], ["2026-W38"], trades_loader=boom)
     assert truth == {"error": "the journal could not be read: locked"}
+
+
+# ---------------------------------------------------------------------------
+# step 3: trader vs bot - the bot's grade as of the entry, never after
+# ---------------------------------------------------------------------------
+def _cell(key, grade, n=40, **extra):
+    return {"key": key, "grade": grade, "n": n, **extra}
+
+
+def _grades(swing=(), daytrade=()):
+    return {"schema": "setup_grades_v1", "as_of": "", "swing": list(swing), "daytrade": list(daytrade)}
+
+
+def _history(tmp_path, *snapshots):
+    import setup_grades_history
+
+    folder = tmp_path / "grades"
+    for when, grades in snapshots:
+        setup_grades_history.append_snapshot(grades, history_dir=folder, now=when)
+    return folder
+
+
+SWING_CLOSE = {"closed_at": "2026-09-16T11:00:00-04:00"}
+
+
+def test_the_bot_grade_is_the_one_written_before_the_entry(tmp_path):
+    import journal_truth
+
+    def swing_grades(grade):
+        return _grades(swing=[_cell("LONG|favorite_setup|avwap_band_bounce", grade,
+                                    family="avwap_band_bounce", side="LONG")])
+
+    folder = _history(
+        tmp_path,
+        (datetime(2026, 9, 10, 18, 0, tzinfo=NY), swing_grades("C")),
+        (datetime(2026, 9, 14, 12, 0, tzinfo=NY), swing_grades("A")),  # after the 10:00 entry
+    )
+    read = journal_truth.grade_reader(folder)
+    swing = _trade("t", 50.0, day="2026-09-14", tags="avwap_band_bounce | favorite_setup", **SWING_CLOSE)
+    result = journal_truth.bot_grade(swing, read)
+    assert result["grade"] == "C"
+    assert datetime.fromisoformat(result["written_at"]) <= datetime(2026, 9, 14, 10, 0, tzinfo=NY)
+    assert journal_truth.grade_text(result) == "bot grade: C"
+
+    early = {**swing, "opened_at": "2026-09-09T10:00:00-04:00"}
+    assert journal_truth.bot_grade(early, read) == {
+        "grade": "no grade", "why": "no grade written before the entry",
+        "family": "avwap_band_bounce", "written_at": "",
+    }
+
+
+def test_the_bot_grade_needs_a_confirmed_setup_and_reads_the_underlying_side(tmp_path):
+    import journal_truth
+
+    grades = _grades(swing=[
+        _cell("SHORT|near_favorite_zone|avwape_to_1stdev", "PROVEN", n=433, family="avwape_to_1stdev", side="SHORT"),
+        _cell("SHORT|favorite_setup|avwape_to_1stdev", "D", n=124, family="avwape_to_1stdev", side="SHORT"),
+        _cell("LONG|favorite_setup|avwape_to_1stdev", "C", n=354, family="avwape_to_1stdev", side="LONG"),
+    ])
+    read = journal_truth.grade_reader(_history(tmp_path, (datetime(2026, 9, 1, tzinfo=NY), grades)))
+    # A long put is SHORT the underlying; no bucket in the tag -> the family's largest cell on that side.
+    put = _trade("p", 10.0, security_type="OPT", symbol="SHOP  260918P00090000", tags="avwape_to_1stdev",
+                 **SWING_CLOSE)
+    assert journal_truth.bot_grade(put, read)["grade"] == "PROVEN"
+    tagged = _trade("s", 10.0, direction="SHORT", tags="avwape_to_1stdev | favorite_setup", **SWING_CLOSE)
+    assert journal_truth.bot_grade(tagged, read)["grade"] == "D"
+    provisional = {**tagged, "tag_status": "provisional"}
+    assert journal_truth.bot_grade(provisional, read)["why"] == "no confirmed setup"
+
+
+def test_a_day_trade_reads_the_bounce_type_cell_else_no_grade(tmp_path):
+    import journal_truth
+
+    grades = _grades(
+        swing=[_cell("LONG|favorite_setup|avwap_band_bounce", "A", family="avwap_band_bounce", side="LONG")],
+        daytrade=[_cell("lrsi_cross_20|LONG", "D", n=1043)],
+    )
+    read = journal_truth.grade_reader(_history(tmp_path, (datetime(2026, 9, 1, tzinfo=NY), grades)))
+    day = _trade("d", -5.0, tags="lrsi_cross_20")
+    assert journal_truth.bot_grade(day, read)["grade"] == "D"
+    swing_family_intraday = _trade("x", 5.0, tags="avwap_band_bounce | favorite_setup")
+    assert journal_truth.bot_grade(swing_family_intraday, read) == {
+        "grade": "no grade", "why": "the bot has no grade for this setup",
+        "family": "avwap_band_bounce", "written_at": "",
+    }
+
+
+def test_the_week_card_names_the_d_or_worse_setups_traded(tmp_path, qapp):
+    import journal_truth
+    import week_coach
+    from ui.widgets.week_coach_card import WeekCoachCard
+
+    grades = _grades(daytrade=[_cell("lrsi_cross_20|LONG", "D"), _cell("lrsi_cross_50|LONG", "B")])
+    read = journal_truth.grade_reader(_history(tmp_path, (datetime(2026, 9, 1, tzinfo=NY), grades)))
+    rows = [
+        _trade("a", -5.0, symbol="AMD", tags="lrsi_cross_20"),
+        _trade("b", 5.0, symbol="NVDA", tags="lrsi_cross_50"),
+        _trade("c", 5.0, symbol="TSLA"),
+    ]
+    truth = week_coach.truth_view(["2026-W38"], ["2026-W38"], trades_loader=lambda: rows, grades_at=read)
+    assert truth["worst_line"] == (
+        "You traded 1 D-or-worse setup this week (AMD). 1 of 3 closed trades have no bot grade."
+    )
+    card = WeekCoachCard(read=lambda *_a, **_k: {})
+    try:
+        card.render({"week": "2026-W38", "truth": truth})
+        assert "You traded 1 D-or-worse setup this week (AMD)." in card.truth_label.text()
+    finally:
+        card.deleteLater()
+
+
+def test_the_day_review_trade_row_shows_the_bot_grade(qapp):
+    from ui.panels import day_review_panel
+    from ui.services.day_review_service import empty_payload
+
+    class _Service:
+        def read_day(self, session_date, **_kwargs):
+            return empty_payload(session_date)
+
+    widget = day_review_panel.DayReviewPanel(service=_Service(), clock=lambda: datetime(2026, 9, 23, 7, 30))
+    try:
+        payload = empty_payload("2026-09-22")
+        payload["trades"] = [{"trade_id": "t1", "symbol": "AMD", "status": "CLOSED",
+                              "opened_at": "2026-09-22T10:00:00-04:00"}]
+        payload["trade_reviews"] = [{"trade_id": "t1", "symbol": "AMD"}]
+        payload["truth"] = {"lines": [], "grades": {"t1": {"grade": "C", "why": "", "family": "x"}}}
+        widget.render(payload)
+        column = list(day_review_panel.TRADE_COLUMNS).index("Bot grade")
+        assert widget.trades_table.item(0, column).text() == "C"
+        assert "Bot grade: C" in widget.trade_detail.toPlainText()
+    finally:
+        widget.shutdown()
+        widget.deleteLater()

@@ -585,10 +585,11 @@ def _load_journal_trades() -> list[dict[str, Any]]:
 
 
 def truth_view(
-    weeks: Sequence[str], rollup_weeks: Sequence[str], *, trades_loader=None,
+    weeks: Sequence[str], rollup_weeks: Sequence[str], *, trades_loader=None, grades_at=None,
 ) -> dict[str, Any]:
     """Stocks/options, longs/shorts and confirmed setups (CAD) for the chosen
-    weeks and for the 4-week rollup. Reads the journal: worker only."""
+    weeks and for the 4-week rollup, and the D-or-worse setups traded in the
+    chosen weeks (bot grade as of each entry). Reads files: worker only."""
     import journal_truth
 
     try:
@@ -605,11 +606,15 @@ def truth_view(
         return journal_truth.in_window(trades, first, last)
 
     chosen, rollup = span(weeks), span(rollup_weeks)
+    grades = journal_truth.bot_grades(chosen, grades_at or journal_truth.grade_reader())
     return {
         "weeks": list(weeks),
         "rollup_weeks": list(rollup_weeks),
         "lines": journal_truth.cad_truth_lines(chosen),
         "rollup_lines": journal_truth.cad_truth_lines(rollup),
+        "worst_line": journal_truth.worst_setups_line(
+            chosen, grades, span="this month" if len(weeks) > 1 else "this week"
+        ),
     }
 
 
@@ -624,7 +629,7 @@ def rollup_weeks_for(week: str, *, weeks: int = TREND_WEEKS) -> list[str]:
 def read_view(
     week: str = "", *, month: bool = False, root: Path | None = None,
     questions_path: Path | None = None, answers_path: Path | None = None,
-    trades_loader=None,
+    trades_loader=None, grades_at=None,
 ) -> dict[str, Any]:
     """Everything the Week Review coach section shows. Worker only."""
     available = list_weeks(root)
@@ -655,6 +660,7 @@ def read_view(
             covered if month else [chosen],
             rollup_weeks_for(covered[-1] if month and covered else chosen),
             trades_loader=trades_loader,
+            grades_at=grades_at,
         ),
     }
 

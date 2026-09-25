@@ -12,6 +12,7 @@ an alert, Focus, the queue or `review_policy.json`.
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -52,8 +53,16 @@ def confirmed_family(row: Mapping[str, Any]) -> str:
 
 
 def confirmed_bucket(row: Mapping[str, Any]) -> str:
-    parts = _setup_tag(row).split("|")
-    return parts[1].strip().lower() if len(parts) > 1 else ""
+    """The bucket after the family in the stored `family | bucket | zone` text, or ""."""
+    family = confirmed_family(row)
+    if not family:
+        return ""
+    # `split_tags` splits a pipe-only string into separate tags, so read the raw text.
+    for chunk in re.split(r"[;,]", str(row.get("setup_tags") or "")):
+        parts = [part.strip().lower() for part in chunk.split("|")]
+        if parts[0] == family and len(parts) > 1:
+            return parts[1]
+    return ""
 
 
 def counted(trades: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
