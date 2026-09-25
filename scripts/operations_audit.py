@@ -541,19 +541,28 @@ def journal_import_line(rows: list[dict[str, Any]]) -> str:
     else:
         error_text = "none"
     line = f"journal import: last success {success_text}, last error {error_text}"
-    return line + _journal_counts_text(runs[-1])
+    return line + _journal_counts_text(runs)
 
 
-def _journal_counts_text(row: dict[str, Any]) -> str:
+_UNRESOLVED_RE = re.compile(r"self-heal repaired \d+, unresolved (\d+)")
+_MISMATCHES_RE = re.compile(r"reconciled \d+ position\(s\), (\d+) mismatch\(es\)")
+
+
+def _journal_counts_text(runs: list[dict[str, Any]]) -> str:
     """"; last run <session>: unresolved self-heal N, position mismatches M" or "".
 
-    Read from the newest import row's reason line; a count it does not state is
-    "unknown", and a row stating neither adds nothing.
+    Read from the newest ok or failed import row whose reason states a count
+    (skip rows are ignored); a count it does not state is "unknown".
     """
-    reason = str(row.get("reason") or "")
-    unresolved = re.search(r"self-heal repaired \d+, unresolved (\d+)", reason)
-    mismatches = re.search(r"reconciled \d+ position\(s\), (\d+) mismatch\(es\)", reason)
-    if not unresolved and not mismatches:
+    for row in reversed(runs):
+        if str(row.get("status") or "") not in ("ok", "failed", "manual_test"):
+            continue
+        reason = str(row.get("reason") or "")
+        unresolved = _UNRESOLVED_RE.search(reason)
+        mismatches = _MISMATCHES_RE.search(reason)
+        if unresolved or mismatches:
+            break
+    else:
         return ""
     label = str(row.get("session_date") or "") or _short_ai_stamp(row.get("started_at"))
     if row.get("morning_retry"):

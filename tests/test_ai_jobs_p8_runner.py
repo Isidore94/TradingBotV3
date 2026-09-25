@@ -365,6 +365,41 @@ def test_health_journal_line_reads_the_newest_run_and_says_unknown_when_unmeasur
     )
 
 
+def test_a_measured_zero_self_heal_is_written_not_omitted():
+    import journal_runner
+
+    reason = journal_runner._nightly_reason(
+        False, [], {"imported": 0, "healed": 0, "heal_failed": 0,
+                    "positions_checked": 5, "mismatched": 0},
+    )
+    assert "self-heal repaired 0, unresolved 0" in reason
+    # Self-heal that never measured (it raised) still says nothing.
+    assert "self-heal repaired" not in journal_runner._nightly_reason(
+        True, ["self-heal: x"], {}
+    )
+
+
+def test_health_counts_skip_the_attempt_cap_row_and_name_the_counted_session(tmp_path):
+    led = _led(tmp_path, [
+        {"job": "journal_import", "status": "failed", "session_date": "2026-09-23",
+         "reason": "failed: IBKR Flex | self-heal repaired 0, unresolved 189; "
+                   "reconciled 29 position(s), 26 mismatch(es)"},
+        {"job": "journal_import", "status": "failed", "session_date": "2026-09-24",
+         "reason": "failed: IBKR Flex | self-heal repaired 1, unresolved 7; "
+                   "reconciled 30 position(s), 2 mismatch(es)"},
+        {"job": "journal_import", "status": "skipped", "session_date": "2026-09-24",
+         "terminal": True, "reason": "3 attempts spent; unresolved 99; 9 mismatch(es)"},
+    ])
+    assert _journal_line(led).endswith(
+        "; last run 2026-09-24: unresolved self-heal 7, position mismatches 2"
+    )
+
+
+def test_gates_md_has_no_carriage_return_inside_a_line():
+    text = (ROOT_DIR / "docs" / "GATES.md").read_bytes()
+    assert b"\r" not in text.replace(b"\r\n", b"")
+
+
 def test_the_ollama_probe_row_is_an_ops_row(tmp_path):
     from ai_jobs import ollama_probe
 
