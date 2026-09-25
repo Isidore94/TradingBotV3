@@ -132,20 +132,84 @@ def test_rule_lane_uses_the_worker_baseline_for_its_own_session_only():
     assert store.calls == 1
 
     chop = datetime(2026, 9, 22, 9, 35, tzinfo=timezone(timedelta(hours=-4)))
+    requested = []
     host = types.SimpleNamespace(
         rule_chip=types.SimpleNamespace(info=_size_rule),
         _regime_timeline=[(chop, "neutral_chop")],
-        _rule_size_baseline=baseline,
+        _rule_size_baselines={baseline["session"]: baseline["median"]},
+        _request_rule_size_baseline=requested.append,
     )
     big = [_sized_trade("t1", SESSION, 500)]
     rows = MainWindow._mentor_rule_lane(host, None, SESSION, big)
     assert [row["trade_id"] for row in rows] == ["t1"]
-    # A baseline for another session is not used: the size check says nothing.
-    host._rule_size_baseline = {"session": "2026-09-21", "median": 1000.0}
-    assert MainWindow._mentor_rule_lane(host, None, SESSION, big) == []
-    # Another rule clears the baseline without starting a read.
+    assert requested == []
+    # Another rule clears the baselines without starting a read.
     MainWindow._refresh_rule_size_baseline(host, {"tag": "hold_winners"})
-    assert host._rule_size_baseline is None
+    assert host._rule_size_baselines == {}
+
+
+def test_rule_lane_for_an_uncached_session_asks_the_worker_and_shows_nothing_yet():
+    import types
+
+    import pytest
+
+    pytest.importorskip("PySide6")
+    from ui.app import MainWindow
+
+    earlier_card = "2026-09-18"
+    requested = []
+    store = _CountingStore()
+    host = types.SimpleNamespace(
+        rule_chip=types.SimpleNamespace(info=_size_rule), _regime_timeline=[],
+        _rule_size_baselines={SESSION: 1000.0},  # today only
+        _request_rule_size_baseline=requested.append,
+    )
+    rows = MainWindow._mentor_rule_lane(
+        host, store, earlier_card, [_sized_trade("t1", earlier_card, 500)]
+    )
+    assert rows == []
+    assert requested == [earlier_card]  # before: never asked; the lane stayed empty for good
+    assert store.calls == 0
+
+
+def test_the_size_baseline_worker_fills_the_cache_for_the_asked_session(monkeypatch):
+    import pytest
+
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import QObject
+    from PySide6.QtWidgets import QApplication
+
+    from ui.app import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    threads = []
+
+    def fake_read(session, store=None):
+        import threading
+
+        threads.append(threading.current_thread())
+        return {"session": session, "median": 1234.0}
+
+    monkeypatch.setattr(MainWindow, "_read_rule_size_baseline", staticmethod(fake_read))
+
+    class Host(QObject):
+        _request_rule_size_baseline = MainWindow._request_rule_size_baseline
+        _apply_rule_size_baseline = MainWindow._apply_rule_size_baseline
+        _join_rule_size_baseline = MainWindow._join_rule_size_baseline
+
+    host = Host()
+    host._request_rule_size_baseline("2026-09-18")
+    host._request_rule_size_baseline("2026-09-18")  # already in flight: no second read
+    for worker in list(host._rule_size_workers.values()):
+        assert worker.wait(5000)
+    app.processEvents()
+
+    assert host._rule_size_baselines == {"2026-09-18": 1234.0}
+    assert len(threads) == 1
+    import threading
+
+    assert threads[0] is not threading.main_thread()
+    host._join_rule_size_baseline()
 
 
 # ---------------------------------------------------------------------------
