@@ -2328,6 +2328,48 @@ class JournalStore:
                 ),
             )
 
+    def backfill_risk_fields(
+        self,
+        trade_id: str,
+        *,
+        planned_entry: float,
+        planned_stop: float,
+        planned_risk: float | None,
+        risk_source: str,
+    ) -> bool:
+        """Fill an EMPTY plan from a machine source; False when any plan field is already set.
+
+        The guard is in the statement itself, so a plan the trader typed after
+        the caller looked is never overwritten. A failed write raises.
+        """
+        if not str(risk_source or "").strip():
+            raise ValueError("a backfilled plan must name its risk_source")
+        with self.connection() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO trade_annotations(trade_id, setup_tags, notes, updated_at) "
+                "VALUES(?, '', '', ?)",
+                (str(trade_id), _now_iso()),
+            )
+            cursor = conn.execute(
+                """
+                UPDATE trade_annotations SET
+                    updated_at = ?, planned_entry = ?, planned_stop = ?,
+                    planned_risk = ?, risk_source = ?
+                WHERE trade_id = ?
+                  AND COALESCE(planned_entry, '') = '' AND COALESCE(planned_stop, '') = ''
+                  AND COALESCE(planned_risk, '') = '' AND COALESCE(risk_source, '') = ''
+                """,
+                (
+                    _now_iso(),
+                    float(planned_entry),
+                    float(planned_stop),
+                    None if planned_risk is None else float(planned_risk),
+                    str(risk_source),
+                    str(trade_id),
+                ),
+            )
+            return cursor.rowcount == 1
+
     def list_trade_legs(self, trade_id: str) -> list[dict[str, Any]]:
         """The fills behind one trade, each carrying its broker payload.
 
