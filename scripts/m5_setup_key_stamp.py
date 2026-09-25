@@ -11,6 +11,15 @@ the stamp for an alert, a grade or a score. `submit` never raises and never
 waits; a full queue or a failed lookup loses the stamp, never the row. With no
 scan row for the name, or no stamp record at all, the key is unknown.
 
+A scan run on the alert's own day (before the alert) can write rows dated the
+previous session (the pre-market and after-close scans use the last completed
+bar); those rows count, as they do in the backfill, because they were on disk
+before the alert and hold only completed bars.
+
+Memory: only the previous session's lines are kept (raw), only the columns the
+rule needs are split out, and only each representative row is parsed whole,
+one at a time. Review events are streamed for that session only.
+
 Owner: this module is the only writer of the sidecar (append-only).
 """
 
@@ -35,6 +44,10 @@ STAMP_FIELDS = ("permutation_key", "permutation_label", "permutation_rule_versio
 QUEUE_MAX = 5000
 #: How far back from the end of the D1 history the previous session may lie.
 MAX_TAIL_BYTES = 256 << 20
+#: A failed load is not retried for this long (a persistent failure never re-reads per alert).
+FAILURE_BACKOFF_SECONDS = 300.0
+#: The columns the backfill's representative rule reads (`representatives_of`, `scan_row_id`).
+_RULE_COLUMNS = ("symbol", "side", "last_trade_date", "run_date", "last_close", "run_timestamp", "run_id")
 #: Set to "0" to switch the hook off (tests, a bad day).
 ENABLED_ENV = "TRADINGBOTV3_M5_SETUP_KEY_STAMP"
 
@@ -84,11 +97,14 @@ class ScanKeyLookup:
         *,
         context_loader: Callable[[str], Any] | None = None,
         max_tail_bytes: int = MAX_TAIL_BYTES,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._history_path = history_path
         self._context_loader = context_loader
         self._max_tail_bytes = max_tail_bytes
+        self._clock = clock
         self._cache: dict[str, tuple[Any, dict[tuple[str, str], dict]]] = {}
+        self._failure: tuple[str, float, Exception] | None = None
         self.loads = 0
 
     def history_path(self) -> Path:
@@ -103,12 +119,10 @@ class ScanKeyLookup:
             return self._context_loader(session)
         import setup_permutation_context as spc
 
-        return spc.SessionContext.load(session)
+        return spc.SessionContext.load(session, stream_review_events=True)
 
     def keys_for_session(self, session: str) -> dict[tuple[str, str], dict]:
         """``{(SYMBOL, SIDE): stamp}`` for every representative row of ``session``. Raises on failure."""
-        import setup_permutation_backfill as bf
-        import setup_permutation_context as spc
 
         path = self.history_path()
         stat = path.stat()
@@ -116,16 +130,47 @@ class ScanKeyLookup:
         cached = self._cache.get(session)
         if cached is not None and cached[0] == signature:
             return cached[1]
-        rows = spc._tail_rows_for_session(
-            path, session, date_columns=("last_trade_date", "run_date"), max_bytes=self._max_tail_bytes
+        failure = self._failure
+        if failure is not None and failure[0] == session and self._clock() - failure[1] < FAILURE_BACKOFF_SECONDS:
+            raise failure[2]
+        try:
+            keys = self._load(path, session)
+        except FileNotFoundError:
+            raise
+        except Exception as exc:
+            self._failure = (session, self._clock(), exc)
+            raise
+        self._failure = None
+        self._cache = {session: (signature, keys)}  # one session at a time
+        self.loads += 1
+        return keys
+
+    def _load(self, path: Path, session: str) -> dict[tuple[str, str], dict]:
+        import csv
+        import io
+
+        import setup_permutation_backfill as bf
+        import setup_permutation_context as spc
+
+        fieldnames, lines = spc._tail_lines_for_session(
+            path, session, date_columns=("last_trade_date", "run_date"),
+            stamp_columns=("run_timestamp", "run_id"), max_bytes=self._max_tail_bytes,
         )
-        representatives = bf.representatives_of(rows)
+        wanted = [(name, fieldnames.index(name)) for name in _RULE_COLUMNS if name in fieldnames]
+
+        def parse(raw: bytes) -> list[str]:
+            return next(csv.reader(io.StringIO(raw.decode("utf-8", errors="replace"))), [])
+
+        def slim(values: list[str]) -> dict[str, str]:
+            return {name: values[index] if index < len(values) else "" for name, index in wanted}
+
+        representatives = bf.representatives_of(slim(parse(raw)) for raw in lines)
         context = self._context(session)
         keys: dict[tuple[str, str], dict] = {}
         for index, (symbol, side, rep_session) in representatives.items():
             if rep_session != session:
                 continue
-            row = rows[index]
+            row = dict(zip(fieldnames, parse(lines[index])))
             key = bf.key_scan_row(row, symbol, side, session, context)
             keys[(symbol, side)] = {
                 "permutation_key": key.compact_key,
@@ -135,8 +180,6 @@ class ScanKeyLookup:
                 "facets": key.as_dict(),
                 "scan_row_id": bf.scan_row_id(row),
             }
-        self._cache = {session: (signature, keys)}  # one session at a time
-        self.loads += 1
         return keys
 
     def stamp(self, symbol: str, side: str, trade_date: str) -> dict:
@@ -190,8 +233,10 @@ def append_record(record: Mapping[str, Any], path: Path | None = None) -> None:
 
     target = Path(path) if path is not None else Path(M5_SETUP_KEY_STAMPS_FILE)
     target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("a", encoding="utf-8", newline="\n") as handle:
-        handle.write(json.dumps(record, ensure_ascii=True, sort_keys=True) + "\n")
+    line = (json.dumps(record, ensure_ascii=True, sort_keys=True) + "\n").encode("ascii")
+    # Unbuffered: the whole line goes down in one write() call, never a partial line.
+    with target.open("ab", buffering=0) as handle:
+        handle.write(line)
 
 
 def read_stamps(path: Path) -> dict[str, dict]:

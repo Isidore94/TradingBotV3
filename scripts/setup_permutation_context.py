@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 from datetime import date
 from pathlib import Path
@@ -175,6 +176,48 @@ def load_review_events(*, path: Path | None = None) -> list[dict] | None:
         return None
 
 
+def load_session_watch_fired(session: Any, *, path: Path | None = None) -> list[dict] | None:
+    """The session's ``watch_fired`` events, streamed; None before the log's first one.
+
+    Same answer as `load_review_events` + `watch_fired_coverage_start` for one
+    session, without holding every review event (or filling that module's
+    whole-log cache) in memory: only ``watch_fired`` lines are parsed.
+    """
+    import review_events
+
+    wanted = _session_text(session)
+    sources = review_events.review_event_sources(path) if path else review_events.review_event_sources()
+    first_day: str | None = None
+    kept: list[dict] = []
+    seen: set[str] = set()
+    for source in sources:
+        try:
+            handle = Path(source).open("rb")
+        except OSError:
+            continue
+        with handle:
+            for raw in handle:
+                if b"watch_fired" not in raw:
+                    continue
+                try:
+                    event = json.loads(raw)
+                except ValueError:
+                    continue
+                if not isinstance(event, dict) or str(event.get("action") or "") != "watch_fired":
+                    continue
+                record_id = str(event.get("review_record_id") or "").strip()
+                if record_id:
+                    if record_id in seen:
+                        continue
+                    seen.add(record_id)
+                day = _session_text(event.get("trade_date"))
+                if day and (first_day is None or day < first_day):
+                    first_day = day
+                if day == wanted:
+                    kept.append(event)
+    return kept if covered(wanted, first_day) else None
+
+
 # --- M5 confirmation
 
 
@@ -202,28 +245,34 @@ class TailReadCapped(RuntimeError):
     """The backwards read passed its byte cap before it left the session behind."""
 
 
-def _tail_rows_for_session(
+def _tail_lines_for_session(
     path: Path,
     session: str,
     *,
     date_columns: tuple[str, ...] = ("trade_date",),
+    stamp_columns: tuple[str, ...] = (),
     max_bytes: int | None = None,
-) -> list[dict]:
-    """The log's rows for ``session``, read backwards from the end (the log is append-ordered).
+) -> tuple[list[str], list[bytes]]:
+    """``(fieldnames, raw lines of the session in file order)``, read backwards from the end.
 
-    A row's date is its first non-blank ``date_columns`` value. Stops after one
-    whole chunk holds no row of the session or later, so a 582 MB log costs a
-    few MB per scan. Rows come back in file order. ``max_bytes`` raises
-    `TailReadCapped` instead of reading further back.
+    A row's date is its first non-blank ``date_columns`` value; its stamp is the
+    first non-blank ``stamp_columns`` value (the moment the row was written).
+    Reading stops after one whole chunk holds no row dated ``session`` or later
+    AND no row stamped on or after ``session``'s calendar day. The stamp half is
+    what makes an out-of-order append safe: a scan run on day D can write rows
+    dated before D, so a block of older dates is not the end of ``session``, but
+    rows written before ``session``'s day cannot be dated ``session``. Only the
+    session's own lines are kept. ``max_bytes`` raises `TailReadCapped`.
     """
     with path.open("rb") as handle:
         header = handle.readline()
         fieldnames = next(csv.reader(io.StringIO(header.decode("utf-8-sig", errors="replace"))), [])
-        indexes = [fieldnames.index(column) for column in date_columns if column in fieldnames]
-        if not indexes:
-            return []
+        date_indexes = [fieldnames.index(column) for column in date_columns if column in fieldnames]
+        stamp_indexes = [fieldnames.index(column) for column in stamp_columns if column in fieldnames]
+        if not date_indexes:
+            return fieldnames, []
 
-        def row_date(values: list[str]) -> str:
+        def first(values: list[str], indexes: list[int]) -> str:
             for index in indexes:
                 text = values[index].strip() if len(values) > index else ""
                 if text:
@@ -252,20 +301,35 @@ def _tail_rows_for_session(
                 text = raw.decode("utf-8", errors="replace")
                 if not text.strip():
                     continue
-                reader_row = next(csv.reader(io.StringIO(text)), [])
-                if row_date(reader_row) >= session:
+                values = next(csv.reader(io.StringIO(text)), [])
+                day = first(values, date_indexes)
+                if day >= session or (stamp_indexes and first(values, stamp_indexes)[:10] >= session):
                     recent = True
-                kept.append(raw)
+                if _session_text(day) == session:
+                    kept.append(raw)
             chunks.append(kept)
             if not recent:
                 break
-    lines = [raw for kept in reversed(chunks) for raw in kept]
+    return fieldnames, [raw for kept in reversed(chunks) for raw in kept]
+
+
+def _tail_rows_for_session(
+    path: Path,
+    session: str,
+    *,
+    date_columns: tuple[str, ...] = ("trade_date",),
+    stamp_columns: tuple[str, ...] = (),
+    max_bytes: int | None = None,
+) -> list[dict]:
+    """The log's rows for ``session`` as dicts, in file order (see `_tail_lines_for_session`)."""
+    fieldnames, lines = _tail_lines_for_session(
+        path, session, date_columns=date_columns, stamp_columns=stamp_columns, max_bytes=max_bytes
+    )
     body = b"\n".join(lines).decode("utf-8", errors="replace")
-    out = []
-    for values in csv.reader(io.StringIO(body)):
-        if _session_text(row_date(values)) == session:
-            out.append(dict(zip(fieldnames, values)))
-    return out
+    return [dict(zip(fieldnames, values)) for values in csv.reader(io.StringIO(body))]
+
+
+_M5_COLUMNS = ("trade_date", "event_id", "direction", "symbol", "entry_time")
 
 
 def load_m5_bounce_types(session: Any, *, path: Path | None = None) -> dict[tuple[str, str], str] | None:
@@ -279,7 +343,13 @@ def load_m5_bounce_types(session: Any, *, path: Path | None = None) -> dict[tupl
             return None
         if not covered(wanted, m5_coverage_start(target)):
             return None
-        rows = _tail_rows_for_session(target, wanted)
+        fieldnames, lines = _tail_lines_for_session(target, wanted)
+        # Only the five columns the answer needs, one line at a time (the log's context_json is large).
+        wanted_columns = [(name, fieldnames.index(name)) for name in _M5_COLUMNS if name in fieldnames]
+        rows = []
+        for raw in lines:
+            values = next(csv.reader(io.StringIO(raw.decode("utf-8", errors="replace"))), [])
+            rows.append({name: values[index] if index < len(values) else "" for name, index in wanted_columns})
     except (OSError, csv.Error):
         logging.debug("setup permutations: M5 outcome log unreadable", exc_info=True)
         return None
@@ -331,11 +401,15 @@ class SessionContext:
         self.trigger_times = trigger_times
 
     @classmethod
-    def load(cls, session: Any, **paths: Any) -> "SessionContext":
-        events = load_review_events(path=paths.get("review_events_path"))
-        # Before the first logged watch_fired the log could not have held one: unknown, not "none".
-        if events is not None and not covered(session, watch_fired_coverage_start(events)):
-            events = None
+    def load(cls, session: Any, *, stream_review_events: bool = False, **paths: Any) -> "SessionContext":
+        """``stream_review_events`` reads only the session's watch_fired lines (same answer, less memory)."""
+        if stream_review_events:
+            events = load_session_watch_fired(session, path=paths.get("review_events_path"))
+        else:
+            events = load_review_events(path=paths.get("review_events_path"))
+            # Before the first logged watch_fired the log could not have held one: unknown, not "none".
+            if events is not None and not covered(session, watch_fired_coverage_start(events)):
+                events = None
         return cls(
             slots=load_discovery_slots(session, reports_dir=paths.get("reports_dir")),
             triggers=entry_triggers(events, session) if events is not None else None,

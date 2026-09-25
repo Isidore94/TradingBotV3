@@ -456,3 +456,145 @@ def test_the_tail_reader_returns_the_session_s_rows_in_file_order(files):
     assert {row["last_trade_date"] for row in rows} == {PREV.isoformat()}
     assert len(rows) == 9
     assert rows[-1]["run_timestamp"] == f"{TODAY.isoformat()}T07:30:00"
+
+
+# ---------------------------------------------------------------------------
+# review round 1: out-of-order appends, memory, backoff, one-write lines
+# ---------------------------------------------------------------------------
+D0, D1, D2 = SESSIONS[0], SESSIONS[1], SESSIONS[2]
+MANY = [f"N{n:03d}" for n in range(60)]
+
+
+def _out_of_order_history() -> list[dict]:
+    """The live 09-17/09-18 shape: D1's close scan appends rows dated D0 after D1's own rows.
+
+    D1's mid-day scan covers every name; the next morning's (D2) pre-market scan
+    dated D1 covers only half of them.
+    """
+    pad = "x" * 300  # fat rows, so the out-of-order block fills whole read chunks
+    rows = []
+    for symbol in MANY:
+        rows.append(_scan(D0, f"{D0.isoformat()}T10:00:00", symbol, "LONG", note=pad))
+    for symbol in MANY:
+        rows.append(_scan(D1, f"{D1.isoformat()}T10:00:00", symbol, "LONG", relvol=1.1, note=pad))
+    for symbol in MANY:  # the close scan on D1 writes D0-dated rows (last completed bar)
+        rows.append(_scan(D0, f"{D1.isoformat()}T13:05:00", symbol, "LONG", note=pad))
+    for symbol in MANY[:30]:  # next pre-market, still dated D1
+        rows.append(_scan(D1, f"{D2.isoformat()}T07:50:00", symbol, "LONG", relvol=3.0, note=pad))
+    for symbol in MANY:  # D2's own intraday scan
+        rows.append(_scan(D2, f"{D2.isoformat()}T10:00:00", symbol, "LONG", note=pad))
+    return rows
+
+
+def test_out_of_order_appends_match_the_full_file_rule(tmp_path, monkeypatch):
+    monkeypatch.setattr(spc, "_TAIL_CHUNK", 2048)
+    history = _write_csv(tmp_path / "hist.csv", _out_of_order_history())
+    full_rows = list(bf._read_rows(history))
+    full = {k: bf.scan_row_id(full_rows[i]) for i, k in bf.representatives_of(full_rows).items()
+            if k[2] == D1.isoformat()}
+    assert len(full) == 60
+
+    lookup = stamp.ScanKeyLookup(history, context_loader=lambda s: spc.SessionContext())
+    for symbol in MANY:
+        got = lookup.stamp(symbol, "LONG", D2.isoformat())
+        assert got["status"] == stamp.STATUS_STAMPED, symbol
+        assert got["scan_row_id"] == full[(symbol, "LONG", D1.isoformat())], symbol
+
+
+def test_the_tail_keeps_only_the_session_s_lines(tmp_path, monkeypatch):
+    monkeypatch.setattr(spc, "_TAIL_CHUNK", 2048)
+    history = _write_csv(tmp_path / "hist.csv", _out_of_order_history())
+    fieldnames, lines = spc._tail_lines_for_session(
+        history, D1.isoformat(), date_columns=("last_trade_date", "run_date"),
+        stamp_columns=("run_timestamp", "run_id"),
+    )
+    assert len(lines) == 90
+    assert all(f",{D1.isoformat()},".encode() in raw for raw in lines)
+    assert "last_trade_date" in fieldnames
+
+
+def test_the_stamp_never_loads_every_review_event(files, monkeypatch):
+    import review_events
+
+    calls = []
+    monkeypatch.setattr(review_events, "load_review_events", lambda *a, **k: calls.append(1) or [])
+    monkeypatch.setattr(stamp.ScanKeyLookup, "history_path", lambda self: files["history"])
+    got = stamp.ScanKeyLookup().stamp("AAA", "LONG", TODAY.isoformat())
+    assert got["status"] == stamp.STATUS_STAMPED
+    assert calls == [], "the bot process must not load (and cache) every review event"
+
+
+def _events_file(tmp_path: Path) -> Path:
+    events = [
+        {"action": "watch_fired", "trade_date": PREV.isoformat(), "ts": f"{PREV.isoformat()}T09:40:00-04:00",
+         "symbol": "AAA", "side": "LONG", "detail": {"kind": "pullback", "trigger": "m15"}, "review_record_id": "r1"},
+        {"action": "watch_fired", "trade_date": PREV.isoformat(), "ts": f"{PREV.isoformat()}T09:40:00-04:00",
+         "symbol": "AAA", "side": "LONG", "detail": {"kind": "pullback", "trigger": "m15"}, "review_record_id": "r1"},
+        {"action": "watch_fired", "trade_date": PREV.isoformat(), "ts": f"{PREV.isoformat()}T11:10:00-04:00",
+         "symbol": "BBB", "side": "SHORT", "detail": {"kind": "trendline"}, "review_record_id": "r2"},
+        {"action": "reviewed", "trade_date": PREV.isoformat(), "symbol": "CCC", "note": "watch_fired in text"},
+        {"action": "watch_fired", "trade_date": TODAY.isoformat(), "ts": f"{TODAY.isoformat()}T09:31:00-04:00",
+         "symbol": "CCC", "side": "LONG", "detail": {"kind": "range"}, "review_record_id": "r3"},
+    ]
+    path = tmp_path / "alert_review_events.jsonl"
+    path.write_text("".join(json.dumps(event) + "\n" for event in events) + "not json watch_fired\n",
+                    encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("session", [SESSIONS[1], PREV, TODAY])
+def test_streamed_review_events_give_the_same_context(tmp_path, session):
+    path = _events_file(tmp_path)
+    whole = spc.SessionContext.load(session.isoformat(), review_events_path=path)
+    streamed = spc.SessionContext.load(session.isoformat(), review_events_path=path, stream_review_events=True)
+    assert streamed.triggers == whole.triggers
+    assert streamed.trigger_times == whole.trigger_times
+    if session == SESSIONS[1]:
+        assert streamed.triggers is None  # before the log's first watch_fired: unknown
+
+
+def test_a_failed_load_backs_off_instead_of_rereading(files):
+    now = [1000.0]
+    calls = []
+
+    def failing(session):
+        calls.append(session)
+        raise OSError("share offline")
+
+    lookup = stamp.ScanKeyLookup(files["history"], context_loader=failing, clock=lambda: now[0])
+    for symbol in SYMBOLS:
+        assert lookup.stamp(symbol, "LONG", TODAY.isoformat())["status"] == stamp.STATUS_FAILED
+    assert len(calls) == 1
+    now[0] += stamp.FAILURE_BACKOFF_SECONDS + 1
+    lookup.stamp("AAA", "LONG", TODAY.isoformat())
+    assert len(calls) == 2
+
+
+def test_each_sidecar_line_is_one_write(tmp_path, monkeypatch):
+    writes = []
+    real_open = Path.open
+
+    def spy_open(self, mode="r", buffering=-1, *args, **kwargs):
+        handle = real_open(self, mode, buffering, *args, **kwargs)
+        if self.name != "one.jsonl" or "a" not in mode:
+            return handle
+        assert buffering == 0 and "b" in mode, "the sidecar must be written unbuffered, in bytes"
+
+        class Spy:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                handle.close()
+
+            def write(self, data):
+                writes.append(data)
+                return handle.write(data)
+
+        return Spy()
+
+    monkeypatch.setattr(Path, "open", spy_open)
+    target = tmp_path / "one.jsonl"
+    stamp.append_record({"schema": stamp.SCHEMA, "event_id": "e1", "facets": {"a": "b"}}, target)
+    assert len(writes) == 1 and writes[0].endswith(b"\n") and writes[0].count(b"\n") == 1
+    assert json.loads(target.read_text(encoding="utf-8"))["event_id"] == "e1"
