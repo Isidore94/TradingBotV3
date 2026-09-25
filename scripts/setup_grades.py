@@ -68,6 +68,8 @@ RULES_TEXT = (
 TAPE_HORIZON_SESSIONS = 5
 TAPE_OUTCOME_KIND = "favorable_direction_session_v2"
 TAPE_UNKNOWN = "tape: unknown"
+#: Said after n when some picks have no tape result yet (their 5 sessions are not done).
+TAPE_N_NOTE = " (tape n excludes the newest ~5 sessions)"
 
 
 def wilson_lower_bound(wins: int, n: int) -> float | None:
@@ -579,7 +581,7 @@ def cell_line(cell: Mapping[str, Any] | None) -> str:
         parts.append(str(cell["tape_note"]))
     cum_r = _float(cell.get("cum_r_lately"))
     parts.append(f"cum R {cum_r:+.1f}" if cum_r is not None else "cum R unknown")
-    parts.append(f"n {n}")
+    parts.append(f"n {n}" + (TAPE_N_NOTE if int(cell.get("tape_unknown") or 0) > 0 else ""))
     return " · ".join(parts)
 
 

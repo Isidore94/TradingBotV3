@@ -355,6 +355,61 @@ def test_no_scoring_snapshot_means_tape_and_cum_r_unknown(tape_files, tmp_path, 
     assert svc.read_swing_tape(date(2026, 9, 18), as_of="2026-09-18") is None
 
 
+def test_the_prior_holdout_tape_is_rebuilt_when_the_day_rolls(tape_files, monkeypatch):
+    from datetime import date
+
+    svc = tape_files
+    seen: list[str] = []
+    real = svc._swing_tape_for
+
+    def spy(setups, reference, *, as_of):
+        seen.append(as_of)
+        return real(setups, reference, as_of=as_of)
+
+    monkeypatch.setattr(svc, "_swing_tape_for", spy)
+    svc._swing(date(2026, 10, 10))
+    monkeypatch.setattr(svc, "_last_completed_session", lambda: date(2026, 9, 21))
+    svc._swing(date(2026, 10, 10))  # same files, new session
+    assert seen == ["2026-09-18", "2026-09-21"]
+
+
+def test_one_build_parses_the_scoring_snapshot_once(tape_files, tmp_path, monkeypatch):
+    import json
+
+    svc = tape_files
+    setups = json.loads(svc._scoring_snapshot_path().read_text(encoding="utf-8"))["setups"]
+    calls: list[int] = []
+
+    def counted():
+        calls.append(1)
+        return setups
+
+    monkeypatch.setattr(svc, "_scoring_setups", counted)
+    monkeypatch.setattr(svc, "read_recent_rows", lambda: [{
+        "side": "SHORT", "priority_bucket": "near_favorite_zone", "setup_family": "general",
+        "namespace": "live", "n_wins": "96", "n_losses": "4", "n_flats": "0",
+        "n_entry_sessions": "20", "representative_closed_r": "0.1",
+        "tracker_saved_at": "2026-09-18T16:20:00-04:00",
+    }])
+    monkeypatch.setattr(svc, "read_favorable_read", lambda: None)
+    monkeypatch.setattr(svc, "read_held_run_summaries", lambda: None)
+    monkeypatch.setattr(svc, "_outcome_rows", lambda: [])
+    service = svc.WorkingLatelyService(store_dir=tmp_path / "wl")
+    payload = service.build_payload()
+    assert payload["setup_grades"]["swing"][0]["tape_n"] == 3
+    assert len(calls) == 1, calls
+    assert svc._SETUPS_THIS_BUILD is None  # never held between builds
+
+
+def test_the_line_says_why_tape_n_is_smaller_only_when_some_are_unknown():
+    some = sg.grade_for(n=150, sessions=20, wins=140, avg_r=0.3, cum_r_lately=4.1,
+                        tape={"wins": 71, "n": 114, "sessions": 18, "unknown": 36})
+    assert sg.cell_line(some).endswith("n 114 (tape n excludes the newest ~5 sessions)")
+    none = sg.grade_for(n=150, sessions=20, wins=140, avg_r=0.3, cum_r_lately=4.1,
+                        tape={"wins": 71, "n": 114, "sessions": 18, "unknown": 0})
+    assert sg.cell_line(none).endswith("n 114")
+
+
 # ---------------------------------------------------------------------------
 # the surfaces print the line
 # ---------------------------------------------------------------------------

@@ -278,7 +278,7 @@ def read_swing_tape(reference: date, *, as_of: str) -> dict[str, Any] | None:
     """
 
     def build() -> dict[str, Any] | None:
-        setups = _scoring_setups()
+        setups = _build_setups()
         return _swing_tape_for(setups, reference, as_of=as_of) if setups else None
 
     return _cached("swing_tape", (_tape_inputs_key(), reference, as_of), build)
@@ -328,6 +328,22 @@ def _scoring_setups() -> dict[str, Any]:
         return {}
     setups = payload.get("setups") if isinstance(payload, dict) else None
     return setups if isinstance(setups, dict) else {}
+
+
+#: The scoring snapshot parsed ONCE per build and shared by the tape read and
+#: the hold-out read: None outside a build, `[]` inside one before the first
+#: read, `[setups]` after it. Cleared by `build_payload`; never kept between builds.
+_SETUPS_THIS_BUILD: list | None = None
+
+
+def _build_setups() -> dict[str, Any]:
+    """`_scoring_setups()`, parsed at most once per `build_payload`."""
+    holder = _SETUPS_THIS_BUILD
+    if holder is None:
+        return _scoring_setups()
+    if not holder:
+        holder.append(_scoring_setups())
+    return holder[0]
 
 
 def _outcome_log_path() -> Path:
@@ -409,13 +425,11 @@ def _swing(recent_reference: date) -> dict[str, Any]:
     lookback = int(legacy.RECENT_SETUP_TYPE_LOOKBACK_DAYS)
     prior_reference = looking_back.tracker_prior_reference(recent_reference, lookback)
 
+    as_of = _last_completed_session().isoformat()
+
     def build() -> dict[str, Any]:
-        setups = _scoring_setups()
-        prior_tape = (
-            _swing_tape_for(setups, prior_reference, as_of=_last_completed_session().isoformat())
-            if setups
-            else None
-        )
+        setups = _build_setups()
+        prior_tape = _swing_tape_for(setups, prior_reference, as_of=as_of) if setups else None
         prior_rows = legacy.build_recent_tracker_setup_family_rows(
             setups,
             reference_date=prior_reference,
@@ -440,7 +454,7 @@ def _swing(recent_reference: date) -> dict[str, Any]:
             },
         }
 
-    return _cached("swing", (_tape_inputs_key(), prior_reference), build)
+    return _cached("swing", (_tape_inputs_key(), prior_reference, as_of), build)
 
 
 def _prior_favorable() -> dict[str, Any]:
@@ -741,6 +755,14 @@ class WorkingLatelyService(QObject):
         setup grades. The grades ride on the emitted dict under `setup_grades`
         and in their own file; the persisted snapshot is unchanged.
         """
+        global _SETUPS_THIS_BUILD
+        _SETUPS_THIS_BUILD = []
+        try:
+            return self._build_payload()
+        finally:
+            _SETUPS_THIS_BUILD = None
+
+    def _build_payload(self) -> dict[str, Any]:
         global _OUTCOME_ROWS_THIS_BUILD
         try:
             try:
