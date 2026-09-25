@@ -146,3 +146,135 @@ def test_rule_lane_uses_the_worker_baseline_for_its_own_session_only():
     # Another rule clears the baseline without starting a read.
     MainWindow._refresh_rule_size_baseline(host, {"tag": "hold_winners"})
     assert host._rule_size_baseline is None
+
+
+# ---------------------------------------------------------------------------
+# step 3: Questrade gap days are importable from a statement, through the CLI
+# ---------------------------------------------------------------------------
+GAP_ACCOUNT = "51830546"
+STATEMENT_COLUMNS = [
+    "Transaction Date", "Settlement Date", "Action", "Symbol", "Description", "Quantity",
+    "Price", "Gross Amount", "Commission", "Net Amount", "Currency", "Account #",
+    "Activity Type", "Account Type",
+]
+
+
+def _statement_row(day, action, qty, price, gross, net):
+    return [f"{day} 12:00:00 AM", f"{day} 12:00:00 AM", action, "AAPL", "APPLE INC",
+            qty, price, gross, "0.00", net, "USD", GAP_ACCOUNT, "Trades", "Individual margin"]
+
+
+def _gap_statement(tmp_path):
+    rows = [
+        # 2026-06-10 is a FAILED gap day; 2026-06-12 is not.
+        _statement_row("2026-06-10", "Buy", "10", "100", "-1000.00", "-1000.00"),
+        _statement_row("2026-06-10", "Sell", "-10", "101", "1010.00", "1010.00"),
+        _statement_row("2026-06-12", "Buy", "5", "50", "-250.00", "-250.00"),
+    ]
+    path = tmp_path / "statement.csv"
+    lines = [",".join(f'"{value}"' for value in row) for row in [STATEMENT_COLUMNS, *rows]]
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
+def _gap_db(tmp_path):
+    import journal_coverage
+    import journal_questrade_gaps
+    from journal_store import JournalStore
+
+    db = tmp_path / "trade_journal.sqlite3"
+    store = JournalStore(db)
+    store.initialize_schema()
+    for day in ("2026-06-10", "2026-06-11"):
+        journal_coverage.mark_coverage(
+            store, broker="QUESTRADE", account_number=GAP_ACCOUNT, day=day,
+            status=journal_coverage.FAILED, source="QT_API",
+            message=journal_questrade_gaps.EXECUTIONS_MISSING_REASON,
+        )
+    return db
+
+
+def _statement_days(db):
+    import sqlite3
+
+    conn = sqlite3.connect(db)
+    try:
+        return sorted(
+            (row[0], row[1]) for row in conn.execute(
+                "SELECT trade_date, COUNT(*) FROM raw_executions "
+                "WHERE source = 'QT_STATEMENT' GROUP BY trade_date"
+            )
+        )
+    finally:
+        conn.close()
+
+
+def _sha(path):
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_gap_statement_dry_run_names_the_gap_days_it_would_fill_and_writes_nothing(tmp_path, capsys):
+    import journal_questrade_gaps
+
+    db = _gap_db(tmp_path)
+    statement = _gap_statement(tmp_path)
+    before = _sha(db)
+
+    code = journal_questrade_gaps.main(["--db", str(db), "--statement", str(statement)])
+
+    assert code == journal_questrade_gaps.EXIT_OK
+    assert _sha(db) == before
+    out = capsys.readouterr().out
+    assert "statement has trades for 1 of 2 FAILED account-day(s)" in out
+    assert f"{GAP_ACCOUNT} 2026-06-10" in out
+    assert "Nothing was written" in out
+
+
+def test_gap_statement_apply_writes_only_the_gap_days_and_a_rerun_adds_nothing(tmp_path, capsys):
+    import journal_questrade_gaps
+
+    db = _gap_db(tmp_path)
+    statement = _gap_statement(tmp_path)
+    args = ["--db", str(db), "--statement", str(statement), "--apply"]
+
+    assert journal_questrade_gaps.main(args) == journal_questrade_gaps.EXIT_OK
+    assert _statement_days(db) == [("2026-06-10", 2)]  # 2026-06-12 is not a gap day
+    assert list(tmp_path.glob("*.pre-qt-statement-*.bak"))
+    failed = journal_questrade_gaps.gap_report(db)["failed_days"]
+    assert [row["day"] for row in failed] == ["2026-06-11"]  # 06-10 is now COVERED
+    assert "1 gap day(s) imported" in capsys.readouterr().out
+
+    # The same file again: the deterministic uid collapses every row.
+    assert journal_questrade_gaps.main(args) == journal_questrade_gaps.EXIT_OK
+    assert _statement_days(db) == [("2026-06-10", 2)]
+
+
+def test_gap_statement_apply_refuses_the_live_folder_without_the_traders_flag(tmp_path, monkeypatch):
+    import journal_questrade_gaps
+    import journal_reclassify
+
+    db = _gap_db(tmp_path)
+    statement = _gap_statement(tmp_path)
+    monkeypatch.setattr(journal_reclassify, "_is_live_store", lambda _path: True)
+    before = _sha(db)
+
+    code = journal_questrade_gaps.main(["--db", str(db), "--statement", str(statement), "--apply"])
+
+    assert code == journal_questrade_gaps.EXIT_REFUSED_TO_START
+    assert _sha(db) == before
+
+
+def test_statement_import_only_days_leaves_other_days_alone(tmp_path):
+    from datetime import date
+
+    import journal_statement_import as statement
+    from journal_store import JournalStore
+
+    store = JournalStore(tmp_path / "journal.sqlite3")
+    summary = statement.import_questrade_statement(
+        store, _gap_statement(tmp_path), only_days={(GAP_ACCOUNT, date(2026, 6, 10))},
+    )
+    assert summary["days_written"] == 1
+    assert summary["days_outside_scope"] == 1

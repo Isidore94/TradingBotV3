@@ -11,11 +11,19 @@ rebuilds trades. It backs the journal up first. Close the desk before running
 it: the Questrade token chain is single-use, and two processes refreshing it
 at once can break it.
 
+``--statement FILE`` fills the FAILED days from a Questrade activity statement
+downloaded from the portal (no API, no token). It shows which gap days the file
+has trades for; with ``--apply`` it imports ONLY those days through
+``journal_statement_import`` (its richer-source day skip, file authority and
+deterministic uids, so a re-run adds nothing), backing the journal up first.
+
 Usage::
 
     python scripts/journal_questrade_gaps.py
     python scripts/journal_questrade_gaps.py --reimport
     python scripts/journal_questrade_gaps.py --reimport --apply --i-am-the-trader
+    python scripts/journal_questrade_gaps.py --statement activity.xlsx
+    python scripts/journal_questrade_gaps.py --statement activity.xlsx --apply --i-am-the-trader
 """
 
 from __future__ import annotations
@@ -156,13 +164,39 @@ def reimport(
     return summary
 
 
-def _backup_path(db_path: Path) -> Path:
+def gap_days(report: dict[str, Any]) -> set[tuple[str, date]]:
+    """The FAILED (account, day) pairs in a gap report."""
+    return {
+        (str(row["account_number"]), date.fromisoformat(str(row["day"])[:10]))
+        for row in report["failed_days"]
+    }
+
+
+def statement_gap_days(statement: Path, report: dict[str, Any]) -> list[tuple[str, date]]:
+    """The FAILED account-days the statement file has trades for. Reads only the file."""
+    from journal_statement_import import parse_statement, read_statement_table
+
+    parse = parse_statement(read_statement_table(Path(statement)))
+    return sorted(gap_days(report) & {(str(a), d) for a, d in parse.trade_days})
+
+
+def import_gap_statement(db_path: Path, statement: Path, report: dict[str, Any]) -> dict[str, Any]:
+    """Import the statement's rows for the FAILED days only, then rebuild trades."""
+    from journal_statement_import import import_questrade_statement
+    from journal_store import JournalStore
+
+    return import_questrade_statement(
+        JournalStore(db_path), Path(statement), only_days=gap_days(report)
+    )
+
+
+def _backup_path(db_path: Path, label: str = "reimport") -> Path:
     # Microseconds plus a counter so a second run never overwrites the first backup.
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    path = db_path.parent / f"{db_path.stem}.pre-qt-reimport-{stamp}{db_path.suffix}.bak"
+    path = db_path.parent / f"{db_path.stem}.pre-qt-{label}-{stamp}{db_path.suffix}.bak"
     n = 1
     while path.exists():
-        path = db_path.parent / f"{db_path.stem}.pre-qt-reimport-{stamp}-{n}{db_path.suffix}.bak"
+        path = db_path.parent / f"{db_path.stem}.pre-qt-{label}-{stamp}-{n}{db_path.suffix}.bak"
         n += 1
     return path
 
@@ -175,7 +209,14 @@ def main(
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--db", default="", help="journal database (default: the desk's journal)")
     parser.add_argument("--reimport", action="store_true", help="show (or with --apply, run) the retry")
-    parser.add_argument("--apply", action="store_true", help="with --reimport: contact Questrade and import")
+    parser.add_argument(
+        "--apply", action="store_true",
+        help="with --reimport: contact Questrade and import; with --statement: import the file",
+    )
+    parser.add_argument(
+        "--statement", default="",
+        help="a Questrade activity statement (.xlsx/.csv) to fill the FAILED days from",
+    )
     parser.add_argument(
         "--i-am-the-trader", action="store_true",
         help="required before --apply may touch a database under the live data folder",
@@ -193,12 +234,21 @@ def main(
     if not db_path.is_file():
         print(f"No journal database at {db_path}", file=sys.stderr)
         return EXIT_REFUSED_TO_START
-    if args.apply and not args.reimport:
-        print("--apply only means something with --reimport.", file=sys.stderr)
+    if args.apply and not (args.reimport or args.statement):
+        print("--apply only means something with --reimport or --statement.", file=sys.stderr)
+        return EXIT_REFUSED_TO_START
+    if args.reimport and args.statement:
+        print("Use --reimport or --statement, not both in one run.", file=sys.stderr)
+        return EXIT_REFUSED_TO_START
+    statement = Path(args.statement).expanduser() if args.statement else None
+    if statement is not None and not statement.is_file():
+        print(f"No statement file at {statement}", file=sys.stderr)
         return EXIT_REFUSED_TO_START
 
     report = gap_report(db_path)
     print(json.dumps(report, indent=2, default=str) if args.json else render(report))
+    if statement is not None:
+        return _run_statement(db_path, statement, report, apply=args.apply, trader=args.i_am_the_trader)
     if not args.reimport:
         return EXIT_OK
 
@@ -210,21 +260,9 @@ def main(
         )
         return EXIT_OK
 
-    from journal_reclassify import _is_live_store, busy_reasons
-
-    if _is_live_store(db_path) and not args.i_am_the_trader:
-        print(
-            f"{db_path} is inside the live data folder. Re-importing there is the trader's own "
-            "act: re-run with --i-am-the-trader if you are the trader.",
-            file=sys.stderr,
-        )
-        return EXIT_REFUSED_TO_START
-    reasons = busy_reasons(db_path)
-    if reasons:
-        print("Not now - something else is writing this journal:", file=sys.stderr)
-        for reason in reasons:
-            print(f"  {reason}", file=sys.stderr)
-        return EXIT_BUSY
+    refused = _refuse_or_busy(db_path, trader=args.i_am_the_trader)
+    if refused is not None:
+        return refused
 
     backup = _backup_path(db_path)
     shutil.copy2(db_path, backup)
@@ -242,6 +280,60 @@ def main(
     )
     for item in summary.get("failed") or []:
         print(f"  still failed {item['account']} {item['day']}: {item['message'][:120]}")
+    return EXIT_OK
+
+
+def _refuse_or_busy(db_path: Path, *, trader: bool) -> int | None:
+    """The live-folder gate and the busy check every write shares; None = go ahead."""
+    from journal_reclassify import _is_live_store, busy_reasons
+
+    if _is_live_store(db_path) and not trader:
+        print(
+            f"{db_path} is inside the live data folder. Importing there is the trader's own "
+            "act: re-run with --i-am-the-trader if you are the trader.",
+            file=sys.stderr,
+        )
+        return EXIT_REFUSED_TO_START
+    reasons = busy_reasons(db_path)
+    if reasons:
+        print("Not now - something else is writing this journal:", file=sys.stderr)
+        for reason in reasons:
+            print(f"  {reason}", file=sys.stderr)
+        return EXIT_BUSY
+    return None
+
+
+def _run_statement(db_path: Path, statement: Path, report: dict[str, Any], *, apply: bool, trader: bool) -> int:
+    covered = statement_gap_days(statement, report)
+    print(
+        f"\n{statement.name}: statement has trades for {len(covered)} of "
+        f"{len(report['failed_days'])} FAILED account-day(s)"
+    )
+    for account, day in covered:
+        print(f"  {account} {day.isoformat()}")
+    if not apply:
+        print("Nothing was written. Close the desk, then add --apply to import those days.")
+        return EXIT_OK
+    if not covered:
+        print("Nothing to import.")
+        return EXIT_OK
+    refused = _refuse_or_busy(db_path, trader=trader)
+    if refused is not None:
+        return refused
+    backup = _backup_path(db_path, "statement")
+    shutil.copy2(db_path, backup)
+    try:
+        summary = import_gap_statement(db_path, statement, report)
+    except Exception as exc:  # noqa: BLE001 - the restore is the point
+        shutil.copy2(backup, db_path)
+        print(f"REFUSED - {type(exc).__name__}: {exc}. The journal was put back.", file=sys.stderr)
+        print(f"  the backup is still at {backup}", file=sys.stderr)
+        return EXIT_FAILED
+    print(
+        f"\n{summary.get('days_written', 0)} gap day(s) imported "
+        f"({summary.get('executions_written', 0)} fills), "
+        f"{summary.get('days_skipped_richer_source', 0)} left to a richer source. Backup: {backup}"
+    )
     return EXIT_OK
 
 

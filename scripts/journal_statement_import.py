@@ -744,8 +744,12 @@ def import_questrade_statement(
     rebuild: bool = True,
     mark_coverage: bool = True,
     file_authority: bool = True,
+    only_days: set[tuple[str, date]] | None = None,
 ) -> dict[str, Any]:
     """Read a statement file and apply everything it may safely write.
+
+    ``only_days`` limits the import to those (account, day) pairs, e.g. the
+    Questrade FAILED gap days; every other day in the file is left untouched.
 
     Returns a summary the Health tab renders and the import run records:
     counts written, days skipped because a richer source owns them, rows the
@@ -758,6 +762,20 @@ def import_questrade_statement(
     """
     table = read_statement_table(Path(path))
     parse = parse_statement(table)
+    outside_scope: set[tuple[str, date]] = set()
+    if only_days is not None:
+        scope = {(str(account), day) for account, day in only_days}
+        outside_scope = {key for key in parse.trade_days | parse.cash_days if key not in scope}
+        parse.executions = [
+            execution for execution in parse.executions
+            if (execution.account_number, _coerce_date(execution.trade_date)) in scope
+        ]
+        parse.cash = [
+            row for row in parse.cash
+            if (row["account_number"], _coerce_date(row["txn_date"])) in scope
+        ]
+        parse.trade_days = {key for key in parse.trade_days if key in scope}
+        parse.cash_days = {key for key in parse.cash_days if key in scope}
     account_numbers = [str(account["number"]) for account in parse.accounts if account.get("number")]
 
     start, end = parse.date_range
@@ -867,6 +885,7 @@ def import_questrade_statement(
             "cash_written": int(written_cash),
             "days_written": len(written_days),
             "days_skipped_richer_source": len(skipped_days),
+            "days_outside_scope": len(outside_scope),
             "authority": authority,
             "skipped_days": [(account, day.isoformat()) for account, day in skipped_days],
             "unreadable_rows": len(parse.skipped),
