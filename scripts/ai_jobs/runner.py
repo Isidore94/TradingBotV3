@@ -828,7 +828,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
     slot for no reason other than having been written first. On 2026-09-01 the
     run took six hours, and a reservation that cannot fit inside what is left
     of the window records SKIPPED. That put the cheap, deterministic, no-model
-    work - the cohort grades, the vocabulary audit, the preference join, the
+    work - the cohort grades, the preference join, the
     evidence report, the fact pack - behind the two jobs most likely to spend
     the night. **No deterministic slot reads either narration slot's output**,
     so the dependency that would have justified the old position does not
@@ -837,8 +837,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
     So the slate is:
 
     1. **the deterministic stage** - ``journal_import``, ``journal_auto_tag``,
-       the cohort grades, ``note_vocabulary_audit``,
-       ``preference_trade_outcomes``, ``outcome_sweep``, ``evidence_report``,
+       the cohort grades, ``preference_trade_outcomes``, ``outcome_sweep``, ``evidence_report``,
        ``daily_digest`` and ``day_review_facts``.
        Their RELATIVE order is unchanged; it is the appended-only order this
        docstring used to describe and the comments below still argue for each
@@ -873,7 +872,6 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         market_story_narration,
         measured_report_publish,
         miss_contrast,
-        note_vocabulary_audit,
         observation_tags,
         outcome_sweep,
         plan_review,
@@ -984,21 +982,6 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             run=cohorts.run_rejection_cohort_grading,
             reserve_minutes=5.0,
             description="Forward-grade NOT-TODAY and DISLIKE (deterministic, no model)",
-            max_attempts=3,
-        ),
-        # P10 A4, APPENDED after the cohort slots. It reads the annotation log
-        # and nothing the cohorts produce, so its position among them carries no
-        # dependency - but it belongs with them because it is the same KIND of
-        # job: deterministic, cheap, no model, its own ledger row and its own
-        # failure isolation. Later phases append; they never reorder.
-        JobSlot(
-            name="note_vocabulary_audit",
-            run=note_vocabulary_audit.run_note_vocabulary_audit,
-            reserve_minutes=5.0,
-            description=(
-                "What the trader wrote that no code says - listed, never coded "
-                "(deterministic, no model)"
-            ),
             max_attempts=3,
         ),
         # P6, APPENDED after the cohort slots and BEFORE the evidence report,

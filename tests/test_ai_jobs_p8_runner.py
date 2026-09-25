@@ -47,3 +47,18 @@ def test_budget_priority_puts_plan_review_and_ideas_between_enrichment_and_tags(
         "journal_enrichment", "plan_review", "improvement_ideas", "observation_tags",
         "econ_brief", "ticker_briefs",
     ]
+
+
+# ---------------------------------------------------------------------------
+# note_vocabulary_audit is gone: its report had no reader
+# ---------------------------------------------------------------------------
+
+
+def test_note_vocabulary_audit_slot_and_module_are_gone():
+    import importlib.util
+
+    from ai_jobs import runner
+
+    names = [slot.name for slot in runner.default_slots() + runner.optional_slots()]
+    assert "note_vocabulary_audit" not in names
+    assert importlib.util.find_spec("ai_jobs.note_vocabulary_audit") is None
