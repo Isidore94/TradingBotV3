@@ -82,6 +82,8 @@ class BestNowStrip(QFrame):
     """Title plus a fixed pool of row labels. Nothing else lives here."""
 
     symbolActivated = Signal(str)
+    #: P9: the ranked entries, after every apply (the Alert Center's Show filter reads them).
+    entriesChanged = Signal(object)
     #: (generation, entries) from the worker, queued onto the Qt thread.
     _entriesReady = Signal(int, object)
 
@@ -218,6 +220,7 @@ class BestNowStrip(QFrame):
                 row.hide()
         self._texts = texts
         self.last_changed_rows = len(changed)
+        self.entriesChanged.emit(list(self._entries))
         has_rows = bool(texts)
         if self.empty_label.isHidden() == (not has_rows):
             self.empty_label.setVisible(not has_rows)

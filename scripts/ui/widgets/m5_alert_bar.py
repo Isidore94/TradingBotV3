@@ -45,6 +45,9 @@ untouched and the switch off restores arrival order exactly.
 P1-6 6a: a row also carries its alert's entry state (``valid``, ``improved``,
 ``gone`` or ``unknown``), measured off the Qt thread by the Working-now strip
 from the NEWEST alert on that row. Display only.
+
+P9 (2026-09-25): the Alert Center's "Show" filter hides rows from the DRAWN
+list only. The arrival list keeps every row; the title counts what is hidden.
 """
 
 from __future__ import annotations
@@ -213,6 +216,9 @@ class M5AlertBar(QWidget):
         self._entry_states: dict = {}
         #: P1-6 6c: fixed risk per trade in dollars; None = sizing off.
         self._risk_dollars: float | None = None
+        #: P9: `alert -> (hidden, is_new)` from the Alert Center; None = show all.
+        self._show_filter = None
+        self._show_hidden = (0, 0)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
@@ -320,19 +326,31 @@ class M5AlertBar(QWidget):
 
     def _grade_for(self, alert: Any) -> str | None:
         """The tracker grade badge for this alert, or None before grades load."""
-        grades = getattr(self, "_grades", None)
-        if not grades:
-            return None
+        import alert_show_filter
         import setup_grades
-        import working_lately
 
-        payload = getattr(alert, "payload", None)
-        feedback = payload.get("feedback") if isinstance(payload, dict) else None
-        bounce_types = str((feedback or {}).get("bounce_types") or "")
-        if not bounce_types:
-            bounce_types = working_lately.alert_priority_key(alert)[0]
-        side = str(getattr(alert, "side", "") or "")
-        return setup_grades.badge(setup_grades.daytrade_grade_for_alert(grades, bounce_types, side))
+        grade = alert_show_filter.daytrade_grade(getattr(self, "_grades", None), alert)
+        return None if grade is None else setup_grades.badge(grade)
+
+    def set_show_filter(self, verdict) -> None:
+        """P9: `alert -> (hidden, is_new)`; None shows every row. Redraws."""
+        self._show_filter = verdict
+        self.refresh_show_filter()
+
+    def refresh_show_filter(self) -> None:
+        """The Show filter's answer changed: redraw the list and the title."""
+        self._render_order()
+        self._refresh_title()
+
+    def _show_verdict(self, alert: Any) -> tuple[bool, bool]:
+        if self._show_filter is None or alert is None:
+            return (False, False)
+        try:
+            hidden, is_new = self._show_filter(alert)
+        except Exception as exc:  # noqa: BLE001 - unknown shows
+            note_swallowed("M5 bar Show filter failed", exc, quiet=True)
+            return (False, False)
+        return (bool(hidden), bool(is_new))
 
     def set_swing_context(self, mapping) -> None:
         """Which rows sit on a D1 swing setup. Rewrites rows in place.
@@ -433,7 +451,7 @@ class M5AlertBar(QWidget):
 
         import swing_context
 
-        rows = list(self._arrival)
+        rows = self._shown_arrival()
         if len(rows) < 2 or not (self._working_lately_order or self._swing_context):
             return rows
         if not working_lately.prioritise_enabled():
@@ -458,6 +476,27 @@ class M5AlertBar(QWidget):
                 key=lambda entry: (entry[0], entry[1], entry[2]),
             )
         ]
+
+    def _shown_arrival(self) -> list:
+        """The arrival list minus rows the Show filter hides; counts them (P9)."""
+        if self._show_filter is None:
+            self._show_hidden = (0, 0)
+            return list(self._arrival)
+        shown: list = []
+        hidden = new = 0
+        for item in self._arrival:
+            is_hidden, is_new = self._show_verdict(item.data(_ALERT_ROLE))
+            if is_hidden:
+                hidden += 1
+                new += int(is_new)
+            else:
+                shown.append(item)
+        self._show_hidden = (hidden, new)
+        return shown
+
+    def hidden_counts(self) -> tuple[int, int]:
+        """`(rows, new)` the Show filter hid at the last draw."""
+        return self._show_hidden
 
     def _render_order(self) -> None:
         """Draw the display order. A no-op when it already matches."""
@@ -568,6 +607,7 @@ class M5AlertBar(QWidget):
     def clear_all(self) -> None:
         self._arrival.clear()
         self.list.clear()
+        self._show_hidden = (0, 0)
         self._refresh_title()
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
@@ -638,7 +678,11 @@ class M5AlertBar(QWidget):
         return written
 
     def _refresh_title(self) -> None:
+        import alert_show_filter
+
         n = self.list.count()
-        self.title_label.setText(f"M5 alerts ({n})" if n else "M5 alerts")
+        title = f"M5 alerts ({n})" if n else "M5 alerts"
+        hidden = alert_show_filter.hidden_text(*self._show_hidden)
+        self.title_label.setText(f"{title} · {hidden}" if hidden else title)
         self.copy_button.setEnabled(n > 0)
         self.clear_button.setEnabled(n > 0)
