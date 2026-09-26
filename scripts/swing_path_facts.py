@@ -15,10 +15,12 @@ Per row (all side-adjusted, 1 ATR = the scan row's ``atr20`` on the scan date):
 * ``next_open_side_return_pct`` - F18's fill: bought at session 1's open instead of
   the scan day's close, held to the same target close.
 * ``pullback_*`` - the intraday-pullback entry for the leader-pullback study key
-  (LONG, ``pct_from_current_vwap`` in [-10, -3], ``top_pattern_tracking`` or sector
-  Technology): a limit at the entry close - 0.25 ATR resting through session 1,
+  (`long_study_families.leader_pullback_long`, the one definition): a limit at
+  the entry close - 0.25 ATR resting through session 1,
   filled by `research_warehouse.retest_entry.limit_fill` (a gap fills at the open).
   No fill is ``no_fill`` - no trade, never a zero.
+* ``study_families`` - the S14 study families of the scan row
+  (`long_study_families.study_families`), ";"-joined; blank = none or unknown.
 
 Point in time: only bars dated strictly after the scan date and no later than the
 last completed session are read. Any missing bar in the path, a target session not
@@ -43,17 +45,13 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import long_study_families as lsf  # noqa: E402
 from research_warehouse.retest_entry import RETEST_ATR_FRACTION, limit_fill  # noqa: E402
 
 PATH_HORIZONS = (1, 3, 5, 10, 20)
 SOURCE_OUTCOME_KIND = "favorable_direction_session_v2"
 KNOWLEDGE_BASIS = "bars_after_scan_date_atr20_at_scan"
 ONE_ATR = 1.0
-
-#: The leader-pullback study key (TODO S14). A study tag, not a scored family.
-LEADER_PULLBACK_VWAP_RANGE = (-10.0, -3.0)
-LEADER_PULLBACK_FAMILY = "top_pattern_tracking"
-LEADER_PULLBACK_SECTOR = "Technology"
 
 REASON_IMMATURE = "target_session_not_complete"
 REASON_OUT_OF_RANGE = "target_session_outside_calendar_range"
@@ -96,6 +94,7 @@ COLUMNS = [
     "pullback_fill",
     "pullback_side_return_pct",
     "knowledge_basis",
+    "study_families",
 ]
 
 Bar = tuple[float, float, float, float]  # open, high, low, close
@@ -125,27 +124,30 @@ def scan_row_id(row: Mapping[str, Any]) -> str:
 
 @dataclass(frozen=True)
 class ScanFacts:
-    """What the scan row knew on the scan date: ATR and the leader-pullback inputs."""
+    """What the scan row knew on the scan date: ATR and the S14 study-family inputs."""
 
     atr20: float | None = None
     pct_from_current_vwap: float | None = None
     sector: str = ""
+    rs_vs_industry: float | None = None
+    spy_above_sma20: str = ""
 
 
 def leader_pullback(side: str, family: str, facts: ScanFacts | None) -> bool | None:
-    """The S14 key on one scan row; None when an input it needs is unknown."""
+    """The S14 leader-pullback key on one scan row (`long_study_families`); None = unknown."""
     if side != "LONG":
         return False
-    if facts is None or facts.pct_from_current_vwap is None:
+    if facts is None:
         return None
-    low, high = LEADER_PULLBACK_VWAP_RANGE
-    if not (low <= facts.pct_from_current_vwap <= high):
-        return False
-    if family == LEADER_PULLBACK_FAMILY:
-        return True
-    if not facts.sector:
-        return None
-    return facts.sector == LEADER_PULLBACK_SECTOR
+    return lsf.leader_pullback_long(side, family, facts.pct_from_current_vwap, facts.sector)
+
+
+def _study_row(entry: Mapping[str, Any], side: str, facts: ScanFacts | None) -> dict[str, Any]:
+    facts = facts or ScanFacts()
+    return {"side": side, "setup_family": _text(entry.get("setup_family")),
+            "scan_date": _text(entry.get("scan_date"))[:10], "sector": facts.sector,
+            "pct_from_current_vwap": facts.pct_from_current_vwap,
+            "rs_vs_industry": facts.rs_vs_industry, "spy_above_sma20": facts.spy_above_sma20}
 
 
 def path_excursions(entry: float, atr: float, side: str, bars: list[Bar]) -> dict[str, Any]:
@@ -221,6 +223,11 @@ def build_path_fact_rows(
             entries[row_id] = dict(row)
 
     build = PathFactsBuild(entries=len(entries))
+    # S14: the RS tercile's cross-section is each session's own LONG scan rows.
+    study_rs = lsf.session_rs_values(
+        _study_row(entry, _text(entry.get("side")).upper() or "LONG", scan_facts.get(row_id))
+        for row_id, entry in entries.items()
+    )
     sessions_cache: dict[date, list[date] | None] = {}
     bars_cache: dict[str, Mapping[date, Bar] | None] = {}
     for row_id, entry in entries.items():
@@ -250,6 +257,7 @@ def build_path_fact_rows(
             build.scan_facts_missing += 1
         atr = facts.atr20 if facts is not None and facts.atr20 and facts.atr20 > 0 else None
         key = leader_pullback(side, family, facts)
+        study = lsf.tag_text(lsf.study_families(_study_row(entry, side, facts), study_rs))
         # Completed bars only: the path stops at the last completed session.
         path: list[Bar | None] = []
         for day in sessions or ():
@@ -263,7 +271,7 @@ def build_path_fact_rows(
                 side=side, scan_date=scan_text, setup_family=family, horizon_sessions=horizon,
                 entry_close=entry_close, atr20="" if atr is None else atr, measured=False,
                 maturity="mature", knowledge_basis=KNOWLEDGE_BASIS,
-                leader_pullback="" if key is None else key,
+                leader_pullback="" if key is None else key, study_families=study,
             )
             build.rows.append(row)
             if sessions is None:
@@ -352,7 +360,7 @@ def daily_bars_from_dir(bars_dir: Path) -> BarsFor:
 
 
 FEATURE_COLUMNS = ["run_id", "run_timestamp", "run_date", "last_trade_date", "symbol",
-                   "atr20", "pct_from_current_vwap", "sector"]
+                   "atr20", "pct_from_current_vwap", "sector", "rs_vs_industry", "spy_above_sma20"]
 
 
 def scan_facts_from_features(path: Path, wanted: set[str], *, chunk_rows: int = 250_000
@@ -373,6 +381,8 @@ def scan_facts_from_features(path: Path, wanted: set[str], *, chunk_rows: int = 
                 atr20=_num(row.get("atr20")),
                 pct_from_current_vwap=_num(row.get("pct_from_current_vwap")),
                 sector=_text(row.get("sector")),
+                rs_vs_industry=_num(row.get("rs_vs_industry")),
+                spy_above_sma20=_text(row.get("spy_above_sma20")),
             )
     return out
 

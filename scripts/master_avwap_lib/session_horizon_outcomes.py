@@ -71,6 +71,7 @@ from typing import Any, Callable, Mapping
 
 import pandas as pd
 
+import long_study_families
 import market_calendar
 from swing_evidence import OUTCOME_KIND_SESSION_V2
 
@@ -107,6 +108,9 @@ SESSION_HORIZON_OUTCOME_COLUMNS = [
     # speaks for. The measurement does not change when the desk scans again, so
     # the session has ONE row and it says how many looks stand behind it.
     "collapsed_same_session",
+    # S14: the long study families the row is in (`long_study_families`), ";"-joined.
+    # Appended last; blank = none, or an input unknown. Research only, never scored.
+    "study_families",
 ]
 
 #: Why a row could not be measured. Every unmeasured row carries exactly one.
@@ -324,7 +328,13 @@ def build_session_horizon_observation_rows(
     target_cache: dict[tuple[date, int], date | None] = {}
     closes_cache: dict[str, Mapping[date, float] | None] = {}
 
-    for entry in frame.to_dict("records"):
+    records = frame.to_dict("records")
+    # S14: the RS tercile's cross-section is each session's own LONG representatives.
+    study_rs = long_study_families.session_rs_values(
+        {"side": e.get("_side"), "scan_date": e.get("_scan_date_text"), "rs_vs_industry": e.get("rs_vs_industry")}
+        for e in records
+    )
+    for entry in records:
         symbol = _text(entry.get("_symbol"))
         scan_date_text = _text(entry.get("_scan_date_text"))
         if not symbol or not scan_date_text:
@@ -356,6 +366,9 @@ def build_session_horizon_observation_rows(
         side_multiplier = -1.0 if side == "SHORT" else 1.0
         scan_row_id = _text(entry.get("_scan_row_id"))
         tier, tier_source = tier_for_tracker_row(entry)
+        study = long_study_families.tag_text(long_study_families.study_families(
+            {**entry, "side": side, "scan_date": scan_date_text}, study_rs
+        ))
 
         # COMPLETED BARS ONLY: a bar dated after the last completed session is a
         # forming bar and is not read, on either leg.
@@ -401,6 +414,7 @@ def build_session_horizon_observation_rows(
                 "priority_bucket": _scan_factor_text(entry.get("priority_bucket")),
                 "setup_family": _scan_factor_text(entry.get("setup_family")),
                 "favorite_zone": _scan_factor_text(entry.get("favorite_zone")),
+                "study_families": study,
             }
             if target_day is None:
                 row["unmeasured_reason"] = REASON_TARGET_OUT_OF_RANGE
