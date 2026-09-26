@@ -25,6 +25,8 @@ Actions (see the Alert Center panel for the emit sites):
                     (detail.direction/level/fill_source: which quick-fill
                     button - vwap, upper_1, hod, ... - produced the price)
     level_fired     a persistent level alert triggered
+    hidden_by_show  the Show filter held an M5 alert back from the feed
+                    (machine row; detail.grade/show_mode)
 
 Every row snapshots the alert's decision-relevant context as structured
 fields (tier, bounce types, RRS numbers, session rvol, market environment),
