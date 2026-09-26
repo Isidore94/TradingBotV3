@@ -68,7 +68,10 @@ def test_the_written_distances_feed_ma_support_and_ma_order():
 
 
 def test_scan_row_columns_are_the_appended_set_in_order():
-    assert sp.SCAN_ROW_COLUMNS == (*sp.MA_DISTANCE_COLUMNS, "perm_weekly_ema8_hold_weeks", *sp.STAMP_COLUMNS)
+    # P11 appends its D1 history columns after the 4a set.
+    assert sp.SCAN_ROW_COLUMNS == (*sp.MA_DISTANCE_COLUMNS, "perm_weekly_ema8_hold_weeks", *sp.STAMP_COLUMNS,
+                                   "perm_atr14_pctile_252", "perm_low_52w_dist_atr", "perm_closes_right_of_level_5",
+                                   "perm_level_respect_20", "perm_d1_zone_arm")
 
 
 # --- the honest input view

@@ -23,12 +23,16 @@ Each tick (once per 5-minute bar, 20 s after the boundary, regular hours only):
 6. announces the top new Pop / Dip-strong / Rip-weak names (`movers_notify`):
    a phone push in AWAY/EVENING (sent here, on the worker), `moversNotice` for
    the Alert Center's desk sound in DESK, nothing otherwise; each announced name
-   is a `kind: notice` row in its outcome log.
+   is a `kind: notice` row in its outcome log;
+7. in DESK/AWAY/EVENING hands those names, with their level gate (the row's own
+   M5 previous-session high/low and session VWAP, see `movers_notify.row_level_gate`),
+   to `moversAdopt` for the Alert Center's M5 Focus AUTO lane (trader 2026-09-25).
 
 Zero IB historical traffic: the scanner client sends scanner subscriptions only,
 from the worker thread. The one market-data exception is the options chase (P10,
 `options_chase_service`, its own client id): option snapshot quotes for at most
-3 Pop names per tick, after the final board, on this worker. Display only: no alerts, no watchlist or Focus writes. A failed
+3 Pop names per tick, after the final board, on this worker. It writes no watchlist
+or Focus itself (the gated M5 adoption, P8, is the Alert Center's). A failed
 tick keeps the last good board and says so in the status line.
 """
 
@@ -267,6 +271,9 @@ class MoversService(QObject):
     statusChanged = Signal(str)
     #: A DESK-mode notice (`MoversNotice.to_dict()`), for the Alert Center's sound.
     moversNotice = Signal(dict)
+    #: {"candidates": [...], "log_paths": {"pop", "dip"}, "at"}: names for the
+    #: M5 Focus AUTO lane (Qt thread writes the store; see AlertCenterPanel).
+    moversAdopt = Signal(dict)
 
     def __init__(
         self,
@@ -663,6 +670,17 @@ class MoversService(QObject):
                 )
             except Exception:
                 logging.warning("Movers notice log write failed", exc_info=True)
+        self._offer_adoptions(notices, now)
+
+    def _offer_adoptions(self, notices, now) -> None:
+        """Gate the noticed names on their levels and hand them to the M5 Focus lane."""
+        candidates = movers_notify.adoption_candidates(notices)
+        if candidates:
+            self.moversAdopt.emit({
+                "candidates": candidates,
+                "log_paths": {"pop": str(self._pop_outcomes_path), "dip": str(self._outcomes_path)},
+                "at": now.isoformat(timespec="seconds"),
+            })
 
     # ------------------------------------------------------------ IB scanner
     def _run_scanner(self) -> Mapping[str, list[str]]:

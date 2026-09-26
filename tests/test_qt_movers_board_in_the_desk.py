@@ -106,10 +106,13 @@ class _FocusStub:
         return True
 
 
-def _gate_board(last):
+def _gate_board(last, prev_session="2026-09-24"):
+    # P8 P8 review 2026-09-25: +F shares the automatic feed's row gate, so the row's
+    # prior-session bars must be the previous NY session before the board's as_of.
     row = {"symbol": "NVDA", "last": last, "prev_high": 100.0, "prev_low": 98.0,
-           "session_vwap": 101.0, "move15_pct": 1.0}
-    return {"state": {"state": "up_day"}, "pop": {"long": [row], "short": []}}
+           "prev_session": prev_session, "session_vwap": 101.0, "move15_pct": 1.0}
+    return {"as_of": "2026-09-25T10:30:00-04:00", "state": {"state": "up_day"},
+            "pop": {"long": [row], "short": []}}
 
 
 def test_plus_focus_goes_through_the_adoption_gate_and_the_focus_service(panel):
@@ -132,6 +135,12 @@ def test_plus_focus_refused_by_the_gate_adds_nothing(panel):
     panel.movers_board.focusAddRequested.emit("NVDA", "long")
     assert stub.added == []
     assert "✕" in panel.movers_board.status_label.text()
+    # A stale prior session (two sessions back) is UNKNOWN: nothing added.
+    panel.movers_board.update_board(_gate_board(105.0, prev_session="2026-09-23"))
+    panel.movers_board.flush_pending_refresh()
+    panel.movers_board.focusAddRequested.emit("NVDA", "long")
+    assert stub.added == []
+    assert "not the previous session" in panel.movers_board.status_label.text()
     panel.movers_board.focusAddRequested.emit("GONE", "long")
     assert stub.added == []
     assert "no longer on the board" in panel.movers_board.status_label.text()

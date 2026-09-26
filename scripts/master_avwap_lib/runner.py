@@ -16,6 +16,7 @@ from .setup_tagging import apply_setup_tag_payload, canonicalize_priority_setup_
 from master_avwap_shared import build_active_bounce_summary, load_master_avwap_events_for_date
 from setup_permutation_context import stamp_scan_rows as stamp_permutation_scan_rows
 from setup_permutations import SCAN_ROW_COLUMNS as PERMUTATION_SCAN_ROW_COLUMNS
+from setup_permutations import d1_history_columns as permutation_d1_history_columns
 from setup_permutations import ma_distance_columns as permutation_ma_distance_columns
 from tracker_store import record_write_failure as record_setup_tracker_write_failure
 from tracker_store import record_write_success as record_setup_tracker_write_success
@@ -2262,6 +2263,25 @@ def _run_master_impl(
         }
         # P1-4 4a: shadow MA distances in ATR for the permutation key; nothing scores on them.
         feature_row.update(permutation_ma_distance_columns(last_close, atr20, entry_feature_snapshot))
+        # P11: shadow D1 facet inputs from the bars this scan already holds (the whole frame, not
+        # the 60-day `daily_ohlc` slice); appended, never scored.
+        try:
+            permutation_bars = [
+                {"date": stamp.date().isoformat(), "high": high, "low": low, "close": close}
+                for stamp, high, low, close in zip(df["datetime"], df["high"], df["low"], df["close"])
+                if not pd.isna(stamp)
+            ]
+            feature_row.update(permutation_d1_history_columns(
+                permutation_bars,
+                side=side,
+                level=current_vwap,
+                atr=atr20,
+                as_of=last_trade_date.isoformat(),
+                zone_arm=d1_zone_arms.get(sym),
+                zone_arm_evaluated=last_close is not None and current_vwap is not None,
+            ))
+        except Exception:
+            logging.debug("%s: P11 permutation columns skipped.", sym, exc_info=True)
         symbol_entry["feature_row"] = feature_row
         for preview_row in (priority_summary, symbol_entry, feature_row):
             stamp_daily_bar_status(

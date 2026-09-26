@@ -11,7 +11,7 @@ night AI 5, plumbing 5, market read 7, theta 3, alert noise 3, per-trade inputs 
 safety 9. Each packet names the goal it lifts. Build in phase order; a phase merges
 after reviewer GO, full suite green and the frozen selftest.
 
-### Phase 1 - inputs and plumbing (building)
+### Phase 1 - inputs and plumbing (built, `claude/p8-phase1-2026-09-25`, waits merge)
 
 - **P1 Stop backfill** (inputs 2->6): dry-run CLI fills the planned stop on old trades
   from the matched M5 alert or the D1 plan, marked as a backfill; never overwrites.
@@ -26,7 +26,7 @@ after reviewer GO, full suite green and the frozen selftest.
   slot names its goal and a test checks it. (Ideas id enum and enrichment grounding
   landed in `af1cc04c`.)
 
-### Phase 2 - tell the truth (needs P1)
+### Phase 2 - tell the truth (built, `claude/p8-phase2-2026-09-25`, waits merge)
 
 - **P5 Journal truth lines** (recap ->8): plain sentences on Day Review, Week Review and
   the journal cards: stock vs options, long vs short, per-setup expectancy on confirmed
@@ -36,20 +36,21 @@ after reviewer GO, full suite green and the frozen selftest.
   sessions; cumulative R beside each badge; no PROVEN while the R line falls. Update the
   grade golden tests.
 
-### Phase 3 - intraday
+### Phase 3 - intraday (built, `claude/p8-phase3-2026-09-25`, waits merge)
 
 - **P7 Rip-weak list + Pop outcomes** (intraday ->6): on an up day rank names by lag vs
   SPY from the last SPY swing low; Pop gets an outcome log like Dip. Display only.
 - **P8 Phone and sound** (intraday ->7): top 3 new Pop and Dip-strong names to the phone
-  in AWAY/EVENING and a desk sound in DESK, once per bar; Pop/Dip-strong names feed the
-  M5 watch through the adoption gate.
+  in AWAY/EVENING and a desk sound in DESK, once per bar. P8b (trader 2026-09-25): the
+  same names feed the M5 watch through the adoption gate only when a long is above the
+  previous day's high and VWAP, a short below the previous day's low and VWAP.
 - **P9 Alert Center default filter** (noise ->7): default view grade B and above or
   Best-right-now only; everything still recorded.
 - **P10 Options chase helper** (intraday ->8, theta ->7): for a Pop name with RVOL 2+,
   read the IB option chain the theta scan uses; show the weekly strike near 0.25 delta,
   spread and IV; log it for grading. Needs IB option data on the account.
 
-### Phase 4 - learning (after the first outcomes land)
+### Phase 4 - learning (P11, P12 and P8b built, `claude/p8-phase4-2026-09-25`, waits merge)
 
 - **P11 More facets** (permutations ->6): M5-native facets in the sidecar (time of day,
   RVOL bucket, VWAP distance, SPY state, bounce type); the 12 missing D1 facets written
@@ -64,6 +65,13 @@ after reviewer GO, full suite green and the frozen selftest.
   fixtures): `[X-TIER] PROVEN` from `bounce_bot_lib/learning.py` replaced by the grade.
 
 ## Carried over
+
+- After the P8 merges: R is still CAD / native-risk in three night-side readers
+  (`recap_rule_loop.trade_r`, `preference_trade_outcomes._canonical_r`,
+  `day_session_record`); moving them changes pack hashes, decide with the trader.
+- `tests/test_p8_p8b_movers_adopt.py` followed by `tests/test_qt_compact_desk.py` in one
+  process can hit a FlowLayout "QWidgetItem already deleted" (pre-existing wrapper hazard
+  in `ui/widgets/flow_layout.py`); passes under the normal suite.
 
 - Read the owed live gates in `docs/GATES.md`, newest first (#257 next).
 - TJ-8 cleanup after gates #145-#150: delete `market_journal_panel.py`,

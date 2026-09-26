@@ -21,6 +21,13 @@ rule needs are split out, and only each representative row is parsed whole,
 one at a time. Review events are streamed for that session only.
 
 Owner: this module is the only writer of the sidecar (append-only).
+
+P11: each record also carries an M5 key (`setup_permutations.m5_facets_for`)
+over what the alert carried then: its registered row (entry time, session
+RVOL, bounce type), the bot's cached completed M5 bars up to the alert bar
+(VWAP distance in M5 ATR14; `register_bar_source`), and the SPY market-state
+shadow log at that bar. Never a bar after the alert bar; a missing input is
+unknown. The D1 part and the M5 part stand alone: either can be unknown.
 """
 
 from __future__ import annotations
@@ -31,7 +38,8 @@ import os
 import queue
 import threading
 import time
-from datetime import datetime, timezone
+import weakref
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -48,6 +56,8 @@ MAX_TAIL_BYTES = 256 << 20
 FAILURE_BACKOFF_SECONDS = 300.0
 #: The columns the backfill's representative rule reads (`representatives_of`, `scan_row_id`).
 _RULE_COLUMNS = ("symbol", "side", "last_trade_date", "run_date", "last_close", "run_timestamp", "run_id")
+#: A registered row's context_json past this size is not copied (the M5 part then reads no RVOL).
+MAX_CONTEXT_CHARS = 64_000
 #: Set to "0" to switch the hook off (tests, a bad day).
 ENABLED_ENV = "TRADINGBOTV3_M5_SETUP_KEY_STAMP"
 
@@ -209,6 +219,296 @@ class ScanKeyLookup:
         return out
 
 
+# --- P11: the M5 part (worker thread only)
+
+M5_BAR_MINUTES = 5
+M5_ATR_LENGTH = 14
+#: Only this much of the SPY shadow log's tail is read (it only grows on state changes).
+SPY_LOG_MAX_BYTES = 8 << 20
+_SPY_STATE_SCHEMA_PREFIX = "spy_state_shadow"
+_EXCHANGE_TZ = "America/New_York"
+
+_bar_source: Callable[[], Any] | None = None
+
+
+def register_bar_source(bot: Any) -> None:
+    """Point the M5 part at a live bot's cached bars (`m5_chart_bars`; cache only, never IB).
+
+    Held by weak reference, so a retired bot is never kept alive; ``None`` clears it.
+    """
+    global _bar_source
+    if bot is None:
+        _bar_source = None
+        return
+    try:
+        _bar_source = weakref.ref(bot)
+    except TypeError:
+        _bar_source = lambda bot=bot: bot  # noqa: E731 - an object without weakref support
+
+
+def _cached_bars(symbol: str) -> list | None:
+    source = _bar_source
+    bot = source() if source is not None else None
+    reader = getattr(bot, "m5_chart_bars", None) if bot is not None else None
+    if reader is None:
+        return None
+    try:
+        return list(reader(symbol, max_sessions=2) or [])
+    except Exception as exc:  # noqa: BLE001 - a bar read costs the facet, never the record
+        _log_once(f"M5 bars: {type(exc).__name__}: {exc}")
+        return None
+
+
+def _local_tz() -> tzinfo:
+    """The zone the bot's naive bar and entry stamps are written in."""
+    from market_session import get_market_local_timezone
+
+    return get_market_local_timezone()[0]
+
+
+def _spy_log_path() -> Path:
+    from market_state_bridge import shadow_log_path
+
+    return Path(shadow_log_path())
+
+
+def _naive(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None) if value.tzinfo is None else None
+    text = _text(value)
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is None else None
+
+
+def _float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if number != number or number in (float("inf"), float("-inf")) else number
+
+
+def _bounce_type(row: Mapping[str, Any], context: Mapping[str, Any]) -> str:
+    from setup_scoreboard import bounce_type_from_event_id
+
+    return bounce_type_from_event_id(_text(row.get("event_id"))) or _text(context.get("family"))
+
+
+def alert_bar_close(row: Mapping[str, Any]) -> datetime | None:
+    """The alert bar's CLOSE, naive in the bot's local zone.
+
+    The bot writes an M5 alert's ``entry_time`` as the bar START (``current_candle["time"]``),
+    so its close is five minutes later; only the H1 families (``h1_`` prefix) stamp the close.
+    """
+    from evidence_rules import H1_FAMILY_PREFIX
+
+    entry = _naive(row.get("entry_time"))
+    if entry is None:
+        return None
+    if _bounce_type(row, {}).lower().startswith(H1_FAMILY_PREFIX):
+        return entry
+    return entry + timedelta(minutes=M5_BAR_MINUTES)
+
+
+def alert_bar_complete(row: Mapping[str, Any], close: datetime | None, tz: tzinfo) -> bool | None:
+    """Had the alert bar closed when the row was logged? None when ``logged_at`` cannot say."""
+    if close is None:
+        return None
+    try:
+        logged = datetime.fromisoformat(_text(row.get("logged_at")))
+    except ValueError:
+        return None
+    if logged.tzinfo is None:
+        return None
+    return close.replace(tzinfo=tz) <= logged
+
+
+def alert_inputs(row: Mapping[str, Any], tz: tzinfo | None = None) -> dict[str, Any]:
+    """The M5 facet inputs one registered outcome row carried: bar close, session RVOL, bounce type.
+
+    ``alert_bar_close`` (see `alert_bar_close`) is written in exchange time
+    (America/New_York); ``alert_bar_complete`` says whether that bar had closed
+    by ``logged_at``. The bounce type is the event id's, the same one the M5
+    population groups by.
+    """
+    from zoneinfo import ZoneInfo
+
+    zone = tz if tz is not None else _local_tz()
+    close = alert_bar_close(row)
+    context: Any = {}
+    raw = row.get("context_json")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            context = json.loads(raw)
+        except ValueError:
+            context = {}
+    if not isinstance(context, Mapping):
+        context = {}
+    return {
+        "alert_bar_close": (
+            close.replace(tzinfo=zone).astimezone(ZoneInfo(_EXCHANGE_TZ)).isoformat() if close is not None else ""
+        ),
+        "alert_bar_complete": alert_bar_complete(row, close, zone),
+        "session_rvol": _float(context.get("session_rvol")),
+        "bounce_type": _bounce_type(row, context),
+        "alert_date": _text(row.get("trade_date"))[:10],
+    }
+
+
+def _bar_fields(bar: Any) -> tuple[datetime, float, float, float, float] | None:
+    get = bar.get if isinstance(bar, Mapping) else lambda name, default=None: getattr(bar, name, default)
+    when = _naive(get("dt"))
+    values = [_float(get(name)) for name in ("high", "low", "close", "volume")]
+    if when is None or any(value is None for value in values[:3]):
+        return None
+    high, low, close, volume = values
+    return when, high, low, close, volume or 0.0
+
+
+def vwap_distance_atr(bars: Any, bar_close: datetime, tz: tzinfo) -> float | None:
+    """(alert-bar close - session VWAP) / M5 ATR14 at the alert bar; None when the bars cannot say.
+
+    ``bars`` are naive local-time M5 bars stamped at their START; ``bar_close``
+    is the alert bar's CLOSE in the same zone (`alert_bar_close`). Only bars that
+    closed at or before it are read, and the last of them must be the alert bar.
+    """
+    from zoneinfo import ZoneInfo
+
+    step = timedelta(minutes=M5_BAR_MINUTES)
+    kept = []
+    for bar in bars or ():
+        fields = _bar_fields(bar)
+        if fields is not None and fields[0] + step <= bar_close:
+            kept.append(fields)
+    kept.sort(key=lambda item: item[0])
+    if not kept or kept[-1][0] + step != bar_close or len(kept) < M5_ATR_LENGTH + 1:
+        return None
+    trs = [
+        max(high - low, abs(high - kept[index - 1][3]), abs(low - kept[index - 1][3]))
+        for index, (_when, high, low, _close, _volume) in enumerate(kept) if index > 0
+    ]
+    atr = sum(trs[-M5_ATR_LENGTH:]) / M5_ATR_LENGTH
+    exchange = ZoneInfo(_EXCHANGE_TZ)
+    session_day = bar_close.date()
+    volume_sum = weighted = 0.0
+    for when, high, low, close, volume in kept:
+        start = when.replace(tzinfo=tz).astimezone(exchange)
+        minutes = start.hour * 60 + start.minute
+        if when.date() != session_day or not 9 * 60 + 30 <= minutes < 16 * 60:
+            continue  # the regular session only
+        volume_sum += volume
+        weighted += (high + low + close) / 3.0 * volume
+    if atr <= 0 or volume_sum <= 0:
+        return None
+    return round((kept[-1][3] - weighted / volume_sum) / atr, 6)
+
+
+class SpyStateReader:
+    """The SPY market-state engine's recorded state at a bar, from its shadow log (cached by size/mtime)."""
+
+    def __init__(self, path: Path | None = None) -> None:
+        self._path = path
+        self._signature: tuple | None = None
+        self._rows: list[tuple[str, datetime, str, int, bool]] = []
+
+    def _load(self) -> None:
+        path = Path(self._path) if self._path is not None else _spy_log_path()
+        try:
+            stat = path.stat()
+        except OSError:
+            self._signature, self._rows = None, []
+            return
+        signature = (str(path), stat.st_mtime_ns, stat.st_size)
+        if signature == self._signature:
+            return
+        rows = []
+        with path.open("rb") as handle:
+            if stat.st_size > SPY_LOG_MAX_BYTES:
+                handle.seek(stat.st_size - SPY_LOG_MAX_BYTES)
+                handle.readline()  # a partial first line
+            for raw in handle:
+                try:
+                    record = json.loads(raw)
+                except ValueError:
+                    continue
+                if not isinstance(record, dict) or not str(record.get("schema") or "").startswith(
+                    _SPY_STATE_SCHEMA_PREFIX
+                ):
+                    continue
+                try:
+                    bar = datetime.fromisoformat(_text(record.get("bar_ts")))
+                except ValueError:
+                    continue
+                if bar.tzinfo is None:
+                    continue
+                try:
+                    sign = int(record.get("side_sign") or 0)
+                except (TypeError, ValueError):
+                    sign = 0
+                rows.append((_text(record.get("session_date"))[:10], bar, _text(record.get("state")).upper(),
+                             sign, bool(record.get("usable"))))
+        self._signature, self._rows = signature, rows
+
+    def state_at(self, alert_close: datetime) -> tuple[str, int] | None:
+        """``(state, side_sign)`` of the last USABLE row at or before ``alert_close`` that session, or None."""
+        try:
+            self._load()
+        except Exception as exc:  # noqa: BLE001 - a log read costs the facet, never the record
+            _log_once(f"SPY state log: {type(exc).__name__}: {exc}")
+            return None
+        from zoneinfo import ZoneInfo
+
+        session = alert_close.astimezone(ZoneInfo(_EXCHANGE_TZ)).date().isoformat()
+        found = None
+        for day, bar, state, sign, usable in self._rows:
+            if usable and day == session and bar <= alert_close and (found is None or bar >= found[0]):
+                found = (bar, state, sign)
+        if found is None:
+            return None
+        return found[1], found[2]
+
+
+_spy_reader: SpyStateReader | None = None
+
+
+def m5_part(row: Mapping[str, Any], *, symbol: str, side: str) -> dict[str, Any]:
+    """The M5 key fields for one registered outcome row. Never raises: a failed input is unknown."""
+    global _spy_reader
+    import setup_permutations as sp
+
+    inputs: dict[str, Any] = {}
+    try:
+        zone = _local_tz()
+        inputs = alert_inputs(row, zone)
+        close = alert_bar_close(row)
+        if close is not None:
+            # A bar still forming when the alert was logged is never measured.
+            if inputs.get("alert_bar_complete") is True:
+                bars = _cached_bars(symbol)
+                if bars:
+                    inputs["vwap_dist_atr"] = vwap_distance_atr(bars, close, zone)
+            if _spy_reader is None:
+                _spy_reader = SpyStateReader()
+            spy = _spy_reader.state_at(close.replace(tzinfo=zone))
+            if spy is not None:
+                inputs["spy_state"], inputs["spy_side_sign"] = spy
+    except Exception as exc:  # noqa: BLE001 - the M5 part never costs the record
+        _log_once(f"M5 part: {type(exc).__name__}: {exc}")
+    key = sp.m5_facets_for(inputs, side)
+    return {
+        "m5_key": key.compact_key,
+        "m5_label": key.label,
+        "m5_rule_version": key.permutation_rule_version,
+        "m5_facets": key.as_dict(),
+        "m5_inputs": {name: inputs.get(name) for name in sp.M5_INPUT_FIELDS},
+    }
+
+
 def record_for(row: Mapping[str, Any], lookup: ScanKeyLookup) -> dict | None:
     """The sidecar record for one outcome row, or None when the row has no event id."""
     event_id = _text(row.get("event_id"))
@@ -224,6 +524,7 @@ def record_for(row: Mapping[str, Any], lookup: ScanKeyLookup) -> dict | None:
         "side": side,
         "trade_date": trade_date,
         **lookup.stamp(symbol, side, trade_date),
+        **m5_part(row, symbol=symbol, side=side),
         "stamped_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 
@@ -296,7 +597,7 @@ def _market_today() -> str:
 def submit(row: Mapping[str, Any]) -> bool:
     """Queue the first outcome row of today's event for stamping. Never raises, never waits.
 
-    Only four plain strings are copied off ``row``; the row itself is not kept.
+    Only seven plain strings are copied off ``row``; the row itself is not kept.
     """
     try:
         if not enabled():
@@ -308,11 +609,15 @@ def submit(row: Mapping[str, Any]) -> bool:
             if event_id in _seen:
                 return False
             _seen.add(event_id)
+        context = row.get("context_json")
         item = {
             "event_id": event_id,
             "symbol": _text(row.get("symbol")),
             "direction": _text(row.get("direction")),
             "trade_date": _text(row.get("trade_date")),
+            "entry_time": _text(row.get("entry_time")),
+            "logged_at": _text(row.get("logged_at")),
+            "context_json": context if isinstance(context, str) and len(context) <= MAX_CONTEXT_CHARS else "",
         }
         _ensure_worker()
         _queue.put_nowait(item)
@@ -336,8 +641,9 @@ def drain(timeout: float = 10.0) -> bool:
 
 
 def reset_for_tests(lookup: ScanKeyLookup | None = None) -> None:
-    global _lookup
+    global _lookup, _spy_reader
     drain(5.0)
+    _spy_reader = None
     with _lock:
         _seen.clear()
         _logged_reasons.clear()
@@ -347,9 +653,13 @@ def reset_for_tests(lookup: ScanKeyLookup | None = None) -> None:
 __all__ = [
     "SCHEMA",
     "ScanKeyLookup",
+    "SpyStateReader",
+    "alert_inputs",
     "append_record",
     "drain",
     "read_stamps",
     "record_for",
+    "register_bar_source",
     "submit",
+    "vwap_distance_atr",
 ]

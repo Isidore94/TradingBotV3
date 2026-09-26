@@ -39,6 +39,18 @@ def _sessions(count: int) -> list[date]:
     return sorted(out)
 
 
+def _daily_ohlc(close: float, n: int) -> list[dict]:
+    """300 sessions ending at ``close`` with a changing range, enough for every P11 column."""
+    start = date(2025, 1, 2)
+    bars = []
+    for index in range(300):
+        level = close - (299 - index) * 0.01
+        width = 0.5 + ((index + n) % 11) * 0.1
+        bars.append({"date": (start + timedelta(days=index)).isoformat(), "open": level,
+                     "high": level + width, "low": level - width, "close": level, "volume": 1.0})
+    return bars
+
+
 def _history(hooks_on: bool) -> pd.DataFrame:
     rows = []
     for s_index, session in enumerate(_sessions(30)):
@@ -65,10 +77,15 @@ def _history(hooks_on: bool) -> pd.DataFrame:
                 "market_regime_label": "mixed",
             }
             if hooks_on:
-                # Exactly what runner.py's two hooks add, in the order it adds them.
+                # Exactly what runner.py's hooks add, in the order it adds them.
                 snapshot = {"sma20": close - 1, "sma50": close - 3, "sma100": close + 2, "sma200": close - 9,
                             "ema8": close + 0.5, "ema15": close - 0.4, "ema21": close - 0.8}
                 row.update(sp.ma_distance_columns(close, row["atr20"], snapshot))
+                # P11: every D1 history column filled, so none can hide behind a blank.
+                row.update(sp.d1_history_columns(
+                    _daily_ohlc(close, n), side=row["side"], level=close - 1.0, atr=row["atr20"],
+                    zone_arm={"side": "LONG", "zone": 1} if n % 2 else None, zone_arm_evaluated=True,
+                ))
                 row["weekly_ema8_hold_weeks"] = n  # on the in-memory feature row only
             feature_rows.append(row)
         if hooks_on:
@@ -116,6 +133,7 @@ def test_scan_factor_and_tier_exports_are_byte_identical_with_the_hooks_on(tmp_p
     plain = _history(hooks_on=False)
     stamped = _history(hooks_on=True)
     assert set(sp.SCAN_ROW_COLUMNS) <= set(stamped.columns)
+    assert stamped[list(sp.D1_HISTORY_COLUMNS)].notna().all().all()
     assert stamped["permutation_rule_version"].eq(sp.PERMUTATION_RULE_VERSION).all()
     off = _export(tmp_path / "off", plain)
     on = _export(tmp_path / "on", stamped)
