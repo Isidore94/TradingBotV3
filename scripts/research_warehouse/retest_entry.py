@@ -84,6 +84,16 @@ def m5_atr(bars: Sequence[Mapping[str, Any]], end_index: int) -> float | None:
     return atr if atr > 0 else None
 
 
+def limit_fill(bar: Mapping[str, Any], limit: float, long: bool) -> float | None:
+    """A resting limit's fill on one bar: None if untouched, else the limit, or the open
+    when the bar opens through it (a gap fills at the open, never at the better limit)."""
+    touched = float(bar["low"]) <= limit if long else float(bar["high"]) >= limit
+    if not touched:
+        return None
+    open_ = float(bar["open"])
+    return min(open_, limit) if long else max(open_, limit)
+
+
 def _bracket_r(entry: float, stop: float, side: str, bars: Sequence[Mapping[str, Any]],
                *, fill_bar_stop_only: bool = False) -> tuple[float, str]:
     """1:1 bracket from ``entry``: (R, how). Both touched in one bar = stop first."""
@@ -147,11 +157,9 @@ def simulate(alert: Mapping[str, Any], bars: Sequence[Mapping[str, Any]]) -> dic
     out.update(atr=atr, level=level, stop=stop,
                flag_entry=entry, flag_r=flag_r, flag_exit=flag_how, retest_limit=limit)
     for offset, bar in enumerate(after[:RETEST_WINDOW_BARS]):
-        open_ = float(bar["open"])
-        touched = float(bar["low"]) <= limit if long else float(bar["high"]) >= limit
-        if not touched:
+        fill = limit_fill(bar, limit, long)
+        if fill is None:
             continue
-        fill = min(open_, limit) if long else max(open_, limit)
         if (fill <= stop) if long else (fill >= stop):
             # Opened through the stop: the limit would be stopped at once.
             out.update(retest_filled=True, retest_fill=fill, retest_bar=offset + 1,
