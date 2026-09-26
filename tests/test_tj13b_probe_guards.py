@@ -666,6 +666,9 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
         # stage 1 and set aside here.
         "exit_windows",
         "day_review_facts",
+        # S12 (2026-09-26): `family_side_evidence`, pinned by
+        # `EXPECTED_SLOT_ORDER` directly after the facts and set aside here.
+        "family_side_evidence",
         "day_review_narration",
         # R1 (2026-09-26): pinned by `EXPECTED_SLOT_ORDER`, set aside here.
         "day_review_show",

@@ -542,7 +542,9 @@ def test_the_tagger_is_a_stage_two_model_slot_that_runs_before_the_briefs():
     assert here > names.index("measured_report"), "stage 1 finishes first"
     assert here < names.index("ticker_briefs"), names
     assert names[names.index("day_review_facts") - 1] == "measured_report", names
-    assert names[names.index("ai_summary") - 1] == "day_review_facts", names
+    # S12 (2026-09-26): the SP4 family evidence closes stage 1 after the facts.
+    assert names[names.index("ai_summary") - 1] == "family_side_evidence", names
+    assert names[names.index("family_side_evidence") - 1] == "day_review_facts", names
 
 
 def test_the_tagger_runs_on_a_weeknight_and_not_on_sundays_deterministic_slate(tmp_path):

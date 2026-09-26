@@ -37,6 +37,7 @@ from project_paths import (
 )
 import claimed_pick_evidence
 import exit_model_review
+import points_challenger
 import setup_grades
 from research_explanations import build_plain_english_whats_working
 from theta_pick_tracker import THETA_NO_EXPORT_SENTENCE, theta_readout
@@ -121,6 +122,8 @@ CURRENT_PICK_COLUMNS = (
     ("symbol", "Symbol"),
     ("side", "Side"),
     ("priority_score", "Score"),
+    # S12: shadow SP4 points (live score + family adjust). Display only.
+    ("sp4_score", "SP4 (shadow)"),
     ("setup_family", "Setup Family"),
     ("favorite_zone", "Favorite Zone"),
     ("current_band_zone", "Current Zone"),
@@ -610,6 +613,15 @@ class SetupTrackerPanel(QFrame):
         self.tape_side_label = QLabel("")
         self.tape_side_label.setObjectName("MutedLabel")
         self.tape_side_label.setWordWrap(True)
+        # S12: what the shadow SP4 column is; the live sort never reads it.
+        self.sp4_chip_label = QLabel("")
+        self.sp4_chip_label.setObjectName("MutedLabel")
+        self.sp4_chip_label.setWordWrap(True)
+        self.sp4_chip_label.setToolTip(
+            "SP4 = live score + 60 x (beat-SPY low bound - 0.50) + 20 x mean 10-session move in ATR, "
+            "clamped to +-40, per setup family and side (n >= 80 over 15+ sessions). Shadow trial: "
+            "20 entry sessions + 5 to mature. Promotion to live points is ask-first."
+        )
         # Packet 3 receives the already-published display payload from the
         # host.  This panel never reads a store, ranks a row, or asks a model
         # to make the route available.
@@ -1089,6 +1101,7 @@ class SetupTrackerPanel(QFrame):
         layout.addWidget(header)
         layout.addLayout(kpi_row)
         layout.addWidget(self.tape_side_label)
+        layout.addWidget(self.sp4_chip_label)
         layout.addWidget(self.summary_view, 1)
         layout.addWidget(self.next_test_card)
         layout.addWidget(self.next_test_review_button)
@@ -1573,6 +1586,7 @@ class SetupTrackerPanel(QFrame):
         self.exit_model_status_label.setText(
             str(data.get("exit_model_sentence") or exit_model_review.NO_DATA_SENTENCE)
         )
+        self.sp4_chip_label.setText(str(data.get("sp4_chip") or points_challenger.chip_text({})))
         tape = data.get("side_by_tape")
         self.tape_side_label.setText(
             setup_grades.side_by_tape_line(tape if isinstance(tape, dict) else None)
@@ -1948,8 +1962,12 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
         repr(human_focus_rows).encode("utf-8", "replace")
     ).hexdigest()
 
+    # S12: the SP4 evidence (shadow). Its signature re-renders the Current table.
+    evidence_path = _sp4_evidence_path()
+    signatures["sp4_evidence"] = _csv_signature(evidence_path)
+    evidence = _read_sp4_evidence(evidence_path)
     ranked = {
-        "current": _rank_current_picks(raw["tier_list"]),
+        "current": current_rows_with_sp4(raw["tier_list"], evidence),
         "setup_type": _rank_setup_types(
             _setup_type_headline_rows(raw["setup_type"]), min_closed=min_closed
         ),
@@ -2011,6 +2029,7 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
         "ranked": ranked,
         "side_by_tape": side_by_tape,
         "exit_model_sentence": exit_model_review.review_sentence(exit_models),
+        "sp4_chip": points_challenger.chip_text(evidence),
         "theta_population_sentence": theta.population_sentence(),
         "theta_grade_sentence": theta.grade_sentence(),
         "scan_factor_mtime_text": _latest_mtime_text(
@@ -2035,7 +2054,7 @@ def _table_render_plan(
     """
     return (
         ("current_table", "current_model", (ranked.get("current") or [])[:300],
-         (signatures.get("tier_list"),)),
+         (signatures.get("tier_list"), signatures.get("sp4_evidence"))),
         ("human_pick_table", "human_pick_model", ranked.get("human_pick") or [],
          (signatures.get("tier_performance"), human_focus_digest)),
         ("setup_type_table", "setup_type_model", (ranked.get("setup_type") or [])[:300],
@@ -2575,6 +2594,28 @@ def exit_framework_population_sentence(rows: list[dict[str, Any]]) -> str:
         f"template's own filter skips, and excluded from every champion aggregate.{tail} "
         "Nothing here scores, ranks or alerts."
     )
+
+
+def _sp4_evidence_path() -> Path:
+    from project_paths import FAMILY_SIDE_EVIDENCE_FILE
+
+    return Path(FAMILY_SIDE_EVIDENCE_FILE)
+
+
+def _read_sp4_evidence(path: Path) -> dict[str, Any]:
+    """The SP4 family evidence, `{}` when absent or unreadable. Worker thread only."""
+    try:
+        from ai_jobs.family_side_evidence import read_payload
+
+        return read_payload(path)
+    except Exception:  # noqa: BLE001 - a shadow column never costs the tracker
+        logging.debug("SP4 evidence could not be read", exc_info=True)
+        return {}
+
+
+def current_rows_with_sp4(rows: list[dict[str, Any]], evidence: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """The live Current Picks order, unchanged, with a shadow `sp4_score` on copies of the rows."""
+    return points_challenger.with_sp4(_rank_current_picks(rows), evidence)
 
 
 def _rank_current_picks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
