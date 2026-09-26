@@ -216,7 +216,141 @@ def week_key(day: Any) -> str:
     return f"{year}-W{week:02d}"
 
 
-def lane(rows: Iterable[Mapping[str, Any]], today: Any) -> dict[str, Any]:
+# -- S16 item 5: the machine's labels checked against the trader's regime ------
+
+#: The Mentor question kind that asks "still a <regime>?" after a disagreement.
+CHECK_KIND = "regime_check"
+#: Consecutive disagreeing sessions before the Mentor asks.
+DISAGREE_SESSIONS = 3
+#: The table symbol whose labels are compared with the trader's regime.
+CHECK_SYMBOL = "SPY"
+
+#: Machine label -> the trader regimes it is consistent with. The one mapping.
+MACHINE_TO_TRADER: dict[str, tuple[str, ...]] = {
+    "bear_channel": ("bear_channel_lower_highs", "capitulation"),
+    "uptrend": ("bull_run", "recovery", "weekly_hh_then_compression"),
+    "compression": ("weekly_hh_then_compression", "range"),
+}
+#: How the Mentor says each machine label.
+MACHINE_WORDS: dict[str, str] = {
+    "bear_channel": "a daily lower-high channel with a bearish D1",
+    "uptrend": "a daily higher-low channel with a bullish D1",
+    "compression": "compressed daily ranges with no trend",
+}
+
+
+def machine_regime(row: Mapping[str, Any] | None) -> str | None:
+    """The machine's structural label for one regime-table row, or None (unknown).
+
+    From the row's own facts only: `bear_channel` = daily channel `lh_ll` and a
+    bearish D1 env_key; `uptrend` = `hh_hl` and a bullish D1; `compression` =
+    ATR percentile compressed with a `mixed` channel or a `neutral_chop` D1.
+    Anything else (unknown bars, a channel and a D1 that disagree) is None.
+    """
+    if not isinstance(row, Mapping):
+        return None
+    structure = row.get("structure") if isinstance(row.get("structure"), Mapping) else {}
+    channel_facts = structure.get("daily_channel") if isinstance(structure.get("daily_channel"), Mapping) else {}
+    channel = str(channel_facts.get("label") or "")
+    atr = structure.get("atr") if isinstance(structure.get("atr"), Mapping) else {}
+    timeframes = row.get("timeframes") if isinstance(row.get("timeframes"), Mapping) else {}
+    d1 = str(timeframes.get("D1") or "")
+    if channel == "lh_ll" and d1.startswith("bearish"):
+        return "bear_channel"
+    if channel == "hh_hl" and d1.startswith("bullish"):
+        return "uptrend"
+    if atr.get("compressed") is True and (channel == "mixed" or d1 == "neutral_chop"):
+        return "compression"
+    return None
+
+
+def machine_agrees(row: Mapping[str, Any] | None, trader_regime: Any) -> bool | None:
+    """True/False when the machine has a label and the trader a regime; None is unknown.
+
+    Unknown on either side never counts as disagreement.
+    """
+    machine = machine_regime(row)
+    regime = str(trader_regime or "").strip()
+    if machine is None or regime not in VOCABULARY:
+        return None
+    return regime in MACHINE_TO_TRADER[machine]
+
+
+def _latest_entry(rows: Iterable[Mapping[str, Any]]) -> date | None:
+    days = [_day(row.get("entered_at")) for row in rows or () if isinstance(row, Mapping)]
+    known = [day for day in days if day is not None]
+    return max(known) if known else None
+
+
+def disagreement_runs(
+    rows: Iterable[Mapping[str, Any]],
+    table_rows: Iterable[Mapping[str, Any]],
+    today: Any,
+    *,
+    symbol: str = CHECK_SYMBOL,
+    reset_on_answer: bool = True,
+) -> list[dict[str, Any]]:
+    """Runs of consecutive table sessions where the machine disagrees with the trader.
+
+    Oldest first. A session that agrees or is unknown on either side ends a run;
+    with ``reset_on_answer`` so does a session on or before the trader's latest
+    regime entry (an answer resets the count). The last run is `open` when it
+    reaches the newest table session up to ``today``.
+    """
+    trader_rows = [dict(row) for row in rows or () if isinstance(row, Mapping)]
+    last_day = _day(today)
+    answered = _latest_entry(trader_rows) if reset_on_answer else None
+    dated = [
+        (_day(row.get("session_date")), row)
+        for row in table_rows or ()
+        if isinstance(row, Mapping) and str(row.get("symbol") or "").upper() == symbol
+    ]
+    sessions = sorted(
+        ((day, row) for day, row in dated if day is not None and (last_day is None or day <= last_day)),
+        key=lambda item: item[0],
+    )
+    runs: list[dict[str, Any]] = []
+    current: list[tuple[date, Mapping[str, Any], str]] = []
+
+    def _close(open_run: bool) -> None:
+        if current:
+            runs.append({
+                "start": current[0][0].isoformat(),
+                "end": current[-1][0].isoformat(),
+                "sessions": [day.isoformat() for day, _row, _regime in current],
+                "streak": len(current),
+                "trader_regime": current[-1][2],
+                "machine": machine_regime(current[-1][1]) or "",
+                "symbol": symbol,
+                "open": open_run,
+            })
+        current.clear()
+
+    for day, row in sessions:
+        regime = str((regime_at(trader_rows, day) or {}).get("regime") or "")
+        if (answered is not None and day <= answered) or machine_agrees(row, regime) is not False:
+            _close(False)
+            continue
+        if current and current[-1][2] != regime:
+            _close(False)
+        current.append((day, row, regime))
+    _close(True)
+    return runs
+
+
+def open_disagreement(runs: Iterable[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """The run the Mentor asks about: open and at least `DISAGREE_SESSIONS` long."""
+    for run in runs or ():
+        if run.get("open") and int(run.get("streak") or 0) >= DISAGREE_SESSIONS:
+            return dict(run)
+    return None
+
+
+def lane(
+    rows: Iterable[Mapping[str, Any]],
+    today: Any,
+    table_rows: Iterable[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
     """Everything the Mentor needs, built from rows already read (pure)."""
     all_rows = [dict(row) for row in rows or () if isinstance(row, Mapping)]
     answered: dict[str, dict[str, str]] = {}
@@ -224,6 +358,13 @@ def lane(rows: Iterable[Mapping[str, Any]], today: Any) -> dict[str, Any]:
         entered = _day(row.get("entered_at"))
         if entered is not None:
             answered[f"{QUESTION_KIND}:{week_key(entered)}"] = {"answered_at": entered.isoformat()}
+    table = [row for row in table_rows or () if isinstance(row, Mapping)]
+    runs = disagreement_runs(all_rows, table, today)
+    ask = open_disagreement(runs)
+    for run in runs + disagreement_runs(all_rows, table, today, reset_on_answer=False):
+        # A run the trader answered or the labels closed is never asked again.
+        if int(run.get("streak") or 0) >= DISAGREE_SESSIONS and (ask is None or run["start"] != ask["start"]):
+            answered[f"{CHECK_KIND}:{run['start']}"] = {"answered_at": str(run.get("end") or "")}
     return {
         "loaded": True,
         "today": (_day(today) or date.min).isoformat(),
@@ -231,12 +372,27 @@ def lane(rows: Iterable[Mapping[str, Any]], today: Any) -> dict[str, Any]:
         "current": current_regime(all_rows, today),
         "prefills": [prefill.__dict__ for prefill in pending_prefills(all_rows)],
         "answered": answered,
+        "disagreement": ask,
     }
 
 
-def load_lane(store: Any, today: Any) -> dict[str, Any]:
-    """Read the table once and build the lane. IO: run it on a worker."""
-    return lane(store.list_structural_regime(), today)
+def _table_rows(path: Any = None) -> list[dict[str, Any]]:
+    """The regime table's rows, read-only; an unreadable table is no rows."""
+    try:
+        import market_regimes
+
+        if path is None:
+            from project_paths import MARKET_REGIME_TABLE_FILE
+
+            path = MARKET_REGIME_TABLE_FILE
+        return market_regimes.read_table(path)
+    except Exception:  # noqa: BLE001 - no table is no disagreement, never a question
+        return []
+
+
+def load_lane(store: Any, today: Any, *, table_path: Any = None) -> dict[str, Any]:
+    """Read the journal and the regime table once and build the lane. IO: run it on a worker."""
+    return lane(store.list_structural_regime(), today, _table_rows(table_path))
 
 
 def segment_from_answer(

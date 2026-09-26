@@ -400,6 +400,9 @@ EXPECTED_SLOT_ORDER = (
     # market story); a local model words it and the fixed parser owns every time.
     "econ_brief",
     "market_story_narration",
+    # S17.2 (2026-09-26): the regime read joins the market story, so it sits
+    # DIRECTLY after it (stage 2); `week_questions` moves one step down.
+    "regime_read",
     # Day Recap coach (2026-09-23): answer the trader's Week Review questions
     # from the day/week records, cited. End of stage 2: after `day_review_facts`
     # rebuilt the records, and not directly after it (`ai_summary` is pinned there).

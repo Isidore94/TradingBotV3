@@ -450,3 +450,11 @@ def test_the_saturday_search_reports_per_regime_never_pooled(tmp_path):
     assert "by_regime" not in plain
     assert not any("regime" in str(key.get("facets")) for fam in plain["populations"]["swing"]["horizons"]["1"][
         "families"].values() for key in fam["keys"])
+
+
+def test_the_research_pack_reads_the_file_the_build_writes():
+    import project_paths
+    from ui.services import working_lately_service as svc
+
+    assert Path(project_paths.SETUP_GRADES_BY_REGIME_FILE).name == svc.REGIME_GRADES_FILE_NAME
+    assert Path(project_paths.SETUP_GRADES_BY_REGIME_FILE).parent == svc.default_store_dir()

@@ -296,6 +296,45 @@ def append_rows(path: Path | str, rows: Iterable[Mapping[str, Any]]) -> int:
     return len(fresh)
 
 
+# ---------------------------------------------------------- regime read --
+
+
+def _reads_root(root: Path | str | None = None) -> Path:
+    if root is not None:
+        return Path(root)
+    from project_paths import REGIME_READS_DIR
+
+    return Path(REGIME_READS_DIR)
+
+
+def regime_read_path(session_date: str, *, root: Path | str | None = None) -> Path:
+    """`REGIME_READS_DIR/<date>.json`; a path only, nothing is opened."""
+    return _reads_root(root) / f"{str(session_date or '').strip()[:10]}.json"
+
+
+def latest_regime_read(on: Any = None, *, root: Path | str | None = None) -> dict[str, Any] | None:
+    """The newest verified regime read dated on or before `on` (any date when None).
+
+    Only the night slot writes these files, and only after its checks pass.
+    """
+    limit = str(on or "")[:10]
+    try:
+        paths = sorted(_reads_root(root).glob("*.json"), reverse=True)
+    except OSError:
+        return None
+    for path in paths:
+        if limit and path.stem > limit:
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        read = payload.get("read") if isinstance(payload, dict) else None
+        if isinstance(read, dict) and str(read.get("paragraph") or "").strip():
+            return payload
+    return None
+
+
 # ----------------------------------------------------------------- bars --
 
 
@@ -454,8 +493,10 @@ __all__ = [
     "d1_env_key",
     "fill_m5_from_day_review",
     "intraday_env_keys",
+    "latest_regime_read",
     "load_bars",
     "read_table",
+    "regime_read_path",
     "session_day",
     "session_row",
     "snapshot_moment",

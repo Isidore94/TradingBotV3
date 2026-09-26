@@ -1041,6 +1041,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         policy_draft,
         prediction_contrast,
         read_grades_mature,
+        regime_read,
         setup_keys_narration,
         setup_research,
         swing_path_facts_night,
@@ -1638,7 +1639,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # the deterministic pack, and the card falls back to the brief's own
         # lines if this never runs. Stage 2, directly after the briefs: the
         # slots before `ticker_briefs` are pinned closed, and `week_questions`
-        # is pinned directly after `market_story_narration`.
+        # is pinned directly after `regime_read`, which follows `market_story_narration`.
         JobSlot(
             name="econ_brief",
             goal="market_read",
@@ -1662,6 +1663,23 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description=(
                 "Grounded weekly/monthly/quarterly Market Journal narration "
                 "and one Trade Mentor coaching question"
+            ),
+            max_attempts=3,
+            uses_model=True,
+        ),
+        # S17.2 (2026-09-26), stage 2 DIRECTLY after `market_story_narration`: the
+        # local model reads the regime table beside the trader's regime. It joins
+        # the market story (same night, same session) and the Day Review Show, and
+        # every timeframe word, date and number is checked against the table. So
+        # `week_questions` now follows it instead of the market story.
+        JobSlot(
+            name="regime_read",
+            goal="market_read",
+            run=regime_read.run_regime_read,
+            reserve_minutes=regime_read.RESERVE_MINUTES,
+            description=(
+                "One grounded paragraph reading the auto regimes on M5..W beside the "
+                "trader's regime; rejected whole when a word is not in the table"
             ),
             max_attempts=3,
             uses_model=True,

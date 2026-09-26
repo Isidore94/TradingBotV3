@@ -429,12 +429,17 @@ AUTO_OPENING_REGIME_HISTORY_FILE = RUNTIME_DATA_DIR / "auto_opening_regime_histo
 # S17: append-only auto regimes (M5..W env_key + structure facts) per session and
 # index / sector ETF. `ai_jobs.market_regime_table` owns it; rows are never re-labelled.
 MARKET_REGIME_TABLE_FILE = RUNTIME_DATA_DIR / "market_regime_table.jsonl"
+# S17.2: the night's verified regime read, one JSON per session. `ai_jobs.regime_read`
+# owns it; a rejected read writes nothing, so the last verified file stays.
+REGIME_READS_DIR = RUNTIME_DATA_DIR / "regime_reads"
 # Dated, append-only copies of `working_lately/setup_grades_latest.json`, one
 # JSONL per day. `setup_grades_history` owns it.
 SETUP_GRADES_HISTORY_DIR = LOCAL_SETTINGS_DIR / "working_lately" / "setup_grades_history"
 # S11: when M5 families usually peak and how five exit rules paid, per
 # (bounce type, side), beside the setup grades. `ai_jobs.exit_windows_night` owns it.
 EXIT_WINDOWS_FILE = LOCAL_SETTINGS_DIR / "working_lately" / "exit_windows.json"
+#: S16.3 per-regime grades, written by the Working-lately build (read by the research pack).
+SETUP_GRADES_BY_REGIME_FILE = LOCAL_SETTINGS_DIR / "working_lately" / "setup_grades_by_regime_latest.json"
 # Append-only JSONL log of the trader's pick verdicts: star likes (with origin
 # alert timeframe/surface), X dislikes (with the typed reason), unfavorites.
 # Lives in the shared home so it syncs across machines and can be handed to an

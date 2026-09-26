@@ -357,7 +357,9 @@ def test_the_night_slot_is_registered_after_day_facts_at_the_end_of_stage_two():
 
     names = [slot.name for slot in runner.default_slots()]
     assert names.index("week_questions") > names.index("day_review_facts")
-    assert names[names.index("week_questions") - 1] == "market_story_narration"
+    # S17.2 (2026-09-26): the regime read joins the market story directly after it.
+    assert names[names.index("week_questions") - 2] == "market_story_narration"
+    assert names[names.index("week_questions") - 1] == "regime_read"
     assert names[names.index("week_questions") + 1] == "journal_enrichment"
     slot = next(slot for slot in runner.default_slots() if slot.name == "week_questions")
     assert slot.uses_model is True and slot.max_attempts == 3
