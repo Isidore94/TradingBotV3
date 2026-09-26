@@ -63,11 +63,6 @@ S11, S12 (SP4 shadow, trial starts the first night it runs), S13. Left here: ite
 - **B10 Young GC** (snappiness): 150 ms/min of young sweeps; skip a sweep when the gen-0
   count is small or lengthen the tick, only with `desk_perf_report` before/after.
 
-- **A4b One RVOL, step 2** (ASK-FIRST: `rvol.py` feeds the bounce RVOL alert gate): the
-  golden (`tests/test_rvol_golden.py`) shows `rvol.session_rvol` is byte-identical to
-  `session_rvol_from_baseline(slot_baselines(...))`; collapse it to a two-line call (-20
-  lines) on the trader's yes. Movers' RVOL stays a named variant (20 sessions, mean of
-  ratios, time-of-day keyed: its numbers differ).
 - **C4a weekly-options facet** (permutations): `setup_age` is in Phase A; the
   weekly-options flag needs a theta store that records `option_status` per scan date
   (the theta path runs after the scan row is written). Only if theta stays a goal.
@@ -285,29 +280,10 @@ S1 and keep the order. The two 500 MB logs are read with
   trades at +1R or 60 min (F14); ignore LRSI-20 and the H1 fades until S9 re-weights them.
 
 **Packets (order):**
-- **S9 Tier composite redesign** (grades/noise; ASK-FIRST `bounce_bot_lib/learning.py`,
-  golden fixtures, trader's quoted yes): weight segments by information (distance from
-  zero x confidence) or by the four most specific dimensions (bounce_type,
-  bounce_combo, setup_family, time_bucket) instead of by n; cap the weight of
-  `internals_breadth`, `rrs_*_alignment` and `market_environment`. Propose, with the
-  F2 numbers, before touching anything. Ties into P14.
-  Proposal (lead, 2026-09-26, read-only): the code differs from F2. `COMPOSITE_DIMENSIONS`
-  blends only bounce_type 1.0, time_bucket 0.4, market_environment 0.4, priority_bucket
-  0.6, focus 0.6, each entry shrunk n/(n+K); `internals_breadth` and `rrs_*` are not in it.
-  The real cause of C/D: the weights are fixed, so a huge near-zero bounce_type
-  (`h1_ema10_bounce` -0.03R n=2961) holds the biggest say, while the positive segments
-  (`regime_pause_rs`, `short|neutral_chop`, `avwap_retest_followthrough`) live in
-  bounce_combo / setup_family, which the composite never blends. Proposed: (1) blend
-  bounce_combo and setup_family too; (2) weight each segment by information,
-  w = base x min(1, |mean R| / SE), so a near-zero mean gets little say however big n is;
-  (3) cap time_bucket and market_environment at 0.25 each; (4) add the trader's structural
-  regime as a dimension once S16 has data. Golden fixtures of today's tiers first; ship
-  as a shadow tier beside the live one for 10 sessions. Needs the trader's quoted yes.
 
-- **S15, what is left** (items 2-6, 8, 9 built 2026-09-26 on the p9 phase 1 branch): item 1,
-  the April-July permutation backfill, and item 7, the trader's labels at scale (the 139
-  tags, likes / claims with a "why", planned stop and target in the journal), are the
-  trader's.
+- **S15, what is left**: item 7, the trader's labels at scale (the 139 tags, likes /
+  claims with a "why", planned stop and target in the journal). Item 1 ran 2026-09-26
+  (gate #288); the scan saved no rows 05-11..07-30, so June-July swing data is missing.
 
 
 
@@ -321,8 +297,6 @@ S1 and keep the order. The two 500 MB logs are read with
   "my trades" nudge follows once a family has 10 confirmed trades.
 - **C3 Second Saturday report** (2026-10-03): first verdicts; promotion to a named
   sub-family (P1-4 4e, ask-first, one at a time).
-- **P14 Retire PROVEN, raise the M5 bar** (noise ->8; ask-first, golden fixtures):
-  `[X-TIER] PROVEN` from `bounce_bot_lib/learning.py` replaced by the grade.
 - **HYG daily bars** (plumbing; scan-side, ask first). TLT/USO the same.
 - **Goal 10 live proof**: stops on 80% of new trades within a week; tag confirmation rate.
 

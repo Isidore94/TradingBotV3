@@ -40,6 +40,7 @@ from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 import alert_show_filter
 import avwape_side
 import focus_adoption_gate
+import longs_market_gate
 import opening_regime_history
 import prev_day_gate
 import sector_exclusion
@@ -2433,6 +2434,24 @@ def build_relative_weakness_candidates(
     return {"longs": rows, "shorts": []}
 
 
+def build_long_setup_candidates(*, today: Any = None) -> dict[str, list[dict[str, Any]]]:
+    """p9: the scan's promoted long setups (leader pullback, post-earnings drift) as LONG candidates.
+
+    Read from the scan's own file; the Focus adoption gate and the daily-trend gate still
+    judge each one like any other candidate. Unreadable or stale = none.
+    """
+    try:
+        import long_setups
+        import long_setups_store
+
+        return long_setups.focus_candidates(
+            long_setups_store.read_long_setups(), today=today or datetime.now().date()
+        )
+    except Exception:  # noqa: BLE001 - a missing file never costs the auto-populate pass
+        logging.debug("Long setups unreadable for auto-populate.", exc_info=True)
+        return {"longs": [], "shorts": []}
+
+
 def merge_auto_populate_candidates(
     *candidate_sets: Mapping[str, list[dict[str, Any]]],
 ) -> dict[str, list[dict[str, Any]]]:
@@ -3171,6 +3190,9 @@ def refresh_auto_populated_watchlists(
             log("Auto-populate skipped: universe pool is empty.")
         return None
     moment = now or datetime.now()
+    # p9: the scan's promoted long leaders are measured even when outside the universe pool.
+    long_leaders = build_long_setup_candidates(today=moment.date())
+    pool = [*pool, *(row["symbol"] for row in long_leaders["longs"] if row["symbol"] not in set(pool))]
     daily_context = load_daily_context(pool, reference_date=moment.date())
     # SPY rides along for the RW/RS excess baseline (builders never emit it).
     profile_pool = pool if "SPY" in pool else ["SPY", *pool]
@@ -3199,6 +3221,7 @@ def refresh_auto_populated_watchlists(
         build_adr_breakout_candidates(profiles, daily_context),
         aggressive,
         relative,
+        long_leaders,
     )
     # M5 Focus adoption gate (trader directives 2026-07-31 and 2026-08-14):
     # every auto pick must be beyond yesterday's range AND on the right side of
@@ -4117,8 +4140,11 @@ def build_swing_push(payload: Mapping[str, Any], *, limit: int = 5) -> tuple[str
         if len(symbols) >= max(1, int(limit)):
             break
     roster_lines = format_roster_lines(payload.get("bucket_roster"))
-    if not lines and not roster_lines:
+    longs_off_line = str(payload.get("longs_off_line") or "").strip()
+    if not lines and not roster_lines and not longs_off_line:
         return None
+    if longs_off_line:
+        lines.insert(0, longs_off_line)
     if payload.get("swing_data_current") is not True:
         lines.append("! not from the current session - check the digest")
     if symbols:
@@ -4228,6 +4254,61 @@ def hide_show_filtered_alerts(payload: Mapping[str, Any]) -> dict[str, Any]:
     out["alert_symbols"] = [symbol for _line, symbol in kept]
     out["show_hidden_count"] = len(removed)
     out["show_hidden_new"] = sum(1 for is_new in removed.values() if is_new)
+    return out
+
+
+def hide_longs_off(
+    payload: Mapping[str, Any],
+    *,
+    verdict: longs_market_gate.Verdict | None,
+    exempt_symbols: Iterable[str] = (),
+) -> dict[str, Any]:
+    """Longs off in a bad market (display only): drop LONG swing picks and roster names.
+
+    One ``longs_off_line`` replaces them. Exempt: ``exempt_symbols`` (typed and Focus
+    names), open positions and leader_pullback / post_earnings_drift rows. An unknown
+    or working market leaves the payload alone. ``longs_off_hidden_count`` = names removed.
+    """
+    out = dict(payload)
+    text = longs_market_gate.banner_text(verdict)
+    if not text:
+        return out
+    exempt = {str(symbol or "").strip().upper() for symbol in exempt_symbols or ()}
+    removed: set[str] = set()
+
+    def hides(symbol: Any, raw: Any = None) -> bool:
+        key = str(symbol or "").strip().upper()
+        if key in exempt or longs_market_gate.row_is_exempt(raw):
+            return False
+        if longs_market_gate.hides_long(verdict, "LONG", key):
+            removed.add(key)
+            return True
+        return False
+
+    picks = out.get("swing_picks")
+    if isinstance(picks, (list, tuple)):
+        out["swing_picks"] = [
+            pick
+            for pick in picks
+            if not isinstance(pick, Mapping)
+            or not longs_market_gate.is_long(pick.get("side"))
+            or not hides(pick.get("symbol"), pick.get("raw"))
+        ]
+    roster = out.get("bucket_roster")
+    if isinstance(roster, Mapping):
+        out["bucket_roster"] = {
+            bucket: (
+                {
+                    side: [s for s in (names or []) if side != "LONG" or not hides(s)]
+                    for side, names in sides.items()
+                }
+                if isinstance(sides, Mapping)
+                else sides
+            )
+            for bucket, sides in roster.items()
+        }
+    out["longs_off_line"] = text + (f" - {len(removed)} long name(s) hidden" if removed else "")
+    out["longs_off_hidden_count"] = len(removed)
     return out
 
 
@@ -4417,6 +4498,9 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         swing_lines = ["No qualified current-session swing opportunity."]
     if swing_data_line:
         swing_lines = [*swing_lines, swing_data_line]
+    longs_off_line = str(payload.get("longs_off_line") or "").strip()
+    if longs_off_line:
+        swing_lines = [longs_off_line, *swing_lines]
     sector_line = sector_exclusion.hidden_line(int(payload.get("sector_hidden_count") or 0))
     show_text = alert_show_filter.hidden_text(
         int(payload.get("show_hidden_count") or 0), int(payload.get("show_hidden_new") or 0)
@@ -4511,6 +4595,10 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     # desk builds it on a desk session, and a phone report that invented a
     # sentence about evidence it had not read would be the worst possible place
     # to guess.
+    # p9: one line when the scan promoted a long leader (leader pullback, post-earnings drift).
+    long_leaders_line = str(payload.get("long_leaders_line") or "").strip()
+    long_leaders_sections = ["== LONG LEADERS ==", long_leaders_line, ""] if long_leaders_line else []
+
     working_lately_sections: list[str] = []
     working_lately_line = str(payload.get("working_lately_line") or "").strip()
     if working_lately_line:
@@ -4525,6 +4613,7 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         "",
         *briefing_sections,
         *working_lately_sections,
+        *long_leaders_sections,
         "== BEST SWING TRADES ==",
         _lines(swing_lines),
         "",

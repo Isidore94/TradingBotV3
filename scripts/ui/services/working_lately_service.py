@@ -340,6 +340,25 @@ def read_side_by_tape(as_of: str = "") -> dict[str, Any]:
     return _cached("side_by_tape", key, build, keep=path.is_file())
 
 
+def read_long_leader_lines() -> list[str]:
+    """p9: the Setup Tracker's Long leaders section and its grades. THE WORKER SIDE.
+
+    Cached on the two long-setups files; a missing file reads as "no scan yet".
+    """
+    import long_setups
+    import long_setups_store
+    import setup_grades
+    from project_paths import LONG_SETUPS_FILE, LONG_SETUPS_HISTORY_FILE
+
+    def build() -> list[str]:
+        lines = long_setups.tracker_lines(long_setups_store.read_long_setups(LONG_SETUPS_FILE))
+        cells = setup_grades.long_setup_cells(long_setups_store.read_history(LONG_SETUPS_HISTORY_FILE))
+        return [*lines, *(setup_grades.long_setup_line(cell) for cell in cells)]
+
+    key = (_file_key(Path(LONG_SETUPS_FILE)), _file_key(Path(LONG_SETUPS_HISTORY_FILE)))
+    return list(_cached("long_leader_lines", key, build))
+
+
 def read_study_family_lines(as_of: str = "") -> list[str]:
     """S14: one line per long study family, raw then vs SPY. THE WORKER SIDE."""
     import setup_grades

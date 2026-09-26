@@ -102,6 +102,22 @@ LEARNING_COLUMNS = (
     ("status", "Status"),
 )
 
+#: S9: the shadow tier beside the live tier, per recent alert (evidence only;
+#: never read by an alert, a sort, the Show filter or the phone).
+SHADOW_S9_COLUMNS = (
+    ("trade_date", "Date"),
+    ("time_local", "Time"),
+    ("symbol", "Symbol"),
+    ("direction", "Side"),
+    ("bounce_types", "Bounce types"),
+    ("tier", "Tier"),
+    ("composite_r", "Tier R"),
+    ("shadow_s9_tier", "Shadow S9"),
+    ("shadow_s9_composite_r", "Shadow S9 R"),
+)
+#: How many recent alerts the Shadow S9 tab lists (newest first).
+SHADOW_S9_MAX_ROWS = 300
+
 PERCENT_KEYS = {
     "positive_eod_rate",
     "target_1r_rate",
@@ -382,6 +398,17 @@ class DaytradeTrackerPanel(QFrame):
         self.learning_table.clicked.connect(
             lambda index: self._show_row_explanation(index, "daytrade_learning")
         )
+        self.shadow_s9_model = TrackerTableModel(
+            SHADOW_S9_COLUMNS,
+            signed_keys={"composite_r", "shadow_s9_composite_r"},
+            numeric_keys={"composite_r", "shadow_s9_composite_r"},
+        )
+        shadow_proxy = TrackerSortProxyModel(self)
+        shadow_proxy.setSourceModel(self.shadow_s9_model)
+        self.shadow_s9_table = DataTable()
+        self.shadow_s9_table.setModel(shadow_proxy)
+        self.shadow_s9_table.setShowGrid(False)
+        self.tabs.addTab(self.shadow_s9_table, "Shadow S9")
 
         # "My decisions" - the same question over the trader's own choices,
         # in its own tab strip beside the bot's. One tab per scoreboard
@@ -804,6 +831,9 @@ class DaytradeTrackerPanel(QFrame):
             self._exit_windows = exits if isinstance(exits, dict) else {}
             by_regime = summaries.get("regime_grades")
             self._regime_grades = by_regime if isinstance(by_regime, dict) else {}
+            shadow_rows = summaries.get("shadow_s9")
+            self.shadow_s9_model.set_rows(shadow_rows if isinstance(shadow_rows, list) else [])
+            self.shadow_s9_table.fit_columns()
             window_text = held_run_window_text(summaries.get("window"))
             coverage_text = outcome_coverage_text(summaries.get("outcome_coverage"))
             summaries = summaries.get("summaries")
@@ -1121,13 +1151,33 @@ def load_held_run_report() -> dict:
             "setup_grades": _read_setup_grades(),
             "exit_windows": _read_exit_windows(),
             "regime_grades": _read_regime_grades(),
+            "shadow_s9": read_shadow_s9_rows(),
         }
     except Exception:
         return {
             "summaries": {}, "window": {}, "outcome_coverage": {},
             "setup_grades": _read_setup_grades(), "exit_windows": _read_exit_windows(),
-            "regime_grades": _read_regime_grades(),
+            "regime_grades": _read_regime_grades(), "shadow_s9": read_shadow_s9_rows(),
         }
+
+
+def read_shadow_s9_rows(path: Path | None = None, limit: int = SHADOW_S9_MAX_ROWS) -> list[dict]:
+    """S9: recent alerts that carry a shadow tier, newest first. NEVER on the Qt thread."""
+    try:
+        from project_paths import INTRADAY_BOUNCES_FILE
+
+        source = Path(path) if path else Path(INTRADAY_BOUNCES_FILE)
+        with source.open("r", newline="", encoding="utf-8-sig") as handle:
+            rows = [row for row in csv.DictReader(handle) if str(row.get("shadow_s9_tier") or "").strip()]
+    except Exception:  # noqa: BLE001 - the tab is then empty
+        return []
+    out = []
+    for row in reversed(rows[-int(limit):]):
+        item = {key: str(row.get(key) or "") for key, _label in SHADOW_S9_COLUMNS}
+        for key in ("composite_r", "shadow_s9_composite_r"):
+            item[key] = _float(item[key], None)
+        out.append(item)
+    return out
 
 
 def _read_exit_windows() -> dict:

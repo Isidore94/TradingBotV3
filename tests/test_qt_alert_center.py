@@ -116,7 +116,9 @@ def test_the_banger_token_no_longer_bypasses_the_tier_gate():
     assert not alert_is_loud(banger)
 
 
-def test_proven_bounces_bypass_tier_gate_and_sound():
+def test_p14_the_grade_not_the_proven_stamp_bypasses_the_tier_gate():
+    """P14 (trader 2026-09-26, "retire PROVEN"): the old stamp text no longer
+    bypasses the gate; the panel's grade verdict (`grade_bypass`) does."""
     try:
         from ui.panels.alert_center_panel import alert_is_loud, alert_passes_min_tier, is_proven_alert
     except ModuleNotFoundError as exc:
@@ -129,9 +131,12 @@ def test_proven_bounces_bypass_tier_gate_and_sound():
         "proven: dynamic_vwap_upper_band: +0.88R (n=59)",
         "green",
     )
-    assert is_proven_alert(proven)
-    # The whole point: a proven config is visible and audible in EVERY gate mode.
-    assert all(alert_passes_min_tier(proven, mode) for mode in ("all", "B", "A", "S"))
+    assert is_proven_alert(proven)  # a row written before P14 is still recognised
+    assert alert_passes_min_tier(proven, "A")  # on its tier
+    assert not alert_passes_min_tier(proven, "S")  # the stamp alone no longer bypasses
+    assert all(
+        alert_passes_min_tier(proven, mode, grade_bypass=True) for mode in ("all", "B", "A", "S")
+    )
     assert alert_is_loud(proven)
 
     # Lowercase "proven negative" mute text must not counterfeit the stamp.
@@ -551,7 +556,7 @@ def test_focus_privilege_waits_for_the_previous_day_extreme(tmp_path, monkeypatc
 
     panel = AlertCenterPanel(parked_symbols_path=tmp_path / "parked.json")
     panel.focus_service = _FocusService()
-    # S tier / PROVEN only. Set directly rather than through the combo box:
+    # S tier / top grade only. Set directly rather than through the combo box:
     # the widget persists the choice to machine-local settings, which would
     # leak this filter into every panel a later test builds.
     monkeypatch.setattr(panel, "_min_tier_mode", lambda: "S")

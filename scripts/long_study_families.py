@@ -3,7 +3,9 @@
 Two study keys over one D1 scan row, as the row knew them on its scan date:
 
 * ``leader_pullback_long`` (F21): LONG, ``pct_from_current_vwap`` in [-10, -3],
-  and the family is ``top_pattern_tracking`` or the sector is Technology.
+  and the family is ``top_pattern_tracking`` or the sector is Technology. This is the
+  HISTORY study key; the live setup is `long_setups.leader_pullback`, built from bars
+  that history scan rows do not carry, so the two differ on purpose (lead, 2026-09-26).
 * ``band_bounce_leader_long`` (F23 follow-up): LONG ``avwap_band_bounce``,
   sector Technology or Healthcare, ``rs_vs_industry`` in the top tercile of
   that scan session's LONG rows, and SPY above its 20-day SMA.

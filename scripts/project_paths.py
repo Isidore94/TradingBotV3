@@ -374,6 +374,8 @@ FORENSICS_BASELINE_CSV = REPORTS_DIR / "move_forensics_baseline.csv"
 FORENSICS_PATTERNS_CSV = REPORTS_DIR / "move_forensics_patterns.csv"
 FORENSICS_REPORT_TXT = REPORTS_DIR / "move_forensics_report.txt"
 FORENSICS_AI_DIGEST_JSON = REPORTS_DIR / "move_forensics_ai_digest.json"
+# Long lab (shadow replay of long-candidate rules); sole writer research_warehouse.long_lab.
+LONG_LAB_REPORT_FILE = REPORTS_DIR / "long_lab_report.json"
 PERSISTENT_RUNTIME_DATA_DIR = RUNTIME_DATA_DIR
 
 LONGS_FILE = PERSISTENT_DATA_DIR / "longs.txt"
@@ -392,6 +394,9 @@ SWING_SHORTS_FILE = PERSISTENT_DATA_DIR / "shortswings.txt"
 UNIVERSE_ALL_FILE = PERSISTENT_DATA_DIR / "universe_all.txt"
 UNIVERSE_LONGS_FILE = PERSISTENT_DATA_DIR / "universe_longs.txt"
 UNIVERSE_SHORTS_FILE = PERSISTENT_DATA_DIR / "universe_shorts.txt"
+# Rolling membership of the `momentum_scanner` universe source (IB scanner names; one writer:
+# `momentum_universe.refresh_membership`, called from the universe rebuild).
+MOMENTUM_UNIVERSE_MEMBERSHIP_FILE = RUNTIME_DATA_DIR / "momentum_universe_membership.json"
 
 # Trader-curated daily Focus Picks (shared home, synced across machines) and the
 # runtime files for human-pick membership tracking + the human-vs-bot cohort.
@@ -749,6 +754,9 @@ AVWAP_SIGNALS_FILE = RUNTIME_DATA_DIR / "avwap_signals.csv"
 MASTER_AVWAP_ACTIVE_EVENTS_FILE = RUNTIME_DATA_DIR / "master_avwap_active_events.json"
 D1_FEATURES_FILE = RUNTIME_DATA_DIR / "d1_features.csv"
 D1_FEATURES_HISTORY_FILE = RUNTIME_DATA_DIR / "d1_features_history.csv"
+# p9 long setups (leader pullback, post-earnings drift) and their settled history; the scan runner is the only writer.
+LONG_SETUPS_FILE = RUNTIME_DATA_DIR / "long_setups.json"
+LONG_SETUPS_HISTORY_FILE = RUNTIME_DATA_DIR / "long_setups_history.json"
 INTRADAY_BOUNCES_FILE = RUNTIME_DATA_DIR / "intraday_bounces.csv"
 INTRADAY_BOUNCE_CANDIDATES_FILE = RUNTIME_DATA_DIR / "intraday_bounce_candidates.csv"
 INTRADAY_BOUNCE_OUTCOMES_FILE = RUNTIME_DATA_DIR / "intraday_bounce_outcomes.csv"

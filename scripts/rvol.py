@@ -86,29 +86,10 @@ def session_rvol(
     min_sessions: int = RVOL_MIN_BASELINE_SESSIONS,
 ) -> float | None:
     """Cumulative session volume vs the same-depth 15-session baseline."""
-    if not today_volumes:
-        return None
-    baseline_total = 0.0
-    today_total = 0.0
-    counted = 0
-    for index, raw in enumerate(today_volumes):
-        baseline = same_slot_baseline(
-            prior_sessions, index, sessions=sessions, min_sessions=min_sessions
-        )
-        if baseline is None:
-            continue
-        try:
-            value = float(raw)
-        except (TypeError, ValueError):
-            continue
-        if value < 0:
-            continue
-        baseline_total += baseline
-        today_total += value
-        counted += 1
-    if counted == 0 or baseline_total <= 0:
-        return None
-    return today_total / baseline_total
+    baselines = slot_baselines(
+        prior_sessions, max_slots=len(today_volumes), sessions=sessions, min_sessions=min_sessions
+    )
+    return session_rvol_from_baseline(today_volumes, baselines)
 
 
 def slot_baselines(

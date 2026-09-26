@@ -324,7 +324,8 @@ def test_stale_v1_state_files_follow_the_new_mute_policy():
     assert verdict["muted"] is True
 
 
-def test_format_bounce_alert_message_carries_proven_stamp():
+def test_format_bounce_alert_message_carries_the_grade_not_a_proven_stamp():
+    """P14 (trader 2026-09-26, "retire PROVEN"): the stamp and its evidence give way to the grade."""
     from bounce_bot_lib.legacy import _format_bounce_alert_message
 
     quality = {
@@ -333,9 +334,14 @@ def test_format_bounce_alert_message_carries_proven_stamp():
         "proven_reasons": ["trendline_break_recent: +1.93R (n=31)"],
         "reasons": ["dynamic_vwap_upper_band long +0.88R (n=59)"],
     }
-    message = _format_bounce_alert_message("NVDA", "long", "dynamic_vwap_upper_band", {}, quality)
-    assert message.startswith("[S-TIER] PROVEN NVDA:")
-    assert "proven: trendline_break_recent: +1.93R (n=31)" in message
+    message = _format_bounce_alert_message(
+        "NVDA", "long", "dynamic_vwap_upper_band", {}, quality, grade_text="1:1 B · 2R C"
+    )
+    assert message.startswith("[S-TIER] NVDA:")
+    assert " | grade 1:1 B · 2R C | why: " in message
+    assert "PROVEN" not in message and "proven:" not in message
+    no_grades = _format_bounce_alert_message("NVDA", "long", "dynamic_vwap_upper_band", {}, quality)
+    assert " | grade unknown | " in no_grades
 
     unproven = _format_bounce_alert_message("NVDA", "long", "vwap", {}, {"tier": "B"})
     assert unproven.startswith("[B-TIER] NVDA:")

@@ -622,6 +622,11 @@ class SetupTrackerPanel(QFrame):
         self.tape_side_label = QLabel("")
         self.tape_side_label.setObjectName("MutedLabel")
         self.tape_side_label.setWordWrap(True)
+        # p9: the Long leaders section (leader pullbacks, post-earnings drift), top of the page.
+        self.long_leaders_label = QLabel("")
+        self.long_leaders_label.setObjectName("LongLeadersLabel")
+        self.long_leaders_label.setWordWrap(True)
+        self.long_leaders_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         # S14: the long study families, raw then vs SPY, formatted on the worker.
         self.study_family_label = QLabel("")
         self.study_family_label.setObjectName("MutedLabel")
@@ -1136,6 +1141,7 @@ class SetupTrackerPanel(QFrame):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
         layout.addWidget(header)
+        layout.addWidget(self.long_leaders_label)
         layout.addLayout(kpi_row)
         layout.addWidget(self.tape_side_label)
         layout.addWidget(self.study_family_label)
@@ -1635,6 +1641,7 @@ class SetupTrackerPanel(QFrame):
             setup_grades.side_by_tape_line(tape if isinstance(tape, dict) else None)
         )
         self.study_family_label.setText("\n".join(str(line) for line in data.get("study_family_lines") or ()))
+        self.long_leaders_label.setText("\n".join(str(line) for line in data.get("long_leader_lines") or ()))
 
         rendered: dict[str, tuple] = {}
         for table_name, model_name, rows, memo in _table_render_plan(
@@ -2057,6 +2064,14 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 - one line, never the tracker
         logging.debug("Setup Tracker study family lines could not be built", exc_info=True)
         study_family_lines = []
+    # p9: the Long leaders section and its grades. Display only; one line on failure.
+    try:
+        from ui.services import working_lately_service
+
+        long_leader_lines = working_lately_service.read_long_leader_lines()
+    except Exception:  # noqa: BLE001 - one section, never the tracker
+        logging.debug("Setup Tracker Long leaders could not be built", exc_info=True)
+        long_leader_lines = ["Long leaders: unreadable right now."]
     # S13: three exit models per family. Display only; unknown on failure.
     try:
         from ui.services import working_lately_service
@@ -2093,6 +2108,7 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
         "ranked": ranked,
         "side_by_tape": side_by_tape,
         "study_family_lines": study_family_lines,
+        "long_leader_lines": long_leader_lines,
         "exit_model_sentence": exit_model_review.review_sentence(exit_models),
         "regime_sentence": regime_grades.status_sentence(regime_payload),
         "sp4_chip": points_challenger.chip_text(evidence),
