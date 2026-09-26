@@ -41,6 +41,10 @@ START HERE (for an AI session on the desk PC)
      at ``--as-of`` when given) and ``plan_challenges.json`` - the night's
      challenges to it for the 7 days ending that date, each with the trader's
      answer (accepted / rejected + reason) or open / expired.
+   * ``market_regime_table.jsonl`` + ``regime_journal.json`` (manifest section
+     ``market_regimes``): the full multi-timeframe regime table and the trader's
+     own regime journal, plus ``setup_grades_by_regime.json`` when a stored
+     file exists (otherwise the section says it is absent).
 
 Point-in-time rules
 -------------------
@@ -168,6 +172,9 @@ class Sources:
     plan_history_dir: Path | None = None
     plan_challenges: Path | None = None
     plan_answers: Path | None = None
+    #: S17.2: the multi-timeframe regime table and the setups-by-regime grades (S16.3).
+    market_regime_table: Path | None = None
+    regime_grades: Path | None = None
 
 
 def _pp():
@@ -210,6 +217,9 @@ def resolve_sources() -> Sources:
         plan_history_dir=Path(paths.TRADING_PLAN_HISTORY_DIR),
         plan_challenges=Path(paths.PLAN_CHALLENGES_FILE),
         plan_answers=Path(paths.PLAN_CHALLENGE_ANSWERS_FILE),
+        market_regime_table=Path(paths.MARKET_REGIME_TABLE_FILE),
+        # S16.3's per-regime grades (the Working-lately build writes them).
+        regime_grades=Path(paths.SETUP_GRADES_BY_REGIME_FILE),
     )
 
 
@@ -1122,6 +1132,88 @@ def export_plan(sources: Sources, out_dir: Path, *, as_of: datetime | None = Non
     return info
 
 
+def _visible_regime_row(row: dict, as_of: datetime | None) -> bool:
+    """A table row is visible at ``as_of`` once it was computed by then (else its session closed)."""
+    if as_of is None:
+        return True
+    stamp = _aware(row.get("computed_at"))
+    if stamp is not None:
+        return stamp <= as_of
+    session = str(row.get("session_date") or "")[:10]
+    return bool(session) and session <= as_of.astimezone(ET).date().isoformat()
+
+
+def _regime_journal_rows(db_path: Path | None, as_of: datetime | None) -> list[dict] | None:
+    """The trader's regime journal (``structural_regime``), read-only; None when unreadable."""
+    if not _exists(db_path):
+        return None
+    connection = _connect_ro(db_path)
+    try:
+        connection.row_factory = sqlite3.Row
+        rows = [dict(row) for row in connection.execute("SELECT * FROM structural_regime ORDER BY segment_id")]
+    finally:
+        connection.close()
+    if as_of is not None:
+        rows = [row for row in rows if (_aware(row.get("entered_at")) or as_of) <= as_of]
+    return rows
+
+
+def export_market_regimes(sources: Sources, out_dir: Path, *, as_of: datetime | None = None) -> dict:
+    """S17.2: the full regime table, the trader's regime journal and per-regime grades.
+
+    Read-only on every source; ``as_of`` hides table rows computed later and
+    journal rows typed later. A missing source is named, never faked.
+    """
+    from scripts import structural_regime
+
+    info: dict[str, Any] = {}
+    notes: dict[str, str] = {}
+    rows: list[dict] | None = None
+    if _exists(sources.market_regime_table):
+        rows = []
+        for line in Path(sources.market_regime_table).read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and _visible_regime_row(row, as_of):
+                rows.append(row)
+        with (out_dir / "market_regime_table.jsonl").open("w", encoding="utf-8", newline="\n") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, sort_keys=True) + "\n")
+        low, high = _date_span(rows, "session_date")
+        info["table"] = {"status": "ok", "file": "market_regime_table.jsonl", "rows": len(rows),
+                         "symbols": sorted({str(row.get("symbol") or "") for row in rows}),
+                         "date_min": low, "date_max": high}
+    else:
+        info["table"] = {"status": "missing", "file": None, "rows": None}
+    try:
+        journal = _regime_journal_rows(sources.journal_db, as_of)
+    except sqlite3.Error as exc:
+        journal = None
+        notes["journal"] = f"regime journal unreadable: {exc}"
+    if journal is None:
+        info["journal"] = {"status": "missing", "file": None, "rows": None}
+    else:
+        payload = {"rows": journal, "timeline": structural_regime.effective_segments(journal),
+                   "vocabulary": list(structural_regime.VOCABULARY), "source": "trader"}
+        (out_dir / "regime_journal.json").write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        info["journal"] = {"status": "ok", "file": "regime_journal.json", "rows": len(journal)}
+    if _exists(sources.regime_grades):
+        copied = out_dir / "setup_grades_by_regime.json"
+        copied.write_bytes(Path(sources.regime_grades).read_bytes())
+        info["grades"] = {"status": "ok", "file": copied.name}
+    else:
+        info["grades"] = {"status": "missing", "file": None}
+        notes["grades"] = ("setups-by-regime grades are not in this pack: no stored file exists "
+                           "(S16.3 computes them on the tracker worker)")
+    info["notes"] = notes
+    info["how_to_read"] = ("One table row per session and symbol: env_key on M5, M30, H1, H4 (close), D1 and W, "
+                           "three intraday snapshots and the structure facts. The journal is the trader's own "
+                           "regime; the table is the machine's check beside it, never over it.")
+    return info
+
+
 def _write_table(rows: list[dict], out_dir: Path, name: str, fmt: str) -> dict:
     if not rows:
         return {"status": "empty", "rows": 0, "file": None}
@@ -1205,6 +1297,11 @@ def export_pack(sources: Sources, out_dir: Path | None = None, *, as_of: datetim
     except Exception as exc:  # noqa: BLE001 - one bad source must not sink the pack
         plan_info = {}
         notes["trading_plan"] = f"plan read failed: {exc}"
+    try:
+        regimes_info = export_market_regimes(sources, target, as_of=as_of)
+    except Exception as exc:  # noqa: BLE001 - one bad source must not sink the pack
+        regimes_info = {}
+        notes["market_regimes"] = f"regime read failed: {exc}"
 
     def _count(rows, column):
         return sum(1 for row in rows or [] if row.get(column))
@@ -1220,6 +1317,7 @@ def export_pack(sources: Sources, out_dir: Path | None = None, *, as_of: datetim
                        "d1_max_sessions": d1_max_sessions, "m5_window_minutes": m5_window_minutes},
         "tables": tables,
         "trading_plan": plan_info,
+        "market_regimes": regimes_info,
         "join": {
             "journal_trades": len(matched or []),
             "d1_matched": _count(matched, "d1_occurrence_id"),

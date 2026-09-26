@@ -37,6 +37,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Iterable, Mapping
 
+import long_study_families as lsf
+
 SCHEMA = "setup_grades_v2"
 
 PROVEN, A, B, C, D, NEW = "PROVEN", "A", "B", "C", "D", "New"
@@ -455,6 +457,118 @@ def side_by_tape_line(summary: Mapping[str, Any] | None) -> str:
         f"n {long_n} long / {short_n} short, scan dates "
         f"{summary.get('first')} to {summary.get('last')}."
     )
+
+
+# ---------------------------------------------------------------------------
+# S14 study families: raw and tape-relative, one display line each, never a gate
+# ---------------------------------------------------------------------------
+
+#: A long is judged raw inside windows where SPY rose more than this over the same
+#: 5 sessions (F23), until the regime journal has data. Lead's call; the trader can overrule.
+SPY_UP_WINDOW_MIN_PCT = 1.0
+STUDY_NO_DATA = "no tagged rows in the horizon file yet"
+
+
+def _study_side_cell(n: int, wins: int, sessions: set, values: list[float]) -> dict[str, Any]:
+    """The ladder over one basis; the mean and sum of ``values`` (points) stand in for avg / cum R."""
+    mean = (sum(values) / len(values)) if values else None
+    cell = grade_for(n=n, sessions=len(sessions), wins=wins, avg_r=mean,
+                     cum_r_lately=sum(values) if values else None)
+    cell["mean_pct"] = mean
+    return cell
+
+
+def study_family_cells(
+    horizon_rows: Any,
+    spy_closes: Mapping[str, float] | None,
+    *,
+    as_of: str = "",
+) -> list[dict[str, Any]]:
+    """One graded cell per S14 study family (`long_study_families`), over the horizon file.
+
+    Two bases, both on the 5-session v2 rows the scan tagged (``study_families``):
+
+    * ``raw``: the side return > 0, only rows whose SPY window rose more than
+      SPY_UP_WINDOW_MIN_PCT (a long needs the market); mean = mean side return.
+    * ``tape``: the side return beat SPY's same-side return, every decided row;
+      mean = mean excess over SPY.
+
+    Longs lead with ``raw`` (``headline``); a short would lead with ``tape``.
+    Unknown SPY, immature or unmeasured rows are left out, never a loss. The
+    same ladder as every family; the %-point means stand in for avg / cum R.
+    Display only: this is a study, and promotion to a scored family is ask-first.
+    """
+    index = horizon_rows if isinstance(horizon_rows, Mapping) else horizon_index(horizon_rows)
+    tallies: dict[str, dict[str, Any]] = {}
+    days: set[str] = set()
+    for (_symbol, side, scan_day), row in index.items():
+        names = lsf.parse_tag(row.get("study_families"))
+        if not names:
+            continue
+        outcome = tape_result({"side": side}, row, spy_closes, as_of=as_of)
+        if outcome == UNKNOWN:
+            continue
+        spy_side = _spy_side_return(row, side, spy_closes)
+        side_return = _float(row.get("side_return_pct"))
+        if spy_side is None or side_return is None:
+            continue
+        spy_raw = spy_side if side == "LONG" else -spy_side
+        days.add(scan_day)
+        for name in names:
+            tally = tallies.setdefault(name, {
+                "side": side, "raw_n": 0, "raw_wins": 0, "raw_days": set(), "raw_values": [],
+                "tape_n": 0, "tape_wins": 0, "tape_days": set(), "tape_values": [],
+            })
+            tally["tape_n"] += 1
+            tally["tape_wins"] += 1 if outcome == WIN else 0
+            tally["tape_days"].add(scan_day)
+            tally["tape_values"].append(side_return - spy_side)
+            if spy_raw > SPY_UP_WINDOW_MIN_PCT:
+                tally["raw_n"] += 1
+                tally["raw_wins"] += 1 if side_return > 0 else 0
+                tally["raw_days"].add(scan_day)
+                tally["raw_values"].append(side_return)
+    first, last = (min(days), max(days)) if days else ("", "")
+    cells = []
+    for name in lsf.STUDY_FAMILIES:
+        tally = tallies.get(name)
+        if tally is None:
+            cells.append({"family": name, "side": "LONG", "raw": None, "tape": None, "headline": "raw",
+                          "first": first, "last": last})
+            continue
+        cells.append({
+            "family": name,
+            "side": tally["side"],
+            "headline": "raw" if tally["side"] == "LONG" else "tape",
+            "raw": _study_side_cell(tally["raw_n"], tally["raw_wins"], tally["raw_days"], tally["raw_values"]),
+            "tape": _study_side_cell(tally["tape_n"], tally["tape_wins"], tally["tape_days"],
+                                     tally["tape_values"]),
+            "first": first,
+            "last": last,
+        })
+    return cells
+
+
+def study_family_line(cell: Mapping[str, Any] | None) -> str:
+    """``leader_pullback_long LONG (study): raw in SPY-up windows B 64% ... · vs SPY C 55% ...``."""
+    cell = cell or {}
+    head = f"{cell.get('family')} {cell.get('side') or 'LONG'} (study)"
+    if not cell.get("raw") and not cell.get("tape"):
+        return f"{head}: {STUDY_NO_DATA}."
+
+    def part(basis: str) -> str:
+        grade = cell.get(basis) or {}
+        n = int(grade.get("n") or 0)
+        label = f"raw in SPY-up (>{SPY_UP_WINDOW_MIN_PCT:g}%) windows" if basis == "raw" else "vs SPY"
+        if not n:
+            return f"{label} unknown (n 0)"
+        mean = _float(grade.get("mean_pct"))
+        mean_text = f", {'avg' if basis == 'raw' else 'excess'} {mean:+.2f}%" if mean is not None else ""
+        return f"{label} {badge(grade.get('grade'))} {_pct(grade.get('win_rate') or 0)}{mean_text}, n {n}"
+
+    order = ("raw", "tape") if cell.get("headline", "raw") == "raw" else ("tape", "raw")
+    dates = f" (scan dates {cell.get('first')} to {cell.get('last')})" if cell.get("first") else ""
+    return f"{head}: " + " · ".join(part(basis) for basis in order) + dates
 
 
 # ---------------------------------------------------------------------------

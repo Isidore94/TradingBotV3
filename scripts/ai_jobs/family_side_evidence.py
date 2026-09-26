@@ -129,17 +129,42 @@ def build_payload(
     *,
     as_of: str,
     generated_at: str = "",
+    segments: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
-    """The whole file, or None when the window has fewer than MIN_WINDOW_SESSIONS sessions."""
-    import points_challenger as pc
+    """The whole file, or None when the window has fewer than MIN_WINDOW_SESSIONS sessions.
 
-    cells, days = pc.build_families(
-        list(horizon_rows), spy_closes, atr_by_day, pc.tracker_r_by_family(leaderboard_rows), as_of=as_of
-    )
+    S16: ``segments`` (the trader's structural regime timeline) adds each
+    regime's own cells over every scan date of that regime up to ``as_of``,
+    and the current regime; the night's adjust history records what SP4 reads.
+    """
+    import points_challenger as pc
+    import regime_join
+
+    tracker_r = pc.tracker_r_by_family(leaderboard_rows)
+    cells, days = pc.build_families(list(horizon_rows), spy_closes, atr_by_day, tracker_r, as_of=as_of)
     if len(days) < pc.MIN_WINDOW_SESSIONS:
         return None
+    timeline = list(segments or ())
+    joiner = regime_join.Joiner(timeline)
+    by_regime: dict[str, dict[str, Any]] = {}
+    for regime, rows in regime_join.split(horizon_rows, lambda row: row.get("scan_date"), joiner).items():
+        if regime == regime_join.UNKNOWN:
+            continue
+        regime_cells, _days = pc.build_families(
+            list(rows), spy_closes, atr_by_day, tracker_r, as_of=as_of, sessions=len(rows) + 1
+        )
+        if regime_cells:
+            by_regime[regime] = regime_cells
+    current = joiner.label(as_of) if joiner else ""
+    current = "" if current == regime_join.UNKNOWN else current
+    regime_block = {
+        "current_regime": current,
+        "current_regime_label": regime_join.regime_label(current) if current else "",
+        "families_by_regime": by_regime,
+    }
+    evidence = {"families": cells, **regime_block}
     history = dict((prior or {}).get("adjust_history") or {})
-    history[as_of] = {key: cell["adjust"] for key, cell in cells.items()}
+    history[as_of] = {key: pc.adjust_for(*key.split("|", 1), evidence) for key in pc.regime_basis(evidence)}
     history = {day: history[day] for day in sorted(history)[-pc.ADJUST_HISTORY_KEEP:]}
     trial = pc.trial_summary(list(horizon_rows), spy_closes, scores, tracker_pick_r, history, as_of=as_of)
     return {
@@ -153,6 +178,8 @@ def build_payload(
             "trial_entry_sessions": pc.TRIAL_ENTRY_SESSIONS, "mature_sessions": pc.TRIAL_MATURE_SESSIONS,
         },
         "families": cells,
+        **regime_block,
+        "regime_basis": pc.regime_basis(evidence),
         "adjust_history": history,
         "trial": trial,
         "saturday_lines": pc.saturday_lines(trial),
@@ -168,10 +195,12 @@ def run_family_side_evidence(
     snapshot_path: Any = None,
     spy_path: Any = None,
     out_path: Any = None,
+    journal_db_path: Any = None,
     **_ignored: Any,
 ) -> dict[str, Any]:
     import points_challenger as pc
     import project_paths as pp
+    import regime_join
     from setup_permutation_backfill import read_spy_closes
 
     horizon_path = Path(horizon_path or pp.MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE)
@@ -192,11 +221,15 @@ def run_family_side_evidence(
                 "reason": f"only {len(days)} session(s) of outcomes (< {pc.MIN_WINDOW_SESSIONS}); nothing written",
                 "outputs": [],
             }
-        atr, scores = read_feature_facts(features_path, first_day=days[0])
+        segments = regime_join.read_segments(journal_db_path)
+        # S16: ATR back to the start of the regime in force, so its own cells have moves.
+        starts = [str(s.get("start_date") or "")[:10] for s in segments if str(s.get("start_date") or "")[:10] <= as_of]
+        first_day = min([days[0], *starts[-1:]])
+        atr, scores = read_feature_facts(features_path, first_day=first_day)
         payload = build_payload(
             horizon_rows, read_spy_closes(spy_path), atr, scores,
             read_leaderboard_family_rows(leaderboard_path), read_tracker_pick_r(snapshot_path),
-            read_payload(out_path), as_of=as_of,
+            read_payload(out_path), as_of=as_of, segments=segments,
         )
     except Exception as exc:  # noqa: BLE001 - the night goes on; the last file stays
         _log.exception("family_side_evidence: build failed")

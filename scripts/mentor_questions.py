@@ -116,6 +116,8 @@ WRITES_EXIT_FIELDS = "trade_mentor_trade_check.confirm_exit_fields"
 #: P1-7 7b. A plan challenge's answer lands in the challenge answers file, and
 #: Accept also appends a dated line to the plan's Decisions.
 WRITES_PLAN_CHALLENGE = "plan_challenges.answer_challenge"
+#: S16: a regime answer appends one `structural_regime` segment.
+WRITES_STRUCTURAL_REGIME = "journal_store.structural_regime"
 
 #: Cadences. `once` is forever, `weekly` is once per EXCHANGE week (the ISO week
 #: of the session), `daily` is once per session, `per_card` is every card.
@@ -807,6 +809,102 @@ def _trigger_plan_challenge(state: Mapping[str, Any]) -> list[Subject]:
     return subjects
 
 
+STRUCTURAL_REGIME_KIND = "structural_regime"
+
+
+def _regime_vocabulary() -> tuple[str, ...]:
+    import structural_regime
+
+    return structural_regime.VOCABULARY
+
+
+#: S16 item 5: "still a <regime>?", asked once per run of disagreeing sessions.
+REGIME_CHECK_KIND = "regime_check"
+
+
+def is_regime_click(kind: str, state: str) -> bool:
+    """Is this answer a regime (it appends a segment), not an answer state or a retire?"""
+    return (
+        _text(kind) in (STRUCTURAL_REGIME_KIND, REGIME_CHECK_KIND)
+        and bool(_text(state))
+        and _text(state) not in _with_answer_states()
+    )
+
+
+def _trigger_regime_check(state: Mapping[str, Any]) -> list[Subject]:
+    """S16 item 5: the machine labels disagreed with the trader's regime for 3 sessions.
+
+    One subject per run (its first session), so it is asked once; the lane marks
+    a run the trader answered or the labels closed as answered.
+    """
+    import structural_regime as regimes
+
+    lane = state.get("structural_regime") if isinstance(state, Mapping) else None
+    session = _session_date(state)
+    if not isinstance(lane, Mapping) or not lane.get("loaded") or session is None:
+        return []
+    run = lane.get("disagreement") if isinstance(lane.get("disagreement"), Mapping) else None
+    current = lane.get("current") if isinstance(lane.get("current"), Mapping) else None
+    if not run or not current or _text(current.get("regime")) != _text(run.get("trader_regime")):
+        return []
+    regime = _text(current.get("regime"))
+    machine = regimes.MACHINE_WORDS.get(_text(run.get("machine")), "something else")
+    prompt = (
+        f"Still a {regimes.label(regime)}? For {run.get('streak')} sessions since "
+        f"{_text(run.get('start'))} the {_text(run.get('symbol'))} labels read {machine}. "
+        "A new pick starts today."
+    )
+    options = [regimes.STILL_PREFIX + regime, *(name for name in regimes.VOCABULARY if name != regime)]
+    return [
+        Subject(
+            kind=REGIME_CHECK_KIND,
+            subject_id=_text(run.get("start")),
+            options=_with_answer_states(*options),
+            prompt=prompt,
+            detail={"session": session.isoformat(), "current": dict(current), "run": dict(run)},
+        )
+    ]
+
+
+def _trigger_structural_regime(state: Mapping[str, Any]) -> list[Subject]:
+    """S16: once a week, "what regime is the market in? still <current>?".
+
+    The lane (`structural_regime.lane`) is read on the card's worker; an
+    unloaded lane asks nothing, because an unread table is not "no regime".
+    """
+    import structural_regime as regimes
+
+    lane = state.get("structural_regime") if isinstance(state, Mapping) else None
+    session = _session_date(state)
+    if not isinstance(lane, Mapping) or not lane.get("loaded") or session is None:
+        return []
+    current = lane.get("current") if isinstance(lane.get("current"), Mapping) else None
+    options: list[str] = []
+    if current:
+        options.append(regimes.STILL_PREFIX + _text(current.get("regime")))
+        prompt = (
+            "What regime is the market in? Still "
+            f"{regimes.label(current.get('regime'))} (since {_text(current.get('start_date'))}, "
+            f"day {current.get('day_count')})? A new pick starts today."
+        )
+    else:
+        prompt = "What regime is the market in? A pick starts today."
+    if lane.get("prefills"):
+        prompt += " Your past regimes wait under 'Regime...' to confirm."
+    options.extend(
+        name for name in regimes.VOCABULARY if not current or name != _text(current.get("regime"))
+    )
+    return [
+        Subject(
+            kind=STRUCTURAL_REGIME_KIND,
+            subject_id=regimes.week_key(session),
+            options=_with_answer_states(*options),
+            prompt=prompt,
+            detail={"session": session.isoformat(), "current": dict(current or {})},
+        )
+    ]
+
+
 REGISTRY: tuple[QuestionKind, ...] = (
     QuestionKind(
         kind="grader_gap",
@@ -931,6 +1029,35 @@ REGISTRY: tuple[QuestionKind, ...] = (
         cadence=CADENCE_ONCE,
         expiry="7 days after the night wrote it",
         priority=55,
+        dormant_until="",
+    ),
+    # S16 item 1 (2026-09-26): the trader's structural regime, weekly. Read by
+    # `structural_regime.effective_segments`.
+    QuestionKind(
+        kind=STRUCTURAL_REGIME_KIND,
+        trigger=_trigger_structural_regime,
+        options=_with_answer_states(*_regime_vocabulary()),
+        writes=WRITES_STRUCTURAL_REGIME,
+        consumer="structural_regime.effective_segments",
+        answer_key="regime",
+        cadence=CADENCE_WEEKLY,
+        expiry="one exchange week",
+        priority=45,
+        dormant_until="",
+    ),
+    # S16 item 5 (2026-09-26): "still a <regime>?" once, after the machine labels
+    # disagreed with the trader's regime for 3 sessions. Same writer and reader
+    # as the weekly regime question.
+    QuestionKind(
+        kind=REGIME_CHECK_KIND,
+        trigger=_trigger_regime_check,
+        options=_with_answer_states(*_regime_vocabulary()),
+        writes=WRITES_STRUCTURAL_REGIME,
+        consumer="structural_regime.effective_segments",
+        answer_key="regime",
+        cadence=CADENCE_ONCE,
+        expiry="until the trader answers or the labels agree again",
+        priority=44,
         dormant_until="",
     ),
     QuestionKind(
@@ -1258,6 +1385,20 @@ def record_answer(
             row = plan_challenges.answer_challenge(subject.subject_id, state, now=now)
         except plan_challenges.PlanChallengeError as exc:
             return {"ok": False, "reason": str(exc)}
+        return {"ok": True, "row": row, "answer_key": kind.answer_key}
+    if is_regime_click(kind.kind, state):
+        # S16: a regime click appends one segment. A journal write fails loudly.
+        import structural_regime
+
+        detail = dict(subject.detail or {})
+        segment = structural_regime.segment_from_answer(
+            state, current=detail.get("current") or None, session=detail.get("session")
+        )
+        if store is None:
+            raise ValueError("no journal store to write the regime to")
+        row = store.append_structural_regime(
+            entered_at=now or datetime.now().astimezone(), **segment
+        )
         return {"ok": True, "row": row, "answer_key": kind.answer_key}
     if state == STOP_ASKING:
         # `Stop asking this` is not an answer and is never stored as one. The

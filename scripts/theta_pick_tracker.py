@@ -140,7 +140,21 @@ THETA_OUTCOME_COLUMNS: tuple[str, ...] = (
     "unmeasured_reason",
     "rs_flag",
     "rs_note",
+    # B7: the underlying-only outcome. Price vs a level, never option P&L.
+    "ref_basis",
+    "ref_level",
+    "ref_held_5",
+    "ref_held_10",
+    "ref_held_20",
+    "ref_status",
 )
+
+#: B7: what the underlying-only level is. A strike when the pick had one;
+#: otherwise the lowest support that held on the scan date (no option quote).
+REF_BASIS_STRIKE_QUOTED = "strike_quoted"
+REF_BASIS_STRIKE_UNQUOTED = "strike_unquoted"
+REF_BASIS_LOWEST_SUPPORT = "lowest_held_support"
+REF_BASIS_NONE = "none"
 
 #: What the Theta tab says before the first grade has been written.
 THETA_NO_EXPORT_SENTENCE = (
@@ -672,6 +686,40 @@ def _grade_one(
     }
     for mark in SESSION_MARKS:
         row[f"held_{mark}"] = marks[mark]
+
+    # ---- B7: the underlying-only outcome ---------------------------------
+    # A strike pick reuses its strike grade. A never-quoted pick is measured
+    # against the lowest support that held on the scan date.
+    if strike is not None:
+        premium = _number(pick.get("premium"))
+        row["ref_basis"] = REF_BASIS_STRIKE_QUOTED if premium is not None else REF_BASIS_STRIKE_UNQUOTED
+        row["ref_level"] = strike
+        ref_marks = dict(marks)
+    else:
+        levels = [float(_number(entry.get("level")) or 0.0) for entry in holding]
+        ref_level = min(levels) if levels else None
+        row["ref_basis"] = REF_BASIS_LOWEST_SUPPORT if ref_level is not None else REF_BASIS_NONE
+        row["ref_level"] = ref_level
+        ref_marks = {mark: None for mark in SESSION_MARKS}
+        ref_immature = False
+        for mark in SESSION_MARKS:
+            endpoint = endpoints.get(mark)
+            if ref_level is None or endpoint is None:
+                continue
+            if endpoint > as_of:
+                ref_immature = True
+                continue
+            target_close, _low = _bar_prices(bars.get(endpoint))
+            if target_close is not None:
+                ref_marks[mark] = bool(target_close >= ref_level)
+    for mark in SESSION_MARKS:
+        row[f"ref_held_{mark}"] = ref_marks[mark]
+    if all(ref_marks[mark] is not None for mark in SESSION_MARKS):
+        row["ref_status"] = STATUS_MEASURED
+    elif (REASON_IMMATURE in reasons) if strike is not None else ref_immature:
+        row["ref_status"] = STATUS_PENDING
+    else:
+        row["ref_status"] = STATUS_UNMEASURED
     return row
 
 
@@ -964,4 +1012,85 @@ def theta_readout(rows: Iterable[Mapping[str, Any]]) -> ThetaReadout:
         n_scan_dates=len({row["scan_date"] for row in prepared}),
         n_expiry_grades=sum(1 for row in prepared if row["held_at_expiry"] is not None),
         _graded=graded,
+    )
+
+
+# ---------------------------------------------------------------------------
+# B7 - the underlying-only outcome line
+# ---------------------------------------------------------------------------
+
+
+def theta_outcome_counts(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Counts for the one theta outcome line, at the first-appearance grain.
+
+    Pure; built on the worker. The Qt thread only formats the result with
+    `theta_outcome_line`. Reads native rows and CSV rows the same way.
+    """
+    marks = {mark: {"n": 0, "held": 0} for mark in SESSION_MARKS}
+    basis: dict[str, int] = {}
+    counts: dict[str, Any] = {
+        "first_appearances": 0,
+        STATUS_MEASURED: 0,
+        STATUS_PENDING: 0,
+        STATUS_UNMEASURED: 0,
+        "marks": marks,
+        "basis": basis,
+    }
+    for row in rows or []:
+        if not isinstance(row, Mapping):
+            continue
+        scan_date = str(row.get("scan_date") or "").strip()
+        if not str(row.get("symbol") or "").strip() or not scan_date:
+            continue
+        first_seen = str(row.get("first_seen_scan_date") or "").strip() or scan_date
+        if first_seen != scan_date:
+            continue
+        counts["first_appearances"] += 1
+        status = str(row.get("ref_status") or "").strip()
+        if status not in (STATUS_MEASURED, STATUS_PENDING):
+            status = STATUS_UNMEASURED
+        counts[status] += 1
+        measured_any = False
+        for mark in SESSION_MARKS:
+            held = _tristate(row.get(f"ref_held_{mark}"))
+            if held is None:
+                continue
+            measured_any = True
+            marks[mark]["n"] += 1
+            marks[mark]["held"] += 1 if held else 0
+        if measured_any:
+            kind = str(row.get("ref_basis") or "").strip() or REF_BASIS_NONE
+            basis[kind] = basis.get(kind, 0) + 1
+    return counts
+
+
+def theta_outcome_line(counts: Mapping[str, Any] | None) -> str:
+    """One sentence: n measured, the hold rate per mark, and what the level was."""
+    counts = counts or {}
+    marks = counts.get("marks") or {}
+    measured = sum(int(value or 0) for value in (counts.get("basis") or {}).values())
+    pending = int(counts.get(STATUS_PENDING) or 0)
+    unmeasured = int(counts.get(STATUS_UNMEASURED) or 0)
+    head = "Theta outcome (underlying only, not option P&L): "
+    if not measured:
+        return head + f"no theta pick measured yet - {pending} pending, {unmeasured} unmeasured."
+    parts = []
+    for mark in SESSION_MARKS:
+        cell = marks.get(mark) or {}
+        n, held = int(cell.get("n") or 0), int(cell.get("held") or 0)
+        if n:
+            bound = wilson_lower_bound(held, n) * 100
+            parts.append(f"{mark} sessions {held / n * 100:.0f}% of {n} (>= {bound:.0f}%)")
+        else:
+            parts.append(f"{mark} sessions not yet")
+    basis = counts.get("basis") or {}
+    quoted = int(basis.get(REF_BASIS_STRIKE_QUOTED, 0))
+    strikes = quoted + int(basis.get(REF_BASIS_STRIKE_UNQUOTED, 0))
+    supports = int(basis.get(REF_BASIS_LOWEST_SUPPORT, 0))
+    return head + (
+        f"{measured} measured of {int(counts.get('first_appearances') or 0)} first "
+        f"appearances; closed at or above the level at {', '.join(parts)}. Level = "
+        f"sold strike for {strikes} ({quoted} with an option quote), lowest held "
+        f"support for {supports} (underlying-only, no option quote). "
+        f"{pending} not yet at {SESSION_MARKS[-1]} sessions, {unmeasured} unmeasured."
     )

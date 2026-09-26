@@ -426,12 +426,20 @@ AUTO_OPENING_ENV_FILE = RUNTIME_DATA_DIR / "auto_opening_environment.json"
 # Append-only per-session history of the opening regime: the day's first
 # regime read and its directional anchor. `opening_regime_history` owns it.
 AUTO_OPENING_REGIME_HISTORY_FILE = RUNTIME_DATA_DIR / "auto_opening_regime_history.jsonl"
+# S17: append-only auto regimes (M5..W env_key + structure facts) per session and
+# index / sector ETF. `ai_jobs.market_regime_table` owns it; rows are never re-labelled.
+MARKET_REGIME_TABLE_FILE = RUNTIME_DATA_DIR / "market_regime_table.jsonl"
+# S17.2: the night's verified regime read, one JSON per session. `ai_jobs.regime_read`
+# owns it; a rejected read writes nothing, so the last verified file stays.
+REGIME_READS_DIR = RUNTIME_DATA_DIR / "regime_reads"
 # Dated, append-only copies of `working_lately/setup_grades_latest.json`, one
 # JSONL per day. `setup_grades_history` owns it.
 SETUP_GRADES_HISTORY_DIR = LOCAL_SETTINGS_DIR / "working_lately" / "setup_grades_history"
 # S11: when M5 families usually peak and how five exit rules paid, per
 # (bounce type, side), beside the setup grades. `ai_jobs.exit_windows_night` owns it.
 EXIT_WINDOWS_FILE = LOCAL_SETTINGS_DIR / "working_lately" / "exit_windows.json"
+#: S16.3 per-regime grades, written by the Working-lately build (read by the research pack).
+SETUP_GRADES_BY_REGIME_FILE = LOCAL_SETTINGS_DIR / "working_lately" / "setup_grades_by_regime_latest.json"
 # Append-only JSONL log of the trader's pick verdicts: star likes (with origin
 # alert timeframe/surface), X dislikes (with the typed reason), unfavorites.
 # Lives in the shared home so it syncs across machines and can be handed to an
@@ -804,6 +812,10 @@ MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE = (
 # S12: per (setup family, side) tape-relative evidence and the SP4 shadow trial.
 # `ai_jobs.family_side_evidence` owns it; read by the Setup Tracker and Setup keys.
 FAMILY_SIDE_EVIDENCE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "family_side_evidence.json"
+# S15: swing path facts (MFE/MAE in ATR, next-open and pullback fills) per scan row x
+# horizon 1/3/5/10/20, joined to the horizons file on observation_id. The night slot
+# `swing_path_facts` (`ai_jobs.swing_path_facts_night`) is its one owner. Shadow only.
+SWING_PATH_FACTS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "swing_path_facts.csv"
 # P1-4 4c: the setup-permutation search report (shadow only). Written by
 # `setup_permutation_search.py --out`; read by Research -> Setup keys and the
 # Saturday `setup_keys_narration` slot. Nothing ranks, filters or alerts on it.

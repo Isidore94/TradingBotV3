@@ -409,6 +409,9 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         # LEAD AMENDMENT 2026-09-26 (S11): exit-window truth, a deterministic
         # stage 1 slot directly after `prediction_contrast`.
         "exit_windows",
+        # LEAD AMENDMENT 2026-09-26 (S17): the regime table, a deterministic
+        # stage 1 slot directly after `exit_windows`.
+        "market_regime_table",
         "market_story_rollups",
         "measured_report",
         # AI-R3 refreshes the bounded facts before any story reads them.
@@ -416,6 +419,9 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         # LEAD AMENDMENT 2026-09-26 (S12): the SP4 family evidence, a
         # deterministic slot directly after the facts; it now closes stage 1.
         "family_side_evidence",
+        # LEAD AMENDMENT 2026-09-26 (S15): swing path facts, deterministic, after
+        # the SP4 evidence; it now closes stage 1.
+        "swing_path_facts",
         # LEAD AMENDMENT 2026-09-20 (TJ-4 integration): the day story, inside
         # stage 2 and ahead of the briefs.
         "day_review_narration",
@@ -437,6 +443,9 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         # the briefs.
         "econ_brief",
         "market_story_narration",
+        # LEAD AMENDMENT 2026-09-26 (S17.2): the regime read joins the market
+        # story, a stage 2 model slot directly after it.
+        "regime_read",
         # Day Recap coach (2026-09-23): cited answers to the trader's Week
         # Review questions, a stage 2 model slot at the end of that stage.
         "week_questions",

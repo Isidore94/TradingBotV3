@@ -341,6 +341,10 @@ EXPECTED_SLOT_ORDER = (
     # no model; after `outcome_sweep` finalizes the day's outcomes, and ahead of
     # `day_review_facts` so the Sunday slate keeps it. Nothing above reads its file.
     "exit_windows",
+    # S17 (2026-09-26): the multi-timeframe regime table. Deterministic, no model;
+    # it reads stored bars only and feeds nothing in the night, so it sits beside
+    # `exit_windows` inside stage 1 and ahead of `day_review_facts` (Sunday slate).
+    "market_regime_table",
     # WS-10D (2026-09-12): the Market Journal's weekly/monthly/quarterly rollups.
     # Deterministic, no model; it reads the daily stories and the exchange calendar
     # and feeds nothing above it, so it CLOSES the deterministic stage.
@@ -356,6 +360,9 @@ EXPECTED_SLOT_ORDER = (
     # brief puts it directly after `day_review_facts`, so it now CLOSES stage 1
     # (`_STAGE_ONE_LAST_SLOT`) and keeps its Sunday slot. Nothing above reads it.
     "family_side_evidence",
+    # S15 (2026-09-26): swing path facts, deterministic; directly after the SP4
+    # evidence (the horizons file it reads is the scan's), and it now closes stage 1.
+    "swing_path_facts",
     # stage 2 - the original pair moved here by decision 0018; Phase 0.31
     # appends the bounded market-story narration inside the same stage.
     "ai_summary",
@@ -363,7 +370,7 @@ EXPECTED_SLOT_ORDER = (
     # Appended INSIDE stage 2 and deliberately AHEAD of `ticker_briefs`: gate
     # #158 reads the ledger for a day story finished before 23:30 Pacific, and
     # the briefs reserve 120 minutes in front of it. It cannot go further
-    # forward either - `ai_summary` sits directly after `family_side_evidence` and
+    # forward either - `ai_summary` sits directly after `swing_path_facts` and
     # two other pins say so.
     "day_review_narration",
     # R1 (2026-09-26): the Day Review Show reads that night's verified story, so
@@ -393,6 +400,9 @@ EXPECTED_SLOT_ORDER = (
     # market story); a local model words it and the fixed parser owns every time.
     "econ_brief",
     "market_story_narration",
+    # S17.2 (2026-09-26): the regime read joins the market story, so it sits
+    # DIRECTLY after it (stage 2); `week_questions` moves one step down.
+    "regime_read",
     # Day Recap coach (2026-09-23): answer the trader's Week Review questions
     # from the day/week records, cited. End of stage 2: after `day_review_facts`
     # rebuilt the records, and not directly after it (`ai_summary` is pinned there).

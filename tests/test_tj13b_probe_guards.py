@@ -665,10 +665,16 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
         # S11 (2026-09-26): `exit_windows`, pinned by `EXPECTED_SLOT_ORDER` in
         # stage 1 and set aside here.
         "exit_windows",
+        # S17 (2026-09-26): `market_regime_table`, pinned by `EXPECTED_SLOT_ORDER`
+        # directly after `exit_windows` and set aside here.
+        "market_regime_table",
         "day_review_facts",
         # S12 (2026-09-26): `family_side_evidence`, pinned by
         # `EXPECTED_SLOT_ORDER` directly after the facts and set aside here.
         "family_side_evidence",
+        # S15 (2026-09-26): `swing_path_facts`, pinned by `EXPECTED_SLOT_ORDER`
+        # directly after the SP4 evidence and set aside here.
+        "swing_path_facts",
         "day_review_narration",
         # R1 (2026-09-26): pinned by `EXPECTED_SLOT_ORDER`, set aside here.
         "day_review_show",
@@ -687,8 +693,14 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
         # P1-7 7b (2026-09-25): `plan_review`, pinned by `EXPECTED_SLOT_ORDER`
         # in stage 3 and set aside here.
         "plan_review",
+        # S17.2 (2026-09-26): `regime_read`, pinned by `EXPECTED_SLOT_ORDER`
+        # directly after the market story and set aside here.
+        "regime_read",
     )
-    assert slate[slate.index("market_story_narration") + 1] == "week_questions"
+    # S17.2: the regime read joins the market story, so it sits between it and
+    # `week_questions`.
+    assert slate[slate.index("market_story_narration") + 1] == "regime_read"
+    assert slate[slate.index("regime_read") + 1] == "week_questions"
     today = tuple(name for name in slate if name not in set_aside)
 
     assert len(today) == len(pinned_at_e8c04f88)

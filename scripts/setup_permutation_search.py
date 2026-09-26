@@ -27,8 +27,24 @@ side: a baseline, then single facets, pairs and triples, never deeper.
 - A population x horizon whose selection window has under
   MIN_SELECTION_SESSIONS sessions is not searched: the block says
   ``refused`` and why (S4; F11 was a 5-session window).
+- S14 study families (`long_study_families.STUDY_FAMILIES`, rows the backfill
+  copies under the study name) are searched FIRST, on their own small grid of
+  `STUDY_SEARCH_FACETS` (spy_trend, trend20, htf_trend_4h), and reported in
+  each horizon's ``study_families`` block, never in ``families`` (so no
+  verdict, chip or narration reads them). Promotion is ask-first.
+- Conditional mode (S15 item 4, the trader 2026-09-26: "longs need the market on
+  their side; judge longs RAW inside the regime"): population
+  ``swing_long_working_raw`` = swing LONG rows whose entry day's
+  `setup_permutations.long_regime_working` verdict is "yes", win = the raw side
+  return > 0 (not vs SPY), facets and horizons as swing. Its own population,
+  never pooled; each horizon block counts which rule said "working".
 - Each run also keeps a dated copy in `permutation_report_history/` and writes
   `permutation_verdicts.json` (P12, `setup_permutation_verdicts.py`), both beside --out.
+- S16: with the trader's regime timeline (``--journal-db``, read-only) every row
+  gets a ``regime`` facet (the structural regime on its session, `regime_join`),
+  searched like any facet, and the report's ``by_regime`` block gives each
+  family x side its per-regime baseline, current regime first (descriptive: no
+  key is chosen from it). Regimes are never pooled into one cell.
 
 Shadow only: the report ranks and annotates. Nothing reads it for a score, a
 filter or an alert.
@@ -55,6 +71,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import long_study_families as lsf  # noqa: E402
 import setup_permutations as sp  # noqa: E402
 
 REPORT_SCHEMA = "setup_permutation_report_v1"
@@ -82,6 +99,13 @@ VERDICT_NONE = "no_key_found"
 VERDICT_THIN = "too_little_data"
 #: Beside the report, so a scratch --out never writes into the live history.
 HISTORY_DIR_NAME = "permutation_report_history"
+#: S15 item 4: LONG swing rows in a "working" market, judged on the raw side return.
+POPULATION_LONG_WORKING_RAW = "swing_long_working_raw"
+LONG_WORKING_RAW_DEFINITION = (
+    "swing LONG rows whose entry-day regime is working (setup_permutations.long_regime_working: the "
+    "trader's bull_run / recovery; with no trader label, SPY above a rising 20-day); win = raw side "
+    "return > 0, not vs SPY"
+)
 VERDICTS_FILE_NAME = "permutation_verdicts.json"
 
 Cell = tuple[tuple[str, str], ...]
@@ -424,7 +448,76 @@ def embargoed_sessions(rows: Sequence[Mapping[str, Any]], holdout: set[str], hor
             if day not in holdout and index + int(horizon) >= first_holdout}
 
 
-def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source: str = "") -> dict[str, Any]:
+def long_working_raw_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The conditional population: swing LONG rows in a working market, ``win`` = the raw win."""
+    out = []
+    for row in rows:
+        raw = row.get("raw_win")
+        if (row.get("population") != "swing" or str(row.get("side") or "").upper() != "LONG"
+                or str(row.get("regime_working") or "") != "yes" or raw is None
+                or (isinstance(raw, float) and math.isnan(raw))):
+            continue
+        out.append({**row, "population": POPULATION_LONG_WORKING_RAW, "win": bool(raw)})
+    return out
+
+
+REGIME_FACET = "regime"
+
+
+def with_regime_facet(
+    rows: Sequence[Mapping[str, Any]], segments: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """Copies of ``rows`` with ``f_regime`` = the trader's regime on the row's session."""
+    import regime_join
+
+    joiner = regime_join.Joiner(segments)
+    return [{**row, f"f_{REGIME_FACET}": joiner.label(row.get("session"))} for row in rows]
+
+
+def regime_block(
+    by_population: Mapping[str, Mapping[str, Sequence[Mapping[str, Any]]]],
+    segments: Sequence[Mapping[str, Any]],
+    data_day: str,
+) -> dict[str, Any]:
+    """Per population x horizon x family x side: each regime's own baseline stats."""
+    import regime_join
+
+    current = regime_join.label_for(data_day, segments) if data_day else regime_join.UNKNOWN
+    present: set[str] = set()
+    out: dict[str, Any] = {}
+    for population, horizons in by_population.items():
+        for horizon, members in horizons.items():
+            groups: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+            for row in members:
+                label = str(row.get(f"f_{REGIME_FACET}") or regime_join.UNKNOWN)
+                present.add(label)
+                family_side = f"{row.get('family') or sp.UNKNOWN} {row.get('side') or sp.UNKNOWN}"
+                groups[family_side][label].append(row)
+            out.setdefault(population, {})[str(horizon)] = {
+                family_side: {label: stats_for(group).as_dict() for label, group in sorted(regimes.items())}
+                for family_side, regimes in sorted(groups.items())
+            }
+    order = regime_join.ordered_regimes(present, current, segments)
+    return {
+        "current": None if current == regime_join.UNKNOWN else current,
+        "order": order,
+        "labels": {name: regime_join.regime_label(name) for name in order},
+        "note": "Descriptive per-regime baselines over all sessions; no key is chosen from them.",
+        "populations": out,
+    }
+
+
+def build_report(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    ledger_root: Path,
+    source: str = "",
+    segments: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """The whole report. ``segments`` (the trader's regime timeline) adds the regime facet."""
+    rows = [*rows, *long_working_raw_rows(rows)]
+    if segments is not None:
+        rows = with_regime_facet(rows, segments)
     by_population: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
     for row in rows:
         by_population[str(row.get("population") or "")][horizon_key(row)].append(row)
@@ -458,7 +551,13 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source
                 "selection_sessions": len(selection_days),
                 "holdout_window": list(hold_window),
                 "families": {},
+                "study_families": {},
             }
+            if population == POPULATION_LONG_WORKING_RAW:
+                rules: dict[str, int] = defaultdict(int)
+                for row in population_rows:
+                    rules[str(row.get("regime_working_rule") or sp.UNKNOWN)] += 1
+                block["working_rules"] = dict(sorted(rules.items()))
             horizons_out[str(horizon)] = block
             groups: dict[tuple[str, str], list] = defaultdict(list)
             for row in population_rows:
@@ -473,12 +572,18 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source
                     "not searched, not published"
                 )
             families: dict[str, Any] = {}
-            for (family, side), members in sorted(groups.items()):
+            study: dict[str, Any] = {}
+            study_names = [name for name in lsf.STUDY_SEARCH_FACETS if name in names]
+            # S14: the study keys first, each on its own three-facet grid.
+            ordered = sorted(groups.items(), key=lambda item: (item[0][0] not in lsf.STUDY_FAMILIES, item[0]))
+            for (family, side), members in ordered:
+                is_study = family in lsf.STUDY_FAMILIES
+                target = study if is_study else families
                 selection = [row for row in members
                              if row.get("session") not in holdout_days and row.get("session") not in embargo]
                 holdout = [row for row in members if row.get("session") in holdout_days]
                 if refused:
-                    families[f"{family} {side}"] = {
+                    target[f"{family} {side}"] = {
                         "family": family, "side": side, "horizon_name": name, "verdict": VERDICT_THIN,
                         "refused_reason": block["refused_reason"],
                         "baseline": {"n": len(selection), "sessions": len({r.get("session") for r in selection})},
@@ -494,14 +599,22 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source
                         cells=cells, selection_window=_sel_window, holdout_window=_hold_window,
                     ))
 
-                result = search_group(selection, holdout, names=names, register=register)
+                result = search_group(selection, holdout, names=study_names if is_study else names,
+                                      register=register)
                 for key in result["keys"]:
                     key["horizon_name"] = name
-                families[f"{family} {side}"] = {"family": family, "side": side, "horizon_name": name, **result}
+                target[f"{family} {side}"] = {"family": family, "side": side, "horizon_name": name, **result}
+                if is_study:
+                    target[f"{family} {side}"]["facets_searched"] = list(study_names)
             block["families"] = families
+            block["study_families"] = study
         report["populations"][population] = {"horizons": horizons_out}
+        if population == POPULATION_LONG_WORKING_RAW:
+            report["populations"][population]["definition"] = LONG_WORKING_RAW_DEFINITION
     data_day = report_data_date(report)
     report["data_date"] = data_day.isoformat() if data_day else ""
+    if segments is not None:
+        report["by_regime"] = regime_block(by_population, segments, report["data_date"])
     return report
 
 
@@ -607,9 +720,14 @@ def main(argv: list[str] | None = None) -> int:
                         help="default: permutation_report_history/ beside --out")
     parser.add_argument("--verdicts-out", type=Path, default=None,
                         help="default: permutation_verdicts.json beside --out")
+    parser.add_argument("--journal-db", type=Path, default=None,
+                        help="the journal holding the trader's regimes (read-only; default the live journal)")
     args = parser.parse_args(argv)
     rows = read_outcomes(args.outcomes)
-    report = build_report(rows, ledger_root=args.ledger_root, source=str(args.outcomes))
+    import regime_join
+
+    report = build_report(rows, ledger_root=args.ledger_root, source=str(args.outcomes),
+                          segments=regime_join.read_segments(args.journal_db))
     write_report(report, args.out)
     history_dir = args.history_dir or Path(args.out).parent / HISTORY_DIR_NAME
     append_history(report, history_dir)
@@ -621,7 +739,7 @@ def main(argv: list[str] | None = None) -> int:
         len(fam["keys"])
         for pop in report["populations"].values()
         for hz in pop["horizons"].values()
-        for fam in hz["families"].values()
+        for fam in (*hz["families"].values(), *hz.get("study_families", {}).values())
     )
     print(json.dumps({"out": str(args.out), "keys": found}))
     return 0

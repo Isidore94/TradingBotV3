@@ -637,6 +637,9 @@ def test_the_scope_can_be_selected_on_demand():
         # LEAD AMENDMENT 2026-09-26 (S11): exit-window truth, a deterministic
         # stage 1 slot directly after `prediction_contrast`.
         "exit_windows",
+        # LEAD AMENDMENT 2026-09-26 (S17): the regime table, a deterministic
+        # stage 1 slot directly after `exit_windows`.
+        "market_regime_table",
         "market_story_rollups",
         "measured_report",
         # AI-R3 keeps the factual day pack current before stage-2 stories.
@@ -644,6 +647,9 @@ def test_the_scope_can_be_selected_on_demand():
         # LEAD AMENDMENT 2026-09-26 (S12): the SP4 family evidence, a
         # deterministic slot directly after the facts; it now closes stage 1.
         "family_side_evidence",
+        # LEAD AMENDMENT 2026-09-26 (S15): swing path facts after the SP4 evidence;
+        # it now closes stage 1.
+        "swing_path_facts",
         # Stage 2: the original pair, plus Phase 0.31's bounded story narration.
         # TJ-4 (2026-09-20) appends the day story inside the stage, ahead of the
         # briefs: gate #158 wants it finished before 23:30 Pacific and the
@@ -670,6 +676,9 @@ def test_the_scope_can_be_selected_on_demand():
         # pasted brief, a stage 2 model slot directly after the briefs.
         "econ_brief",
         "market_story_narration",
+        # S17.2 (2026-09-26): the regime read joins the market story, a stage 2
+        # model slot directly after it.
+        "regime_read",
         # Day Recap coach (2026-09-23): cited answers to the trader's Week
         # Review questions, appended at the end of stage 2.
         "week_questions",

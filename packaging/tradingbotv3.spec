@@ -176,6 +176,9 @@ hiddenimports += ["day_session_record", "recap_store", "recap_findability", "set
 # Movers imports its IB scanner client, and every yfinance caller the shared
 # download lock, inside functions on worker threads.
 hiddenimports += ["ib_market_scanner", "yahoo_download"]
+# S17: the bounce service's regime-strip worker and the night regime table import
+# the regime reads (and they the structure facts) inside functions.
+hiddenimports += ["market_regimes", "market_structure"]
 # P1-7: the plan view's worker and the Mentor's answer writer import the plan
 # and its challenge store inside functions.
 hiddenimports += ["trading_plan", "plan_challenges"]

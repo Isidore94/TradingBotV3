@@ -21,7 +21,11 @@ was on the scan date (``f_<facet>`` columns):
   close, so the v2 gap-aware execution convention and the literal one book the
   same number). With ``--daily-bars`` the v2 build is re-run over the whole
   history (``window_sessions=None``) instead of reading the 30-session file;
-  SPY comes from ``--spy-bars``, else ``<daily-bars>/SPY.csv``.
+  SPY comes from ``--spy-bars``, else ``<daily-bars>/SPY.csv``. S15 item 4:
+  ``raw_win`` = the side return > 0 (not vs SPY) and ``regime_working`` /
+  ``regime_working_rule`` = the entry day's `long_regime_working` verdict, from
+  the row's live stamp, else recomputed (``--structural-regime`` copy of the
+  journal first, then SPY above a rising 20-day through the session).
 - **m5**: one row per MEASURED M5 episode (`held_run_score.build_episodes`),
   family = its bounce type, ``win`` = the level held 30 minutes, ``r`` = the
   episode's MFE_R (held_run_score's MFE rule). Its facets come from the
@@ -60,6 +64,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import long_study_families as lsf  # noqa: E402  (pure)
 import setup_permutations as sp  # noqa: E402  (pure; imports no store path)
 
 POPULATION_SWING = "swing"
@@ -78,6 +83,8 @@ BACKFILL_VERSION = "setup_permutation_backfill.v1"
 BASE_COLUMNS = (
     "population", "episode_id", "symbol", "side", "family", "session", "horizon", "horizon_name",
     "win", "r", "r_unit", "outcome_kind", "permutation_rule_version", "backfill_version",
+    # S15 item 4: the raw side return won (> 0, not vs SPY) and the entry day's long regime verdict.
+    "raw_win", "regime_working", "regime_working_rule",
 )
 
 
@@ -317,6 +324,11 @@ class KeyedRow:
     priority_bucket: str
     facets: dict[str, str]
     rule_version: str
+    #: S14: the long study families the row is in (`long_study_families`).
+    study: tuple[str, ...] = ()
+    #: `setup_permutations.long_regime_working` on the entry day: the scan row's stamp, else recomputed.
+    regime_working: str = sp.UNKNOWN
+    regime_rule: str = sp.UNKNOWN
 
 
 def key_scan_row(row: Mapping[str, Any], symbol: str, side: str, session: str, context: Any) -> "sp.PermutationKey":
@@ -334,11 +346,17 @@ def key_representatives(
     features_path: Path, representatives: Mapping[int, tuple[str, str, str]], stores: ContextStores
 ) -> dict[tuple[str, str, str], KeyedRow]:
     keyed: dict[tuple[str, str, str], KeyedRow] = {}
+    study_inputs: dict[tuple[str, str, str], dict[str, Any]] = {}
     for index, row in enumerate(_read_rows(features_path)):
         identity = representatives.get(index)
         if identity is None:
             continue
         symbol, side, session = identity
+        study_inputs[identity] = {
+            "side": side, "scan_date": session, "setup_family": _text(row.get("setup_family")),
+            **{name: row.get(name) for name in ("sector", "pct_from_current_vwap", "rs_vs_industry",
+                                                "spy_above_sma20")},
+        }
         key = key_scan_row(row, symbol, side, session, stores.session_context(session))
         keyed[identity] = KeyedRow(
             symbol=symbol,
@@ -354,8 +372,55 @@ def key_representatives(
             priority_bucket=_text(row.get("priority_bucket")),
             facets=key.as_dict(),
             rule_version=key.permutation_rule_version,
+            **_stamped_regime(row),
         )
+    # S14: tagged once every representative is read (the RS tercile is the session's cross-section).
+    session_rs = lsf.session_rs_values(study_inputs.values())
+    for identity, inputs in study_inputs.items():
+        keyed[identity].study = tuple(lsf.study_families(inputs, session_rs))
     return keyed
+
+
+# --- S15 item 4: the entry day's long regime ("working" or not)
+
+_WORKING, _WORKING_RULE = "perm_regime_working", "perm_regime_working_rule"
+
+
+def _stamped_regime(row: Mapping[str, Any]) -> dict[str, str]:
+    """The verdict the live scan stamped on the row (S15 item 2); unknown on older rows."""
+    verdict = _text(row.get(_WORKING)).lower()
+    if verdict not in ("yes", "no"):
+        return {}
+    return {"regime_working": verdict, "regime_rule": _text(row.get(_WORKING_RULE)) or sp.UNKNOWN}
+
+
+def label_entry_regimes(
+    keyed: Mapping[tuple[str, str, str], KeyedRow],
+    spy_closes: Mapping[str, float],
+    trader_rows: list[Mapping[str, Any]] | None = None,
+) -> dict[str, int]:
+    """Fill the regime verdict of every row the live scan did not stamp; returns counts by rule.
+
+    Same definition as the stamp (`setup_permutations.long_regime_working`): the trader's
+    structural regime on the session (``trader_rows`` = a copy of the journal's
+    `structural_regime` rows), else SPY above a rising 20-day from SPY closes through the
+    session (the entry is the session's close, so its bar is complete).
+    """
+    import structural_regime
+
+    days = sorted(spy_closes or {})
+    counts: dict[str, int] = {}
+    for row in keyed.values():
+        if row.regime_working == sp.UNKNOWN:
+            segment = structural_regime.regime_at(trader_rows, row.session) if trader_rows else None
+            upto = [day for day in days if day <= row.session]
+            trend = (None, None)
+            if upto and upto[-1] == row.session:
+                trend = sp.spy_trend([spy_closes[day] for day in upto[-30:]])
+            row.regime_working, row.regime_rule = sp.long_regime_working(
+                (segment or {}).get("regime"), *trend)
+        counts[row.regime_rule] = counts.get(row.regime_rule, 0) + 1
+    return counts
 
 
 # --- outcomes
@@ -364,6 +429,7 @@ def key_representatives(
 def _swing_row(keyed: KeyedRow, horizon: int, win: bool, side_return_pct: Any, entry_close: Any) -> dict:
     ret = _number(side_return_pct)
     close = _number(entry_close) or keyed.last_close
+    raw_win = None if ret is None else ret > 0
     r = None
     if ret is not None and close and keyed.atr20 and keyed.atr20 > 0:
         r = ret / (keyed.atr20 / close * 100.0)
@@ -382,9 +448,18 @@ def _swing_row(keyed: KeyedRow, horizon: int, win: bool, side_return_pct: Any, e
         "outcome_kind": SWING_OUTCOME_KIND,
         "permutation_rule_version": keyed.rule_version,
         "backfill_version": BACKFILL_VERSION,
+        "raw_win": raw_win,
+        "regime_working": keyed.regime_working,
+        "regime_working_rule": keyed.regime_rule,
         **{facet_column(name): value for name, value in keyed.facets.items()},
         **_unknown_m5(),
     }
+
+
+def _swing_rows(keyed: KeyedRow, horizon: int, win: bool, side_return_pct: Any, entry_close: Any) -> list[dict]:
+    """The row under its own family, then one copy per S14 study family it is in."""
+    row = _swing_row(keyed, horizon, win, side_return_pct, entry_close)
+    return [row, *({**row, "family": name} for name in keyed.study)]
 
 
 def read_spy_closes(path: Path | None) -> dict[str, float]:
@@ -436,7 +511,7 @@ def swing_rows_from_horizons(
         win = _tape_win(match, row, spy_closes or {}, tally)
         if win is None:
             continue
-        out.append(_swing_row(match, horizon, win, row.get("side_return_pct"), row.get("entry_close")))
+        out.extend(_swing_rows(match, horizon, win, row.get("side_return_pct"), row.get("entry_close")))
     return out
 
 
@@ -490,8 +565,8 @@ def swing_rows_from_daily_bars(
         win = _tape_win(match, row, spy_closes or {}, tally)
         if win is None:
             continue
-        out.append(_swing_row(match, row["horizon_sessions"], win, row.get("side_return_pct"),
-                              row.get("entry_close")))
+        out.extend(_swing_rows(match, row["horizon_sessions"], win, row.get("side_return_pct"),
+                               row.get("entry_close")))
     return out
 
 
@@ -756,16 +831,18 @@ def build_permutation_outcomes(
     m5_candidates: Path | None = None,
     spy_bars: Path | None = None,
     spy_closes: Mapping[str, float] | None = None,
+    structural_regime: Path | None = None,
 ) -> BackfillResult:
     """Every population row. Refuses live paths before it opens anything.
 
     SPY closes for the tape-relative swing win: ``spy_closes``, else ``spy_bars``,
     else ``<daily_bars>/SPY.csv``. With none, every swing row's tape is unknown
-    and none is written.
+    and none is written. ``structural_regime`` is a copy of the trade journal: the
+    trader's regime for rows the live scan did not stamp (S15 item 4).
     """
     stores = stores or ContextStores()
     refuse_live([features, horizons, daily_bars, m5_outcomes, m5_stamps, m5_candidates, spy_bars,
-                 *stores.paths()])
+                 structural_regime, *stores.paths()])
     if horizons is None and daily_bars is None:
         raise ValueError("give --horizons or --daily-bars for the swing outcomes")
     representatives = session_representatives(Path(features))
@@ -773,6 +850,12 @@ def build_permutation_outcomes(
     if spy_closes is None:
         spy_source = spy_bars or (Path(daily_bars) / "SPY.csv" if daily_bars is not None else None)
         spy_closes = read_spy_closes(spy_source)
+    trader_rows = None
+    if structural_regime is not None:
+        import setup_permutation_context as spc
+
+        trader_rows = spc.load_structural_regime_rows(path=Path(structural_regime))
+    regime_counts = label_entry_regimes(keyed, spy_closes, trader_rows)
     swing_counts: dict[str, int] = {"swing_tape_unknown": 0}
     if horizons is not None:
         swing = swing_rows_from_horizons(Path(horizons), keyed, spy_closes, swing_counts)
@@ -797,7 +880,8 @@ def build_permutation_outcomes(
     return BackfillResult(
         rows=[*swing, *m5, *bracket],
         counts={"scan_rows_keyed": len(keyed), "swing_rows": len(swing), "spy_closes": len(spy_closes),
-                **swing_counts, "m5_rows": len(m5), "m5_bracket_rows": len(bracket), **stamp_counts},
+                **swing_counts, "m5_rows": len(m5), "m5_bracket_rows": len(bracket), **stamp_counts,
+                **{f"regime_rule_{rule}": count for rule, count in sorted(regime_counts.items())}},
     )
 
 
@@ -808,7 +892,7 @@ def write_parquet(rows: list[dict], out: Path) -> Path:
     refuse_live([out])
     columns = output_columns()
     schema = pa.schema([
-        pa.field(name, pa.int32() if name == "horizon" else pa.bool_() if name == "win"
+        pa.field(name, pa.int32() if name == "horizon" else pa.bool_() if name in ("win", "raw_win")
                  else pa.float64() if name == "r" else pa.string())
         for name in columns
     ])
@@ -832,6 +916,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--m5-candidates", type=Path,
                         help="copy of intraday_bounce_candidates.csv: adds the bracket_1r horizon (S3)")
     parser.add_argument("--spy-bars", type=Path, help="copy of SPY daily bars (csv or parquet) for the tape win")
+    parser.add_argument("--structural-regime", type=Path,
+                        help="copy of trade_journal.sqlite3: the trader's regime for unstamped rows (S15 item 4)")
     parser.add_argument("--review-events", type=Path)
     parser.add_argument("--scan-reports", type=Path)
     parser.add_argument("--environment", type=Path)
@@ -841,7 +927,7 @@ def main(argv: list[str] | None = None) -> int:
     stores = ContextStores(reports_dir=args.scan_reports, review_events=args.review_events,
                            m5_outcomes=args.m5_outcomes, environment=args.environment)
     everything = [args.scratch, args.features, args.horizons, args.daily_bars, args.out, args.m5_stamps,
-                  args.m5_candidates, args.spy_bars, *stores.paths()]
+                  args.m5_candidates, args.spy_bars, args.structural_regime, *stores.paths()]
     roots = live_roots()  # taken before LOCALAPPDATA is pointed at scratch
     try:
         refuse_live(everything, roots)
@@ -863,7 +949,7 @@ def main(argv: list[str] | None = None) -> int:
     result = build_permutation_outcomes(
         args.features, horizons=args.horizons, daily_bars=args.daily_bars, m5_outcomes=args.m5_outcomes,
         stores=stores, last_completed=args.last_completed, m5_stamps=args.m5_stamps,
-        m5_candidates=args.m5_candidates, spy_bars=args.spy_bars,
+        m5_candidates=args.m5_candidates, spy_bars=args.spy_bars, structural_regime=args.structural_regime,
     )
     write_parquet(result.rows, args.out)
     print(json.dumps({"out": str(args.out), **result.counts}))

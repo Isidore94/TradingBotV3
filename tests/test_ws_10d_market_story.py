@@ -952,7 +952,9 @@ def test_the_measured_report_precedes_the_day_facts_stage_tail():
     names = tuple(slot.name for slot in runner.default_slots())
     assert "market_story_rollups" in names, names
     # S12 (2026-09-26): the SP4 family evidence closes stage 1 after the facts.
-    assert names[names.index("ai_summary") - 1] == "family_side_evidence", names
+    # S15 (2026-09-26): swing path facts follow the SP4 evidence and now close stage 1.
+    assert names[names.index("ai_summary") - 1] == "swing_path_facts", names
+    assert names[names.index("swing_path_facts") - 1] == "family_side_evidence", names
     assert names[names.index("family_side_evidence") - 1] == "day_review_facts", names
     assert names[names.index("day_review_facts") - 1] == "measured_report", names
     assert names[names.index("measured_report") - 1] == "market_story_rollups", names

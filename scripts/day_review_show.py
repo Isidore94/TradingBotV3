@@ -622,6 +622,34 @@ def inputs_hash(pack: Mapping[str, Any], narration: Mapping[str, Any] | None) ->
     ).hexdigest()
 
 
+def with_regime_read(deck: Mapping[str, Any], regime_read: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The deck with the night's verified regime read as a `read` slide source (S17.2).
+
+    It joins the deck's `read` slide (its source id and paragraph added) or, with
+    no read slide, becomes one before the closing slide. No read, no change.
+    """
+    body = dict(deck or {})
+    read = (regime_read or {}).get("read") if isinstance(regime_read, Mapping) else None
+    paragraph = str((read or {}).get("paragraph") or "").strip() if isinstance(read, Mapping) else ""
+    if not paragraph:
+        return body
+    source_id = str(regime_read.get("source_id") or f"regime_read:{regime_read.get('session_date') or ''}")
+    line = f"Regime read ({str(regime_read.get('session_date') or '')[:10]}): {paragraph}"
+    slides = [dict(slide) for slide in body.get("slides") or () if isinstance(slide, Mapping)]
+    for slide in slides:
+        if slide.get("kind") == "read":
+            slide["source_ids"] = [*list(slide.get("source_ids") or ()), source_id]
+            slide["lines"] = [*list(slide.get("lines") or ()), _clip(line, 1000)]
+            break
+    else:
+        new = _slide("read", "The market regime", "", source_ids=[source_id])
+        new["lines"] = [_clip(line, 1000)]
+        at = next((index for index, slide in enumerate(slides) if slide.get("kind") == "close"), len(slides))
+        slides.insert(at, new)
+    body["slides"] = slides
+    return body
+
+
 def desk_deck(
     stored: Mapping[str, Any] | None,
     pack: Mapping[str, Any] | None,
@@ -630,12 +658,14 @@ def desk_deck(
     truth_lines: Iterable[str] = (),
     alerts_line: str = "",
     spy_bars: Sequence[Mapping[str, Any]] | None = None,
+    regime_read: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """What the Show button opens: the verified model deck, or the fallback.
 
     The stored deck is re-verified against the current pack and must have been
     written for that pack; stats are re-printed from the pack. Anything else
-    shows the fallback deck with `facts_only` set and the reason named.
+    shows the fallback deck with `facts_only` set and the reason named. Either
+    way the night's verified regime read joins as a `read` slide source.
     """
     session = str(session_date or (pack or {}).get("session_date") or "")[:10]
     fallback_reason = ""
@@ -670,15 +700,18 @@ def desk_deck(
             fallback_reason = f"the show failed its checks: {exc}"
         else:
             return {
-                "deck": deck,
+                "deck": with_regime_read(deck, regime_read),
                 "facts_only": False,
                 "reason": "",
                 "model": str(stored.get("model") or ""),
             }
     return {
-        "deck": fallback_deck(
-            pack, session_date=session, truth_lines=truth_lines,
-            alerts_line=alerts_line, spy_bars=spy_bars,
+        "deck": with_regime_read(
+            fallback_deck(
+                pack, session_date=session, truth_lines=truth_lines,
+                alerts_line=alerts_line, spy_bars=spy_bars,
+            ),
+            regime_read,
         ),
         "facts_only": True,
         "reason": fallback_reason,
@@ -705,4 +738,5 @@ __all__ = [
     "spy_path",
     "stat_value",
     "verify_show",
+    "with_regime_read",
 ]

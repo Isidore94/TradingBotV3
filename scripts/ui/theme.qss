@@ -1029,3 +1029,31 @@ QLabel#SectionTitle[accent="favorite"] {
     color: @favorite@;
     font-weight: 700;
 }
+
+/* S17 regime strip: six auto-regime cells per index, tone from the champion env_key. */
+QLabel#RegimeStripSymbol {
+    color: @text_secondary@;
+    font-size: @font_body@;
+    font-weight: 700;
+    padding: 0px 2px 0px 8px;
+}
+
+QLabel#RegimeCell {
+    color: @text_muted@;
+    font-size: @font_body@;
+    padding: 0px 4px;
+    border: 1px solid @border@;
+    border-radius: 4px;
+}
+
+QLabel#RegimeCell[tone="bull"] {
+    color: @long@;
+}
+
+QLabel#RegimeCell[tone="bear"] {
+    color: @short@;
+}
+
+QLabel#RegimeCell[tone="chop"] {
+    color: @caution@;
+}

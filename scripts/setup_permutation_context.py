@@ -26,7 +26,7 @@ import csv
 import io
 import json
 import logging
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping
 
@@ -377,6 +377,71 @@ def load_d1_environment(session: Any, *, path: Any = None) -> str:
         return d1_environment_store.label_for_session(_session_text(session), path=path)
     except Exception:  # noqa: BLE001 - an unreadable store is "unknown"
         return sp.UNKNOWN
+
+
+# --- S15: market caps (the universe builder's weekly yfinance cache, read-only)
+
+#: A cache older than this at scan time gives no caps (unknown), never a stale bucket.
+MARKET_CAP_MAX_AGE_DAYS = 30
+
+
+def market_cap_cache_path() -> Path:
+    """The same file as `universe_builder.MARKET_CAP_CACHE`."""
+    import project_paths
+
+    return Path(project_paths.CACHE_DIR) / "universe" / "market_caps.json"
+
+
+def load_market_caps(*, path: Path | None = None, now: datetime | None = None) -> dict[str, float]:
+    """Symbol -> market cap ($M) from the cache; empty when it is missing, unreadable or too old."""
+    try:
+        payload = json.loads(Path(path or market_cap_cache_path()).read_text(encoding="utf-8"))
+        fetched = datetime.fromisoformat(str(payload.get("fetched_at")))
+    except Exception:  # noqa: BLE001 - an unreadable cache is "unknown"
+        return {}
+    reference = now or datetime.now()
+    if fetched > reference or reference - fetched > timedelta(days=MARKET_CAP_MAX_AGE_DAYS):
+        return {}
+    caps = payload.get("caps") if isinstance(payload, dict) else None
+    if not isinstance(caps, dict):
+        return {}
+    out: dict[str, float] = {}
+    for symbol, value in caps.items():
+        try:
+            cap = float(value)
+        except (TypeError, ValueError):
+            continue
+        if cap > 0:
+            out[str(symbol).strip().upper()] = cap
+    return out
+
+
+def load_structural_regime_rows(*, path: Path | None = None) -> list[dict[str, Any]]:
+    """The trader's `structural_regime` rows, opened read-only; [] when the journal or table is missing."""
+    import sqlite3
+    from contextlib import closing
+
+    if path is None:
+        import project_paths
+
+        path = Path(project_paths.JOURNAL_DB_FILE)
+    target = Path(path)
+    if not target.is_file():
+        return []
+    try:
+        with closing(sqlite3.connect(f"file:{target.as_posix()}?mode=ro", uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM structural_regime ORDER BY segment_id").fetchall()
+    except sqlite3.Error:  # an older journal has no table yet: unknown
+        return []
+    return [dict(row) for row in rows]
+
+
+def load_trader_regime(day: Any, *, path: Path | None = None) -> dict[str, Any] | None:
+    """The trader's regime segment in force on ``day`` (`structural_regime.regime_at`), or None."""
+    import structural_regime
+
+    return structural_regime.regime_at(load_structural_regime_rows(path=path), day)
 
 
 # --- ctx and stamping

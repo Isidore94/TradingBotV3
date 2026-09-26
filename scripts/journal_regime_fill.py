@@ -25,13 +25,14 @@ By hand (dry run by default):
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
+
+import market_regimes
 
 MARKET_TZ = ZoneInfo("America/New_York")
 BENCHMARKS = ("SPY", "QQQ", "IWM")
@@ -97,35 +98,10 @@ def _is_date_only(moment: datetime) -> bool:
     return (local.hour, local.minute, local.second, local.microsecond) == (0, 0, 0, 0)
 
 
-def _session_day(row: Mapping[str, Any]) -> date | None:
-    value = row.get("session_date")
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    try:
-        return date.fromisoformat(str(value or "")[:10])
-    except ValueError:
-        return None
-
-
-def _d1_read(completed: Sequence[Mapping[str, Any]], window: int) -> str:
-    """Champion env_key over the last `window` completed D1 bars, or `unknown`."""
-    if len(completed) <= window:
-        return UNKNOWN
-    from research_warehouse import market_bias_context as bias
-
-    try:
-        reference = float(completed[-window - 1].get("close"))
-    except (TypeError, ValueError):
-        return UNKNOWN
-    reading = bias._champion_read([dict(row) for row in completed[-window:]], reference)
-    return str(reading.get("env_key") or UNKNOWN)
-
-
-def _completed_before(rows: Iterable[Mapping[str, Any]], day: date) -> list[Mapping[str, Any]]:
-    kept = [row for row in rows or () if (_session_day(row) or day) < day]
-    return sorted(kept, key=lambda row: _session_day(row))
+# One definition, shared with the S17 regime table (`market_regimes`).
+_session_day = market_regimes.session_day
+_d1_read = market_regimes.d1_env_key
+_completed_before = market_regimes.completed_before
 
 
 def _intraday_read(
@@ -135,28 +111,16 @@ def _intraday_read(
     if entry_at is None or _is_date_only(entry_at) or not spy_m5:
         return UNKNOWN, UNKNOWN, "no entry time"
     from research_warehouse import exchange_calendar as xcal
-    from research_warehouse import market_bias_context as bias
 
     session = xcal.session_for(entry_at)
     if session is None:
         return UNKNOWN, UNKNOWN, "not a session"
     moment = min(entry_at, session.rth_close_at)
-    d1_rows = [{**dict(row), "session_date": _session_day(row)} for row in spy_d1]
-    # M5 and M30 need at most a few sessions; bound the tape so a year of bars is not re-aggregated per date.
-    floor = moment - M5_LOOKBACK
-    window = [
-        row for row in spy_m5
-        if isinstance(row.get("interval_start"), datetime) and floor <= row["interval_start"] < moment
-    ]
-    if not window:
-        return UNKNOWN, UNKNOWN, "no M5 bars"
-    readings = bias.context_at(moment, spy_m5=window, spy_d1=d1_rows)
+    readings, note = market_regimes.intraday_env_keys(moment, spy_m5, spy_d1, lookback=M5_LOOKBACK)
+    if note:
+        return UNKNOWN, UNKNOWN, note
     stamp = moment.astimezone(MARKET_TZ).strftime("%H:%M ET")
-    return (
-        str(readings.get("M5", {}).get("env_key") or UNKNOWN),
-        str(readings.get("M30", {}).get("env_key") or UNKNOWN),
-        f"first entry {stamp}",
-    )
+    return readings["M5"], readings["M30"], f"first entry {stamp}"
 
 
 def read_session_regime(
@@ -263,62 +227,14 @@ def apply_fill(store: Any, plan: RegimeFillPlan) -> dict[str, int]:
     return summary
 
 
-def _d1_rows_from_frame(symbol: str, frame) -> list[dict[str, Any]]:
-    rows = []
-    for record in frame.to_dict("records"):
-        stamp = record.get("datetime")
-        day = stamp.date() if hasattr(stamp, "date") else None
-        if day is None:
-            continue
-        values = {key: record.get(key) for key in ("open", "high", "low", "close", "volume")}
-        rows.append({**values, "symbol": symbol, "session_date": day})
-    return rows
-
-
 def load_benchmark_bars() -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]], str]:
     """Read-only: benchmark D1 (lake, then the durable D1 store) and SPY M5 (lake).
 
     Returns `(d1_by_symbol, spy_m5, source text)`. Never writes; an unreadable
-    source contributes nothing.
+    source contributes nothing. The read itself is `market_regimes.load_bars`.
     """
-    d1_by_symbol: dict[str, list[dict[str, Any]]] = {symbol: [] for symbol in BENCHMARKS}
-    spy_m5: list[dict[str, Any]] = []
-    sources: list[str] = []
-    try:
-        from research_warehouse.config import get_research_store_dir
-        from research_warehouse.store import ResearchStore
-
-        root = get_research_store_dir()
-        if root is not None and Path(root).exists():
-            lake = ResearchStore(Path(root))
-            for row in lake.read_rows("bar_d1", symbols=list(BENCHMARKS)):
-                symbol = str(row.get("symbol") or "").upper()
-                if symbol in d1_by_symbol:
-                    d1_by_symbol[symbol].append(row)
-            partitions = sorted(
-                {entry.partition for entry in lake.manifest.resolve(dataset="bar_m5").entries}
-            )
-            for partition in partitions:
-                spy_m5.extend(lake.read_rows("bar_m5", partition, symbols=[PRIMARY]))
-            sources.append("lake")
-    except Exception:  # noqa: BLE001 - an unreadable lake is unknown, never a failure
-        logging.debug("Research lake unreadable for the regime fill.", exc_info=True)
-    try:
-        from research_warehouse.ingest_existing import read_durable_daily_bars
-
-        for symbol in BENCHMARKS:
-            frame = read_durable_daily_bars(symbol)
-            if frame is None:
-                continue
-            known = {_session_day(row) for row in d1_by_symbol[symbol]}
-            extra = [row for row in _d1_rows_from_frame(symbol, frame) if row["session_date"] not in known]
-            if extra:
-                d1_by_symbol[symbol].extend(extra)
-                if "durable_d1" not in sources:
-                    sources.append("durable_d1")
-    except Exception:  # noqa: BLE001
-        logging.debug("Durable D1 store unreadable for the regime fill.", exc_info=True)
-    return d1_by_symbol, spy_m5, "+".join(sources) or "none"
+    d1_by_symbol, m5_by_symbol, source = market_regimes.load_bars(BENCHMARKS, (PRIMARY,))
+    return d1_by_symbol, m5_by_symbol[PRIMARY], source
 
 
 def fill_regimes(

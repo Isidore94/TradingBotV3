@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -194,10 +195,64 @@ def ib_status_check(bot_provider: Callable[[], Any] | None) -> dict[str, Any]:
 
 
 def _with_universe_and_ib_checks(payload: dict[str, Any], bot_provider) -> dict[str, Any]:
-    """Append the universe-floor and IB rows; audit worker only."""
+    """Append the universe-floor, traded-names and IB rows; audit worker only."""
     if not isinstance(payload, dict):
         return payload
-    return _merge_checks(payload, [universe_floor_check(), ib_status_check(bot_provider)])
+    return _merge_checks(
+        payload, [universe_floor_check(), traded_names_missing_check(), ib_status_check(bot_provider)]
+    )
+
+
+#: S14: journal trades opened this many days back count toward the traded-names check.
+TRADED_NAMES_LOOKBACK_DAYS = 90
+#: One answer per ISO week (keyed by that week's Monday), so the list moves once a week.
+_TRADED_GAP_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def traded_names_missing_check(today: date | None = None) -> dict[str, Any]:
+    """Journal-traded names the scan never sees (no daily bars), once a week; audit worker only.
+
+    The scan measures the trader's wins only on names it has bars for (F21: SPCX, DRAM).
+    Deterministic: the same journal and bar folder give the same list.
+    """
+    label, source = "Traded names outside the scan", "trade_journal.sqlite3 + daily_bars"
+    day = today or date.today()
+    week = (day - timedelta(days=day.weekday())).isoformat()
+    cached = _TRADED_GAP_CACHE.get(week)
+    if cached is not None:
+        return dict(cached)
+    try:
+        from project_paths import JOURNAL_DB_FILE, MASTER_AVWAP_DAILY_BARS_DIR
+
+        bars_dir = Path(MASTER_AVWAP_DAILY_BARS_DIR)
+        if not Path(JOURNAL_DB_FILE).is_file() or not bars_dir.is_dir():
+            return _health_row("traded_names_universe", label, _UNKNOWN,
+                               "No journal or no daily bars on this machine; unknown.", source)
+        from universe_builder import journal_traded_symbols
+
+        since = (date.fromisoformat(week) - timedelta(days=TRADED_NAMES_LOOKBACK_DAYS)).isoformat()
+        traded = set(journal_traded_symbols(
+            db_path=Path(JOURNAL_DB_FILE), today=date.fromisoformat(week),
+            lookback_days=TRADED_NAMES_LOOKBACK_DAYS, limit=10**6, include_option_roots=True,
+        ))
+        seen = {entry.stem.upper() for entry in bars_dir.iterdir() if entry.suffix.lower() in {".parquet", ".csv"}}
+    except Exception as exc:
+        return _health_row("traded_names_universe", label, _UNKNOWN, f"Could not read: {exc}", source)
+    missing = sorted(traded - seen)
+    details = {"week_of": week, "since": since, "traded": len(traded), "missing": missing}
+    if missing:
+        row = _health_row(
+            "traded_names_universe", label, "degraded",
+            f"Week of {week}: {len(missing)} traded name(s) the scan never sees: {', '.join(missing)}.",
+            source, details,
+        )
+    else:
+        row = _health_row(
+            "traded_names_universe", label, "healthy",
+            f"Week of {week}: all {len(traded)} traded names are in the scan.", source, details,
+        )
+    _TRADED_GAP_CACHE[week] = dict(row)
+    return row
 
 
 def _with_tracker_write_line(payload: dict[str, Any]) -> dict[str, Any]:

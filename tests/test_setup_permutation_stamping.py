@@ -73,7 +73,9 @@ def test_scan_row_columns_are_the_appended_set_in_order():
                                    "perm_atr14_pctile_252", "perm_low_52w_dist_atr", "perm_closes_right_of_level_5",
                                    "perm_level_respect_20", "perm_d1_zone_arm", "perm_setup_age_sessions",
                                    "perm_trendline_break_recent", "perm_trendline_within_alert_range",
-                                   "perm_trendline_direction")
+                                   "perm_trendline_direction", "perm_dollar_volume_20d_m", "perm_market_cap_m",
+                                   "perm_sector_rs_rank_5d", "perm_sector_rs_rank_20d", "perm_sector_rank_count",
+                                   "perm_earnings_gap_atr_signed", *sp.REGIME_COLUMNS)
 
 
 # --- the honest input view

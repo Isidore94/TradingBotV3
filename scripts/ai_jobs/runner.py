@@ -1031,6 +1031,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         family_side_evidence,
         improvement_ideas,
         journal_auto_tag,
+        market_regime_table,
         market_story_narration,
         measured_report_publish,
         miss_contrast,
@@ -1040,8 +1041,10 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         policy_draft,
         prediction_contrast,
         read_grades_mature,
+        regime_read,
         setup_keys_narration,
         setup_research,
+        swing_path_facts_night,
         theta_grading,
         week_review_narration,
         week_questions,
@@ -1351,6 +1354,20 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             ),
             max_attempts=3,
         ),
+        # S17 (2026-09-26), INSIDE stage 1 directly after `exit_windows`: the
+        # multi-timeframe regime table. It reads stored bars only and feeds nothing
+        # in the night; ahead of `day_review_facts` so the Sunday slate keeps it.
+        JobSlot(
+            name="market_regime_table",
+            goal="market_read",
+            run=market_regime_table.run_market_regime_table,
+            reserve_minutes=5.0,
+            description=(
+                "Auto regimes on M5, M30, H1, H4, D1 and W for the indexes and sector "
+                "ETFs plus structure facts, appended per session (deterministic, no model)"
+            ),
+            max_attempts=3,
+        ),
         # Packet WS-10D (2026-09-12), APPENDED at the END of the deterministic
         # stage, after `theta_pick_grading`, and it CLOSES the block. It reads
         # the Market Journal's own entries and the exchange calendar, writes
@@ -1401,8 +1418,8 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description="Refresh current and recent Day Review facts (no model)",
             max_attempts=3,
         ),
-        # S12 (2026-09-26), DIRECTLY after `day_review_facts` and now the LAST
-        # stage-1 slot (`_STAGE_ONE_LAST_SLOT`), so the Sunday slate keeps it.
+        # S12 (2026-09-26), DIRECTLY after `day_review_facts`, inside stage 1
+        # (S15's `swing_path_facts` now closes it), so the Sunday slate keeps it.
         # Shadow SP4 evidence per (setup family, side); nothing in the night reads it.
         JobSlot(
             name="family_side_evidence",
@@ -1412,6 +1429,20 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description=(
                 "SP4 shadow evidence per setup family and side: beat SPY, move in ATR, "
                 "tracker R, and the challenger trial (deterministic, no model)"
+            ),
+            max_attempts=3,
+        ),
+        # S15 (2026-09-26), directly after `family_side_evidence` and now the LAST
+        # stage-1 slot: the session-horizon file it reads is written by the scan, not a
+        # night slot, so the latest deterministic data slot is its anchor. Shadow only.
+        JobSlot(
+            name="swing_path_facts",
+            goal="setup_quality",
+            run=swing_path_facts_night.run_swing_path_facts,
+            reserve_minutes=5.0,
+            description=(
+                "Swing path facts per scan row: MFE/MAE in ATR over 1-20 sessions, "
+                "next-open and pullback fills (deterministic, no model)"
             ),
             max_attempts=3,
         ),
@@ -1608,7 +1639,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # the deterministic pack, and the card falls back to the brief's own
         # lines if this never runs. Stage 2, directly after the briefs: the
         # slots before `ticker_briefs` are pinned closed, and `week_questions`
-        # is pinned directly after `market_story_narration`.
+        # is pinned directly after `regime_read`, which follows `market_story_narration`.
         JobSlot(
             name="econ_brief",
             goal="market_read",
@@ -1632,6 +1663,23 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description=(
                 "Grounded weekly/monthly/quarterly Market Journal narration "
                 "and one Trade Mentor coaching question"
+            ),
+            max_attempts=3,
+            uses_model=True,
+        ),
+        # S17.2 (2026-09-26), stage 2 DIRECTLY after `market_story_narration`: the
+        # local model reads the regime table beside the trader's regime. It joins
+        # the market story (same night, same session) and the Day Review Show, and
+        # every timeframe word, date and number is checked against the table. So
+        # `week_questions` now follows it instead of the market story.
+        JobSlot(
+            name="regime_read",
+            goal="market_read",
+            run=regime_read.run_regime_read,
+            reserve_minutes=regime_read.RESERVE_MINUTES,
+            description=(
+                "One grounded paragraph reading the auto regimes on M5..W beside the "
+                "trader's regime; rejected whole when a word is not in the table"
             ),
             max_attempts=3,
             uses_model=True,
@@ -1795,10 +1843,10 @@ NIGHT_KINDS = (NIGHT_WEEKNIGHT, NIGHT_SATURDAY, NIGHT_SUNDAY)
 WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration", "ticker_briefs", "setup_keys_narration")
 
 #: The deterministic stage (decision 0018 stage 1), which every night runs. It
-#: ENDS at `family_side_evidence` (S12, directly after `day_review_facts`); a
+#: ENDS at `swing_path_facts` (S15, directly after S12's `family_side_evidence`); a
 #: later packet appending inside stage 1 lands inside this set automatically
 #: because the set is derived from the slate, not written out twice.
-_STAGE_ONE_LAST_SLOT = "family_side_evidence"
+_STAGE_ONE_LAST_SLOT = "swing_path_facts"
 
 
 def _night_evening_date(moment: datetime):
