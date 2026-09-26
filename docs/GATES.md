@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #271 First-30 Show filter (S2): on the next session no non-exempt M5 alert (not PROVEN, Focus, typed or chart watch) before 10:00 ET shows in the Alert Center, and its status line's hidden count says first30, e.g. "3 hidden by Show filter (0 New, 2 first30)" [trader]
 - #270 Day-trade grades (S1 + S10c): on the next desk start the Daytrade Tracker's Bounce Types tab shows 1:1 bracket, 2R grade, EOD R, EOD med R, Reach 2R and Grade n per row after the working-lately build lands, and an M5 alert's hover reads like "1:1 C · 2R D · EOD +0.04R · n 427" [trader]
 - #264 Night telemetry (B1), what is left: Monday's digest facts carry a `slots per goal (night of 2026-09-25)` line with non-zero counts and a `tokens (night of <date>)` line with real totals, and System Health shows the Night AI and Broker import rows (tokens on every model-calling ledger row passed on the night of 2026-09-25: 12 rows) [lead]
 - #265 Alert noise (B6): after the next session `python scripts/alert_noise_report.py --day <date>` prints shown / hidden_by_show / acted counts that match the Day Review Alerts line, and `best_now_outcomes.py --summary` has rows for that day [lead]

@@ -703,6 +703,16 @@ class AlertCenterPanel(StrengthBoardAdoptionMixin, QFrame):
             "names, armed watches, price alerts and regime-pause rows always show."
         )
         self.show_filter_input.currentIndexChanged.connect(self._on_show_filter_changed)
+        # S2: hide 09:30-10:00 ET M5 rows (PROVEN, Focus, typed, watches still show).
+        self.first30_input = QCheckBox(alert_show_filter.FIRST30_LABEL)
+        self.first30_input.setObjectName("AlertShowFirst30")
+        self.first30_input.setToolTip(
+            "Hide M5 alerts from 9:30 to 10:00 ET (they win less and end red on "
+            "average). PROVEN, Focus names, your typed names and armed watches "
+            "always show. Hidden rows are still recorded."
+        )
+        self.first30_input.setChecked(alert_show_filter.first30_enabled())
+        self.first30_input.toggled.connect(self._on_show_filter_changed)
 
         clear_button = QPushButton("Clear")
         clear_button.clicked.connect(self.clear_feed)
@@ -1101,6 +1111,7 @@ class AlertCenterPanel(StrengthBoardAdoptionMixin, QFrame):
             self.sound_input,
             self.hide_sector_input,
             self.show_filter_input,
+            self.first30_input,
             None,  # the stretch
             self.ignored_button,
             clear_button,
@@ -1629,7 +1640,9 @@ class AlertCenterPanel(StrengthBoardAdoptionMixin, QFrame):
             if self._focus_gate_held
             else ""
         )
-        shown_hidden = alert_show_filter.hidden_text(*self.show_filter_hidden_counts())
+        shown_hidden = alert_show_filter.hidden_text(
+            *self.show_filter_hidden_counts(), first30=self.show_filter_first30_count()
+        )
         shown_hidden = f" {shown_hidden}." if shown_hidden else ""
         self.statusChanged.emit(
             f"Alert center: {len(self._alerts)} live alert(s), {loud} loud; "
@@ -1683,9 +1696,14 @@ class AlertCenterPanel(StrengthBoardAdoptionMixin, QFrame):
     def show_filter_mode(self) -> str:
         return str(self.show_filter_input.currentData() or alert_show_filter.DEFAULT_MODE)
 
+    def show_filter_active(self) -> bool:
+        """True when the Show mode or the first-30 switch can hide a row."""
+        return self.show_filter_mode() != alert_show_filter.ALL or self.first30_input.isChecked()
+
     def _on_show_filter_changed(self, *_args) -> None:
         try:
             alert_show_filter.set_mode(self.show_filter_mode())
+            alert_show_filter.set_first30_enabled(self.first30_input.isChecked())
         except Exception:  # noqa: BLE001 - a preference never costs the feed
             logging.debug("Show filter setting not saved.", exc_info=True)
         self._show_verdicts.clear()
@@ -1712,7 +1730,9 @@ class AlertCenterPanel(StrengthBoardAdoptionMixin, QFrame):
         """An input the verdicts read changed: drop them and redraw by diff if it matters."""
         self._show_verdicts.clear()
         show_mode = self.show_filter_mode()
-        if show_mode == alert_show_filter.ALL or (affects is not None and show_mode != affects):
+        if not self.show_filter_active():
+            return
+        if affects is not None and show_mode != affects and not self.first30_input.isChecked():
             return
         self._sync_feed()
         self.showFilterChanged.emit()
@@ -1727,7 +1747,7 @@ class AlertCenterPanel(StrengthBoardAdoptionMixin, QFrame):
         """
         self._show_verdicts.clear()
         self._sync_feed()
-        if self.show_filter_mode() != alert_show_filter.ALL:
+        if self.show_filter_active():
             self.showFilterChanged.emit()
             self._emit_feed_status()
 
@@ -1767,7 +1787,7 @@ class AlertCenterPanel(StrengthBoardAdoptionMixin, QFrame):
 
     def show_filter_verdict(self, alert: BounceAlert) -> tuple[bool, bool]:
         """`(hidden, is_new)` for one alert, cached until an input changes."""
-        if self.show_filter_mode() == alert_show_filter.ALL:
+        if not self.show_filter_active():
             return (False, False)
         cached = self._show_verdicts.get(id(alert))
         if cached is not None and cached[0] is alert:
@@ -1780,19 +1800,30 @@ class AlertCenterPanel(StrengthBoardAdoptionMixin, QFrame):
 
     def _compute_show_verdict(self, alert: BounceAlert) -> tuple[bool, bool]:
         """Only ordinary M5 rows on a real symbol can hide."""
-        show_mode = self.show_filter_mode()
         if not str(alert.symbol or "").strip() or not self._is_m5_review_alert(alert):
             return (False, False)
         grade = self.show_filter_grade(alert)
-        hidden = alert_show_filter.hides(
-            show_mode,
+        hidden = bool(self.show_filter_reason(alert, grade))
+        return (hidden, grade == alert_show_filter.setup_grades.NEW)
+
+    def show_filter_reason(self, alert: BounceAlert, grade: str | None = None) -> str:
+        """Why the row hides: `first30`, the Show mode, or "" (shows)."""
+        if not self.show_filter_active():
+            return ""
+        if not str(alert.symbol or "").strip() or not self._is_m5_review_alert(alert):
+            return ""
+        if grade is None:
+            grade = self.show_filter_grade(alert)
+        return alert_show_filter.hide_reason(
+            self.show_filter_mode(),
             grade=grade,
             best=self._show_best_keys,
             symbol=alert.symbol,
             side=alert.side,
             privileged=self._show_filter_privileged(alert),
+            first30=self.first30_input.isChecked(),
+            when=alert_show_filter.alert_time(alert),
         )
-        return (hidden, grade == alert_show_filter.setup_grades.NEW)
 
     def show_filter_hides(self, alert: BounceAlert) -> bool:
         return self.show_filter_verdict(alert)[0]
@@ -1817,6 +1848,12 @@ class AlertCenterPanel(StrengthBoardAdoptionMixin, QFrame):
         except Exception:  # noqa: BLE001 - evidence never costs the alert
             grade = None
         detail = {"grade": grade or "", "show_mode": self.show_filter_mode()}
+        try:
+            reason = self.show_filter_reason(alert, grade)
+        except Exception:  # noqa: BLE001 - evidence never costs the alert
+            reason = ""
+        if reason:
+            detail["reason"] = reason
         try:
             if self._show_hidden_executor is None:
                 from concurrent.futures import ThreadPoolExecutor
@@ -1863,25 +1900,47 @@ class AlertCenterPanel(StrengthBoardAdoptionMixin, QFrame):
 
     def show_filter_hidden_counts(self) -> tuple[int, int]:
         """`(rows, new)` the Show filter holds back from the feed, one per name+side."""
-        if self.show_filter_mode() == alert_show_filter.ALL:
+        if not self.show_filter_active():
             return (0, 0)
-        mode = self._min_tier_mode()
-        hide_sectors = sector_exclusion.hide_enabled()
 
         def verdicts():
-            for alert in self._alerts:
-                if (
-                    alert.symbol in self._ignored_symbols
-                    or self._sector_hidden(alert, hide_sectors)
-                    or not alert_passes_feed_gate(
-                        alert, mode, is_focus=self._alert_has_focus_privilege(alert)
-                    )
-                ):
-                    continue
+            for alert in self._show_filter_candidates():
                 hidden, is_new = self.show_filter_verdict(alert)
                 yield (self._feed_row_key(alert), hidden, is_new)
 
         return alert_show_filter.count_hidden(verdicts())
+
+    def show_filter_first30_count(self) -> int:
+        """Rows (one per name+side) the first-30 switch holds back."""
+        if not self.first30_input.isChecked():
+            return 0
+        first30 = alert_show_filter.REASON_FIRST30
+
+        def verdicts():
+            for alert in self._show_filter_candidates():
+                hidden = self.show_filter_verdict(alert)[0]
+                yield (
+                    self._feed_row_key(alert),
+                    hidden and self.show_filter_reason(alert) == first30,
+                    False,
+                )
+
+        return alert_show_filter.count_hidden(verdicts())[0]
+
+    def _show_filter_candidates(self):
+        """Alerts the feed would show but for the Show filter."""
+        mode = self._min_tier_mode()
+        hide_sectors = sector_exclusion.hide_enabled()
+        for alert in self._alerts:
+            if (
+                alert.symbol in self._ignored_symbols
+                or self._sector_hidden(alert, hide_sectors)
+                or not alert_passes_feed_gate(
+                    alert, mode, is_focus=self._alert_has_focus_privilege(alert)
+                )
+            ):
+                continue
+            yield alert
 
     def _on_hide_sector_toggled(self, checked: bool) -> None:
         try:

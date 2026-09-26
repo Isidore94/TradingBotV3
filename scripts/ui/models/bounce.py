@@ -117,6 +117,8 @@ class BounceAlert:
     #: row reading "held 100% / ran 3.2R" is read as a strong segment at a
     #: glance, and a glance is what this row is for.
     held_run_suffix: str = ""
+    #: Timezone-aware receive time (S2 first-30 Show filter); None = unknown.
+    received_at: datetime | None = None
 
     @classmethod
     def from_callback(cls, message: Any, tag: str, timestamp: datetime | None = None) -> "BounceAlert":
@@ -146,6 +148,7 @@ class BounceAlert:
             raw_text=raw_text,
             is_d1=tag_text.startswith("d1_flag") or raw_text.startswith("MASTER_AVWAP_D1"),
             payload=dict(payload),
+            received_at=timestamp.astimezone(),
         )
 
     @classmethod
@@ -183,6 +186,7 @@ class BounceAlert:
                     tag=alert.tag,
                     raw_text=alert.raw_text,
                     payload=payload,
+                    received_at=alert.received_at,
                 )
             )
         return alerts
