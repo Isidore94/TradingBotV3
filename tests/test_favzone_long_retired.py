@@ -63,3 +63,12 @@ def test_long_favourite_zone_arms_no_d1_trigger_but_the_short_one_does():
             assert not sources & {"favorite_zone", "current_band_zone"}
         else:
             assert "favorite_zone" in sources
+
+
+def test_retired_controls_never_evict_the_sampled_controls(monkeypatch):
+    monkeypatch.setattr(legacy, "CONTROL_SETUP_MAX_RECORDS", 3)
+    controls = {f"r{i}": {"scan_date": f"2026-09-0{i + 1}", "control_reason": "random"} for i in range(3)}
+    controls.update({f"f{i}": {"scan_date": "2026-09-09", "control_reason": "favzone_long_retired"} for i in range(5)})
+    legacy._prune_control_setups(controls, reference_scan_date="2026-09-10")
+    assert {key for key in controls if key.startswith("r")} == {"r0", "r1", "r2"}
+    assert sum(1 for key in controls if key.startswith("f")) == 3

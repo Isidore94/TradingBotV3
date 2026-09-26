@@ -14637,12 +14637,19 @@ def _prune_control_setups(control_setups: dict, *, reference_scan_date: str | No
         scan_day = _parse_iso_date_or_none(isinstance(setup, dict) and setup.get("scan_date") or None)
         if scan_day is None or (reference - scan_day).days > CONTROL_SETUP_KEEP_DAYS:
             control_setups.pop(setup_id, None)
-    if len(control_setups) > CONTROL_SETUP_MAX_RECORDS:
+    # Retired favourite-zone longs are capped on their own so they never evict the sampled controls.
+    for retired in (False, True):
+        group = [
+            item for item in control_setups.items()
+            if (isinstance(item[1], dict) and item[1].get("control_reason") == FAVZONE_LONG_RETIRED) is retired
+        ]
+        if len(group) <= CONTROL_SETUP_MAX_RECORDS:
+            continue
         ordered = sorted(
-            control_setups.items(),
+            group,
             key=lambda item: str(item[1].get("scan_date") or "") if isinstance(item[1], dict) else "",
         )
-        for setup_id, _setup in ordered[: len(control_setups) - CONTROL_SETUP_MAX_RECORDS]:
+        for setup_id, _setup in ordered[: len(group) - CONTROL_SETUP_MAX_RECORDS]:
             control_setups.pop(setup_id, None)
 
 
