@@ -392,6 +392,9 @@ SWING_SHORTS_FILE = PERSISTENT_DATA_DIR / "shortswings.txt"
 UNIVERSE_ALL_FILE = PERSISTENT_DATA_DIR / "universe_all.txt"
 UNIVERSE_LONGS_FILE = PERSISTENT_DATA_DIR / "universe_longs.txt"
 UNIVERSE_SHORTS_FILE = PERSISTENT_DATA_DIR / "universe_shorts.txt"
+# Rolling membership of the `momentum_scanner` universe source (IB scanner names; one writer:
+# `momentum_universe.refresh_membership`, called from the universe rebuild).
+MOMENTUM_UNIVERSE_MEMBERSHIP_FILE = RUNTIME_DATA_DIR / "momentum_universe_membership.json"
 
 # Trader-curated daily Focus Picks (shared home, synced across machines) and the
 # runtime files for human-pick membership tracking + the human-vs-bot cohort.

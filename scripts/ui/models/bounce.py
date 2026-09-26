@@ -119,6 +119,9 @@ class BounceAlert:
     held_run_suffix: str = ""
     #: Timezone-aware receive time (S2 first-30 Show filter); None = unknown.
     received_at: datetime | None = None
+    #: P14: the Alert Center's grade-bypass verdict (`bypass_grades`), set when it
+    #: judges the row; None = not judged. Review events record it as `proven`.
+    grade_bypass: bool | None = None
 
     @classmethod
     def from_callback(cls, message: Any, tag: str, timestamp: datetime | None = None) -> "BounceAlert":

@@ -9,6 +9,10 @@ show. Unknown (grades not loaded, Best list not ranked yet) shows.
 S2 (finding F5): a separate switch, default on, hides M5 rows whose alert time
 is 09:30-10:00 ET. Top-grade rows (`bypass_grades`, P14) and the always-show
 rows above still show; an alert with no timezone-aware time is unknown and shows.
+
+Longs off (the trader 2026-09-26): with `longs_market_gate` on and the market
+not on a long's side, LONG rows hide (reason `longs_off`); the always-show rows
+and names with an open position still show, and an unknown market shows.
 """
 
 from __future__ import annotations
@@ -59,6 +63,8 @@ FIRST30_LABEL = "Hide first 30 min"
 #: The `hidden_by_show` detail reason for a first-30 hide.
 REASON_FIRST30 = "first30"
 _ET_NAME = "America/New_York"
+#: The `hidden_by_show` detail reason for a longs-off hide (`longs_market_gate.REASON`).
+REASON_LONGS_OFF = "longs_off"
 _FIRST30_START = dt_time(9, 30)
 _FIRST30_END = dt_time(10, 0)
 
@@ -162,15 +168,19 @@ def hide_reason(
     first30: bool = False,
     when: datetime | None = None,
     bypass: frozenset | None = None,
+    longs_off: bool = False,
 ) -> str:
-    """Why this M5 row is hidden: `first30`, the Show mode, or "" (shows).
+    """Why this M5 row is hidden: `longs_off`, `first30`, the Show mode, or "" (shows).
 
     Privileged rows always show; so do `bypass` grades (default A and up, see
     `bypass_grades`) and unknown-grade rows under the first-30 switch. Unknown
-    grade / unranked Best shows under the Show mode.
+    grade / unranked Best shows under the Show mode. ``longs_off`` = the gate
+    says longs are off for this row; it hides a LONG whatever its grade.
     """
     if privileged:
         return ""
+    if longs_off and _side(side) == "LONG":
+        return REASON_LONGS_OFF
     exempt = TOP_GRADES if bypass is None else bypass
     if first30 and in_first30(when) and grade is not None and grade not in exempt:
         return REASON_FIRST30
@@ -194,6 +204,7 @@ def hides(
     first30: bool = False,
     when: datetime | None = None,
     bypass: frozenset | None = None,
+    longs_off: bool = False,
 ) -> bool:
     """True when this M5 row is hidden (see `hide_reason`)."""
     return bool(
@@ -207,6 +218,7 @@ def hides(
             first30=first30,
             when=when,
             bypass=bypass,
+            longs_off=longs_off,
         )
     )
 
