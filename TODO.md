@@ -221,6 +221,25 @@ S1 and keep the order. The two 500 MB logs are read with
   `d1_features_history.csv`), and every M5 structure facet (M5 has five facets: time,
   RVOL, VWAP distance, SPY state, bounce type).
 
+**Priority read, 2026-09-26 (what works right now; re-read after 10 more sessions):**
+- Swing, tape-relative at 5 sessions, last 10 scan sessions: SHORT families beat SPY 75%
+  (+2.4% excess), LONG 38% (+0.4%). Best: `previous_avwape_bounce` SHORT 87% (n=63),
+  `avwap_retest_followthrough` SHORT 76% (+3.0%), `favorite_zone_watch` SHORT 76% (+3.2%),
+  `avwap_band_bounce` SHORT 76% (+2.6%), `mid_earnings_above_2nd_stdev` SHORT 74% (n=584).
+  The favourite zone works on the SHORT side only: LOWER_1 -> AVWAPE short 73% / +2.3%;
+  AVWAPE -> UPPER_1 long 42% / -0.3%. The scan's S-tier longs beat SPY 38% (n=558); B-tier
+  shorts 75% (n=2,458). Only long family near even: `top_pattern_tracking` 46-50%, flat.
+- Day trades, last 10 sessions (bracket win / EV of +1R-or-60-min / fires per day):
+  `regime_pause_rs` long 65% / +0.20R / 17; `dynamic_vwap_lower_band` short 52% / +0.13R
+  / 12; `eod_vwap` long 58% / +0.11R / 13; `lrsi_cross_50` short 55% / +0.06R / 75;
+  `vwap_lower_band` short 52% / +0.05R / 9. Dead weight: `h1_blue_after_red` long (S10a),
+  `regime_pause_rw` short 44% / -0.17R, `h1_green_to_yellow` short, `lrsi_cross_20` both
+  sides (0.00R on 170 + 73 fires a day). Longs recovered to 52% in these 10 sessions
+  (tape mix balanced); Aug-Sep as a whole they were 44%.
+- So: short the favourite zone and the retest-followthrough shorts; take longs only from
+  `top_pattern_tracking` swings and `regime_pause_rs` / `eod_vwap` day trades; exit day
+  trades at +1R or 60 min (F14); ignore LRSI-20 and the H1 fades until S9 re-weights them.
+
 **Packets (order):**
 - **S1 Tell the truth on the Daytrade Tracker** (grades ->7; no ask-first):
   `setup_scoreboard.py` / `ui/panels/setup_tracker_panel.py` cells show, beside the
