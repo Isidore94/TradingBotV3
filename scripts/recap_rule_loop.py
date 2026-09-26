@@ -14,6 +14,8 @@ import statistics
 from datetime import date, datetime, time
 from typing import Any, Iterable, Mapping, Sequence
 
+from journal_analytics import trade_r_multiple
+
 #: The Mentor kind, and the key its answer is filed under.
 REFLECTION_KIND = "rule_reflection"
 REFLECTION_ANSWER_KEY = "rule_kept"
@@ -216,15 +218,6 @@ def _closed_in(row: Mapping[str, Any], session: date) -> datetime | None:
     return closed
 
 
-def trade_r(row: Mapping[str, Any]) -> float | None:
-    """`net_pnl_cad / |planned_risk|`, the journal's one R, or None."""
-    risk = _number(row.get("planned_risk"))
-    pnl = _number(row.get("net_pnl_cad"))
-    if risk is None or pnl is None or abs(risk) < 1e-9:
-        return None
-    return pnl / abs(risk)
-
-
 def trade_pct(row: Mapping[str, Any]) -> float | None:
     """The price move captured, in percent, signed by the side, or None."""
     entry = _number(row.get("average_entry_price"))
@@ -303,7 +296,7 @@ def _check(
         pnl = _number(row.get("net_pnl"))
         if pnl is None or pnl <= 0:
             return ""
-        r_value = trade_r(row)
+        r_value = trade_r_multiple(row)
         if r_value is not None:
             return f"You closed {symbol} at {r_value:+.1f}R" if r_value < 1.0 else ""
         pct = trade_pct(row)
@@ -314,7 +307,7 @@ def _check(
             return f"You closed {symbol} at {pct:+.1f}%, under the day's median winner ({median:+.1f}%)"
         return ""
     if tag == "respect_stop":
-        r_value = trade_r(row)
+        r_value = trade_r_multiple(row)
         if r_value is None or r_value >= -1.0:
             return ""
         return f"You closed {symbol} at {r_value:+.1f}R, past your planned risk"

@@ -292,10 +292,10 @@ def test_respect_stop_asks_about_a_loss_beyond_planned_risk_only():
     rows = _rows(rule, [
         _trade("t1", "ZETA", net=-140, cad=-140, risk=100),
         _trade("t2", "BETA", net=-80, cad=-80, risk=100),
-        _trade("t3", "GAMA", net=-300, cad=None, risk=100),  # R unknown
+        _trade("t3", "GAMA", net=-300, cad=None, risk=100),  # no CAD rate; native R is still known
         _trade("t4", "DELT", net=-300, cad=-300, risk=None),  # risk unknown
     ])
-    assert [row["trade_id"] for row in rows] == ["t1"]
+    assert [row["trade_id"] for row in rows] == ["t1", "t3"]
     assert "-1.4R, past your planned risk" in rows[0]["prompt"]
 
 

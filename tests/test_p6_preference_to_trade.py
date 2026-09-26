@@ -679,10 +679,11 @@ def test_the_report_uses_the_journals_one_definition_of_r():
     """`r_multiple` is a key that exists nowhere in scripts/."""
     import preference_trade_outcomes as report
 
-    assert report._canonical_r({"planned_risk": 100.0, "net_pnl_cad": 250.0}) == "2.5000"
+    # Native R (`journal_analytics.trade_r_multiple`): the CAD P&L is not R.
+    assert report._canonical_r({"planned_risk": 100.0, "net_pnl": 250.0, "net_pnl_cad": 350.0}) == "2.5000"
     # Blank, never zero, when the trader never typed a risk.
-    assert report._canonical_r({"net_pnl_cad": 250.0}) == ""
-    assert report._canonical_r({"planned_risk": 0.0, "net_pnl_cad": 250.0}) == ""
+    assert report._canonical_r({"net_pnl": 250.0}) == ""
+    assert report._canonical_r({"planned_risk": 0.0, "net_pnl": 250.0}) == ""
 
     source = (ROOT_DIR / "scripts" / "preference_trade_outcomes.py").read_text(encoding="utf-8")
     assert 'trade.get("r_multiple")' not in source

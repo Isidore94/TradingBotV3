@@ -279,7 +279,7 @@ def setup_family(tags: Any) -> str:
 
 
 def _trades(inputs: Mapping[str, Any], shifts: list[dict[str, Any]]) -> dict[str, Any]:
-    from journal_analytics import counts_in_pnl
+    from journal_analytics import counts_in_pnl, trade_r_multiple
 
     payload = inputs.get("payload") or {}
     reviews = {
@@ -297,8 +297,8 @@ def _trades(inputs: Mapping[str, Any], shifts: list[dict[str, Any]]) -> dict[str
         counted = counts_in_pnl(dict(trade))
         pnl = _number(trade.get("net_pnl")) if closed else None
         pnl_cad = _number(trade.get("net_pnl_cad")) if closed else None
-        risk = _number(trade.get("planned_risk"))
-        r_value = pnl_cad / abs(risk) if pnl_cad is not None and risk and abs(risk) > 1e-9 else None
+        # The journal's one R, native currency; `net_pnl_cad` stays as the money column.
+        r_value = trade_r_multiple(dict(trade)) if closed else None
         review = reviews.get(trade_id) or {}
         answers = [_plain(row) for row in mentor_by_trade.get(trade_id) or ()]
         item = {name: _plain(trade.get(name)) for name in TRADE_FIELDS}
