@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import csv
 import logging
+import os
 import sys
 import time as _time
 from dataclasses import dataclass, field
@@ -376,14 +377,21 @@ def scan_facts_from_features(path: Path, wanted: set[str], *, chunk_rows: int = 
     return out
 
 
-def write_rows(rows: list[dict], out: Path) -> None:
+def write_rows(rows: list[dict], out: Path) -> Path:
+    """Temp file then replace, so a half-written file never replaces the last good one."""
+    out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(out.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=COLUMNS)
-        writer.writeheader()
-        writer.writerows(rows)
-    tmp.replace(out)
+    tmp = out.with_name(f"{out.name}.{os.getpid()}.tmp")
+    try:
+        with tmp.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=COLUMNS)
+            writer.writeheader()
+            writer.writerows(rows)
+        os.replace(tmp, out)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:

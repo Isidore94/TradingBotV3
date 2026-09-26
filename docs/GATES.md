@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #281 Swing path facts (S15): after the next night the ledger has a `swing_path_facts` row that is ok, and `C:\TradingBotData\data\runtime\swing_path_facts.csv` exists with horizon 20 rows [lead]
 - #278 Shadow setups (S7), shadow only: after the next session `C:\TradingBotData\m5_shadow_setups.jsonl` has rows from the four engines (`pd_level_break_hold`, `vwap_reclaim_after_flush` if SPY read bullish_strong, `m5_compression_break`, `trendline_break`), each with event_id, side, level, entry, stop and a zoned bar time, and no live alert, score, Show row or phone line changed [lead]
 - #268 blue_after_red off (S10a): on the next session no `h1_blue_after_red` candidate row is written; the other H1 colour types' counts are in line with the prior session [lead]
 - #277 Exit models (S13): on the next desk start the Setup Tracker's Exit models tab shows per family x side n, Tracker R (target/stop) with its n, Stop only 10d and Trail 1 ATR (ATR R), e.g. `avwap_retest_followthrough` SHORT with three numbers, and the status line counts measured / not yet 10 sessions / no ATR [trader]
