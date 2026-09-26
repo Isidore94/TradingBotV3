@@ -185,12 +185,16 @@ def _ledger_rows() -> list[dict]:
     ]
 
 
-def test_the_telemetry_lines_are_deterministic_facts_from_tonights_ledger():
+#: The digest's own session: its night is under way, so the lines name DIGEST_DAY.
+NEXT_DAY = "2026-08-25"
+
+
+def test_the_telemetry_lines_are_deterministic_facts_from_the_last_complete_night():
     from ai_jobs import digest
 
-    goal_line, token_line = digest.night_telemetry_lines(_ledger_rows(), DIGEST_DAY)[:2]
+    goal_line, token_line = digest.night_telemetry_lines(_ledger_rows(), NEXT_DAY)[:2]
     assert goal_line == (
-        "slots per goal: "
+        "slots per goal (night of 2026-08-24): "
         "trade_identification: ok 0 / degraded 0 / failed 0 / skipped 0; "
         "setup_quality: ok 1 / degraded 0 / failed 0 / skipped 0; "
         "permutations: ok 0 / degraded 0 / failed 0 / skipped 0; "
@@ -200,9 +204,75 @@ def test_the_telemetry_lines_are_deterministic_facts_from_tonights_ledger():
         "ops: ok 0 / degraded 0 / failed 0 / skipped 0"
     )
     assert token_line == (
-        "tokens tonight: 6600/560 over 5 calls; top 3 slots by prompt tokens: "
+        "tokens (night of 2026-08-24): 6600/560 over 5 calls; top 3 slots by prompt tokens: "
         "ai_summary 5000, day_review_narration 900, econ_brief 600"
     )
+
+
+def _at(stamp: str) -> str:
+    return f"2026-09-{stamp}:00-07:00"
+
+
+def test_a_half_run_night_reports_the_previous_complete_night():
+    from ai_jobs import digest
+
+    rows = [
+        # 2026-09-22: complete, but older than the newest complete night.
+        {"job": "journal_import", "goal": "journal", "status": "failed",
+         "session_date": "2026-09-22", "started_at": _at("22T22:00")},
+        # 2026-09-23: complete - it reached stage 3.
+        {"job": "journal_import", "goal": "journal", "status": "ok",
+         "session_date": "2026-09-23", "started_at": _at("23T22:00"),
+         "tokens": {}},
+        {"job": "day_review_narration", "goal": "coaching", "status": "ok",
+         "session_date": "2026-09-23", "started_at": _at("23T22:10"),
+         "tokens": {"prompt_tokens": 800, "completion_tokens": 80, "calls": 1}},
+        {"job": "improvement_ideas", "goal": "setup_quality", "status": "ok",
+         "session_date": "2026-09-23", "started_at": _at("24T01:00"),
+         "tokens": {"prompt_tokens": 200, "completion_tokens": 20, "calls": 1}},
+        # 2026-09-24: tonight, half-run when the digest writes.
+        {"job": "journal_import", "goal": "journal", "status": "failed",
+         "session_date": "2026-09-24", "started_at": _at("24T22:00")},
+        {"job": "day_review_narration", "goal": "coaching", "status": "failed",
+         "session_date": "2026-09-24", "started_at": _at("24T22:05"),
+         "tokens": {"prompt_tokens": 5, "completion_tokens": 0, "calls": 1}},
+        # A redo of the 23rd, run tonight: the 23rd still counts (stage-3 row).
+        {"job": "day_review_narration", "goal": "coaching", "status": "ok",
+         "session_date": "2026-09-23", "started_at": _at("24T22:07"),
+         "tokens": {"prompt_tokens": 100, "completion_tokens": 10, "calls": 1}},
+    ]
+    now = datetime(2026, 9, 25, 1, 10, tzinfo=ET)
+    goal_line, token_line = digest.night_telemetry_lines(rows, "2026-09-24", now=now)
+    assert goal_line.startswith(
+        "slots per goal (night of 2026-09-23): trade_identification: ok 0 / degraded 0 / "
+        "failed 0 / skipped 0; setup_quality: ok 1 / degraded 0 / failed 0 / skipped 0; "
+    )
+    assert "coaching: ok 1 / degraded 0 / failed 0 / skipped 0" in goal_line
+    assert "journal: ok 1 / degraded 0 / failed 0 / skipped 0" in goal_line
+    assert token_line == (
+        "tokens (night of 2026-09-23): 1100/110 over 3 calls; top 3 slots by prompt tokens: "
+        "day_review_narration 900, improvement_ideas 200"
+    )
+
+
+def test_a_previous_night_without_stage_three_is_complete_only_if_it_ended_before_tonight():
+    from ai_jobs import digest
+
+    rows = [
+        {"job": "journal_import", "goal": "journal", "status": "ok",
+         "session_date": "2026-09-22", "started_at": _at("22T22:00")},
+        # The 23rd has a row that started after tonight began and no stage-3 row.
+        {"job": "journal_import", "goal": "journal", "status": "ok",
+         "session_date": "2026-09-23", "started_at": _at("24T22:30")},
+        {"job": "journal_import", "goal": "journal", "status": "failed",
+         "session_date": "2026-09-24", "started_at": _at("24T22:00")},
+    ]
+    lines = digest.night_telemetry_lines(rows, "2026-09-24")
+    assert lines[0].startswith("slots per goal (night of 2026-09-22): ")
+    assert digest.night_telemetry_lines([], "2026-09-24") == [
+        "slots per goal: unknown (no complete night in the ledger yet)",
+        "tokens: unknown (no complete night in the ledger yet)",
+    ]
 
 
 def test_the_digest_file_carries_the_lines_and_the_narrator_never_sees_them(
@@ -219,15 +289,15 @@ def test_the_digest_file_carries_the_lines_and_the_narrator_never_sees_them(
 
     monkeypatch.setattr(digest, "_narrate", narrator)
     digest.run_daily_digest(
-        session_date=DIGEST_DAY, now=DIGEST_NOW, root=tmp_path, is_session=False,
+        session_date=NEXT_DAY, now=DIGEST_NOW, root=tmp_path, is_session=False,
     )
-    written = json.loads(digest.facts_path(tmp_path, DIGEST_DAY).read_text(encoding="utf-8"))
+    written = json.loads(digest.facts_path(tmp_path, NEXT_DAY).read_text(encoding="utf-8"))
     lines = written[digest.NIGHT_TELEMETRY_KEY]["lines"]
-    assert lines[0].startswith("slots per goal: trade_identification: ok 0")
-    assert lines[1].startswith("tokens tonight: 6600/560 over 5 calls")
+    assert lines[0].startswith("slots per goal (night of 2026-08-24): trade_identification: ok 0")
+    assert lines[1].startswith("tokens (night of 2026-08-24): 6600/560 over 5 calls")
     assert handed, "the narrator was not asked"
     seen = json.dumps(handed[0])
-    assert "slots per goal" not in seen and "tokens tonight" not in seen
+    assert "slots per goal" not in seen and "tokens (night of" not in seen
     assert digest.NIGHT_TELEMETRY_KEY not in seen
 
 

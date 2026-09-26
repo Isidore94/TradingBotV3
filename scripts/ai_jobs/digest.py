@@ -690,19 +690,78 @@ def _int_or_zero(value: Any) -> int:
     return int(value)
 
 
-def night_telemetry_lines(job_rows, session_date: str) -> list[str]:
-    """Deterministic 'slots per goal' and 'tokens tonight' lines from the ledger.
+def _row_started(row: Mapping[str, Any]) -> datetime | None:
+    try:
+        stamp = datetime.fromisoformat(str(row.get("started_at") or ""))
+    except ValueError:
+        return None
+    return stamp if stamp.tzinfo is not None else None
 
-    A slot counts once, by its newest row for the session (the last row wins);
+
+def _stage_three_slots() -> frozenset[str]:
+    """Stage-3 slot names: the runner's slate from `journal_enrichment` on."""
+    try:
+        from ai_jobs import runner
+
+        names = [slot.name for slot in runner.default_slots() + runner.optional_slots()]
+        first = names.index(STAGE_THREE_FIRST_SLOT)
+        return frozenset(names[first:])
+    except Exception:  # noqa: BLE001 - without it only the clock rule decides
+        return frozenset()
+
+
+#: The first slot of stage 3 (decision 0018); a night that reached it is complete.
+STAGE_THREE_FIRST_SLOT = "journal_enrichment"
+
+
+def last_complete_night(
+    job_rows, session_date: str, *, now: datetime | None = None
+) -> tuple[str, list[Mapping[str, Any]]]:
+    """The newest earlier session whose night is complete, and its ledger rows.
+
+    Complete: it has a stage-3 row, or every one of its rows started before the
+    current night began (the first row for `session_date`, else `now`).
+    Returns ("", []) when no earlier night qualifies.
+    """
+    rows = [row for row in (job_rows or []) if isinstance(row, Mapping)]
+    tonight = [row for row in rows if str(row.get("session_date") or "") == str(session_date)]
+    starts = [stamp for stamp in (_row_started(row) for row in tonight) if stamp is not None]
+    night_start = min(starts) if starts else _now(now)
+    by_session: dict[str, list[Mapping[str, Any]]] = {}
+    for row in rows:
+        day = str(row.get("session_date") or "")
+        if day and day < str(session_date):
+            by_session.setdefault(day, []).append(row)
+    stage_three = _stage_three_slots()
+    for day in sorted(by_session, reverse=True):
+        night = by_session[day]
+        if any(str(row.get("job") or "") in stage_three for row in night):
+            return day, night
+        stamps = [_row_started(row) for row in night]
+        if all(stamp is None or stamp < night_start for stamp in stamps):
+            return day, night
+    return "", []
+
+
+def night_telemetry_lines(
+    job_rows, session_date: str, *, now: datetime | None = None
+) -> list[str]:
+    """'slots per goal' and 'tokens' lines for the last COMPLETE night, named by date.
+
+    The digest runs early in the night, so tonight is half-run; the lines
+    describe the newest earlier night that finished (`last_complete_night`).
+    A slot counts once, by its newest row for that session (the last row wins);
     attempt-cap markers and corrections are not a slot's outcome. Tokens sum
     every row, because every attempt spent them.
     """
     from ai_jobs.runner import SLOT_GOALS
 
-    rows = [
-        row for row in (job_rows or [])
-        if isinstance(row, Mapping) and str(row.get("session_date") or "") == str(session_date)
-    ]
+    night, rows = last_complete_night(job_rows, session_date, now=now)
+    if not night:
+        return [
+            "slots per goal: unknown (no complete night in the ledger yet)",
+            "tokens: unknown (no complete night in the ledger yet)",
+        ]
     last: dict[str, Mapping[str, Any]] = {}
     for row in rows:
         job = str(row.get("job") or "")
@@ -718,7 +777,7 @@ def night_telemetry_lines(job_rows, session_date: str) -> list[str]:
         for word, statuses in _GOAL_STATUS_WORDS:
             if status in statuses:
                 counts[goal][word] += 1
-    goal_line = "slots per goal: " + "; ".join(
+    goal_line = f"slots per goal (night of {night}): " + "; ".join(
         f"{goal}: " + " / ".join(f"{word} {n}" for word, n in counts[goal].items())
         for goal in SLOT_GOALS
     )
@@ -738,7 +797,7 @@ def night_telemetry_lines(job_rows, session_date: str) -> list[str]:
             by_slot[job] = by_slot.get(job, 0) + slot_prompt
     top = sorted(by_slot.items(), key=lambda item: (-item[1], item[0]))[:3]
     token_line = (
-        f"tokens tonight: {prompt}/{completion} over {calls} calls; top 3 slots by "
+        f"tokens (night of {night}): {prompt}/{completion} over {calls} calls; top 3 slots by "
         "prompt tokens: " + (", ".join(f"{job} {n}" for job, n in top) if top else "none")
     )
     return [goal_line, token_line]
@@ -1528,7 +1587,9 @@ def run_daily_digest(
     try:
         import slot_output_reads
 
-        lines = night_telemetry_lines(job_rows, day) + [slot_output_reads.unread_line()]
+        lines = night_telemetry_lines(job_rows, day, now=moment) + [
+            slot_output_reads.unread_line()
+        ]
         published[NIGHT_TELEMETRY_KEY] = {"lines": lines}
     except Exception as exc:  # noqa: BLE001 - telemetry never costs the digest
         _log.info("Daily digest: night telemetry not built (%s).", exc)
