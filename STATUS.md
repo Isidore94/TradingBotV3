@@ -2,15 +2,10 @@
 
 Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `git log`.
 
-**Updated:** 2026-09-26 PT (Phase B built)
+**Updated:** 2026-09-26 13:00 PT (p9 phase 1 built)
 
-- **Live on `main`:** round 1 (`7d160b4b`, gates #257-#263) and round 2 Phase A
-  (`81272d42`, merged 20:45 PT on the trader's word, gates #264-#266): perf tooling
-  (`desk_perf_report.py --day`, bench ops, Movers tick timing), GC re-freeze after each
-  full sweep + stat TTLs, known-red tests fixed, FlowLayout guard, one Credential Manager
-  path, night telemetry, one R, Alert Center split step 1, noise report + Best-right-now
-  log, missing-inputs chip, `setup_age` facet. Reviewer's one blocker (settings writers
-  could build on the 1 s cache) fixed in `5d10ddaf`.
+- **Live on `main`:** round 1, round 2 Phase A (`81272d42`), Phase B + S (`2d59aace`),
+  S10a + S7 (`3802c0d7`); gates #257-#278.
 - **Desk:** DOWN. Restarted 20:50 PT on `81272d42`, then closed cleanly 21:51 PT on the
   trader's word; restart only on the trader's word.
 - **Perf:** 09-24 baseline GUI blocked 1305 s, full GC 306 ms/min, young 156; on the new
@@ -18,9 +13,6 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
   2026-09-28 --compare 2026-09-24`.
 - **Night window:** the night AI starts 22:00 PT. No builders, merges or test runs
   22:00-02:00 PT.
-- **Live on `main` (next restart):** Phase B + S (`2d59aace`, merged 2026-09-26 on the
-  trader's word; gates #267-#277). Full suite 12,720 passed + 1 order flake; selftest
-  105/105 source and frozen. S10a + S7 merged after it (gates #268, #278).
 - **Owed:** TLT/USO/HYG daily bars (scan-side, ask first); halted-name refetch; movers
   summary into the night AI; phone-brief rule line; pre-Aug entry_at (outcome code, ask
   first); review of the per-trade Mentor Save (`182f3e08`); weekly-options facet needs a
@@ -29,8 +21,12 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
   "narration absent", empty-evidence enrichment carries no tags, no event 2004). #264:
   tokens on 12 model rows; the digest lines exist but describe the goal-less 09-24 night
   (B1b); Health rows need a desk session. Econ brief still rejected (P4b).
-- **Next action:** new TODO items S14-S17 (added 09-26). Left for live days: A4b, B10, B7, C4a, B2,
-  Phase C. S9 needs the trader's yes. #258 Monday 07:00.
+- **In flight:** `claude/p9-phase1-2026-09-26` (NOT merged; needs the trader's word):
+  S16 regime journal + joins + story + question, S17 regime table + strip + regime read,
+  S15 items 2-6/8/9, S14, B7; gates #279-#287. Reviewer NO-GO fixed (regime read
+  grounding) and re-proven; suite 13,095 passed + 3 order flakes; frozen 105/105.
+- **Next action:** Monday: `desk_perf_report.py --day 2026-09-28 --compare 2026-09-24`,
+  gates #258-#287. Waiting on a yes: A4b step 2, S9, P14. Left: B10, B2, C4a, Phase C.
 - **Trader actions owed:** set Risk per trade ($) in Settings > General; fill
   `trading_plan.md`; run the permutation backfill before Saturday; confirm setup tags
   (P2 screen); Task Scheduler "run whether logged on or not" on the night task;
