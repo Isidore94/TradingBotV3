@@ -2,7 +2,7 @@
 
 Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `git log`.
 
-**Updated:** 2026-09-25 23:30 PT
+**Updated:** 2026-09-25 22:36 PT
 
 - **Live on `main`:** round 1 (`7d160b4b`, gates #257-#263) and round 2 Phase A
   (`81272d42`, merged 20:45 PT on the trader's word, gates #264-#266): perf tooling
