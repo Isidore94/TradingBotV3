@@ -1674,6 +1674,7 @@ def build_intraday_bounce_performance_rows(
     candidates_path: Path = INTRADAY_BOUNCE_CANDIDATES_CSV,
     outcomes_path: Path = INTRADAY_BOUNCE_OUTCOMES_CSV,
     min_samples: int = BOUNCE_PERFORMANCE_MIN_SAMPLES,
+    regime_segments: list | None = None,
 ) -> list[dict]:
     candidate_columns = [
         "event_id",
@@ -1747,6 +1748,18 @@ def build_intraday_bounce_performance_rows(
     if not quick_rows.empty:
         joined = joined.merge(quick_rows, on="event_id", how="left", suffixes=("", "_quick"))
 
+    # S9: the trader's structural regime per trade date (the shadow tier's
+    # dimension); `regime_segments=None` reads the journal, failure = unknown.
+    regime_joiner = None
+    try:
+        import regime_join
+
+        regime_joiner = regime_join.Joiner(
+            regime_join.read_segments() if regime_segments is None else regime_segments
+        )
+    except Exception as exc:
+        logging.debug("Structural regime join unavailable: %s", exc)
+
     observations = []
     for record in joined.to_dict("records"):
         close_r = _bounce_perf_clip_r(record.get("close_r"))
@@ -1819,6 +1832,10 @@ def build_intraday_bounce_performance_rows(
         h1_focus_type = str(record.get("master_avwap_h1_focus_type") or "").strip().lower()
         if h1_focus_type == "top_pattern" and "h1_ema_15" in bounce_types:
             dimensions.append(("top_pattern_entry_timing", "h1_15ema_bounce"))
+        if regime_joiner:
+            regime = regime_joiner.label(common["trade_date"])
+            if regime != "unknown":
+                dimensions.append(("structural_regime", regime))
         for dimension, segment in dimensions:
             observations.append({**common, "dimension": dimension, "segment": segment})
 
@@ -1880,6 +1897,8 @@ def build_intraday_bounce_performance_rows(
             avg_quick_mae_r = None
         avg_close_r = sum(close_values) / float(len(close_values))
         median_close_r = float(pd.Series(close_values).median())
+        # S9: the spread of close R, so the shadow tier can weigh a mean by its SE.
+        std_close_r = float(pd.Series(close_values).std(ddof=1)) if sample_count > 1 else None
         positive_eod_rate = sum(1 for value in close_values if value > 0.0) / float(len(close_values))
         sample_weight = min(1.0, math.log1p(sample_count) / math.log1p(max(min_samples, 2)))
         edge_score = (
@@ -1908,6 +1927,7 @@ def build_intraday_bounce_performance_rows(
                 "median_eod_r": median_close_r,
                 "avg_close_r": avg_close_r,
                 "median_close_r": median_close_r,
+                "std_close_r": std_close_r,
                 "avg_mfe_r": (sum(mfe_values) / float(len(mfe_values))) if mfe_values else None,
                 "avg_mae_r": (sum(mae_values) / float(len(mae_values))) if mae_values else None,
                 "avg_eod_move_pct": (
@@ -3970,23 +3990,42 @@ class BounceBot(EWrapper, EClient):
 
             row = event_row if isinstance(event_row, dict) else {}
             bounce_type_keys = _bounce_type_keys_from_levels(levels or {})
-            return evaluate_bounce_quality(
-                load_bounce_learning_state(),
-                direction=direction,
-                bounce_types=bounce_type_keys,
-                time_bucket=time_bucket_for(_bounce_quality_time(row) or get_market_local_now()),
-                market_environment=str(row.get("market_environment") or ""),
-                priority_bucket=str(row.get("master_avwap_priority_bucket") or ""),
-                focus_label=str(row.get("master_avwap_focus_label") or ""),
+            state = load_bounce_learning_state()
+            when = _bounce_quality_time(row) or get_market_local_now()
+            context = {
+                "direction": direction,
+                "bounce_types": bounce_type_keys,
+                "time_bucket": time_bucket_for(when),
+                "market_environment": str(row.get("market_environment") or ""),
+                "priority_bucket": str(row.get("master_avwap_priority_bucket") or ""),
+                "focus_label": str(row.get("master_avwap_focus_label") or ""),
                 # The best measured segments live in dimensions the composite
                 # ignores; matching any PROVEN one flags the alert live.
-                bounce_combo="+".join(bounce_type_keys),
-                setup_family=str(row.get("master_avwap_setup_family") or ""),
+                "bounce_combo": "+".join(bounce_type_keys),
+                "setup_family": str(row.get("master_avwap_setup_family") or ""),
+            }
+            quality = evaluate_bounce_quality(
+                state,
+                **context,
                 swing_traits=_split_delimited_text(row.get("master_avwap_swing_traits")),
             )
         except Exception as exc:  # learning must never block an alert
             logging.warning("Bounce learning evaluation failed (alerting anyway): %s", exc)
             return {"tier": "B", "muted": False, "mute_reasons": [], "reasons": []}
+        quality["shadow_s9"] = self._shadow_s9_tier(state, context, when)
+        return quality
+
+    @staticmethod
+    def _shadow_s9_tier(state, context, when) -> dict:
+        """S9 shadow tier, evidence only: `{}` on any failure, never read by a live decision."""
+        try:
+            from bounce_bot_lib.learning import evaluate_shadow_tier, structural_regime_on
+
+            day = when.date().isoformat() if hasattr(when, "date") else ""
+            return evaluate_shadow_tier(state, **context, structural_regime=structural_regime_on(day))
+        except Exception as exc:
+            logging.debug("Shadow S9 tier skipped: %s", exc)
+            return {}
 
     def _measured_exit_suffix(self, direction, levels):
         """Tracker-measured exit stats for this bounce type ("" when unproven).
@@ -5184,6 +5223,8 @@ class BounceBot(EWrapper, EClient):
                     "tier": tier,
                     "muted": bool(verdict.get("muted")),
                     "proven": bool(verdict.get("proven")),
+                    # S9 shadow tier beside the live one (evidence only).
+                    "shadow_tier": str((verdict.get("shadow_s9") or {}).get("tier") or ""),
                     # RETIRED 2026-09-01. The learning verdict has never
                     # carried this key, so the column has always been False;
                     # it is left in place unchanged so the tier_assigned row
@@ -14542,7 +14583,12 @@ class BounceBot(EWrapper, EClient):
                 f.write(f"{timestamp} | {symbol} | {bounce_types_str} | {direction} | {tier_str}\n")
 
             DATA_DIR.mkdir(parents=True, exist_ok=True)
-            fieldnames = ["time_local", "trade_date", "symbol", "direction", "bounce_types", "tier", "composite_r"]
+            shadow = quality.get("shadow_s9") if isinstance(quality.get("shadow_s9"), dict) else {}
+            shadow_composite = shadow.get("composite_r")
+            fieldnames = [
+                "time_local", "trade_date", "symbol", "direction", "bounce_types", "tier", "composite_r",
+                "shadow_s9_tier", "shadow_s9_composite_r",
+            ]
             _migrate_csv_header(INTRADAY_BOUNCES_CSV, fieldnames)
             file_exists = INTRADAY_BOUNCES_CSV.exists()
             with INTRADAY_BOUNCES_CSV.open("a", newline="") as csvfile:
@@ -14558,6 +14604,10 @@ class BounceBot(EWrapper, EClient):
                         "bounce_types": ", ".join(bounce_types_list),
                         "tier": tier,
                         "composite_r": composite if isinstance(composite, (int, float)) else "",
+                        "shadow_s9_tier": str(shadow.get("tier") or ""),
+                        "shadow_s9_composite_r": (
+                            shadow_composite if isinstance(shadow_composite, (int, float)) else ""
+                        ),
                     }
                 )
 

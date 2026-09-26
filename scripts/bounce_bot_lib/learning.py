@@ -110,6 +110,25 @@ PROVEN_MIN_SAMPLES = 12
 PROVEN_MIN_AVG_R = 0.45
 PROVEN_MIN_MEDIAN_R = 0.0
 
+# S9 shadow tier (trader 2026-09-26: "a new tier formula, tried in shadow
+# first"). Recorded beside the live tier; never read by an alert, a sort, the
+# Show filter or the phone. Each segment weighs base x min(1, |mean R| / SE):
+# a near-zero mean gets little say however big its n. Setup identity (type,
+# combo, family) carries the most; time and environment are capped at 0.25.
+SHADOW_S9_DIMENSIONS = (
+    ("bounce_type", 1.0),
+    ("bounce_combo", 1.0),
+    ("master_avwap_setup_family", 1.0),
+    ("master_avwap_priority_bucket", 0.6),
+    ("master_avwap_focus", 0.6),
+    ("structural_regime", 0.4),
+    ("time_bucket", 0.25),
+    ("market_environment", 0.25),
+)
+# Per-alert close-R spread assumed when a state predates `std_close_r`: the
+# median over the 236 live segments rebuilt on 2026-09-26 (p10 1.15, p90 1.72).
+SHADOW_S9_FALLBACK_STD_R = 1.5
+
 
 def _seg_key(direction: str, segment: str) -> str:
     return f"{str(direction or '').strip().lower()}|{str(segment or '').strip()}"
@@ -237,6 +256,7 @@ def build_learning_state(perf_rows: list[dict], *, min_samples: int = MIN_SAMPLE
             "target_1r_rate": target_1r_rate,
             "avg_mfe_r": _float_or_none(row.get("avg_mfe_r")),
             "median_close_r": median_close_r,
+            "std_close_r": _float_or_none(row.get("std_close_r")),
             "score_delta": delta,
             "proven": proven,
         }
@@ -416,6 +436,107 @@ def evaluate_bounce_quality(
         "proven": proven,
         "proven_reasons": proven_reasons[:3],
     }
+
+
+def segment_information(entry: dict) -> float:
+    """min(1, |mean R| / SE) for one stored segment; 0 when it has no mean.
+
+    SE = std(close R) / sqrt(n); a state without `std_close_r` uses
+    SHADOW_S9_FALLBACK_STD_R.
+    """
+    mean = _segment_entry_r(entry)
+    n = int(entry.get("sample_count") or 0)
+    if mean is None or n <= 0:
+        return 0.0
+    std = _float_or_none(entry.get("std_close_r"))
+    if std is None or std <= 0:
+        std = SHADOW_S9_FALLBACK_STD_R
+    se = std / (n ** 0.5)
+    return min(1.0, abs(mean) / se) if se > 0 else 1.0
+
+
+def evaluate_shadow_tier(
+    state: dict | None,
+    *,
+    direction: str,
+    bounce_types: list[str] | tuple = (),
+    time_bucket: str = "",
+    market_environment: str = "",
+    priority_bucket: str = "",
+    focus_label: str = "",
+    bounce_combo: str = "",
+    setup_family: str = "",
+    structural_regime: str = "",
+) -> dict:
+    """S9 shadow tier: information-weighted composite, same bars and mutes, no PROVEN floor.
+
+    Each matching segment weighs base / (values in its dimension) x
+    `segment_information`. Unknown segments (and an unknown regime) add nothing.
+    Returns `{"tier", "composite_r"}`; never read by any live decision.
+    """
+    segments = (state or {}).get("segments") or {}
+    direction = str(direction or "").strip().lower()
+    dim_values = {
+        "bounce_type": list(bounce_types or []),
+        "bounce_combo": [bounce_combo],
+        "master_avwap_setup_family": [setup_family],
+        "master_avwap_priority_bucket": [priority_bucket],
+        "master_avwap_focus": [focus_label],
+        "structural_regime": [structural_regime],
+        "time_bucket": [time_bucket],
+        "market_environment": [market_environment],
+    }
+    weighted_sum = 0.0
+    weight_used = 0.0
+    matched = False
+    muted = False
+    for dimension, base in SHADOW_S9_DIMENSIONS:
+        values = [str(v).strip() for v in dim_values.get(dimension, []) if str(v or "").strip()]
+        by_key = segments.get(dimension) or {}
+        entries = [by_key.get(_seg_key(direction, value)) for value in values]
+        entries = [entry for entry in entries if entry]
+        if not entries:
+            continue
+        matched = True
+        share = base / len(entries)
+        for entry in entries:
+            weight = share * segment_information(entry)
+            weighted_sum += weight * (_segment_entry_r(entry) or 0.0)
+            weight_used += weight
+            muted = muted or _segment_is_muted(dimension, entry)
+    if not matched:
+        return {"tier": "B", "composite_r": None}
+    composite = (weighted_sum / weight_used) if weight_used > 0 else 0.0
+    tier = "D"
+    if not muted:
+        for label, threshold in TIER_THRESHOLDS:
+            if composite >= threshold:
+                tier = label
+                break
+    return {"tier": tier, "composite_r": round(composite, 3)}
+
+
+_regime_cache: dict = {"day": None, "regime": ""}
+
+
+def structural_regime_on(day) -> str:
+    """The trader's structural regime in force on `day` ("" = unknown), cached per day.
+
+    Reads the journal's `structural_regime` rows read-only once per day.
+    """
+    key = str(day or "")[:10]
+    if _regime_cache["day"] == key:
+        return _regime_cache["regime"]
+    regime = ""
+    try:
+        import regime_join
+
+        label = regime_join.Joiner(regime_join.read_segments()).label(key)
+        regime = "" if label == regime_join.UNKNOWN else str(label)
+    except Exception as exc:  # noqa: BLE001 - unknown contributes nothing
+        logging.debug("Structural regime unavailable for the shadow tier: %s", exc)
+    _regime_cache.update(day=key, regime=regime)
+    return regime
 
 
 # ---------------------------------------------------------------------------
