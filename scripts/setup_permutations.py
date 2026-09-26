@@ -760,6 +760,21 @@ def _trendline(row, ctx, side):
     return f"trendline_break_{direction}" if broke else f"trendline_near_{direction}"
 
 
+# --- S14: the study search's own trend facets (the scan row's `trend_20d` and `htf_trend_4h`)
+
+
+@facet("trend20", "trend", in_label=False)
+def _trend20(row, ctx, side):
+    value = (_text(row.get("trend_20d")) or "").upper()
+    return f"trend20_{value.lower()}" if value in {"UP", "DOWN", "SIDEWAYS"} else UNKNOWN
+
+
+@facet("htf_trend_4h", "htf", in_label=False)
+def _htf_trend_4h(row, ctx, side):
+    value = (_text(row.get("htf_trend_4h")) or "").upper()
+    return f"h4_{value.lower()}" if value in {"UP", "DOWN", "NEUTRAL"} else UNKNOWN
+
+
 # --- stamping (4a): the scan-row columns and the honest input view
 
 #: `perm_dist_<ma>_atr` columns the enrichment step writes: (close - ma) / ATR20. The `perm_`

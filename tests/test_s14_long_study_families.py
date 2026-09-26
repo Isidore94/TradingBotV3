@@ -145,3 +145,87 @@ def test_the_sidecar_tags_the_same_families():
                                      horizons=(5,))
     assert {row["symbol"]: row["study_families"] for row in build.rows} == {"TECH": LPL, "BNCE": BBL, "LOW1": LPL}
     assert spf.COLUMNS[-1] == "study_families"
+
+
+# --- the permutation facets, the backfill copies and the search's study block
+
+
+def test_trend20_and_htf_trend_4h_facets():
+    import setup_permutations as sp
+
+    key = sp.facets_for_row({"side": "LONG", "setup_family": "x", "trend_20d": "DOWN", "htf_trend_4h": "NEUTRAL"})
+    assert key.get("trend20") == "trend20_down"
+    assert key.get("htf_trend_4h") == "h4_neutral"
+    blank = sp.facets_for_row({"side": "LONG", "setup_family": "x", "trend_20d": "", "htf_trend_4h": None})
+    assert blank.get("trend20") == sp.UNKNOWN and blank.get("htf_trend_4h") == sp.UNKNOWN
+    assert set(lsf.STUDY_SEARCH_FACETS) <= set(sp.FACETS)
+
+
+def test_the_backfill_copies_a_tagged_row_under_each_study_family(tmp_path):
+    import csv
+
+    import setup_permutation_backfill as bf
+
+    path = tmp_path / "features.csv"
+    rows = [
+        {"symbol": "TECH", "side": "LONG", "setup_family": "avwap_breakout", "sector": "Technology",
+         "pct_from_current_vwap": "-6", "rs_vs_industry": "0.1"},
+        {"symbol": "BNCE", "side": "LONG", "setup_family": "avwap_band_bounce", "sector": "Healthcare",
+         "pct_from_current_vwap": "2", "rs_vs_industry": "5"},
+        {"symbol": "LOW1", "side": "LONG", "setup_family": "avwap_band_bounce", "sector": "Energy",
+         "pct_from_current_vwap": "2", "rs_vs_industry": "-2"},
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=[*rows[0], "last_trade_date", "run_id", "last_close",
+                                                    "spy_above_sma20", "atr20"])
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({**row, "last_trade_date": "2026-09-01", "run_id": "r1", "last_close": "50",
+                             "spy_above_sma20": "True", "atr20": "2"})
+    keyed = bf.key_representatives(path, bf.session_representatives(path), bf.ContextStores())
+    study = {identity[0]: row.study for identity, row in keyed.items()}
+    assert study == {"TECH": (LPL,), "BNCE": (BBL,), "LOW1": ()}
+    out = bf._swing_rows(keyed[("TECH", "LONG", "2026-09-01")], 5, True, 3.0, 50.0)
+    assert [row["family"] for row in out] == ["avwap_breakout", LPL]
+    assert out[1]["f_trend20"] == out[0]["f_trend20"]
+
+
+def _study_population():
+    import random
+    from datetime import timedelta
+
+    rng = random.Random(3)
+    sessions = [(date(2026, 1, 5) + timedelta(days=i)).isoformat() for i in range(60)]
+    rows = []
+    for day in sessions:
+        for n in range(20):
+            spy_up = rng.random() < 0.5
+            win = rng.random() < (0.8 if spy_up else 0.35)
+            base = {"population": "swing", "side": "LONG", "horizon": 5, "session": day,
+                    "episode_id": f"{day}:{n}", "win": win, "r": 1.0 if win else -1.0,
+                    "f_spy_trend": "spy_above_sma20_above_sma50" if spy_up else "spy_below_sma20_below_sma50",
+                    "f_trend20": rng.choice(["trend20_up", "trend20_down"]),
+                    "f_htf_trend_4h": rng.choice(["h4_up", "h4_neutral"]),
+                    "f_noise": rng.choice(["a", "b"])}
+            rows.append({**base, "family": "avwap_breakout"})
+            rows.append({**base, "family": LPL})
+    return rows
+
+
+def test_the_search_runs_study_families_first_on_their_own_three_facets(tmp_path):
+    import setup_permutation_search as search
+    from research_warehouse import trial_ledger
+
+    report = search.build_report(_study_population(), ledger_root=tmp_path)
+    block = report["populations"]["swing"]["horizons"]["5"]
+    assert f"{LPL} LONG" not in block["families"]
+    study = block["study_families"][f"{LPL} LONG"]
+    assert study["facets_searched"] == list(lsf.STUDY_SEARCH_FACETS)
+    assert study["verdict"] == search.VERDICT_KEY
+    assert {"spy_trend": "spy_above_sma20_above_sma50"} in [key["facets"] for key in study["keys"]]
+    for key in study["keys"] + study["top_rejected"]:
+        assert set(key["facets"]) <= set(lsf.STUDY_SEARCH_FACETS)
+    # The ordinary family still searches every facet, noise included.
+    assert "avwap_breakout LONG" in block["families"]
+    trials = [row["trial_id"] for row in trial_ledger.load(tmp_path)]
+    assert trials[0].split(":")[2] == LPL  # registered before any other family

@@ -60,6 +60,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import long_study_families as lsf  # noqa: E402  (pure)
 import setup_permutations as sp  # noqa: E402  (pure; imports no store path)
 
 POPULATION_SWING = "swing"
@@ -317,6 +318,8 @@ class KeyedRow:
     priority_bucket: str
     facets: dict[str, str]
     rule_version: str
+    #: S14: the long study families the row is in (`long_study_families`).
+    study: tuple[str, ...] = ()
 
 
 def key_scan_row(row: Mapping[str, Any], symbol: str, side: str, session: str, context: Any) -> "sp.PermutationKey":
@@ -334,11 +337,17 @@ def key_representatives(
     features_path: Path, representatives: Mapping[int, tuple[str, str, str]], stores: ContextStores
 ) -> dict[tuple[str, str, str], KeyedRow]:
     keyed: dict[tuple[str, str, str], KeyedRow] = {}
+    study_inputs: dict[tuple[str, str, str], dict[str, Any]] = {}
     for index, row in enumerate(_read_rows(features_path)):
         identity = representatives.get(index)
         if identity is None:
             continue
         symbol, side, session = identity
+        study_inputs[identity] = {
+            "side": side, "scan_date": session, "setup_family": _text(row.get("setup_family")),
+            **{name: row.get(name) for name in ("sector", "pct_from_current_vwap", "rs_vs_industry",
+                                                "spy_above_sma20")},
+        }
         key = key_scan_row(row, symbol, side, session, stores.session_context(session))
         keyed[identity] = KeyedRow(
             symbol=symbol,
@@ -355,6 +364,10 @@ def key_representatives(
             facets=key.as_dict(),
             rule_version=key.permutation_rule_version,
         )
+    # S14: tagged once every representative is read (the RS tercile is the session's cross-section).
+    session_rs = lsf.session_rs_values(study_inputs.values())
+    for identity, inputs in study_inputs.items():
+        keyed[identity].study = tuple(lsf.study_families(inputs, session_rs))
     return keyed
 
 
@@ -385,6 +398,12 @@ def _swing_row(keyed: KeyedRow, horizon: int, win: bool, side_return_pct: Any, e
         **{facet_column(name): value for name, value in keyed.facets.items()},
         **_unknown_m5(),
     }
+
+
+def _swing_rows(keyed: KeyedRow, horizon: int, win: bool, side_return_pct: Any, entry_close: Any) -> list[dict]:
+    """The row under its own family, then one copy per S14 study family it is in."""
+    row = _swing_row(keyed, horizon, win, side_return_pct, entry_close)
+    return [row, *({**row, "family": name} for name in keyed.study)]
 
 
 def read_spy_closes(path: Path | None) -> dict[str, float]:
@@ -436,7 +455,7 @@ def swing_rows_from_horizons(
         win = _tape_win(match, row, spy_closes or {}, tally)
         if win is None:
             continue
-        out.append(_swing_row(match, horizon, win, row.get("side_return_pct"), row.get("entry_close")))
+        out.extend(_swing_rows(match, horizon, win, row.get("side_return_pct"), row.get("entry_close")))
     return out
 
 
@@ -490,8 +509,8 @@ def swing_rows_from_daily_bars(
         win = _tape_win(match, row, spy_closes or {}, tally)
         if win is None:
             continue
-        out.append(_swing_row(match, row["horizon_sessions"], win, row.get("side_return_pct"),
-                              row.get("entry_close")))
+        out.extend(_swing_rows(match, row["horizon_sessions"], win, row.get("side_return_pct"),
+                               row.get("entry_close")))
     return out
 
 
