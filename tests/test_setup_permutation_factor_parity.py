@@ -95,6 +95,10 @@ def _history(hooks_on: bool) -> pd.DataFrame:
                     zone_arm={"side": "LONG", "zone": 1} if n % 2 else None, zone_arm_evaluated=True,
                 ))
                 row["weekly_ema8_hold_weeks"] = n  # on the in-memory feature row only
+                # S15: the earnings gap in the loop, as runner.py does (up, down and small gaps).
+                row.update(sp.earnings_gap_columns({
+                    "gap_date": "2025-01-02", "gap_atr_multiple": 0.5 + n * 0.3,
+                    "gap_open": 50.0 + (1 if n % 3 else -1), "pre_gap_close": 50.0}))
             feature_rows.append(row)
         if hooks_on:
             sp.setup_age_columns(feature_rows, tracker, [day.isoformat() for day in sessions[: s_index + 1]])
@@ -105,6 +109,17 @@ def _history(hooks_on: bool) -> pd.DataFrame:
                            "trendline_candidate": {"type": "H-" if n % 2 else "L+"}}
                 row.update(sp.trendline_columns(refined, frame_bars=250, last_close=row["last_close"],
                                                 atr=row["atr20"]))
+            # S15: dollar volume, market cap and a sector rank on every row, after the trendline hook.
+            for n, row in enumerate(feature_rows):
+                bars = [{"close": 40.0 + n, "volume": 2e6 * (n + 1)} for _ in range(25)]
+                row.update(sp.liquidity_columns(bars, market_cap_m=1_500.0 * (n + 1) ** 2))
+            as_of = session.isoformat()
+            sectors = {f"S{k}{m}": f"sector{k}" for k in range(6) for m in range(5)}
+            closes = {symbol: [(as_of, 100.0 + int(symbol[1]) + int(symbol[2]))] * 21 for symbol in sectors}
+            for pairs in closes.values():
+                pairs[0] = ("2000-01-01", 100.0)  # a 20-session return that differs by sector
+            sectors.update({symbol: f"sector{n % 6}" for n, symbol in enumerate(SYMBOLS)})
+            sp.sector_rank_columns(feature_rows, closes, sectors, as_of=as_of)
             spc.stamp_scan_rows(feature_rows, session=session, context=spc.SessionContext())
             for row in feature_rows:
                 row.pop("weekly_ema8_hold_weeks", None)  # not in the runner's CSV allowlist
@@ -153,6 +168,7 @@ def test_scan_factor_and_tier_exports_are_byte_identical_with_the_hooks_on(tmp_p
     assert stamped[sp.SETUP_AGE_COLUMN].notna().all()
     assert stamped[list(sp.TRENDLINE_COLUMNS[:2])].notna().all().all()
     assert set(stamped["perm_trendline_direction"].dropna()) == {"up", "down"}
+    assert stamped[list(sp.S15_COLUMNS)].notna().all().all()
     assert stamped["permutation_rule_version"].eq(sp.PERMUTATION_RULE_VERSION).all()
     off = _export(tmp_path / "off", plain)
     on = _export(tmp_path / "on", stamped)
