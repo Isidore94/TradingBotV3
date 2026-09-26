@@ -30,6 +30,8 @@ QUESTION_SCHEMA = "week_question_v1"
 ANSWER_SCHEMA = "week_answer_v1"
 QUESTION_MAX = 500
 TOO_FEW = "too few to tell"
+#: P8-P5: rows with n from here up to MIN_N - 1 are shown as "thin (n)", never ranked.
+THIN_MIN_N = 5
 UNCITED_NOTE = "uncited — not shown"
 
 STATUS_PENDING = "pending"
@@ -160,6 +162,42 @@ def edge_and_leaks(body: Mapping[str, Any], *, k: int = 3) -> dict[str, Any]:
         if int(row.get("pnl_known_n") or 0) < MIN_N
     )
     return {"edge": edge[:k], "leaks": leaks[:k], "thin_rows": thin, "min_n": MIN_N}
+
+
+def thin_rows(body: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Rows with n THIN_MIN_N..MIN_N-1 and a known P&L, biggest first. Shown, never ranked."""
+    rows = []
+    for group, label in GROUPS:
+        for row in body.get(group) or ():
+            key = _text(row.get("key")) or UNKNOWN
+            n_known = int(row.get("pnl_known_n") or 0)
+            pnl = _number(row.get("pnl_cad"))
+            if key == UNKNOWN or pnl is None or not THIN_MIN_N <= n_known < MIN_N:
+                continue
+            rows.append({
+                "group": group, "label": label, "key": key, "pnl_known_n": n_known,
+                "wins": int(row.get("wins") or 0), "losses": int(row.get("losses") or 0),
+                "pnl_cad": pnl, "value": pnl,
+            })
+    rows.sort(key=lambda row: (-abs(row["value"]), row["group"], row["key"]))
+    return rows
+
+
+def thin_line(row: Mapping[str, Any]) -> str:
+    words = str(row["key"]).replace("_", " ")
+    return (
+        f"{row['label']} {words}: {fmt_money(row.get('pnl_cad'))}, thin ({row['pnl_known_n']}), "
+        f"{row['wins']} won / {row['losses']} lost"
+    )
+
+
+def rollup_view(weeks: Sequence[str], root: Path | None = None) -> dict[str, Any]:
+    """Edge, leaks and thin rows over several week files, merged group by group. Worker only."""
+    bodies = [body for body in (load_week(key, root) for key in weeks) if body]
+    if not bodies:
+        return {"weeks": [], "edge": [], "leaks": [], "thin": [], "thin_rows": 0}
+    body = month_rollup(bodies)
+    return {"weeks": list(body.get("weeks") or ()), **edge_and_leaks(body), "thin": thin_rows(body)}
 
 
 def _merge_groups(bodies: Sequence[Mapping[str, Any]], group: str) -> list[dict[str, Any]]:
@@ -576,11 +614,65 @@ def answer_row(
 
 
 # ---------------------------------------------------------------------------
+# P8-P5: the journal's truth lines for the week and the 4-week rollup
+# ---------------------------------------------------------------------------
+def _load_journal_trades() -> list[dict[str, Any]]:
+    from journal_store import JournalStore
+
+    return list(JournalStore().list_trades())
+
+
+def truth_view(
+    weeks: Sequence[str], rollup_weeks: Sequence[str], *, trades_loader=None, grades_at=None,
+    measure=None,
+) -> dict[str, Any]:
+    """Stocks/options, longs/shorts and confirmed setups (CAD) for the chosen
+    weeks and for the 4-week rollup, and the D-or-worse setups traded in the
+    chosen weeks (bot grade as of each entry). Reads files: worker only."""
+    import journal_truth
+
+    try:
+        trades = list((trades_loader or _load_journal_trades)())
+    except Exception as exc:  # noqa: BLE001 - unread is unknown, never zero
+        return {"error": f"the journal could not be read: {exc}"}
+
+    def span(keys: Sequence[str]) -> list[dict[str, Any]]:
+        keys = [key for key in keys if key]
+        if not keys:
+            return []
+        first = week_monday(min(keys))
+        last = week_monday(max(keys)) + timedelta(days=6)
+        return journal_truth.in_window(trades, first, last)
+
+    chosen, rollup = span(weeks), span(rollup_weeks)
+    grades = journal_truth.bot_grades(chosen, grades_at or journal_truth.grade_reader())
+    return {
+        "weeks": list(weeks),
+        "rollup_weeks": list(rollup_weeks),
+        "lines": journal_truth.cad_truth_lines(chosen),
+        "rollup_lines": journal_truth.cad_truth_lines(rollup),
+        "worst_line": journal_truth.worst_setups_line(
+            chosen, grades, span="this month" if len(weeks) > 1 else "this week"
+        ),
+        # Exits need n, so they are read over the rollup window.
+        "exit_lines": journal_truth.exit_scoreboard(
+            rollup, journal_truth.measure_exits(rollup, measure)
+        )["lines"],
+    }
+
+
+def rollup_weeks_for(week: str, *, weeks: int = TREND_WEEKS) -> list[str]:
+    """The chosen week and the ones before it, oldest first."""
+    return [shift_week(week, -offset) for offset in range(weeks - 1, -1, -1)]
+
+
+# ---------------------------------------------------------------------------
 # the page's one read
 # ---------------------------------------------------------------------------
 def read_view(
     week: str = "", *, month: bool = False, root: Path | None = None,
     questions_path: Path | None = None, answers_path: Path | None = None,
+    trades_loader=None, grades_at=None, measure=None,
 ) -> dict[str, Any]:
     """Everything the Week Review coach section shows. Worker only."""
     available = list_weeks(root)
@@ -601,12 +693,22 @@ def read_view(
         "sessions": list(body.get("sessions") or ()),
         "trades_n": int(body.get("trades_n") or 0),
         **edge_and_leaks(body),
+        "thin": thin_rows(body),
+        # P8-P5: the same builders over the last 4 week files, so cells can reach n 10.
+        "rollup": {} if month else rollup_view(rollup_weeks_for(chosen), root),
         "repeats": repeats(body, records),
         "rule_kept": dict(body.get("rule_kept") or {}),
         "calls": calls_right(records),
         # Month view: the trend ends at the month's last recorded week.
         "trend": trend(covered[-1] if month and covered else chosen, root),
         "questions": read_questions(questions_path=questions_path, answers_path=answers_path),
+        "truth": truth_view(
+            covered if month else [chosen],
+            rollup_weeks_for(covered[-1] if month and covered else chosen),
+            trades_loader=trades_loader,
+            grades_at=grades_at,
+            measure=measure,
+        ),
     }
 
 

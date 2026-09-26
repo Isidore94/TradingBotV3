@@ -533,7 +533,7 @@ TRADES_GOLDEN = [
         "CLOSED",
         "100",
         "1,650.00 CAD",
-        "1.65R",
+        "1.20R",
         "earnings_hold",
     ],
     [
@@ -543,7 +543,7 @@ TRADES_GOLDEN = [
         "CLOSED",
         "100",
         "1,650.00 CAD",
-        "1.65R",
+        "1.20R",
         LONG_TAGS,
     ],
     [
@@ -553,7 +553,7 @@ TRADES_GOLDEN = [
         "CLOSED",
         "100",
         "-330.00 CAD",
-        "-0.33R",
+        "-0.24R",
         "",
     ],
 ]

@@ -318,21 +318,37 @@ class M5AlertBar(QWidget):
             if alert is not None:
                 self._write_item(item, alert, int(item.data(_REPEAT_ROLE) or 1))
 
+    @staticmethod
+    def _bounce_types_of(alert: Any) -> str:
+        import working_lately
+
+        payload = getattr(alert, "payload", None)
+        feedback = payload.get("feedback") if isinstance(payload, dict) else None
+        bounce_types = str((feedback or {}).get("bounce_types") or "")
+        return bounce_types or working_lately.alert_priority_key(alert)[0]
+
     def _grade_for(self, alert: Any) -> str | None:
         """The tracker grade badge for this alert, or None before grades load."""
         grades = getattr(self, "_grades", None)
         if not grades:
             return None
         import setup_grades
-        import working_lately
 
-        payload = getattr(alert, "payload", None)
-        feedback = payload.get("feedback") if isinstance(payload, dict) else None
-        bounce_types = str((feedback or {}).get("bounce_types") or "")
-        if not bounce_types:
-            bounce_types = working_lately.alert_priority_key(alert)[0]
         side = str(getattr(alert, "side", "") or "")
-        return setup_grades.badge(setup_grades.daytrade_grade_for_alert(grades, bounce_types, side))
+        return setup_grades.badge(
+            setup_grades.daytrade_grade_for_alert(grades, self._bounce_types_of(alert), side)
+        )
+
+    def _grade_line_for(self, alert: Any) -> str:
+        """`setup_grades.cell_line` of the alert's best-graded type, "" when none."""
+        grades = getattr(self, "_grades", None)
+        if not grades:
+            return ""
+        import setup_grades
+
+        side = str(getattr(alert, "side", "") or "")
+        cell = setup_grades.daytrade_cell_for_alert(grades, self._bounce_types_of(alert), side)
+        return setup_grades.cell_line(cell) if cell else ""
 
     def set_swing_context(self, mapping) -> None:
         """Which rows sit on a D1 swing setup. Rewrites rows in place.
@@ -516,6 +532,9 @@ class M5AlertBar(QWidget):
             "+1R before -1R over the last 20 sessions (PROVEN, A, B, C, D; NEW = "
             "too few to grade).\n\n"
         )
+        grade_line = self._grade_line_for(alert)
+        if grade_line:
+            grade_help = f"{grade_line}\n{grade_help}"
         if repeats > 1:
             raw = (
                 f"{repeats} alerts on this name this session; the newest is shown.\n"

@@ -110,7 +110,7 @@ def swing_pick_results(
     reference: date | None = None,
     context: Callable[[Mapping[str, Any]], tuple[str, str, str]] | None = None,
 ) -> list[dict[str, Any]]:
-    """One row per tracker episode: `{session, r, side, family, symbol}`.
+    """One row per tracker episode: `{session, r, side, bucket, family, symbol}`.
 
     `setups` is the tracker's compact scoring snapshot (`setups` mapping), whose
     `_scoring_outcome_summary` is the record the family rows read. `r` is the
@@ -158,6 +158,7 @@ def swing_pick_results(
             "r": row["_r"],
             "status": row["_status"],
             "side": row["side"],
+            "bucket": row["priority_bucket"],
             "family": row["setup_family"],
             "symbol": row["symbol"],
         }

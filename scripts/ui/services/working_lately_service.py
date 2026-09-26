@@ -153,19 +153,135 @@ def read_held_run_summaries() -> Any:
 def read_setup_grades(recent_rows: Any) -> dict[str, Any] | None:
     """`setup_grades.build_payload` over the tracker rows and the outcome window.
 
-    None when it could not be built; the surfaces then keep arrival order.
+    The swing cells also get their wins vs SPY and cum R (`read_swing_tape`),
+    over the tracker's own window. None when it could not be built; the
+    surfaces then keep arrival order.
     """
     try:
         import setup_grades
 
+        as_of = _last_completed_session().isoformat()
+        try:
+            swing_tape = read_swing_tape(_tracker_reference(recent_rows), as_of=as_of)
+        except Exception:  # noqa: BLE001 - tape and cum R are then unknown
+            logging.warning("Setup grades tape read failed", exc_info=True)
+            swing_tape = None
         return setup_grades.build_payload(
             recent_rows=recent_rows or (),
             outcome_rows=_outcome_rows(),
-            as_of=_last_completed_session().isoformat(),
+            as_of=as_of,
+            swing_tape=swing_tape,
         )
     except Exception:  # noqa: BLE001 - grades are presentation, never fatal
         logging.debug("Setup grades build failed", exc_info=True)
         return None
+
+
+def _horizon_outcomes_path() -> Path:
+    from project_paths import MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE
+
+    return Path(MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE)
+
+
+def _spy_bars_path() -> Path:
+    from project_paths import MASTER_AVWAP_DAILY_BARS_DIR
+
+    return Path(MASTER_AVWAP_DAILY_BARS_DIR) / "SPY.parquet"
+
+
+#: The horizon-file columns the tape join reads; the rest are dropped on read.
+_HORIZON_COLUMNS = (
+    "symbol", "side", "scan_date", "target_session", "horizon_sessions",
+    "side_return_pct", "measured", "maturity", "outcome_kind",
+)
+
+
+def _horizon_index() -> dict:
+    """The 5-session horizon rows by `(SYMBOL, SIDE, scan_date)`, `{}` when unreadable."""
+    import setup_grades
+
+    path = _horizon_outcomes_path()
+
+    def build() -> dict:
+        try:
+            with path.open("r", newline="", encoding="utf-8-sig") as handle:
+                return setup_grades.horizon_index(
+                    {name: row.get(name) for name in _HORIZON_COLUMNS}
+                    for row in csv.DictReader(handle)
+                )
+        except OSError:
+            return {}
+
+    return _cached("horizon_index", _file_key(path), build, keep=path.is_file())
+
+
+def read_spy_closes() -> dict[str, float]:
+    """SPY's daily closes from the durable bar store, `{iso date: close}`."""
+    path = _spy_bars_path()
+
+    def build() -> dict[str, float]:
+        try:
+            import pandas as pd
+
+            frame = pd.read_parquet(path)
+        except Exception:  # noqa: BLE001 - no SPY is unknown, never a guess
+            return {}
+        column = next((c for c in ("datetime", "date") if c in frame.columns), None)
+        if column is None or "close" not in frame.columns:
+            return {}
+        days = pd.to_datetime(frame[column], errors="coerce")
+        closes = pd.to_numeric(frame["close"], errors="coerce")
+        return {
+            day.date().isoformat(): float(close)
+            for day, close in zip(days, closes, strict=False)
+            if not pd.isna(day) and not pd.isna(close)
+        }
+
+    return _cached("spy_closes", _file_key(path), build, keep=path.is_file())
+
+
+def _swing_tape_for(setups: Mapping[str, Any], reference: date, *, as_of: str) -> dict[str, Any]:
+    """`setup_grades.swing_tape_stats` over the tracker's window ending `reference`.
+
+    The window is the tracker's own (scan dates 0..lookback calendar days
+    back), and the picks are its selected episodes, so the tape cell describes
+    the same picks as the plain one.
+    """
+    import looking_back
+    import setup_grades
+    from master_avwap_lib import legacy
+
+    start = reference - timedelta(days=int(legacy.RECENT_SETUP_TYPE_LOOKBACK_DAYS))
+    in_window = {
+        key: setup
+        for key, setup in (setups or {}).items()
+        if isinstance(setup, Mapping)
+        and start.isoformat() <= str(setup.get("scan_date") or "")[:10] <= reference.isoformat()
+    }
+    picks = looking_back.swing_pick_results(in_window, reference=reference)
+    return setup_grades.swing_tape_stats(picks, _horizon_index(), read_spy_closes(), as_of=as_of)
+
+
+def _tape_inputs_key() -> tuple:
+    return (
+        _file_key(_scoring_snapshot_path()),
+        _file_key(_horizon_outcomes_path()),
+        _file_key(_spy_bars_path()),
+    )
+
+
+def read_swing_tape(reference: date, *, as_of: str) -> dict[str, Any] | None:
+    """Per swing key: wins vs SPY and cum R over the tracker window, or None.
+
+    None when the tracker's scoring snapshot is unreadable: every swing cell's
+    tape and cum R are then unknown. THE WORKER SIDE; cached on its inputs.
+    """
+
+    def build() -> dict[str, Any] | None:
+        setups = _build_setups()
+        return _swing_tape_for(setups, reference, as_of=as_of) if setups else None
+
+    return _cached("swing_tape", (_tape_inputs_key(), reference, as_of), build)
 
 
 #: The looking-back reading (P2-9): pick equity curves and the hold-out window.
@@ -212,6 +328,22 @@ def _scoring_setups() -> dict[str, Any]:
         return {}
     setups = payload.get("setups") if isinstance(payload, dict) else None
     return setups if isinstance(setups, dict) else {}
+
+
+#: The scoring snapshot parsed ONCE per build and shared by the tape read and
+#: the hold-out read: None outside a build, `[]` inside one before the first
+#: read, `[setups]` after it. Cleared by `build_payload`; never kept between builds.
+_SETUPS_THIS_BUILD: list | None = None
+
+
+def _build_setups() -> dict[str, Any]:
+    """`_scoring_setups()`, parsed at most once per `build_payload`."""
+    holder = _SETUPS_THIS_BUILD
+    if holder is None:
+        return _scoring_setups()
+    if not holder:
+        holder.append(_scoring_setups())
+    return holder[0]
 
 
 def _outcome_log_path() -> Path:
@@ -293,8 +425,11 @@ def _swing(recent_reference: date) -> dict[str, Any]:
     lookback = int(legacy.RECENT_SETUP_TYPE_LOOKBACK_DAYS)
     prior_reference = looking_back.tracker_prior_reference(recent_reference, lookback)
 
+    as_of = _last_completed_session().isoformat()
+
     def build() -> dict[str, Any]:
-        setups = _scoring_setups()
+        setups = _build_setups()
+        prior_tape = _swing_tape_for(setups, prior_reference, as_of=as_of) if setups else None
         prior_rows = legacy.build_recent_tracker_setup_family_rows(
             setups,
             reference_date=prior_reference,
@@ -305,7 +440,7 @@ def _swing(recent_reference: date) -> dict[str, Any]:
             row["namespace"] = "live"
         return {
             "picks": looking_back.swing_pick_results(setups),
-            "grades": setup_grades.swing_cells(prior_rows),
+            "grades": setup_grades.swing_cells(prior_rows, prior_tape),
             "trade_r": working_lately.bucketed_trade_r_cells(prior_rows),
             "windows": {
                 "recent": [
@@ -319,7 +454,7 @@ def _swing(recent_reference: date) -> dict[str, Any]:
             },
         }
 
-    return _cached("swing", (_file_key(_scoring_snapshot_path()), prior_reference), build)
+    return _cached("swing", (_tape_inputs_key(), prior_reference, as_of), build)
 
 
 def _prior_favorable() -> dict[str, Any]:
@@ -620,6 +755,14 @@ class WorkingLatelyService(QObject):
         setup grades. The grades ride on the emitted dict under `setup_grades`
         and in their own file; the persisted snapshot is unchanged.
         """
+        global _SETUPS_THIS_BUILD
+        _SETUPS_THIS_BUILD = []
+        try:
+            return self._build_payload()
+        finally:
+            _SETUPS_THIS_BUILD = None
+
+    def _build_payload(self) -> dict[str, Any]:
         global _OUTCOME_ROWS_THIS_BUILD
         try:
             try:

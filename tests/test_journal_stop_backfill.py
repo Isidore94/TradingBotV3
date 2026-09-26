@@ -119,7 +119,8 @@ def test_apply_fills_the_plan_and_r_mfe_and_entry_grade_become_known(tmp_path, c
     assert after["planned_entry"] == 49.9
     assert after["planned_risk"] == (50.0 - 49.5) * 100
     assert after["risk_source"] == "backfill_m5_alert"
-    assert trade_r_multiple(after) == 270.0 / 50.0
+    # P8-P5: R is native (USD 200 net / USD 50 risk), never the CAD 270 / 50.
+    assert trade_r_multiple(after) == 200.0 / 50.0
     assert abs(entry_grade(after["average_entry_price"], after["planned_entry"], after["planned_stop"]) - 0.25) < 1e-9
     measured = excursion(after, bars, now=now)
     assert measured["state"] == "measured"
