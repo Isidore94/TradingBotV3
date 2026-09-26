@@ -47,18 +47,22 @@ def _loader(d1_symbols, m5_symbols, **_kwargs):
     return d1, m5, "fixture"
 
 
-def _run(tmp_path, root):
+#: Two sessions before DAY: old enough that a row with no M5 source is written unknown.
+SETTLED = _history_days()[-3]
+
+
+def _run(tmp_path, root, *, sessions=1, session=DAY):
     from ai_jobs import market_regime_table as job
 
     import market_regimes as mr
 
     out = tmp_path / "table.jsonl"
     result = job.run_market_regime_table(
-        session_date=DAY.isoformat(), out_path=out, loader=_loader, sessions=1,
+        session_date=DAY.isoformat(), out_path=out, loader=_loader, sessions=sessions,
         symbols=("SPY", "QQQ", "IWM"), day_review_root=root,
     )
     assert result["status"] == "ok", result
-    return {row["symbol"]: row for row in mr.read_table(out)}
+    return {row["symbol"]: row for row in mr.read_table(out) if row["session_date"] == session.isoformat()}
 
 
 def test_qqq_m5_is_filled_from_the_day_review_store(tmp_path, monkeypatch):
@@ -81,15 +85,17 @@ def test_the_lake_wins_when_both_stores_hold_the_session(tmp_path, monkeypatch):
 
 
 def test_a_session_in_neither_store_stays_unknown(tmp_path, monkeypatch):
+    # Held while fresh (advisory 2, 2026-09-26); written unknown once two sessions old.
     root = _write_day_review(tmp_path / "dr", monkeypatch, {"QQQ": 0.02}, _history_days())
-    iwm = _run(tmp_path, root)["IWM"]
+    assert "IWM" not in _run(tmp_path / "fresh", root)
+    iwm = _run(tmp_path / "settled", root, sessions=3, session=SETTLED)["IWM"]
     assert iwm["m5_source"] == "none"
     assert {iwm["timeframes"][tf] for tf in INTRADAY} == {"unknown"}
     assert iwm["session_m5_bars"] == 0
 
 
 def test_every_row_names_its_m5_source(tmp_path):
-    rows = _run(tmp_path, tmp_path / "empty")
+    rows = _run(tmp_path, tmp_path / "empty", sessions=3, session=SETTLED)
     assert {symbol: row["m5_source"] for symbol, row in rows.items()} == {"SPY": "lake", "QQQ": "none", "IWM": "none"}
 
 

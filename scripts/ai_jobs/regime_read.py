@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 _log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "regime_read_v1"
+PROMPT_VERSION = "regime_read_v2"
 SCHEMA = "regime_read_v1"
 #: Sessions of the table the model reads.
 WINDOW_SESSIONS = 20
@@ -87,6 +87,23 @@ _MONTHS = (
 _MONTH_WORD = re.compile(
     r"\b(January|February|March|April|May|June|July|August|September|October|November|December"
     r"|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\b"
+)
+_MONTH_NAMES = (
+    r"January|February|March|April|May|June|July|August|September|October|November|December"
+    r"|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept|Sep|Oct|Nov|Dec"
+)
+_MONTH_DAY = re.compile(rf"\b({_MONTH_NAMES})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?\b")
+_DAY_MONTH = re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?({_MONTH_NAMES})\b")
+#: Timeframes the table does not carry, and relative periods it cannot date.
+_FOREIGN_TIMEFRAME = re.compile(
+    r"\b(?:monthly|quarterly|yearly|annual(?:ly)?|\d+[- ]?(?:minutes?|mins?|hours?|hrs?|months?|quarters?|years?)"
+    r"|(?:last|this|next|past|prior|previous)\s+(?:month|quarter|year)|yesterday|tomorrow)\b",
+    re.I,
+)
+#: A read describes; these words predict or advise.
+_PREDICTION = re.compile(
+    r"\b(?:will|would|could|should|might|expects?|expected|likely|probably|forecasts?|next\s+(?:session|day|week))\b",
+    re.I,
 )
 _SMALL_NUMBER_WORDS = frozenset({
     "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "twice", "thrice",
@@ -194,9 +211,20 @@ def build_inputs(
             "session_count": current.get("session_count"),
             "structure_note": str(current.get("structure_note") or ""),
         }
+    import market_structure
+
     return {
         "session_date": day,
         "window": [window[0], window[-1]],
+        # The lookbacks the facts are measured on, so "20-day" or "13 weeks" is a source number.
+        "definitions": {
+            "sma_period": market_structure.SMA_PERIOD,
+            "sma_slope_sessions": market_structure.SMA_SLOPE_SESSIONS,
+            "weekly_lookback_weeks": market_structure.WEEKLY_LOOKBACK,
+            "channel_lookback_sessions": market_structure.CHANNEL_LOOKBACK,
+            "atr_period": market_structure.ATR_PERIOD,
+            "window_sessions": len(window),
+        },
         "trader_regime": trader_regime,
         "regime_journal": segments,
         "structure": structure,
@@ -244,27 +272,75 @@ def _allowed_dates(inputs: Mapping[str, Any]) -> set[date]:
     return found
 
 
+#: Keys whose string value is the trader's own words; their numbers are sources too.
+_TEXT_KEYS = frozenset({"structure_note"})
+
+
+def _number_forms(value: float) -> set[str]:
+    """How a source number may be copied: as written, whole, or rounded to 1-3 decimals.
+
+    Rounding to a whole number is allowed only from 100 up, so a small fraction
+    cannot turn into a count the rows never held.
+    """
+    forms = {f"{round(value, places):.{places}f}" for places in (1, 2, 3)}
+    if value == int(value) or abs(value) >= 100:
+        forms.add(f"{round(value):.0f}")
+    forms.add(repr(value))
+    return {form.lstrip("-") for form in forms}
+
+
 def _source_numbers(inputs: Mapping[str, Any]) -> set[str]:
-    """Every number in the inputs, as written and rounded to 0-3 decimals."""
+    """Every number VALUE in the inputs; keys, ids and date parts are never sources."""
     out: set[str] = set()
-    for raw in _NUMBER.findall(json.dumps(dict(inputs), default=str)):
-        value = float(raw)
-        out.add(raw)
-        for places in range(4):
-            out.add(f"{round(value, places):.{places}f}")
+
+    def _walk(value: Any, key: str = "") -> None:
+        if isinstance(value, bool) or value is None:
+            return
+        if isinstance(value, (int, float)):
+            out.update(_number_forms(float(value)))
+        elif isinstance(value, str):
+            if key in _TEXT_KEYS:
+                for raw in _NUMBER.findall(_FULL_DATE.sub(" ", value)):
+                    out.update(_number_forms(float(raw)))
+        elif isinstance(value, Mapping):
+            for name, item in value.items():
+                _walk(item, str(name))
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                _walk(item, key)
+
+    _walk(dict(inputs))
     return out
 
 
+def _month_number(word: str) -> int:
+    return next(index for index, name in enumerate(_MONTHS, start=1) if name.startswith(word[:3]))
+
+
+def _named_month_days(text: str) -> list[tuple[str, int, int]]:
+    """`(as written, month, day)` for "September 3", "Sept. 3rd" and "3 September"."""
+    found = [(match.group(0), _month_number(match.group(1)), int(match.group(2))) for match in _MONTH_DAY.finditer(text)]
+    found += [(match.group(0), _month_number(match.group(2)), int(match.group(1))) for match in _DAY_MONTH.finditer(text)]
+    return found
+
+
+def _strip_dates(text: str) -> str:
+    """The text with every written date removed, so its digits are not read as numbers."""
+    for pattern in (_FULL_DATE, _MONTH_DAY, _DAY_MONTH, _SHORT_DATE):
+        text = pattern.sub(" ", text)
+    return text
+
+
 def _clause_dates(clause: str, allowed: set[date]) -> set[str]:
-    """ISO dates a clause names (full or month-day), resolved against the allowed dates."""
+    """ISO dates a clause names (full, month-day or named month), resolved against the allowed dates."""
     named: set[str] = set()
     for year, month, day in _FULL_DATE.findall(clause):
         named.add(f"{year}-{month}-{day}")
     stripped = _FULL_DATE.sub(" ", clause)
-    for month, day in _SHORT_DATE.findall(stripped):
-        named.update(
-            item.isoformat() for item in allowed if (item.month, item.day) == (int(month), int(day))
-        )
+    pairs = [(int(month), int(day)) for month, day in _SHORT_DATE.findall(_MONTH_DAY.sub(" ", _DAY_MONTH.sub(" ", stripped)))]
+    pairs += [(month, day) for _written, month, day in _named_month_days(stripped)]
+    for month, day in pairs:
+        named.update(item.isoformat() for item in allowed if (item.month, item.day) == (month, day))
     return named
 
 
@@ -275,7 +351,11 @@ def _check_dates(text: str, inputs: Mapping[str, Any]) -> None:
         stamp = _day(f"{year}-{month}-{day}")
         if stamp is None or stamp not in allowed:
             raise rejected(f"the read writes {year}-{month}-{day}, a date none of its rows holds")
-    for month, day in _SHORT_DATE.findall(_FULL_DATE.sub(" ", text)):
+    for written, month, day in _named_month_days(_FULL_DATE.sub(" ", text)):
+        if not any((item.month, item.day) == (month, day) for item in allowed):
+            raise rejected(f"the read writes {written.strip()}, a date none of its rows holds")
+    bare = _DAY_MONTH.sub(" ", _MONTH_DAY.sub(" ", _FULL_DATE.sub(" ", text)))
+    for month, day in _SHORT_DATE.findall(bare):
         if not any((item.month, item.day) == (int(month), int(day)) for item in allowed):
             raise rejected(f"the read writes {month}-{day}, a date none of its rows holds")
     notes = " ".join(
@@ -293,9 +373,7 @@ def _check_numbers(text: str, inputs: Mapping[str, Any]) -> None:
     import day_review_show
 
     rejected = _story().NarrationRejected
-    bare = _FULL_DATE.sub(" ", text)
-    bare = _SHORT_DATE.sub(" ", bare)
-    bare = _CODE.sub(" ", bare)
+    bare = _CODE.sub(" ", _strip_dates(text))
     known = _source_numbers(inputs)
     for number in day_review_show._numbers(bare):
         if number not in known:
@@ -393,6 +471,17 @@ def _check_regime_words(text: str, inputs: Mapping[str, Any]) -> None:
             raise rejected(f"the read says {match.group(0)!r}, which no structure fact says")
 
 
+def _check_foreign_words(text: str) -> None:
+    """A timeframe or period the table does not carry, or a prediction, rejects."""
+    rejected = _story().NarrationRejected
+    match = _FOREIGN_TIMEFRAME.search(text)
+    if match:
+        raise rejected(f"the read says {match.group(0)!r}, a timeframe or period the regime table does not carry")
+    match = _PREDICTION.search(text)
+    if match:
+        raise rejected(f"the read says {match.group(0)!r}; a regime read describes, it does not predict")
+
+
 def _check_tickers(text: str, inputs: Mapping[str, Any]) -> None:
     """An all-caps word is a symbol the rows carry, a timeframe code or a fixed desk word."""
     import day_review_show
@@ -415,6 +504,7 @@ def verify_read(reply: Any, inputs: Mapping[str, Any]) -> dict[str, Any]:
     if len(sentences) > MAX_SENTENCES:
         raise story.NarrationRejected(f"the read runs {len(sentences)} sentences; at most {MAX_SENTENCES}")
     _check_dates(paragraph, inputs)
+    _check_foreign_words(paragraph)
     _check_numbers(paragraph, inputs)
     _check_tickers(paragraph, inputs)
     _check_timeframes(paragraph, inputs)

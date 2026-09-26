@@ -2,7 +2,8 @@
 
 Appends one `market_regimes.session_row` per (session, symbol) for the last
 `BACKFILL_SESSIONS` sessions that are not in `MARKET_REGIME_TABLE_FILE` yet.
-A session waits until SPY's D1 store holds its bar (the day is recorded).
+A session waits until SPY's D1 store holds its bar (the day is recorded); a
+non-SPY row with no M5 source waits until one exists or it is 2 sessions old.
 Rows already in the file are never rewritten; a failure appends nothing and
 leaves the file as it was. M5 comes from the lake first, then the cached Day
 Review Yahoo store; each row names its `m5_source` (lake/day_review_yahoo/none).
@@ -18,6 +19,8 @@ from typing import Any, Callable, Sequence
 _log = logging.getLogger(__name__)
 
 BACKFILL_SESSIONS = 20
+#: A non-SPY row with no M5 source is held until the session is this many sessions old.
+HOLD_SESSIONS = 2
 
 
 def _recent_sessions(last: date, count: int) -> list[date]:
@@ -64,6 +67,15 @@ def run_market_regime_table(
         m5_days = [session.session_date for session in xcal.sessions_between(first - mr.INTRADAY_LOOKBACK, last)]
         m5_sources = mr.fill_m5_from_day_review(m5_by_symbol, wanted, m5_days, root=day_review_root, now=now)
         recorded = {mr.session_day(row) for row in d1_by_symbol.get(mr.PRIMARY) or ()}
+        # A non-SPY row with no M5 source yet waits (rows are never re-labelled) until
+        # its source exists or the session is HOLD_SESSIONS old; then it is written unknown.
+        age = {day: len(days) - 1 - index for index, day in enumerate(days)}
+        held = [
+            (day, symbol) for day, symbol in missing
+            if day in recorded and symbol != mr.PRIMARY and age[day] < HOLD_SESSIONS
+            and m5_sources.get((day.isoformat(), symbol), mr.M5_SOURCE_NONE) == mr.M5_SOURCE_NONE
+        ]
+        missing = [item for item in missing if item not in held]
         stamp = (now or datetime.now(mr.MARKET_TZ)).astimezone(mr.MARKET_TZ)
         rows = [
             {
@@ -90,4 +102,6 @@ def run_market_regime_table(
     reason = f"{written} rows appended ({len(wanted)} symbols, bars {source})"
     if waiting:
         reason += f"; waiting for the D1 bar of {', '.join(waiting)}"
+    if held:
+        reason += f"; holding {len(held)} rows until their M5 exists or they are {HOLD_SESSIONS} sessions old"
     return {"status": "ok", "model": "", "reason": reason, "outputs": [str(out)] if written else []}

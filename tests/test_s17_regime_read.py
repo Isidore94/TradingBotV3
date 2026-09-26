@@ -76,6 +76,9 @@ def test_a_grounded_read_passes(tmp_path):
     assert inputs["trader_regime"]["day_count"] == 56
     read = regime_read.verify_read(_reply(), inputs)
     assert read["paragraph"] == GOOD
+    # A month-day that is a pivot date, and the 20-day the facts are measured on, pass.
+    extra = GOOD + " The last lower high came on September 3 with SPY under its 20-day."
+    assert regime_read.verify_read(_reply(extra), inputs)["paragraph"] == extra
 
 
 @pytest.mark.parametrize(
@@ -89,6 +92,17 @@ def test_a_grounded_read_passes(tmp_path):
         ("This looks like capitulation.", "capitulation"),
         ("XLK D1 is bullish.", "XLK"),
         ("The trend began in October.", "October"),
+        # Reviewer sneaks (2026-09-26): digits from keys, ids and date parts are not sources.
+        ("SPY D1 turned bullish on 09-22 and the monthly trend is bullish.", "monthly"),
+        ("SPY will retest its high by September 30.", "September 30"),
+        ("SPY dropped 25 points in the H1 window.", "25"),
+        ("The 15-minute chart and the quarterly trend are bearish.", "15-minute"),
+        ("SPY sits 2026 points under its high.", "2026"),
+        ("Yesterday SPY D1 turned bullish; last month W was bullish.", "Yesterday"),
+        ("SPY D1 turned bullish on 09-22; last month W was bullish.", "last month"),
+        ("SPY could rally 3 percent next week.", "could"),
+        ("H4 is the 4-hour read.", "4-hour"),
+        ("SPY held 30 points above the low.", "30"),
     ],
 )
 def test_a_word_the_table_does_not_hold_rejects_the_whole_read(tmp_path, paragraph, reason):

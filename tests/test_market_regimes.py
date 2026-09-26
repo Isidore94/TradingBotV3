@@ -203,21 +203,57 @@ def test_the_night_job_appends_the_session_for_every_symbol(tmp_path):
 
     out = tmp_path / "table.jsonl"
     result = job.run_market_regime_table(
-        session_date=DAY.isoformat(), out_path=out, loader=_loader(), sessions=2, symbols=("SPY", "QQQ", "IWM"),
+        session_date=DAY.isoformat(), out_path=out, loader=_loader(), sessions=4, symbols=("SPY", "QQQ", "IWM"),
+        day_review_root=tmp_path / "no_day_review",
     )
     assert result["status"] == "ok", result
     rows = mr.read_table(out)
+    # QQQ/IWM have no M5 anywhere: their two freshest sessions are held (advisory 2, 2026-09-26).
     assert {(row["session_date"], row["symbol"]) for row in rows} == {
-        (day, symbol) for day in ("2026-09-23", "2026-09-24") for symbol in ("SPY", "QQQ", "IWM")
-    }
-    qqq = next(row for row in rows if row["symbol"] == "QQQ" and row["session_date"] == "2026-09-24")
+        (day, "SPY") for day in ("2026-09-21", "2026-09-22", "2026-09-23", "2026-09-24")
+    } | {(day, symbol) for day in ("2026-09-21", "2026-09-22") for symbol in ("QQQ", "IWM")}
+    qqq = next(row for row in rows if row["symbol"] == "QQQ" and row["session_date"] == "2026-09-22")
     assert qqq["timeframes"]["M5"] == "unknown"  # no QQQ M5 in the lake
     assert qqq["timeframes"]["D1"] != "unknown"
+    assert "holding 4 rows" in result["reason"]
     again = job.run_market_regime_table(
-        session_date=DAY.isoformat(), out_path=out, loader=_loader(), sessions=2, symbols=("SPY", "QQQ", "IWM"),
+        session_date=DAY.isoformat(), out_path=out, loader=_loader(), sessions=2, symbols=("SPY",),
     )
     assert again["status"] == "ok" and "nothing new" in again["reason"]
-    assert len(mr.read_table(out)) == 6
+    assert len(mr.read_table(out)) == 8
+
+
+def test_a_non_spy_row_waits_for_its_m5_source_then_settles_unknown(tmp_path):
+    from ai_jobs import market_regime_table as job
+
+    import market_regimes as mr
+
+    out = tmp_path / "table.jsonl"
+    kwargs = dict(out_path=out, loader=_loader(), sessions=1, symbols=("SPY", "QQQ"),
+                  day_review_root=tmp_path / "no_day_review")
+    job.run_market_regime_table(session_date=DAY.isoformat(), **kwargs)
+    assert [(row["session_date"], row["symbol"]) for row in mr.read_table(out)] == [(DAY.isoformat(), "SPY")]
+
+    # Its source arrives: the held row is written with a real M5 read.
+    def with_qqq(d1_symbols, m5_symbols, **_kw):
+        d1, m5, source = _loader()(d1_symbols, m5_symbols)
+        m5["QQQ"] = _m5("QQQ", _history_days(), step=0.02)
+        return d1, m5, source
+
+    job.run_market_regime_table(session_date=DAY.isoformat(), **{**kwargs, "loader": with_qqq})
+    qqq = next(row for row in mr.read_table(out) if row["symbol"] == "QQQ")
+    assert qqq["timeframes"]["M5"] != "unknown" and qqq["m5_source"] == "lake"
+
+    # Never arrives: two sessions later the row is written unknown.
+    other = tmp_path / "other.jsonl"
+    later = _sessions(DAY, date(2026, 10, 9))[2]
+    job.run_market_regime_table(
+        session_date=later.isoformat(), out_path=other, loader=_loader(sessions_in_d1_end=later), sessions=3,
+        symbols=("SPY", "QQQ"), day_review_root=tmp_path / "no_day_review",
+    )
+    held = {(row["session_date"], row["symbol"]) for row in mr.read_table(other)}
+    assert (DAY.isoformat(), "QQQ") in held
+    assert all((day.isoformat(), "QQQ") not in held for day in _sessions(DAY, later)[1:])
 
 
 def test_a_session_not_yet_in_the_d1_store_waits(tmp_path):
