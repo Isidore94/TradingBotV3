@@ -37,8 +37,8 @@ history simply produces no events.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
-from typing import Any, Mapping, Sequence
+from datetime import date, datetime, timedelta
+from typing import Any, Callable, Mapping, Sequence
 
 from completed_bars import bar_time, completed_m5_bars
 from indicators.efficiency_lrsi import (
@@ -583,3 +583,441 @@ def latest_orb_events(
         return ()
     last = len(completed_m5_bars(bars, now=now)) - 1
     return tuple(event for event in events if event.bar_index == last)
+
+
+# ----------------------------------------------------------------------
+# S7 (2026-09-26): four SHADOW setup engines for the setups the desk has no
+# detector for. SHADOW ONLY: their events go to the `m5_shadow_setups` sidecar
+# and nowhere else - no alert, no score, no Show, no phone - and nothing live
+# reads them. Graduation only through the `docs/SETUPS_TEST.md` ladder.
+#
+# Same rules as above: completed bars only, shorts by mirroring, missing data
+# is no event. They read the REGULAR session (09:30-16:00 ET) only; bars are
+# naive market-local (``tz``) unless they carry a zone. Each event carries what
+# the S3 bracket needs: event_id, side, level, entry, stop, bar time with tz.
+# ----------------------------------------------------------------------
+
+SHADOW_PD_BREAK_HOLD = "pd_level_break_hold"
+SHADOW_VWAP_RECLAIM = "vwap_reclaim_after_flush"
+SHADOW_COMPRESSION_BREAK = "m5_compression_break"
+SHADOW_TRENDLINE_BREAK = "trendline_break"
+SHADOW_ENGINES = (
+    SHADOW_PD_BREAK_HOLD,
+    SHADOW_VWAP_RECLAIM,
+    SHADOW_COMPRESSION_BREAK,
+    SHADOW_TRENDLINE_BREAK,
+)
+
+EXCHANGE_TIMEZONE = "America/New_York"
+_M5_MINUTES = 5
+_REGULAR_OPEN = 9 * 60 + 30
+_REGULAR_CLOSE = 16 * 60
+_FULL_SESSION_SLOTS = tuple(range(_REGULAR_OPEN, _REGULAR_CLOSE, _M5_MINUTES))
+
+#: (a) The event bar must start at or after 10:00 ET, with session RVOL at least this.
+PD_BREAK_EARLIEST = 10 * 60
+PD_BREAK_RVOL_MIN = 1.5
+#: RVOL = today's volume through the bar over the mean of the same span in up to this
+#: many earlier sessions; fewer than ``RVOL_MIN_PRIOR_SESSIONS`` usable ones is unknown.
+RVOL_LOOKBACK_SESSIONS = 5
+RVOL_MIN_PRIOR_SESSIONS = 2
+#: (b) The first 30 minutes (six M5 bars) and the environment longs need.
+FLUSH_BARS = 6
+VWAP_RECLAIM_ENVIRONMENT = "bullish_strong"
+#: (c) The S6 squeeze: 12 bars no wider than 2.5 M5 ATR20 (`setup_permutations.M5_SQUEEZE_RANGE_ATR`).
+SQUEEZE_BOX_BARS = 12
+SQUEEZE_ATR_BARS = 20
+SQUEEZE_RANGE_ATR = 2.5
+#: (d) A pivot high is higher than this many bars on each side.
+PIVOT_SPAN = 2
+
+
+@dataclass(frozen=True)
+class ShadowSetupEvent:
+    """One shadow setup on a completed M5 bar, on the trader's chart scale."""
+
+    engine: str
+    symbol: str
+    side: str
+    bar_index: int
+    bar_time: datetime  # the bar's START, zone-aware (exchange time)
+    level: float
+    entry: float
+    stop: float
+    details: tuple[tuple[str, Any], ...] = ()
+
+    @property
+    def bar_close(self) -> datetime:
+        return self.bar_time + timedelta(minutes=_M5_MINUTES)
+
+    @property
+    def risk_per_share(self) -> float:
+        return abs(self.entry - self.stop)
+
+    @property
+    def event_id(self) -> str:
+        return f"s7:{self.engine}:{self.symbol}:{self.side}:{self.bar_time.isoformat()}"
+
+
+@dataclass(frozen=True)
+class _RegularBar:
+    index: int  # into the completed bars
+    start: datetime  # exchange time
+    day: date
+    minutes: int
+    open: float  # OHLC mirrored for shorts
+    high: float
+    low: float
+    close: float
+    volume: float | None
+
+
+def _exchange_tz():
+    from zoneinfo import ZoneInfo
+
+    return ZoneInfo(EXCHANGE_TIMEZONE)
+
+
+def _default_local_tz():
+    from market_session import get_market_local_timezone
+
+    return get_market_local_timezone()[0]
+
+
+def _bar_volume(bar: Any) -> float | None:
+    raw = bar.get("volume") if isinstance(bar, Mapping) else getattr(bar, "volume", None)
+    try:
+        volume = float(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+    if volume is None or volume != volume or volume < 0:
+        return None
+    return volume
+
+
+def _regular_bars(
+    bars: Sequence[Mapping[str, Any]], side: str, *, now: datetime, tz
+) -> list[_RegularBar] | None:
+    """Completed regular-session bars, mirrored for shorts; None when any bar is unreadable."""
+    completed = completed_m5_bars(bars, now=now)
+    series = _mirrored_ohlc(completed, side)
+    if series is None:
+        return None
+    opens, highs, lows, closes = series
+    local = tz if tz is not None else _default_local_tz()
+    exchange = _exchange_tz()
+    out: list[_RegularBar] = []
+    for index, bar in enumerate(completed):
+        stamp = bar_time(bar)
+        if stamp is None:
+            continue
+        start = (stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=local)).astimezone(exchange)
+        minutes = start.hour * 60 + start.minute
+        if not _REGULAR_OPEN <= minutes < _REGULAR_CLOSE:
+            continue
+        out.append(_RegularBar(index, start, start.date(), minutes, opens[index], highs[index],
+                               lows[index], closes[index], _bar_volume(bar)))
+    return out
+
+
+def _split_session(regular: list[_RegularBar], session: date | None):
+    """(session day, that day's bars) - the last regular day when ``session`` is None."""
+    if not regular:
+        return None, []
+    day = session if session is not None else regular[-1].day
+    return day, [bar for bar in regular if bar.day == day]
+
+
+def _event(engine, symbol, side, bar: _RegularBar, *, level, entry, stop, **details):
+    sign = _sign(side)
+    return ShadowSetupEvent(
+        engine=engine,
+        symbol=str(symbol or "").strip().upper(),
+        side=SHORT if sign < 0 else LONG,
+        bar_index=bar.index,
+        bar_time=bar.start,
+        level=round(sign * level, 6),
+        entry=round(sign * entry, 6),
+        stop=round(sign * stop, 6),
+        details=tuple(sorted(details.items())),
+    )
+
+
+def session_rvol(regular: list[_RegularBar], day: date, position: int) -> tuple[float, int] | None:
+    """(RVOL, prior sessions used) through ``day``'s bar at ``position``; None when unknown.
+
+    Today's volume from the open through that bar over the mean of the same span in
+    the last ``RVOL_LOOKBACK_SESSIONS`` earlier sessions that hold every bar of it.
+    """
+    today = [bar for bar in regular if bar.day == day]
+    through = today[: position + 1]
+    slots = tuple(range(_REGULAR_OPEN, through[-1].minutes + _M5_MINUTES, _M5_MINUTES))
+    if tuple(bar.minutes for bar in through) != slots or any(bar.volume is None for bar in through):
+        return None
+    earlier = sorted({bar.day for bar in regular if bar.day < day})
+    totals: list[float] = []
+    for prior in reversed(earlier):
+        span = [bar for bar in regular if bar.day == prior and bar.minutes <= slots[-1]]
+        if tuple(bar.minutes for bar in span) != slots or any(bar.volume is None for bar in span):
+            continue
+        totals.append(sum(bar.volume for bar in span))
+        if len(totals) == RVOL_LOOKBACK_SESSIONS:
+            break
+    if len(totals) < RVOL_MIN_PRIOR_SESSIONS:
+        return None
+    baseline = sum(totals) / len(totals)
+    if baseline <= 0:
+        return None
+    return sum(bar.volume for bar in through) / baseline, len(totals)
+
+
+def pd_level_break_hold_events(
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    symbol: str,
+    side: str,
+    now: datetime,
+    session: date | None = None,
+    tz=None,
+    rvol_min: float = PD_BREAK_RVOL_MIN,
+) -> tuple[ShadowSetupEvent, ...]:
+    """(a) Previous-day high (long) / low (short) break-and-hold, RVOL >= 1.5, after 10:00 ET.
+
+    The break bar is the first close beyond the level after a close (or the day's
+    open) at or inside it; the hold bar is the next bar, closing beyond it too. The
+    event is on the hold bar, which must start at 10:00 ET or later with session RVOL
+    at least ``rvol_min``. A failed hold re-arms. First event of the session only.
+    The previous session must be a full 78-bar day. Stop: the lower low of the two bars.
+    """
+    regular = _regular_bars(bars, side, now=now, tz=tz)
+    if regular is None:
+        return ()
+    day, today = _split_session(regular, session)
+    if day is None or len(today) < 2:
+        return ()
+    earlier = sorted({bar.day for bar in regular if bar.day < day})
+    if not earlier:
+        return ()
+    previous = [bar for bar in regular if bar.day == earlier[-1]]
+    if tuple(bar.minutes for bar in previous) != _FULL_SESSION_SLOTS:
+        return ()
+    level = max(bar.high for bar in previous)
+    for position in range(1, len(today)):
+        hold, broke = today[position], today[position - 1]
+        before = today[position - 2].close if position >= 2 else broke.open
+        if not (before <= level < broke.close and hold.close > level):
+            continue
+        if hold.minutes < PD_BREAK_EARLIEST:
+            continue
+        rvol = session_rvol(regular, day, position)
+        if rvol is None or rvol[0] < rvol_min:
+            continue
+        stop = min(broke.low, hold.low)
+        if not stop < hold.close:
+            continue
+        return (
+            _event(SHADOW_PD_BREAK_HOLD, symbol, side, hold, level=level, entry=hold.close, stop=stop,
+                   rvol=round(rvol[0], 4), rvol_sessions=rvol[1], break_bar=broke.start.isoformat()),
+        )
+    return ()
+
+
+def _running_vwap(today: list[_RegularBar]) -> list[float] | None:
+    """Session VWAP (typical price) at each bar; None when any volume is missing.
+
+    On a mirrored series the typical price is negated, so the VWAP mirrors with it.
+    """
+    cum_volume = cum_value = 0.0
+    out: list[float] = []
+    for bar in today:
+        if bar.volume is None:
+            return None
+        cum_volume += bar.volume
+        cum_value += (bar.high + bar.low + bar.close) / 3.0 * bar.volume
+        if cum_volume <= 0:
+            return None
+        out.append(cum_value / cum_volume)
+    return out
+
+
+def vwap_reclaim_after_flush_events(
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    symbol: str,
+    side: str,
+    now: datetime,
+    session: date | None = None,
+    tz=None,
+    environment_at: Callable[[datetime], str | None] | None = None,
+) -> tuple[ShadowSetupEvent, ...]:
+    """(b) VWAP reclaim after a first-30 flush; longs only, only in ``bullish_strong``.
+
+    Flush: all six first-30 bars present, their low under the day's open, and the
+    09:55 bar closing under session VWAP. Reclaim: the first bar from 10:00 ET that
+    closes back over VWAP. ``environment_at(bar start)`` must say ``bullish_strong``
+    at the reclaim bar; no reader or an unknown label is no event. Stop: the
+    session low through the reclaim bar.
+    """
+    if _sign(side) < 0 or environment_at is None:
+        return ()
+    regular = _regular_bars(bars, side, now=now, tz=tz)
+    if regular is None:
+        return ()
+    day, today = _split_session(regular, session)
+    if day is None or len(today) <= FLUSH_BARS:
+        return ()
+    first30 = today[:FLUSH_BARS]
+    if tuple(bar.minutes for bar in first30) != _FULL_SESSION_SLOTS[:FLUSH_BARS]:
+        return ()
+    vwap = _running_vwap(today)
+    if vwap is None:
+        return ()
+    flush_low = min(bar.low for bar in first30)
+    if not (flush_low < first30[0].open and first30[-1].close < vwap[FLUSH_BARS - 1]):
+        return ()
+    for position in range(FLUSH_BARS, len(today)):
+        bar = today[position]
+        if bar.close <= vwap[position]:
+            continue
+        try:
+            label = environment_at(bar.start)
+        except Exception:  # noqa: BLE001 - an unreadable environment is unknown
+            label = None
+        if str(label or "").strip().lower() != VWAP_RECLAIM_ENVIRONMENT:
+            return ()
+        stop = min(item.low for item in today[: position + 1])
+        if not stop < bar.close:
+            return ()
+        return (
+            _event(SHADOW_VWAP_RECLAIM, symbol, side, bar, level=vwap[position], entry=bar.close,
+                   stop=stop, environment=VWAP_RECLAIM_ENVIRONMENT, flush_low=round(flush_low, 6)),
+        )
+    return ()
+
+
+def compression_break_events(
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    symbol: str,
+    side: str,
+    now: datetime,
+    session: date | None = None,
+    tz=None,
+) -> tuple[ShadowSetupEvent, ...]:
+    """(c) M5 compression break: a close beyond a 12-bar squeeze box.
+
+    The box is the 12 same-session bars before the bar, no wider than 2.5 M5 ATR20
+    (ATR over the regular-session bars before it; 21 needed). One event per box: a
+    break starts a 12-bar cooldown. Level: the box edge; stop: the far edge.
+    """
+    regular = _regular_bars(bars, side, now=now, tz=tz)
+    if regular is None:
+        return ()
+    day, _today = _split_session(regular, session)
+    if day is None:
+        return ()
+    # True range of bar i against bar i-1, computed once (index 0 is unused).
+    true_range = [0.0] + [
+        max(item.high - item.low, abs(item.high - regular[i - 1].close), abs(item.low - regular[i - 1].close))
+        for i, item in enumerate(regular) if i > 0
+    ]
+    events: list[ShadowSetupEvent] = []
+    last_event: int | None = None
+    for k, bar in enumerate(regular):
+        if bar.day != day or k < max(SQUEEZE_ATR_BARS + 1, SQUEEZE_BOX_BARS):
+            continue
+        if last_event is not None and k - last_event <= SQUEEZE_BOX_BARS:
+            continue
+        box = regular[k - SQUEEZE_BOX_BARS:k]
+        if any(item.day != day for item in box):
+            continue
+        atr = sum(true_range[k - SQUEEZE_ATR_BARS:k]) / SQUEEZE_ATR_BARS
+        box_high = max(item.high for item in box)
+        box_low = min(item.low for item in box)
+        if atr <= 0 or (box_high - box_low) / atr > SQUEEZE_RANGE_ATR:
+            continue
+        if bar.close <= box_high:
+            continue
+        last_event = k
+        events.append(
+            _event(SHADOW_COMPRESSION_BREAK, symbol, side, bar, level=box_high, entry=bar.close,
+                   stop=box_low, range_atr=round((box_high - box_low) / atr, 4))
+        )
+    return tuple(events)
+
+
+def trendline_break_events(
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    symbol: str,
+    side: str,
+    now: datetime,
+    session: date | None = None,
+    tz=None,
+    pivot_span: int = PIVOT_SPAN,
+) -> tuple[ShadowSetupEvent, ...]:
+    """(d) Intraday trendline break from pivots (long: a falling line through pivot highs).
+
+    A pivot high is higher than ``pivot_span`` bars on each side and is known only once
+    those later bars have completed. The line runs through the last two known pivots
+    of the session when the second is lower. The event is the first close over the
+    line after a close at or under it; once per line. Stop: the lowest low since the
+    second pivot. Shorts mirror: a rising line through pivot lows, broken down.
+    """
+    regular = _regular_bars(bars, side, now=now, tz=tz)
+    if regular is None:
+        return ()
+    day, today = _split_session(regular, session)
+    span = max(1, int(pivot_span))
+    if day is None or len(today) < 2 * span + 3:
+        return ()
+    pivots = [
+        p for p in range(span, len(today) - span)
+        if all(today[p].high > today[q].high for q in range(p - span, p + span + 1) if q != p)
+    ]
+    sign = _sign(side)
+    events: list[ShadowSetupEvent] = []
+    used: set[tuple[int, int]] = set()
+    for j in range(1, len(today)):
+        known = [p for p in pivots if p + span <= j - 1]
+        if len(known) < 2:
+            continue
+        p1, p2 = known[-2], known[-1]
+        if not today[p2].high < today[p1].high or (p1, p2) in used:
+            continue
+        slope = (today[p2].high - today[p1].high) / (p2 - p1)
+        line_now = today[p2].high + slope * (j - p2)
+        line_before = today[p2].high + slope * (j - 1 - p2)
+        if not (today[j].close > line_now and today[j - 1].close <= line_before):
+            continue
+        stop = min(item.low for item in today[p2: j + 1])
+        if not stop < today[j].close:
+            continue
+        used.add((p1, p2))
+        events.append(
+            _event(SHADOW_TRENDLINE_BREAK, symbol, side, today[j], level=line_now, entry=today[j].close,
+                   stop=stop, pivot_1=today[p1].start.isoformat(), pivot_1_price=round(sign * today[p1].high, 6),
+                   pivot_2=today[p2].start.isoformat(), pivot_2_price=round(sign * today[p2].high, 6))
+        )
+    return tuple(events)
+
+
+def shadow_setup_events(
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    symbol: str,
+    now: datetime,
+    session: date | None = None,
+    tz=None,
+    environment_at: Callable[[datetime], str | None] | None = None,
+) -> tuple[ShadowSetupEvent, ...]:
+    """All four shadow engines, both sides, in bar order. Shadow only (see above)."""
+    events: list[ShadowSetupEvent] = []
+    for side in (LONG, SHORT):
+        common = {"symbol": symbol, "side": side, "now": now, "session": session, "tz": tz}
+        events.extend(pd_level_break_hold_events(bars, **common))
+        events.extend(vwap_reclaim_after_flush_events(bars, environment_at=environment_at, **common))
+        events.extend(compression_break_events(bars, **common))
+        events.extend(trendline_break_events(bars, **common))
+    events.sort(key=lambda event: (event.bar_time, event.engine, event.side))
+    return tuple(events)

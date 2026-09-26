@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
+from m5_shadow_setups import ShadowSetupsCapture
 from market_environment_annotations import record_market_environment_annotation
 from project_paths import MARKET_ENVIRONMENT_ANNOTATIONS_FILE
 from technical_integrity import load_technical_integrity_snapshot
@@ -299,6 +300,15 @@ class BounceService(QObject):
         self._warehouse_timer.timeout.connect(self.capture_warehouse_tee)
         self.started.connect(self._start_warehouse_timer)
 
+        # S7 shadow setups: the four shadow engines over the same bar cache, on
+        # their own worker, into their own sidecar. Shadow only: no alert, no
+        # score, no Show/phone. Every 5 minutes, one M5 bar.
+        self._shadow_setups: ShadowSetupsCapture | None = None
+        self._shadow_setups_timer = QTimer(self)
+        self._shadow_setups_timer.setInterval(300_000)
+        self._shadow_setups_timer.timeout.connect(self.capture_shadow_setups)
+        self.started.connect(self._start_shadow_setups_timer)
+
     # ------------------------------------------------------------------
     # Emission guards
     # ------------------------------------------------------------------
@@ -570,12 +580,14 @@ class BounceService(QObject):
         # The tee's worker is this service's to retire, like every other thread
         # it owns; it holds no Qt object, so it is stopped before the timers.
         self._close_warehouse_capture()
+        self._close_shadow_setups()
         for timer in (
             self._health_timer,
             self._regime_timer,
             self._integrity_timer,
             self._board_timer,
             self._warehouse_timer,
+            self._shadow_setups_timer,
         ):
             try:
                 stop_staggered(timer)
@@ -815,6 +827,33 @@ class BounceService(QObject):
             capture.close()
         except Exception:
             logging.debug("Research warehouse tee failed to close cleanly.", exc_info=True)
+
+    @Slot()
+    def _start_shadow_setups_timer(self) -> None:
+        if not self._may_arm_timers():
+            return
+        start_staggered(self._shadow_setups_timer, 97_000)
+
+    @Slot()
+    def capture_shadow_setups(self) -> None:
+        """Hand the bot's bar cache to the S7 shadow-setups worker (memory only here)."""
+        if not self._is_live():
+            return
+        bot = self._current_bot()
+        if bot is None:
+            return
+        if self._shadow_setups is None:
+            self._shadow_setups = ShadowSetupsCapture()
+        self._shadow_setups.submit(bot)
+
+    def _close_shadow_setups(self) -> None:
+        capture = self._shadow_setups
+        if capture is None:
+            return
+        try:
+            capture.close()
+        except Exception:
+            logging.debug("S7 shadow setups worker failed to close cleanly.", exc_info=True)
 
     @Slot()
     def refresh_entry_board(self) -> None:
