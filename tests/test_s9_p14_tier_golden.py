@@ -110,3 +110,62 @@ def test_formerly_proven_alerts_carry_their_grade_and_nothing_else_moves():
 def test_no_golden_alert_says_proven_any_more():
     for case in CASES:
         assert "PROVEN" not in _message(case, EXPECTED[case["id"]]["quality"]), case["id"]
+
+
+# --------------------------------------------------------------------------- the bot seam
+REGIME = "bear_channel_lower_highs"
+
+
+def _state_with_extreme_regime_segments():
+    """A COPY of the golden state plus regime segments no live tier may feel."""
+    import copy
+
+    state = copy.deepcopy(STATE)
+    state["segments"]["structural_regime"] = {
+        # A mute-grade negative with a big n, and a huge positive.
+        f"short|{REGIME}": {
+            "avg_close_r": -0.9, "entry_r": -0.9, "production_r": -0.9, "sample_count": 900,
+            "session_count": 40, "std_close_r": 1.2, "median_close_r": -1.0, "muted": True, "proven": False,
+        },
+        f"long|{REGIME}": {
+            "avg_close_r": 2.5, "entry_r": 2.5, "production_r": 2.5, "sample_count": 900,
+            "session_count": 40, "std_close_r": 1.2, "median_close_r": 2.0, "muted": False, "proven": True,
+        },
+    }
+    return state
+
+
+def test_the_bot_seam_keeps_live_tier_text_and_mutes_with_extreme_regime_segments(monkeypatch):
+    """S9 review blocker: neither the shadow nor the regime reaches a live verdict at the seam."""
+    from bounce_bot_lib import legacy
+
+    state = _state_with_extreme_regime_segments()
+    monkeypatch.setattr(learning, "load_bounce_learning_state", lambda path=None: state)
+    monkeypatch.setattr(learning, "structural_regime_on", lambda day: REGIME)
+    shadow_differs = 0
+    for case in CASES:
+        inputs = case["inputs"]
+        monkeypatch.setattr(learning, "time_bucket_for", lambda when, bucket=inputs["time_bucket"]: bucket)
+        row = {
+            "market_environment": inputs["market_environment"],
+            "master_avwap_priority_bucket": inputs["priority_bucket"],
+            "master_avwap_focus_label": inputs["focus_label"],
+            "master_avwap_setup_family": inputs["setup_family"],
+            "master_avwap_swing_traits": ";".join(inputs["swing_traits"]),
+            "signal_time": f"{case['trade_date']} 10:00:00",
+        }
+        levels = {bounce_type: 1.0 for bounce_type in inputs["bounce_types"]}
+        quality = legacy.BounceBot._evaluate_bounce_alert_quality(
+            legacy.BounceBot, inputs["direction"], levels, row
+        )
+        shadow = quality.pop("shadow_s9")
+        expected = EXPECTED[case["id"]]
+        assert quality == expected["quality"], case["id"]  # tier, composite, mutes, reasons
+        if quality.get("proven_reasons"):
+            assert _message(case, quality) == _p14_text(case), case["id"]
+        else:
+            assert _message(case, quality) == expected["message"], case["id"]
+        plain = learning.evaluate_shadow_tier(STATE, **{k: v for k, v in inputs.items() if k != "swing_traits"})
+        shadow_differs += int(shadow != plain)
+    # The regime segments DO move the shadow, so the seam really fed it the regime.
+    assert shadow_differs >= 100

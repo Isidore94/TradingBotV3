@@ -1792,6 +1792,10 @@ class AlertCenterPanel(
         if len(self._grade_bypass_cache) > MAX_FEED_ITEMS * 8:
             self._grade_bypass_cache.clear()
         self._grade_bypass_cache[id(alert)] = (alert, verdict)
+        try:
+            alert.grade_bypass = verdict  # review events record it as `proven`
+        except AttributeError:
+            pass
         return verdict
 
     def set_best_now_entries(self, entries) -> None:
