@@ -19,7 +19,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-PROMPT_VERSION = "econ_brief_narration_v2"
+PROMPT_VERSION = "econ_brief_narration_v3"
 
 MIN_LINES = 3
 MAX_LINES = 6
@@ -120,24 +120,69 @@ def validate(narration: Any, pack: Mapping[str, Any]) -> list[str]:
     return out
 
 
-def _evidence(pack: Mapping[str, Any]) -> dict[str, Any]:
+#: The model's label for the prior brief's prose: context only, never content.
+YESTERDAY_KEY = "yesterday - do not restate"
+
+_PROSE_KEYS = ("bottom_line", "ranked_signals", "turbulence_lines", "playbook_bullish", "playbook_bearish")
+
+# The sentence a rejected reply wrote, as the verifier quotes it in the ledger reason.
+_REJECTED_SENTENCE = re.compile(
+    r"""(?:a time in (['"])(?P<a>.+?)\1 is not the time"""
+    r"""|(['"])(?P<b>.+?)\3 names a release that is not in the brief)"""
+)
+
+
+def _model_pack(pack: Mapping[str, Any]) -> dict[str, Any]:
+    """The pack as the model sees it: the session's calendar, prose moved under YESTERDAY_KEY."""
+    seen = {key: value for key, value in pack.items() if key not in _PROSE_KEYS}
+    seen[YESTERDAY_KEY] = {
+        "written_for": pack.get("brief_session") or "",
+        **{key: pack.get(key) for key in _PROSE_KEYS},
+    }
+    return seen
+
+
+def prior_rejected_sentences(session_date: str, *, ledger_path: Path | None = None) -> list[str]:
+    """Sentences this slot's earlier attempts for the session were rejected for, oldest first."""
+    from ai_jobs import ledger
+
+    try:
+        rows = ledger.attempt_rows("econ_brief", session_date, path=ledger_path)
+    except (OSError, ValueError):  # no AI store configured: nothing to quote
+        return []
+    out: list[str] = []
+    for row in rows:
+        match = _REJECTED_SENTENCE.search(str(row.get("reason") or ""))
+        sentence = (match.group("a") or match.group("b")) if match else ""
+        if sentence and sentence not in out:
+            out.append(sentence)
+    return out
+
+
+def _evidence(pack: Mapping[str, Any], rejected: list[str] | None = None) -> dict[str, Any]:
     canonical = json.dumps(pack, sort_keys=True, separators=(",", ":"), default=str)
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    instructions = (
+        "Write 3 to 6 short lines, plain simple words, telling a day trader what to "
+        "watch today. Use only this pack. Name only events in `today` or `week`, and "
+        "put the id of every event a line names in its event_ids. Write a clock time "
+        "only if it is that cited event's time_et (ET). Never add a time, number or "
+        "event the pack does not hold. Lead with today's timed events. "
+        f"Today is {pack.get('target_session') or 'the target session'}. "
+        f"`{YESTERDAY_KEY}` is the prose of the brief written for "
+        f"{pack.get('brief_session') or 'an earlier day'}: context only. Never restate "
+        "it; an event or time it names that is not in `today` or `week` is already "
+        "past - never mention it."
+    )
+    for sentence in rejected or ():
+        instructions += (
+            f' An earlier reply was rejected for this line. Do not write: "{sentence}"'
+        )
     return {
         "package_id": f"econ-brief:{digest[:16]}",
         "evidence_hash": digest,
-        "instructions": (
-            "Write 3 to 6 short lines, plain simple words, telling a day trader what to "
-            "watch today. Use only this pack. Name only events in `today` or `week`, and "
-            "put the id of every event a line names in its event_ids. Write a clock time "
-            "only if it is that cited event's time_et (ET). Never add a time, number or "
-            "event the pack does not hold. Lead with today's timed events. "
-            f"Today is {pack.get('target_session') or 'the target session'}. The brief "
-            f"prose (bottom_line, ranked_signals, turbulence_lines, playbooks) was written "
-            f"on {pack.get('brief_session') or 'an earlier day'} for that day: an event it "
-            "names that is not in `today` or `week` is already past - never mention it."
-        ),
-        "pack": dict(pack),
+        "instructions": instructions,
+        "pack": _model_pack(pack),
     }
 
 
@@ -158,6 +203,7 @@ def run_econ_brief(
     out_dir: Path | None = None,
     forecasts: list[Mapping[str, str]] | None = None,
     request: Callable[..., Mapping[str, Any]] | None = None,
+    ledger_path: Path | None = None,
     **_ignored: Any,
 ) -> dict[str, Any]:
     """Write one verified summary for the next session; failure keeps the old file."""
@@ -178,7 +224,8 @@ def run_econ_brief(
             "reason": f"{econ_brief.NO_BRIEF_TEXT} Nothing to summarise for {target}.",
             "outputs": [],
         }
-    evidence = _evidence(pack)
+    # A retry quotes what the earlier attempts were rejected for, so the model does not repeat it.
+    evidence = _evidence(pack, prior_rejected_sentences(day, ledger_path=ledger_path))
     destination = econ_brief.night_dir(out_dir) / f"{target}.json"
     existing = econ_brief.read_night(target, out_dir=out_dir)
     if (

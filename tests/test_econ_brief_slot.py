@@ -291,3 +291,74 @@ def test_no_brief_pasted_is_said_plainly(tmp_path):
     assert view["origin"] == econ_brief.ORIGIN_NONE
     assert view["note"] == "No brief pasted."
     assert view["today"] == [] and view["summary_lines"] == []
+
+
+# ---------------------------------------------------------------------------
+# P4b: the 09-25 night restated the prior brief's "1 p.m. Treasury auction"
+# ---------------------------------------------------------------------------
+NIGHT_0925 = json.loads((FIXTURES / "econ_night_2026-09-25.json").read_text(encoding="utf-8"))
+REJECTED_0925 = "The 1 p.m. Treasury auction is important today."
+PROSE_KEYS = ("bottom_line", "ranked_signals", "turbulence_lines", "playbook_bullish", "playbook_bearish")
+
+
+def _run_0925(monkeypatch, tmp_path, ledger_rows=()):
+    import econ_brief
+    from ai_jobs import econ_brief_narration as job
+
+    pack = NIGHT_0925["pack"]
+    monkeypatch.setattr(econ_brief, "build_pack", lambda _f, *, target_session: dict(pack))
+    ledger = tmp_path / "ai_job_ledger.jsonl"
+    ledger.write_text("".join(json.dumps(row) + "\n" for row in ledger_rows), encoding="utf-8")
+    request = _request_returning({"lines": [{"text": REJECTED_0925, "event_ids": []}] * 3})
+    outcome = job.run_econ_brief(
+        session_date="2026-09-25", out_dir=tmp_path / "out",
+        forecasts=_forecasts(("2026-09-24", "brief")), request=request, ledger_path=ledger,
+    )
+    assert request.calls, outcome
+    return outcome, request.calls[0]["evidence"]
+
+
+def test_the_0925_rejected_sentence_is_still_rejected():
+    from ai_jobs import econ_brief_narration as job
+
+    pack = NIGHT_0925["pack"]
+    assert pack["target_session"] == "2026-09-28" and pack["today"] == []
+    reply = {"lines": [{"text": REJECTED_0925, "event_ids": ["w1"]}] * 3}
+    with pytest.raises(ValueError, match="is not the time of an event it cites"):
+        job.validate(reply, pack)
+
+
+def test_the_model_sees_the_prior_briefs_prose_only_as_yesterday(monkeypatch, tmp_path):
+    from ai_jobs import econ_brief_narration as job
+
+    _outcome, evidence = _run_0925(monkeypatch, tmp_path)
+    seen = evidence["pack"]
+    for key in PROSE_KEYS:
+        assert key not in seen, key
+    assert job.YESTERDAY_KEY == "yesterday - do not restate"
+    yesterday = seen[job.YESTERDAY_KEY]
+    assert yesterday["written_for"] == "2026-09-24"
+    assert "1 p.m. 7-year auction" in yesterday["bottom_line"]
+    # The calendar the model may name is the session's own parsed events, nothing else.
+    assert seen["today"] == NIGHT_0925["pack"]["today"]
+    assert seen["week"] == NIGHT_0925["pack"]["week"]
+    outside = {key: value for key, value in seen.items() if key != job.YESTERDAY_KEY}
+    assert "1 p.m." not in json.dumps(outside)
+    assert "yesterday - do not restate" in evidence["instructions"]
+    assert REJECTED_0925 not in evidence["instructions"]
+
+
+def test_the_retry_quotes_the_rejected_sentence_as_do_not_write(monkeypatch, tmp_path):
+    first_attempt = NIGHT_0925["ledger_rows"][0]
+    assert REJECTED_0925 in first_attempt["reason"]
+    outcome, evidence = _run_0925(monkeypatch, tmp_path, ledger_rows=[first_attempt])
+    assert f'Do not write: "{REJECTED_0925}"' in evidence["instructions"]
+    # The verifier is unchanged: the same sentence is still rejected.
+    assert outcome["status"] == "degraded_no_narrative"
+    assert "is not the time of an event it cites" in outcome["reason"]
+
+
+def test_another_nights_rejection_is_not_quoted(monkeypatch, tmp_path):
+    other = dict(NIGHT_0925["ledger_rows"][0], session_date="2026-09-24")
+    _outcome, evidence = _run_0925(monkeypatch, tmp_path, ledger_rows=[other])
+    assert REJECTED_0925 not in evidence["instructions"]
