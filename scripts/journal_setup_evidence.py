@@ -429,6 +429,29 @@ def evidence_candidates(
     return sorted(best.values(), key=lambda item: (-item["confidence"], item["tag"]))
 
 
+def same_session_before_entry(
+    trade: Mapping[str, Any], rows: Iterable[EvidenceRow]
+) -> list[EvidenceRow]:
+    """Rows on the trade's underlying and side, stamped before its first fill that session.
+
+    The same point-in-time join `evidence_candidates` uses, kept to the entry's
+    own session and an explicit side match. Closest to the entry first.
+    """
+    entry = aware_moment(trade.get("opened_at"))
+    underlying, side = underlying_view(trade)
+    if entry is None or not underlying or not side:
+        return []
+    entry_session = entry.astimezone(MARKET_TZ).date()
+    kept = [
+        row
+        for row in rows
+        if row.symbol == underlying
+        and row.side == side
+        and _timing(row, entry, entry_session) in {"trigger", "session"}
+    ]
+    return sorted(kept, key=lambda row: entry - row.at)
+
+
 def _read_review_events() -> list[dict[str, Any]]:
     try:
         from review_events import load_review_events
@@ -474,5 +497,6 @@ __all__ = [
     "focus_pick_rows",
     "option_underlying",
     "review_event_rows",
+    "same_session_before_entry",
     "underlying_view",
 ]

@@ -426,11 +426,20 @@ class TradesTab(QFrame):
         # own text height as its height, same as the label and combobox beside
         # it, so the splitter below is the only widget left that grows.
         self.tag_filter_note.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        # P8 P2 B: the Sunday bulk confirm of every suggested setup.
+        self.bulk_confirm_button = QPushButton("Confirm suggested setups")
+        self.bulk_confirm_button.setToolTip(
+            "Lists every trade whose setup is still a machine suggestion. Tick the "
+            "right ones, fix the rest, and confirm them in one go."
+        )
+        self.bulk_confirm_button.clicked.connect(self._open_bulk_confirm)
+        self._bulk_confirm_dialog = None
         filter_row = QHBoxLayout()
         filter_row.addWidget(QLabel("Tag review"))
         filter_row.addWidget(self.tag_filter)
         filter_row.addWidget(self.tag_filter_note)
         filter_row.addStretch(1)
+        filter_row.addWidget(self.bulk_confirm_button)
 
         self.detail = self._build_detail()
         self.splitter = QSplitter(Qt.Horizontal)
@@ -1259,6 +1268,19 @@ class TradesTab(QFrame):
             return
         self.statusChanged.emit(getattr(self, "_rebuild_message", "journal rebuilt"))
         self.reload()
+
+    def _open_bulk_confirm(self) -> None:
+        """Open (or raise) the non-modal bulk confirm; it loads on a worker."""
+        from ui.panels.journal.bulk_confirm_dialog import BulkConfirmDialog
+
+        dialog = self._bulk_confirm_dialog
+        if dialog is None:
+            dialog = BulkConfirmDialog(self, threaded=self._threaded)
+            dialog.confirmedSetups.connect(lambda _result: self.reload())
+            self._bulk_confirm_dialog = dialog
+        dialog.load()
+        dialog.show()
+        dialog.raise_()
 
     def _open_corrections(self) -> None:
         if self._current is None:

@@ -104,6 +104,11 @@ NO_SUPPORT_BROKEN = "none"
 STATUS_MEASURED = "measured"
 STATUS_PENDING = "pending"
 STATUS_UNMEASURED = "unmeasured"
+#: A never-quoted pick whose play has run out: it can never be graded.
+STATUS_DEAD = "dead"
+REASON_NEVER_QUOTED = "never_quoted"
+#: With no expiry recorded, a never-quoted pick is dead this many sessions on.
+DEAD_AFTER_SESSIONS = 30
 
 #: The outcome CSV header, in order. The readout joins on it and the Setup
 #: Tracker's Theta tab reads it; a column is appended, never reordered.
@@ -624,6 +629,14 @@ def _grade_one(
 
     if strike is None:
         status = STATUS_UNMEASURED
+        # Dead once the sold put would have expired (else 30 sessions on).
+        scan_day = _parse_date(scan_date) or entry_day
+        dead_on = expiry
+        if dead_on is None and scan_day is not None:
+            dead_on = _nth_session_after(scan_day, DEAD_AFTER_SESSIONS, calendar)
+        if dead_on is not None and dead_on <= as_of:
+            status = STATUS_DEAD
+            reasons = [REASON_NEVER_QUOTED]
     elif all(marks[mark] is not None for mark in SESSION_MARKS):
         status = STATUS_MEASURED
     elif REASON_IMMATURE in reasons:

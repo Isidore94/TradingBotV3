@@ -1557,14 +1557,14 @@ class MainWindow(QMainWindow):
             # merge, which is where it can protect the widgets WITHOUT also
             # freezing the words above them.
             carrying = str(card.trade_check_session() or "") == str(slot.session)
-            if not is_check_slot and not carrying and not self._trade_check_is_owed(check, slot):
+            if not is_check_slot and not carrying and not self._trade_check_is_owed(check, slot, task):
                 return
 
             card.set_trade_check(task, store=store, auto_mode=self._auto_mode_now())
         except Exception:  # noqa: BLE001 - the read still stands without it
             logging.debug("Trade Mentor trade check could not be built.", exc_info=True)
 
-    def _trade_check_is_owed(self, check, slot) -> bool:
+    def _trade_check_is_owed(self, check, slot, task=None) -> bool:
         """Does this ORDINARY slot have to carry the trade check?
 
         TJ-9 item 2: *"AWAY still prompts nothing; the first DESK slot after it
@@ -1590,6 +1590,10 @@ class MainWindow(QMainWindow):
         reviewed session has moved on.
         """
         try:
+            # P8 P2: a trade with no stop rides on every card, so it is asked
+            # before the day's budgeted questions.
+            if task is not None and check.stop_owed(task):
+                return True
             reviewed = check.previous_exchange_session(slot.scheduled_at.date())
             # Only what may still be ASKED: a trade asked once (`MENTOR_ASKED`,
             # 2026-09-23) keeps its blanks and never brings the section back.

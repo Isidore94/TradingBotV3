@@ -20,6 +20,7 @@
 #
 # Remove with:
 #   Unregister-ScheduledTask -TaskName 'TradingBotV3 AI Jobs' -Confirm:$false
+#   Unregister-ScheduledTask -TaskName 'TradingBotV3 AI Jobs Morning Retry' -Confirm:$false
 
 param(
     # Defaults are the ET window (01:00-09:00) expressed in DESK LOCAL time,
@@ -27,7 +28,9 @@ param(
     # 22:00-06:00. Change both if the desk moves timezone.
     [string]$StartLocal = "22:00",
     [int]$DurationHours = 8,
-    [int]$RepeatMinutes = 30
+    [int]$RepeatMinutes = 30,
+    # Desk-local time of the once-a-morning journal import retry (07:00 PT).
+    [string]$RetryLocal = "07:00"
 )
 
 $taskName = "TradingBotV3 AI Jobs"
@@ -91,8 +94,26 @@ if ($existing) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false }
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings `
     -RunLevel Limited | Out-Null
 
+# Morning retry (Plan to 8/10 P3): a second daily task that runs the wrapper
+# with --retry-journal-import. The runner retries only a FAILED night import,
+# once per session, and stands down while the night run holds its lock.
+$retryName = "TradingBotV3 AI Jobs Morning Retry"
+$retryAction = New-ScheduledTaskAction -Execute "powershell.exe" `
+    -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$wrapper`" --retry-journal-import" `
+    -WorkingDirectory $root
+$retryTrigger = New-ScheduledTaskTrigger -Daily -At $RetryLocal
+$retryTrigger.StartBoundary = (Get-Date).AddDays(-1).Date.Add([TimeSpan]::Parse($RetryLocal)).ToString("yyyy-MM-dd'T'HH:mm:ss")
+$retrySettings = New-ScheduledTaskSettingsSet -DontStopIfGoingOnBatteries `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
+    -MultipleInstances IgnoreNew
+$existingRetry = Get-ScheduledTask -TaskName $retryName -ErrorAction SilentlyContinue
+if ($existingRetry) { Unregister-ScheduledTask -TaskName $retryName -Confirm:$false }
+Register-ScheduledTask -TaskName $retryName -Action $retryAction -Trigger $retryTrigger -Settings $retrySettings `
+    -RunLevel Limited | Out-Null
+
 $endLocal = ([datetime]::ParseExact($StartLocal, "HH:mm", $null)).AddHours($DurationHours).ToString("HH:mm")
 Write-Output "Registered '$taskName': daily $StartLocal-$endLocal local, repeating every $RepeatMinutes min."
+Write-Output "Registered '$retryName': daily $RetryLocal local (journal import retry, once, only after a failed night)."
 Write-Output "Runner: $script"
 Write-Output ""
 Write-Output "Verify with:  .venv\Scripts\python.exe scripts\run_ai_jobs.py --status"

@@ -307,7 +307,6 @@ EXPECTED_SLOT_ORDER = (
     "sidecar_completion",
     "pass_cohort_grading",
     "rejection_cohort_grading",
-    "note_vocabulary_audit",
     "preference_trade_outcomes",
     "outcome_sweep",
     "evidence_report",

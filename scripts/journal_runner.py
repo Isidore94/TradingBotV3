@@ -536,7 +536,7 @@ def _nightly_reason(
     trade_count = findings.get("trade_count")
     if trade_count is not None:
         parts.append(f"rebuilt {trade_count} trade(s)")
-    if findings.get("healed") or findings.get("heal_failed"):
+    if "healed" in findings or "heal_failed" in findings:
         parts.append(
             f"self-heal repaired {findings.get('healed', 0)}, "
             f"unresolved {findings.get('heal_failed', 0)}"

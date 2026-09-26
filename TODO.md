@@ -4,60 +4,78 @@ The next work, in order. Delete an item when it's done; don't archive it. Only t
 trader adds items. An idea in `WISHLIST.md` becomes work only when the trader moves it
 here.
 
-## Waiting on live checks (nothing to build)
+## Plan to 8/10 on every goal (trader's go, 2026-09-25)
 
-- **Read the owed live gates** in `docs/GATES.md`, newest first. Green tests don't
-  count as live proof.
-- **SP4 score challenger:** freeze a prospective challenger before looking at any
-  results. The first trial is 20 new entry sessions plus a 5-session outcome wait, with
-  success, downside and rollback limits fixed in advance. No weight tuning from the
-  4-session sample.
-- **TJ-8 cleanup** (after gates #145–#150 pass): delete
-  `ui/panels/market_journal_panel.py`, `daily_recap_panel.py`, the page class in
-  `away_recap_panel.py` (the phone digest path stays), their dead tests and the
-  four-pane capture reader. Update `docs/RULES.md` and the packaging drift guard. No
-  behaviour change.
+Scores on 2026-09-25: intraday 5, grades/points 4, permutations 4, recap/journal 4,
+night AI 5, plumbing 5, market read 7, theta 3, alert noise 3, per-trade inputs 2,
+safety 9. Each packet names the goal it lifts. Build in phase order; a phase merges
+after reviewer GO, full suite green and the frozen selftest.
 
-## Planned, not scheduled
+### Phase 1 - inputs and plumbing (building)
 
-- **Setup grades, step 2 (trader asked 2026-09-22):** find the micro-setups inside a
-  family (stop at an SMA vs the level, time of day, market environment, D1 alignment)
-  and let the local AI suggest which traits work. Guard against luck: test few ideas,
-  hold out recent sessions.
-- **Old PROVEN stamp:** the M5 alert text still carries the learning tier `[X-TIER] PROVEN`
-  from `bounce_bot_lib/learning.py` (12 alerts all-time unlock it). Replacing it with the
-  new grade is ask-first and needs golden fixtures.
+- **P1 Stop backfill** (inputs 2->6): dry-run CLI fills the planned stop on old trades
+  from the matched M5 alert or the D1 plan, marked as a backfill; never overwrites.
+- **P2 Mentor stop first + Sunday bulk confirm** (inputs ->8): the stop is the first
+  question on every trade; one screen confirms the 139 waiting setup tags.
+- **P3 Broker import morning retry** (plumbing ->7): a failed night import runs again
+  at 07:00 PT; Health shows unresolved self-heal rows and mismatches.
+- **P4 Night model fixes** (night AI ->8): day story stops timing out (smaller pack or
+  context); econ verifier accepts "1 p.m." for a 13:00 event; plan_review and
+  improvement_ideas ahead of observation_tags in the budget order; delete the unread
+  note_vocabulary_audit slot; theta picks that can never get a quote are "dead"; every
+  slot names its goal and a test checks it. (Ideas id enum and enrichment grounding
+  landed in `af1cc04c`.)
 
-- **TJ-12F:** read the Focus-add and armed-alert lanes in `trade_origin`. Today an
-  unread lane looks like `unplanned`.
-- **TJ-14C:** give the `quick_like_followup` Mentor kind a reader, then wake it by
-  setting `dormant_until=""`. Build the reader first.
-- **TJ-13B Sunday follow-ups:** add suggested setup tags for old untagged trades and a
-  short week-ahead note. TJ-5 must also read week_review_plan when the week slot
-  lands. The first large-model probe is still live gate #158.
-- **TJ-6M:** add mentor_answer_mix_rate to TJ-6's closed MEASURABLES, pool the
-  Mentor answer mix in day_report_card, and add it to the registry test.
-- **TJ-14B grader_gap question:** TJ-10 is merged and the field is on every grade
-  row, so this small follow-up is ready to wake the question.
-- **TJ-7 follow-ups:** build a verifier rule so the night never pairs a mood with
-  a result; gate #175 stands in until then. Re-offered Mentor subjects keep their
-  old label and combo items when the prompt or options change.
-- **TJ-9E follow-ups** (not authorized yet):
-  - Day pack and stories don't read exit fields yet.
-  - The `CLOSED_PARTIAL` status is misspelled in 4 places (ask-first:
-    `setup_environment_evidence.py:480`, `weekend_prep_panel.py:2426/4076`,
-    `journal_feed.py:1076`).
-  - `ai_summary._journal_source` lets raw exit words ride into narration next to P&L.
-  - `journal_feed._store()` is a module-global cache.
+### Phase 2 - tell the truth (needs P1)
 
-## Housekeeping
+- **P5 Journal truth lines** (recap ->8): plain sentences on Day Review, Week Review and
+  the journal cards: stock vs options, long vs short, per-setup expectancy on confirmed
+  trades; each trade joins to the bot's grade of its setup; week coach floor 5 with a
+  "thin" badge; "exit early / held losers" scoreboard from MFE and MAE.
+- **P6 Grades vs the tape** (grades ->6): win measured against SPY over the same 5
+  sessions; cumulative R beside each badge; no PROVEN while the R line falls. Update the
+  grade golden tests.
 
-- Split the giant files, starting with `ui/panels/alert_center_panel.py` (8k lines).
-  The detector `legacy.py` files are ask-first and need golden fixtures first.
-- Dead-script review (recon 2026-09-22): these have no importer outside their own tests.
-  Delete them only with the trader's yes, since some may be hand-run tools:
-  - `tracker_execution_compare.py`, `tracker_selection_compare.py`, `d1_level_store_survey.py`
-  - `sector_cohort_divergence.py`, `diagnostics/observability_trends.py`, `gui_output.py`
-  - `build_avwap_band_variant_fixture.py`, `build_mixed_unit_avwap_fixture.py`, `build_sector_cohort_fixture.py`
-- **142 live gates are still marked owed** (`docs/GATES.md`); many are weeks old. The
-  trader should mark whole batches as passed or dropped.
+### Phase 3 - intraday
+
+- **P7 Rip-weak list + Pop outcomes** (intraday ->6): on an up day rank names by lag vs
+  SPY from the last SPY swing low; Pop gets an outcome log like Dip. Display only.
+- **P8 Phone and sound** (intraday ->7): top 3 new Pop and Dip-strong names to the phone
+  in AWAY/EVENING and a desk sound in DESK, once per bar; Pop/Dip-strong names feed the
+  M5 watch through the adoption gate.
+- **P9 Alert Center default filter** (noise ->7): default view grade B and above or
+  Best-right-now only; everything still recorded.
+- **P10 Options chase helper** (intraday ->8, theta ->7): for a Pop name with RVOL 2+,
+  read the IB option chain the theta scan uses; show the weekly strike near 0.25 delta,
+  spread and IV; log it for grading. Needs IB option data on the account.
+
+### Phase 4 - learning (after the first outcomes land)
+
+- **P11 More facets** (permutations ->6): M5-native facets in the sidecar (time of day,
+  RVOL bucket, VWAP distance, SPY state, bounce type); the 12 missing D1 facets written
+  on the scan row (scan edits allowed with no output change, trader 2026-09-24).
+- **P12 Weak-variant tag** (permutations ->8): a key that fails hold-out two Saturdays
+  running gets a visible tag and sorts lower. Rank and annotate only.
+- **P13 Points challenger** (grades ->8, after 09-30): SP4 as specified below; then a
+  bounded "my trades" nudge once a family has 10 confirmed trades.
+  SP4: freeze the challenger before looking at results; 20 new entry sessions plus a
+  5-session wait; success, downside and rollback limits fixed in advance.
+- **P14 Retire the old PROVEN stamp, raise the M5 bar** (noise ->8; ask-first, golden
+  fixtures): `[X-TIER] PROVEN` from `bounce_bot_lib/learning.py` replaced by the grade.
+
+## Carried over
+
+- Read the owed live gates in `docs/GATES.md`, newest first (#257 next).
+- TJ-8 cleanup after gates #145-#150: delete `market_journal_panel.py`,
+  `daily_recap_panel.py`, the page class in `away_recap_panel.py`, dead tests, the
+  four-pane capture reader. No behaviour change.
+- TLT/USO have no daily bars: scan-side change, ask first.
+- Small mentor follow-ups: TJ-12F (Focus-add and armed lanes in `trade_origin`), TJ-14C
+  (`quick_like_followup` reader), TJ-13B (Sunday setup tags + week-ahead note), TJ-6M
+  (`mentor_answer_mix_rate`), TJ-14B (`grader_gap` question), TJ-7 verifier (never pair
+  a mood with a result), TJ-9E (exit fields in the day pack; `CLOSED_PARTIAL` spelling
+  in 4 ask-first places; `ai_summary._journal_source` exit words).
+- Housekeeping: split `alert_center_panel.py` (8k lines); dead-script review needs the
+  trader's yes; 142 owed gates need a batch pass/drop.
+- Known red on `main`: 3 tests in `test_tj17d_chosen_change.py` and
+  `test_st6 ... empty_snapshot`.

@@ -646,8 +646,13 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
     assert slate[slate.index("exit_note_fields") - 2] == "day_review_narration"
     assert slate[slate.index("exit_note_fields") - 1] == "observation_tags"
     assert slate[slate.index("exit_note_fields") + 1] == "econ_brief"
+    # AMENDMENT 2026-09-25 (Plan to 8/10 P4): `note_vocabulary_audit` was
+    # deleted (its report had no reader), so it leaves the pinned set and every
+    # position after it moves up one: the moved triple is now 11-13.
     pinned_at_e8c04f88 = tuple(
-        name for name in pinned_at_e8c04f88 if name != "ticker_briefs"
+        name
+        for name in pinned_at_e8c04f88
+        if name not in ("ticker_briefs", "note_vocabulary_audit")
     )
     set_aside = (
         "outcome_sweep",
@@ -677,10 +682,10 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
 
     assert len(today) == len(pinned_at_e8c04f88)
     assert set(today) == set(pinned_at_e8c04f88), "a slot was added or removed"
-    assert today[:12] == pinned_at_e8c04f88[:12]
-    assert today[15:] == pinned_at_e8c04f88[15:]
-    assert sorted(today[12:15]) == sorted(pinned_at_e8c04f88[12:15])
-    assert today[12:15] == ("miss_contrast", "market_story_rollups", "measured_report")
+    assert today[:11] == pinned_at_e8c04f88[:11]
+    assert today[14:] == pinned_at_e8c04f88[14:]
+    assert sorted(today[11:14]) == sorted(pinned_at_e8c04f88[11:14])
+    assert today[11:14] == ("miss_contrast", "market_story_rollups", "measured_report")
 
 
 # ---------------------------------------------------------------------------
