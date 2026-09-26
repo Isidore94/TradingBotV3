@@ -220,8 +220,10 @@ def test_the_cell_line_reads_grade_win_vs_spy_cum_r_and_n():
          "bounce_type": "vwap", "result": sg.WIN if i < 20 else sg.LOSS}
         for i in range(30)
     ])[0]
-    assert sg.cell_line(day).startswith(f"{sg.badge(day['grade'])} · win 67%")
-    assert "cum R +10.0" in sg.cell_line(day) and "SPY" not in sg.cell_line(day)
+    # S1 + S10c (trader 2026-09-26): a day-trade cell reads its 1:1 bracket grade,
+    # 2R grade, EOD close R and n; these results carry no 2R or EOD data.
+    assert sg.cell_line(day) == f"1:1 {sg.badge(day['grade'])} · 2R NEW · EOD unknown · n 30"
+    assert "SPY" not in sg.cell_line(day)
 
 
 def test_the_holdout_rows_carry_tape_and_cum_r_per_window():

@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #270 Day-trade grades (S1 + S10c): on the next desk start the Daytrade Tracker's Bounce Types tab shows 1:1 bracket, 2R grade, EOD R, EOD med R, Reach 2R and Grade n per row after the working-lately build lands, and an M5 alert's hover reads like "1:1 C · 2R D · EOD +0.04R · n 427" [trader]
 - #264 Night telemetry (B1), what is left: Monday's digest facts carry a `slots per goal (night of 2026-09-25)` line with non-zero counts and a `tokens (night of <date>)` line with real totals, and System Health shows the Night AI and Broker import rows (tokens on every model-calling ledger row passed on the night of 2026-09-25: 12 rows) [lead]
 - #265 Alert noise (B6): after the next session `python scripts/alert_noise_report.py --day <date>` prints shown / hidden_by_show / acted counts that match the Day Review Alerts line, and `best_now_outcomes.py --summary` has rows for that day [lead]
 - #266 Missing-inputs chip (B4): with an open trade lacking a stop the status bar shows 'Inputs: N trades missing stop/setup', one click opens the Mentor on the oldest such trade at the stop question, and the chip disappears once every trade in the last 30 days has stop and confirmed setup [trader]
