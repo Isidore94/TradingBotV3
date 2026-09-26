@@ -572,9 +572,9 @@ class M5AlertBar(QWidget):
         grade_help = (
             "Grade: PROVEN, then S through D; — means the alert is ungraded.\n\n"
             if not getattr(self, "_grades", None)
-            else "Grade from the Daytrade Tracker: how often this alert type reached "
+            else "Grade from the Daytrade Tracker (1:1 bracket): how often this alert type reached "
             "+1R before -1R over the last 20 sessions (PROVEN, A, B, C, D; NEW = "
-            "too few to grade).\n\n"
+            "too few to grade). 2R is the same ladder on +2R before -1R.\n\n"
         )
         grade_line = self._grade_line_for(alert)
         if grade_line:
