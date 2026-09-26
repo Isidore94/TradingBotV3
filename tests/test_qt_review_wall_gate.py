@@ -94,7 +94,9 @@ class _Desk:
             def now(cls, tz=None):  # noqa: D102 - stdlib signature
                 return today if tz is None else today.astimezone(tz)
 
-        monkeypatch.setattr(alert_center_panel, "datetime", _At11)
+        from alert_center_support import patch_alert_center_global
+
+        patch_alert_center_global(monkeypatch, "datetime", _At11)
         kwargs = {}
         if persist:
             kwargs = {
