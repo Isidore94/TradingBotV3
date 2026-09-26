@@ -75,7 +75,7 @@ def test_scan_row_columns_are_the_appended_set_in_order():
                                    "perm_trendline_break_recent", "perm_trendline_within_alert_range",
                                    "perm_trendline_direction", "perm_dollar_volume_20d_m", "perm_market_cap_m",
                                    "perm_sector_rs_rank_5d", "perm_sector_rs_rank_20d", "perm_sector_rank_count",
-                                   "perm_earnings_gap_atr_signed")
+                                   "perm_earnings_gap_atr_signed", *sp.REGIME_COLUMNS)
 
 
 # --- the honest input view

@@ -120,6 +120,10 @@ def _history(hooks_on: bool) -> pd.DataFrame:
                 pairs[0] = ("2000-01-01", 100.0)  # a 20-session return that differs by sector
             sectors.update({symbol: f"sector{n % 6}" for n, symbol in enumerate(SYMBOLS)})
             sp.sector_rank_columns(feature_rows, closes, sectors, as_of=as_of)
+            # S15 item 2: every regime column filled (trader label, SPY trend and breadth).
+            spy = [(as_of, 400.0 + k) for k in range(30)]
+            sp.regime_columns(feature_rows, trader_segment={"regime": "range", "session_count": s_index + 1},
+                              spy_closes=spy, closes_by_symbol=closes, as_of=as_of)
             spc.stamp_scan_rows(feature_rows, session=session, context=spc.SessionContext())
             for row in feature_rows:
                 row.pop("weekly_ema8_hold_weeks", None)  # not in the runner's CSV allowlist
@@ -169,6 +173,7 @@ def test_scan_factor_and_tier_exports_are_byte_identical_with_the_hooks_on(tmp_p
     assert stamped[list(sp.TRENDLINE_COLUMNS[:2])].notna().all().all()
     assert set(stamped["perm_trendline_direction"].dropna()) == {"up", "down"}
     assert stamped[list(sp.S15_COLUMNS)].notna().all().all()
+    assert stamped[list(sp.REGIME_COLUMNS)].notna().all().all()
     assert stamped["permutation_rule_version"].eq(sp.PERMUTATION_RULE_VERSION).all()
     off = _export(tmp_path / "off", plain)
     on = _export(tmp_path / "on", stamped)

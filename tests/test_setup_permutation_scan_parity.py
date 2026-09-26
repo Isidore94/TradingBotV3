@@ -76,6 +76,10 @@ if DISABLE:
         runner.permutation_earnings_gap_columns = lambda *args, **kwargs: {}
         runner.permutation_sector_rank_columns = lambda *args, **kwargs: 0
         runner.load_permutation_market_caps = lambda *args, **kwargs: {}
+    # S15 item 2: the regime columns are switched off the same way.
+    if hasattr(runner, "permutation_regime_columns"):
+        runner.permutation_regime_columns = lambda *args, **kwargs: 0
+        runner.load_permutation_trader_regime = lambda *args, **kwargs: None
 
 
 def _sessions(count):

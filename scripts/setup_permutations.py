@@ -789,6 +789,34 @@ SECTOR_RANK_WINDOWS = (5, 20)
 EARNINGS_DRIFT_LAST_SESSION = 13
 EARNINGS_GAP_MIN_ATR = 1.0
 
+# --- S15 item 2: the point-in-time market regime (appended `perm_` columns; no facet, never scored)
+
+#: The trader's structural regime on the scan date and its session count (S16), the completed session
+#: the machine checks are measured through, SPY's close vs its 20-day (%), the 20-day's change over 5
+#: sessions (%), breadth (% of the scanned universe above its own 20-day) and how many names it counted,
+#: then `long_regime_working`'s verdict and the rule that decided it. The sector's 5/20-day RS rank is
+#: already on the row (`perm_sector_rs_rank_5d/_20d`).
+REGIME_COLUMNS = (
+    "perm_regime_trader",
+    "perm_regime_trader_sessions",
+    "perm_regime_as_of",
+    "perm_spy_vs_sma20_pct",
+    "perm_spy_sma20_slope_pct",
+    "perm_breadth_above_sma20_pct",
+    "perm_breadth_count",
+    "perm_regime_working",
+    "perm_regime_working_rule",
+)
+REGIME_SMA_WINDOW = 20
+#: The 20-day's slope is its change over this many sessions.
+REGIME_SLOPE_SESSIONS = 5
+#: Breadth needs this many scanned names with a current completed bar and 20+ closes.
+BREADTH_MIN_NAMES = 20
+#: The trader's regimes in which a long has the market on its side.
+LONG_WORKING_TRADER_REGIMES = frozenset({"bull_run", "recovery"})
+WORKING_RULE_TRADER = "trader"
+WORKING_RULE_SPY = "spy_above_rising_sma20"
+
 
 def _sector_third(row: Mapping[str, Any], column: str) -> str | None:
     rank = _num(row.get(column))
@@ -890,9 +918,10 @@ TRENDLINE_COLUMNS = (
     "perm_trendline_within_alert_range",
     "perm_trendline_direction",
 )
-#: Every column P1-4 appends to `d1_features_history.csv`, in order (4a, P11, P8b, S6, then S15).
+#: Every column P1-4 appends to `d1_features_history.csv`, in order (4a, P11, P8b, S6, S15, then the
+#: S15 item 2 regime).
 SCAN_ROW_COLUMNS = (*MA_DISTANCE_COLUMNS, WEEKLY_STREAK_COLUMN, *STAMP_COLUMNS, *D1_HISTORY_COLUMNS,
-                    SETUP_AGE_COLUMN, *TRENDLINE_COLUMNS, *S15_COLUMNS)
+                    SETUP_AGE_COLUMN, *TRENDLINE_COLUMNS, *S15_COLUMNS, *REGIME_COLUMNS)
 
 _WEEKLY_TOP_PATTERN_FLAGS = (
     "top_pattern_weekly_ema15_hold",
@@ -1257,6 +1286,110 @@ def _median(values: list[float]) -> float:
     ordered = sorted(values)
     middle = len(ordered) // 2
     return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+# --- S15 item 2: the market regime columns (pure; the scan passes the completed bars it holds)
+
+
+def spy_trend(closes: Any) -> tuple[float | None, float | None]:
+    """``(close vs SMA20 %, SMA20 change over 5 sessions %)`` from completed closes, oldest first.
+
+    ``(None, None)`` with fewer than 25 closes or a hole in the last 25.
+    """
+    values = [_num(close) for close in (closes or ())]
+    need = REGIME_SMA_WINDOW + REGIME_SLOPE_SESSIONS
+    window = values[-need:]
+    if len(window) < need or any(value is None or value <= 0 for value in window):
+        return None, None
+    sma_now = sum(window[-REGIME_SMA_WINDOW:]) / REGIME_SMA_WINDOW
+    sma_then = sum(window[:REGIME_SMA_WINDOW]) / REGIME_SMA_WINDOW
+    return (round((window[-1] - sma_now) / sma_now * 100.0, 4),
+            round((sma_now - sma_then) / sma_then * 100.0, 4))
+
+
+def long_regime_working(trader_regime: Any, spy_vs_sma20_pct: Any, spy_sma20_slope_pct: Any) -> tuple[str, str]:
+    """Is the market on a long's side? ``(verdict, rule)``: verdict ``yes`` / ``no`` / unknown.
+
+    The one definition (S15 item 4, the trader 2026-09-26: longs need the market on their side).
+    The trader's structural regime decides first: ``bull_run`` or ``recovery`` = yes, any other of
+    their labels = no (rule ``trader``). Only when their label is unknown: SPY above a rising
+    20-day (close > SMA20 and the SMA20 up over 5 sessions) = yes, else no (rule
+    ``spy_above_rising_sma20``). SPY unknown too = unknown, never a guess. The journal only
+    stores labels from `structural_regime.VOCABULARY`, so any label here is the trader's.
+    """
+    label = str(trader_regime or "").strip()
+    if label:
+        return ("yes" if label in LONG_WORKING_TRADER_REGIMES else "no"), WORKING_RULE_TRADER
+    vs, slope = _num(spy_vs_sma20_pct), _num(spy_sma20_slope_pct)
+    if vs is None or slope is None:
+        return UNKNOWN, UNKNOWN
+    return ("yes" if vs > 0 and slope > 0 else "no"), WORKING_RULE_SPY
+
+
+def breadth_above_sma20(closes_by_symbol: Mapping[str, Any], *, as_of: Any) -> tuple[float | None, int | None]:
+    """``(% of names closing above their own SMA20, names counted)`` on ``as_of``; None under 20 names.
+
+    ``closes_by_symbol`` maps a symbol to its completed ``(date, close)`` pairs in date order; a name
+    counts only when its last pair is ``as_of`` and its last 20 closes are whole.
+    """
+    as_of_text = str(as_of or "")[:10]
+    if not as_of_text:
+        return None, None
+    above = counted = 0
+    for pairs in (closes_by_symbol or {}).values():
+        pairs = list(pairs or ())
+        if not pairs or str(pairs[-1][0])[:10] != as_of_text:
+            continue
+        closes = [_num(close) for _day, close in pairs[-REGIME_SMA_WINDOW:]]
+        if len(closes) < REGIME_SMA_WINDOW or any(close is None for close in closes):
+            continue
+        counted += 1
+        above += closes[-1] > sum(closes) / REGIME_SMA_WINDOW
+    if counted < BREADTH_MIN_NAMES:
+        return None, None
+    return round(above / counted * 100.0, 2), counted
+
+
+def regime_columns(
+    feature_rows: Any,
+    *,
+    trader_segment: Mapping[str, Any] | None,
+    spy_closes: Any,
+    closes_by_symbol: Mapping[str, Any],
+    as_of: Any,
+) -> int:
+    """Write the same `REGIME_COLUMNS` on every feature row; returns the rows written.
+
+    ``trader_segment`` is `structural_regime.regime_at` for the scan date (None = unknown).
+    ``spy_closes`` are SPY's completed ``(date, close)`` pairs; they count only when the last one
+    is ``as_of`` (a stale SPY is unknown).
+    """
+    as_of_text = str(as_of or "")[:10] or None
+    pairs = list(spy_closes or ())
+    spy_current = bool(as_of_text and pairs and str(pairs[-1][0])[:10] == as_of_text)
+    vs, slope = spy_trend([close for _day, close in pairs]) if spy_current else (None, None)
+    breadth, counted = breadth_above_sma20(closes_by_symbol, as_of=as_of_text)
+    segment = trader_segment if isinstance(trader_segment, Mapping) else {}
+    trader = _text(segment.get("regime"))
+    sessions = _num(segment.get("session_count"))
+    verdict, rule = long_regime_working(trader, vs, slope)
+    values = dict(zip(REGIME_COLUMNS, (
+        trader,
+        int(sessions) if trader and sessions is not None else None,
+        as_of_text,
+        vs,
+        slope,
+        breadth,
+        counted,
+        None if verdict == UNKNOWN else verdict,
+        None if rule == UNKNOWN else rule,
+    ), strict=True))
+    written = 0
+    for row in feature_rows or ():
+        if isinstance(row, dict):
+            row.update(values)
+            written += 1
+    return written
 
 
 # --- P11: M5-native facets over one alert's own inputs (group ``m5``)

@@ -416,6 +416,34 @@ def load_market_caps(*, path: Path | None = None, now: datetime | None = None) -
     return out
 
 
+def load_structural_regime_rows(*, path: Path | None = None) -> list[dict[str, Any]]:
+    """The trader's `structural_regime` rows, opened read-only; [] when the journal or table is missing."""
+    import sqlite3
+    from contextlib import closing
+
+    if path is None:
+        import project_paths
+
+        path = Path(project_paths.JOURNAL_DB_FILE)
+    target = Path(path)
+    if not target.is_file():
+        return []
+    try:
+        with closing(sqlite3.connect(f"file:{target.as_posix()}?mode=ro", uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM structural_regime ORDER BY segment_id").fetchall()
+    except sqlite3.Error:  # an older journal has no table yet: unknown
+        return []
+    return [dict(row) for row in rows]
+
+
+def load_trader_regime(day: Any, *, path: Path | None = None) -> dict[str, Any] | None:
+    """The trader's regime segment in force on ``day`` (`structural_regime.regime_at`), or None."""
+    import structural_regime
+
+    return structural_regime.regime_at(load_structural_regime_rows(path=path), day)
+
+
 # --- ctx and stamping
 
 

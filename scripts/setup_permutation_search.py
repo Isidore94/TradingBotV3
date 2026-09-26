@@ -32,6 +32,12 @@ side: a baseline, then single facets, pairs and triples, never deeper.
   `STUDY_SEARCH_FACETS` (spy_trend, trend20, htf_trend_4h), and reported in
   each horizon's ``study_families`` block, never in ``families`` (so no
   verdict, chip or narration reads them). Promotion is ask-first.
+- Conditional mode (S15 item 4, the trader 2026-09-26: "longs need the market on
+  their side; judge longs RAW inside the regime"): population
+  ``swing_long_working_raw`` = swing LONG rows whose entry day's
+  `setup_permutations.long_regime_working` verdict is "yes", win = the raw side
+  return > 0 (not vs SPY), facets and horizons as swing. Its own population,
+  never pooled; each horizon block counts which rule said "working".
 - Each run also keeps a dated copy in `permutation_report_history/` and writes
   `permutation_verdicts.json` (P12, `setup_permutation_verdicts.py`), both beside --out.
 
@@ -88,6 +94,13 @@ VERDICT_NONE = "no_key_found"
 VERDICT_THIN = "too_little_data"
 #: Beside the report, so a scratch --out never writes into the live history.
 HISTORY_DIR_NAME = "permutation_report_history"
+#: S15 item 4: LONG swing rows in a "working" market, judged on the raw side return.
+POPULATION_LONG_WORKING_RAW = "swing_long_working_raw"
+LONG_WORKING_RAW_DEFINITION = (
+    "swing LONG rows whose entry-day regime is working (setup_permutations.long_regime_working: the "
+    "trader's bull_run / recovery; with no trader label, SPY above a rising 20-day); win = raw side "
+    "return > 0, not vs SPY"
+)
 VERDICTS_FILE_NAME = "permutation_verdicts.json"
 
 Cell = tuple[tuple[str, str], ...]
@@ -430,7 +443,21 @@ def embargoed_sessions(rows: Sequence[Mapping[str, Any]], holdout: set[str], hor
             if day not in holdout and index + int(horizon) >= first_holdout}
 
 
+def long_working_raw_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The conditional population: swing LONG rows in a working market, ``win`` = the raw win."""
+    out = []
+    for row in rows:
+        raw = row.get("raw_win")
+        if (row.get("population") != "swing" or str(row.get("side") or "").upper() != "LONG"
+                or str(row.get("regime_working") or "") != "yes" or raw is None
+                or (isinstance(raw, float) and math.isnan(raw))):
+            continue
+        out.append({**row, "population": POPULATION_LONG_WORKING_RAW, "win": bool(raw)})
+    return out
+
+
 def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source: str = "") -> dict[str, Any]:
+    rows = [*rows, *long_working_raw_rows(rows)]
     by_population: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
     for row in rows:
         by_population[str(row.get("population") or "")][horizon_key(row)].append(row)
@@ -466,6 +493,11 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source
                 "families": {},
                 "study_families": {},
             }
+            if population == POPULATION_LONG_WORKING_RAW:
+                rules: dict[str, int] = defaultdict(int)
+                for row in population_rows:
+                    rules[str(row.get("regime_working_rule") or sp.UNKNOWN)] += 1
+                block["working_rules"] = dict(sorted(rules.items()))
             horizons_out[str(horizon)] = block
             groups: dict[tuple[str, str], list] = defaultdict(list)
             for row in population_rows:
@@ -517,6 +549,8 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source
             block["families"] = families
             block["study_families"] = study
         report["populations"][population] = {"horizons": horizons_out}
+        if population == POPULATION_LONG_WORKING_RAW:
+            report["populations"][population]["definition"] = LONG_WORKING_RAW_DEFINITION
     data_day = report_data_date(report)
     report["data_date"] = data_day.isoformat() if data_day else ""
     return report

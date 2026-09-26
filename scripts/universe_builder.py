@@ -52,6 +52,7 @@ from swallowed import note_swallowed  # noqa: E402
 from project_paths import (  # noqa: E402
     CACHE_DIR,
     DATA_DIR,
+    JOURNAL_DB_FILE,
     PERSISTENT_DATA_DIR,
     UNIVERSE_ALL_FILE,
     UNIVERSE_LONGS_FILE,
@@ -90,6 +91,16 @@ UNIVERSE_INCLUDE_FILES = {
     "longs": PERSISTENT_DATA_DIR / "universe_include_longs.txt",
     "shorts": PERSISTENT_DATA_DIR / "universe_include_shorts.txt",
 }
+
+# S15 item 8: stock names the trader traded join the universe as the `journal_traded` source, so
+# their trades are measured on the scan's own ruler. The most recently traded first, at most
+# JOURNAL_TRADED_MAX_SYMBOLS, from the last JOURNAL_TRADED_LOOKBACK_DAYS. Never moves a name
+# already in the universe and never counts toward the write floor.
+JOURNAL_TRADED_SOURCE = "journal_traded"
+JOURNAL_TRADED_MAX_SYMBOLS = 100
+JOURNAL_TRADED_LOOKBACK_DAYS = 365
+JOURNAL_TRADED_DB_FILE = JOURNAL_DB_FILE
+_JOURNAL_SYMBOL = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 
 # Write floor (plan.md R9.1). `build_universe` used to refuse a write only when
 # the screen produced *exactly* zero symbols, so there was no guard at all
@@ -745,6 +756,49 @@ def merge_external_into_universe(list_name: str, external_symbols: list[str]) ->
     }
 
 
+def journal_traded_symbols(
+    *,
+    db_path: Path | None = None,
+    today=None,
+    limit: int = JOURNAL_TRADED_MAX_SYMBOLS,
+    lookback_days: int = JOURNAL_TRADED_LOOKBACK_DAYS,
+) -> dict[str, str]:
+    """Symbol -> side (the latest stock trade's direction) for names traded in the lookback.
+
+    Most recently traded first, at most ``limit``. Stock trades only (options and cash are
+    skipped). The journal is opened read-only; a missing journal or table is ``{}``. The one
+    definition of "the journal's traded names" (S15 item 8; the S14 Health list reads it too).
+    """
+    import sqlite3
+    from contextlib import closing
+    from datetime import date as _date
+
+    path = Path(db_path or JOURNAL_TRADED_DB_FILE)
+    if not path.is_file():
+        return {}
+    start = ((today or _date.today()) - timedelta(days=int(lookback_days))).isoformat()
+    try:
+        with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as conn:
+            rows = conn.execute(
+                "SELECT symbol, direction, trade_date FROM trades "
+                "WHERE upper(security_type) = 'STK' AND trade_date >= ? "
+                "ORDER BY trade_date DESC, opened_at DESC",
+                (start,),
+            ).fetchall()
+    except sqlite3.Error:
+        return {}
+    out: dict[str, str] = {}
+    for symbol, direction, _day in rows:
+        name = str(symbol or "").strip().upper()
+        side = str(direction or "").strip().upper()
+        if name in out or not _JOURNAL_SYMBOL.match(name) or side not in ("LONG", "SHORT"):
+            continue
+        out[name] = side
+        if len(out) >= int(limit):
+            break
+    return out
+
+
 def build_universe(
     *,
     max_symbols: int = DEFAULT_MAX_SYMBOLS,
@@ -824,6 +878,22 @@ def build_universe(
         set(screened["symbol"]) | set(include_all) | set(include_longs) | set(include_shorts)
     )
     stages["after_include_lists"] = len(all_symbols)
+    # The write floor is judged on the screen and the trader's lists, never on journal names.
+    screened_count = len(all_symbols)
+    # S15 item 8: names the trader traded that the universe lacks; nothing already in it moves.
+    try:
+        journal = journal_traded_symbols()
+    except Exception:
+        logging.warning("Journal traded names not read; the universe is built without them.", exc_info=True)
+        journal = {}
+    present = set(all_symbols)
+    journal_added = sorted(symbol for symbol in journal if symbol not in present)
+    longs = sorted(set(longs) | {symbol for symbol in journal_added if journal[symbol] == "LONG"})
+    shorts = sorted(set(shorts) | {symbol for symbol in journal_added if journal[symbol] == "SHORT"})
+    all_symbols = sorted(present | set(journal_added))
+    stages[JOURNAL_TRADED_SOURCE] = len(journal_added)
+    if journal_added:
+        logging.info("Universe %s source: %s", JOURNAL_TRADED_SOURCE, ", ".join(journal_added))
 
     if write_outputs:
         # plan.md sec 5: a failed publish never destroys the last verified
@@ -841,10 +911,10 @@ def build_universe(
                 f"Universe screen produced 0 symbols (priced {len(metrics)}); "
                 "refusing to overwrite the existing universe files."
             )
-        elif not force and floor and len(all_symbols) < floor:
-            refused_count = len(all_symbols)
+        elif not force and floor and screened_count < floor:
+            refused_count = screened_count
             reason = (
-                f"Universe rebuild produced {len(all_symbols)} symbols, below the write "
+                f"Universe rebuild produced {screened_count} symbols, below the write "
                 f"floor of {floor} (previous universe {before.get('all')}); refusing to "
                 "overwrite the existing universe files. If the shrink is real, rebuild "
                 "manually to override it."
@@ -883,6 +953,7 @@ def build_universe(
         "metrics": screened,
         "options_filter": options_filter,
         "options_filter_applied": bool(option_symbols),
+        JOURNAL_TRADED_SOURCE: journal_added,
     }
 
 
