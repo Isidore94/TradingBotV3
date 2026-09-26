@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import threading
 from datetime import date, timedelta
 from pathlib import Path
@@ -206,33 +205,8 @@ def _with_universe_and_ib_checks(payload: dict[str, Any], bot_provider) -> dict[
 
 #: S14: journal trades opened this many days back count toward the traded-names check.
 TRADED_NAMES_LOOKBACK_DAYS = 90
-#: An OCC option symbol's root (DRAM261218P00050000 -> DRAM).
-_OCC_ROOT = re.compile(r"^([A-Z][A-Z.]{0,5})\d{6}[CP]\d{8}$")
 #: One answer per ISO week (keyed by that week's Monday), so the list moves once a week.
 _TRADED_GAP_CACHE: dict[str, dict[str, Any]] = {}
-
-
-def journal_traded_symbols(db_path: Path, since: str) -> set[str]:
-    """Stock symbols and option underlyings the journal traded on or after ``since``; read-only."""
-    import sqlite3
-    from contextlib import closing
-
-    uri = f"file:{Path(db_path).as_posix()}?mode=ro"
-    with closing(sqlite3.connect(uri, uri=True)) as conn:
-        rows = conn.execute(
-            "SELECT symbol, security_type FROM trades WHERE trade_date >= ?", (since,)
-        ).fetchall()
-    out: set[str] = set()
-    for symbol, security_type in rows:
-        text = str(symbol or "").strip().upper()
-        kind = str(security_type or "").strip().upper()
-        if kind == "STK" and text:
-            out.add(text)
-        elif kind == "OPT":
-            match = _OCC_ROOT.match(text.replace(" ", ""))
-            if match:
-                out.add(match.group(1))
-    return out
 
 
 def traded_names_missing_check(today: date | None = None) -> dict[str, Any]:
@@ -254,8 +228,13 @@ def traded_names_missing_check(today: date | None = None) -> dict[str, Any]:
         if not Path(JOURNAL_DB_FILE).is_file() or not bars_dir.is_dir():
             return _health_row("traded_names_universe", label, _UNKNOWN,
                                "No journal or no daily bars on this machine; unknown.", source)
+        from universe_builder import journal_traded_symbols
+
         since = (date.fromisoformat(week) - timedelta(days=TRADED_NAMES_LOOKBACK_DAYS)).isoformat()
-        traded = journal_traded_symbols(Path(JOURNAL_DB_FILE), since)
+        traded = set(journal_traded_symbols(
+            db_path=Path(JOURNAL_DB_FILE), today=date.fromisoformat(week),
+            lookback_days=TRADED_NAMES_LOOKBACK_DAYS, limit=10**6, include_option_roots=True,
+        ))
         seen = {entry.stem.upper() for entry in bars_dir.iterdir() if entry.suffix.lower() in {".parquet", ".csv"}}
     except Exception as exc:
         return _health_row("traded_names_universe", label, _UNKNOWN, f"Could not read: {exc}", source)

@@ -101,6 +101,8 @@ JOURNAL_TRADED_MAX_SYMBOLS = 100
 JOURNAL_TRADED_LOOKBACK_DAYS = 365
 JOURNAL_TRADED_DB_FILE = JOURNAL_DB_FILE
 _JOURNAL_SYMBOL = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+#: An OCC option symbol's root (DRAM261218P00050000 -> DRAM).
+_OCC_ROOT = re.compile(r"^([A-Z][A-Z.]{0,5})\d{6}[CP]\d{8}$")
 
 # Write floor (plan.md R9.1). `build_universe` used to refuse a write only when
 # the screen produced *exactly* zero symbols, so there was no guard at all
@@ -762,11 +764,13 @@ def journal_traded_symbols(
     today=None,
     limit: int = JOURNAL_TRADED_MAX_SYMBOLS,
     lookback_days: int = JOURNAL_TRADED_LOOKBACK_DAYS,
+    include_option_roots: bool = False,
 ) -> dict[str, str]:
     """Symbol -> side (the latest stock trade's direction) for names traded in the lookback.
 
     Most recently traded first, at most ``limit``. Stock trades only (options and cash are
-    skipped). The journal is opened read-only; a missing journal or table is ``{}``. The one
+    skipped unless ``include_option_roots``, which adds each option's underlying with side
+    ``OPT``). The journal is opened read-only; a missing journal or table is ``{}``. The one
     definition of "the journal's traded names" (S15 item 8; the S14 Health list reads it too).
     """
     import sqlite3
@@ -780,18 +784,23 @@ def journal_traded_symbols(
     try:
         with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as conn:
             rows = conn.execute(
-                "SELECT symbol, direction, trade_date FROM trades "
-                "WHERE upper(security_type) = 'STK' AND trade_date >= ? "
+                "SELECT symbol, direction, trade_date, upper(security_type) FROM trades "
+                "WHERE upper(security_type) IN ('STK', ?) AND trade_date >= ? "
                 "ORDER BY trade_date DESC, opened_at DESC",
-                (start,),
+                ("OPT" if include_option_roots else "STK", start),
             ).fetchall()
     except sqlite3.Error:
         return {}
     out: dict[str, str] = {}
-    for symbol, direction, _day in rows:
+    for symbol, direction, _day, kind in rows:
         name = str(symbol or "").strip().upper()
         side = str(direction or "").strip().upper()
-        if name in out or not _JOURNAL_SYMBOL.match(name) or side not in ("LONG", "SHORT"):
+        if kind == "OPT":
+            match = _OCC_ROOT.match(name.replace(" ", ""))
+            if not match:
+                continue
+            name, side = match.group(1), "OPT"
+        if name in out or not _JOURNAL_SYMBOL.match(name) or side not in ("LONG", "SHORT", "OPT"):
             continue
         out[name] = side
         if len(out) >= int(limit):

@@ -25,8 +25,14 @@ import ui.panels.health_panel as hp  # noqa: E402
 
 def _journal(path: Path, trades: list[tuple[str, str, str]]) -> None:
     with closing(sqlite3.connect(path)) as conn:
-        conn.execute("CREATE TABLE trades (symbol TEXT, security_type TEXT, trade_date TEXT)")
-        conn.executemany("INSERT INTO trades VALUES (?, ?, ?)", trades)
+        # The live trades table's columns the shared reader (`universe_builder`) selects.
+        conn.execute(
+            "CREATE TABLE trades (symbol TEXT, security_type TEXT, trade_date TEXT,"
+            " direction TEXT, opened_at TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO trades VALUES (?, ?, ?, 'LONG', ?)", [(*t, t[2]) for t in trades]
+        )
         conn.commit()
 
 
@@ -72,7 +78,7 @@ def test_the_list_is_fixed_for_the_week_and_moves_the_next(tmp_path, monkeypatch
     db, _bars = _stores(tmp_path, monkeypatch, TRADES)
     first = hp.traded_names_missing_check(today=date(2026, 9, 22))
     with closing(sqlite3.connect(db)) as conn:
-        conn.execute("INSERT INTO trades VALUES ('NEWX', 'STK', '2026-09-24')")
+        conn.execute("INSERT INTO trades VALUES ('NEWX', 'STK', '2026-09-24', 'LONG', '2026-09-24')")
         conn.commit()
     assert hp.traded_names_missing_check(today=date(2026, 9, 26)) == first
     later = hp.traded_names_missing_check(today=date(2026, 9, 28))
