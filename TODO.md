@@ -54,6 +54,53 @@ Gates #257-#263: none judged yet (first proof tonight and Monday).
 
 ### Phase B - simpler code, truer numbers (no live data needed)
 
+Order (trader 2026-09-25 evening): R1 first, then B0, then the rest.
+
+- **R1 Day Review Show** (recap ->8; the trader: "day recap is boring and hard to parse;
+  mix the fonts, a presentation mode, the local AI cooks it up each night, fun but
+  informative, keep the stats"). Two builders, shared module first.
+  - `day_review_show.py` (pure): schema `day_review_show_v1` = `{title <=60, slides: 6-10
+    of {kind: open|tape|number|scoreboard|trade|miss|read|lesson|tomorrow|close, title
+    <=48, body <=220, stat: {value <=16, label <=40} | null, source_ids: 1-4}}`. A
+    deterministic **fallback deck** built from the day pack alone (report card six lines
+    as a scoreboard, truth lines, Alerts line, walkaway counts, internals, SPY path) so
+    Show works every day. A **verifier** that rejects WHOLE (last good file kept, ledger
+    `degraded`): every `source_id` in `day_review_pack.allowed_source_ids`; every number
+    in title/body/stat appears verbatim in the cited sources; tickers only from the pack;
+    no mood words next to a result (RULES TJ-7; mood is report-only); one slide per kind
+    except number/trade. The model never supplies a stat value: it picks the source and
+    writes the caption; the desk prints the number from the pack.
+  - Night slot `day_review_show` (goal coaching, `uses_model`, reserve 5 min), in
+    `EXPECTED_SLOT_ORDER` and `MODEL_SLOT_PRIORITY` directly after `day_review_narration`
+    (stage 2; decision 0018 boundaries unchanged; update the order pins with the reason).
+    Input: the day pack + that night's verified narration. Output
+    `<DAY_REVIEW_DIR>/shows/<date>.json` with model, prompt_version, inputs_hash.
+  - Desk: a **Show** button beside "Review my day"; a full-window overlay, one slide at a
+    time; Right/Space next, Left back, Esc close, A auto-advance 8 s; footer "3/9 - told
+    by gemma3:12b - sources on hover"; kind accent stripe and one deterministic glyph per
+    kind (Segoe UI Emoji). Fonts set with `QFont` in code, sized through `theme.px`:
+    headline Bahnschrift SemiBold, big numbers Cascadia Mono SemiBold, prose Georgia,
+    captions Segoe UI (all installed on the desk; Qt substitutes if absent). One
+    `QFrame#DayReviewShow` variant block in `theme.qss`; no per-widget stylesheets. The
+    show JSON rides the Day Review worker's one payload; the tape slide reuses the SPY
+    session bars already in it. A deck that failed its checks shows the fallback deck
+    with a "facts only" badge. Gate #267.
+- **B0 Desk abort 2026-09-24** (safety): `gui_crash.log` holds a "Fatal Python error:
+  Aborted" from the 09-24 desk (exec line app.py:2386); find the aborting thread, fix or
+  guard, and make the crash log stamp its own time.
+- **B8 Alert feed as model/view** (snappiness): `add_alert` is 7.3 ms/alert at 1,000 and
+  grows with the feed (widget per row). After A6 step 2: `QAbstractListModel` + delegate;
+  prove with `desk_bench alert_center.add_alert[1000]`.
+- **B9 Working-lately build** (snappiness): `build_payload` 16-28 s (`read_inputs` 15 s);
+  cache or incrementalise the three reads; prove with the bench op.
+- **B10 Young GC** (snappiness): 150 ms/min of young sweeps; skip a sweep when the gen-0
+  count is small or lengthen the tick, only with `desk_perf_report` before/after.
+- **B11 Two unread slot outputs**: `daily_digest` narration and `setup_research`
+  narration have no desk page. Surface each on Day Review / Weekend Prep (default) or the
+  trader kills the slot.
+- **B12 Day Review startup warning**: `DayReviewPanel.eventFilter` runs before
+  `entry_text` exists (`8f82213a`); `getattr` guard, one test.
+
 - **A4b One RVOL**: golden fixture from today's outputs of `rvol.py`,
   `intraday_rvol_service.py`, `movers_scan.py` first; unify only where the numbers are
   identical, otherwise one module with the variant named.
@@ -87,6 +134,17 @@ Gates #257-#263: none judged yet (first proof tonight and Monday).
   `[X-TIER] PROVEN` from `bounce_bot_lib/learning.py` replaced by the grade.
 - **HYG daily bars** (plumbing; scan-side, ask first). TLT/USO the same.
 - **Goal 10 live proof**: stops on 80% of new trades within a week; tag confirmation rate.
+
+## Decisions the trader owes (each one moves a score)
+
+- IB option data on the account: theta (43 of 6,462 picks ever priced) and the options
+  chase both wait on it. Keep theta as a goal, or drop it.
+- TWS logged in during sessions, or the scanners and the M5 feed have nothing to read.
+- P14 (retire PROVEN, raise the M5 bar) and any permutation promotion: quoted yes needed.
+- The 142 owed gates in `docs/GATES.md`: one batch pass/drop.
+- Dead-script review: yes or no.
+- B11: surface the two unread slot outputs, or kill the slots.
+- Risk per trade ($) in Settings, `trading_plan.md`, the 139 setup tags waiting.
 
 ## Carried over
 
