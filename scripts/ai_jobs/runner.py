@@ -1027,6 +1027,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         enrichment,
         evidence_report,
         exit_note_fields,
+        exit_windows_night,
         improvement_ideas,
         journal_auto_tag,
         market_story_narration,
@@ -1331,6 +1332,21 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
                 "What leads to a good call - the trader's right reads against "
                 "their wrong ones, per point-in-time context field "
                 "(deterministic, no model)"
+            ),
+            max_attempts=3,
+        ),
+        # S11 (2026-09-26), INSIDE stage 1 after `prediction_contrast`: when M5
+        # families usually peak and how five exit rules paid. It reads the
+        # outcome log `outcome_sweep` finalized above and feeds nothing in the
+        # night; ahead of `day_review_facts` so the Sunday slate keeps it.
+        JobSlot(
+            name="exit_windows",
+            goal="trade_identification",
+            run=exit_windows_night.run_exit_windows,
+            reserve_minutes=5.0,
+            description=(
+                "Exit-window truth per M5 family: peak timing, give-back and five "
+                "exit rules with a 1R stop (deterministic, no model)"
             ),
             max_attempts=3,
         ),

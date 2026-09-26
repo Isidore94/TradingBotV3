@@ -406,6 +406,9 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         # a deterministic stage 1 slot registered DIRECTLY after `miss_contrast`
         # after this packet was built.
         "prediction_contrast",
+        # LEAD AMENDMENT 2026-09-26 (S11): exit-window truth, a deterministic
+        # stage 1 slot directly after `prediction_contrast`.
+        "exit_windows",
         "market_story_rollups",
         "measured_report",
         # AI-R3 refreshes the bounded facts before any story reads them.
