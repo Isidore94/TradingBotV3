@@ -169,3 +169,82 @@ def test_the_cli_says_no_data_yet_on_an_empty_log(tmp_path, capsys):
 
     assert best_now_outcomes.main(["--summary", "--path", str(tmp_path / "missing.jsonl")]) == 0
     assert capsys.readouterr().out.strip() == "no data yet"
+
+
+# --- the alert noise report --------------------------------------------------------
+
+HIDDEN = "hidden_by_show"
+
+
+def _ev(action, symbol, day=DAY, **detail):
+    row = {"action": action, "symbol": symbol, "side": "LONG", "trade_date": day,
+           "ts": f"{day}T07:00:00"}
+    if detail:
+        row["detail"] = detail
+    return row
+
+
+EVENTS = [
+    _ev("shown", "AAA"), _ev("shown", "AAA"), _ev("shown", "BBB"), _ev("shown", "CCC"),
+    _ev(HIDDEN, "DDD", grade="C"), _ev(HIDDEN, "EEE", grade="New"),
+    _ev("skip", "BBB"), _ev("remove_today", "CCC"),
+    _ev("add_focus", "AAA"), _ev("like_advance", "AAA"),
+    _ev("toggle_m5_focus", "BBB", on=True), _ev("toggle_m5_focus", "BBB", on=False),
+    _ev("auto_arm_watch", "ZZZ"),  # a machine row is never "acted on"
+    _ev("watch_fired", "AAA"),
+    _ev("shown", "OLD", day="2026-09-23"),
+]
+
+
+def test_the_report_counts_shown_hidden_and_acted_on_per_day():
+    import alert_noise_report
+
+    row = alert_noise_report.report([DAY], EVENTS, [], bars_reader=lambda _s: None)[0]
+    assert (row["shown"], row["shown_names"]) == (4, 3)
+    assert row["hidden_by_show"] == 2
+    assert (row["skip"], row["remove_today"], row["watch_fired"]) == (1, 1, 1)
+    assert (row["acted"], row["acted_names"]) == (3, 2)
+    assert row["acted_share"] == pytest.approx(0.75)
+    assert row["line"] == (
+        "Alerts: 4 shown, 2 hidden by Show, 3 acted on (75%), Best-right-now: no data yet"
+    )
+
+
+def test_a_day_before_hidden_by_show_existed_is_unmeasured_never_zero():
+    import alert_noise_report
+
+    row = alert_noise_report.report(["2026-09-23"], EVENTS, [], bars_reader=lambda _s: None)[0]
+    assert row["hidden_by_show"] is None
+    assert row["line"].startswith("Alerts: 1 shown, hidden by Show unmeasured, 0 acted on (0%)")
+
+
+def test_a_day_with_no_events_says_so():
+    import alert_noise_report
+
+    row = alert_noise_report.report(["2026-09-22"], EVENTS, [], bars_reader=lambda _s: None)[0]
+    assert row["line"] == "Alerts: no review events for this day"
+
+
+def test_the_report_carries_the_best_now_hit_rate():
+    import alert_noise_report
+
+    ts = "2026-09-24T06:40:25-07:00"
+    best = [_row("AAA", "LONG", ts), _row("CCC", "LONG", ts)]
+    row = alert_noise_report.report([DAY], EVENTS, best, bars_reader=lambda _s: _tape())[0]
+    assert row["line"].endswith("Best-right-now hit rate 50% (2)")
+    pending = alert_noise_report.report([DAY], EVENTS, best, bars_reader=lambda _s: None)[0]
+    assert pending["line"].endswith("Best-right-now hit rate unmeasured (2 logged, 2 pending)")
+
+
+def test_the_cli_prints_the_day_read_only(monkeypatch, capsys):
+    import alert_noise_report
+    import best_now_outcomes
+    import review_events
+
+    monkeypatch.setattr(review_events, "load_review_events", lambda *a, **k: list(EVENTS))
+    monkeypatch.setattr(best_now_outcomes, "load_records", lambda *a, **k: [])
+    assert alert_noise_report.main(["--day", DAY, "--days", "2"]) == 0
+    out = capsys.readouterr().out
+    assert "2026-09-23:" in out and f"{DAY}:" in out
+    assert "shown 4 (3 names), hidden_by_show 2, skip 1, remove_today 1" in out
+    assert "acted on 3 (2 names), acted share 75%, watch_fired 1" in out
