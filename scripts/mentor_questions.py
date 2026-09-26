@@ -818,13 +818,52 @@ def _regime_vocabulary() -> tuple[str, ...]:
     return structural_regime.VOCABULARY
 
 
+#: S16 item 5: "still a <regime>?", asked once per run of disagreeing sessions.
+REGIME_CHECK_KIND = "regime_check"
+
+
 def is_regime_click(kind: str, state: str) -> bool:
     """Is this answer a regime (it appends a segment), not an answer state or a retire?"""
     return (
-        _text(kind) == STRUCTURAL_REGIME_KIND
+        _text(kind) in (STRUCTURAL_REGIME_KIND, REGIME_CHECK_KIND)
         and bool(_text(state))
         and _text(state) not in _with_answer_states()
     )
+
+
+def _trigger_regime_check(state: Mapping[str, Any]) -> list[Subject]:
+    """S16 item 5: the machine labels disagreed with the trader's regime for 3 sessions.
+
+    One subject per run (its first session), so it is asked once; the lane marks
+    a run the trader answered or the labels closed as answered.
+    """
+    import structural_regime as regimes
+
+    lane = state.get("structural_regime") if isinstance(state, Mapping) else None
+    session = _session_date(state)
+    if not isinstance(lane, Mapping) or not lane.get("loaded") or session is None:
+        return []
+    run = lane.get("disagreement") if isinstance(lane.get("disagreement"), Mapping) else None
+    current = lane.get("current") if isinstance(lane.get("current"), Mapping) else None
+    if not run or not current or _text(current.get("regime")) != _text(run.get("trader_regime")):
+        return []
+    regime = _text(current.get("regime"))
+    machine = regimes.MACHINE_WORDS.get(_text(run.get("machine")), "something else")
+    prompt = (
+        f"Still a {regimes.label(regime)}? For {run.get('streak')} sessions since "
+        f"{_text(run.get('start'))} the {_text(run.get('symbol'))} labels read {machine}. "
+        "A new pick starts today."
+    )
+    options = [regimes.STILL_PREFIX + regime, *(name for name in regimes.VOCABULARY if name != regime)]
+    return [
+        Subject(
+            kind=REGIME_CHECK_KIND,
+            subject_id=_text(run.get("start")),
+            options=_with_answer_states(*options),
+            prompt=prompt,
+            detail={"session": session.isoformat(), "current": dict(current), "run": dict(run)},
+        )
+    ]
 
 
 def _trigger_structural_regime(state: Mapping[str, Any]) -> list[Subject]:
@@ -1004,6 +1043,21 @@ REGISTRY: tuple[QuestionKind, ...] = (
         cadence=CADENCE_WEEKLY,
         expiry="one exchange week",
         priority=45,
+        dormant_until="",
+    ),
+    # S16 item 5 (2026-09-26): "still a <regime>?" once, after the machine labels
+    # disagreed with the trader's regime for 3 sessions. Same writer and reader
+    # as the weekly regime question.
+    QuestionKind(
+        kind=REGIME_CHECK_KIND,
+        trigger=_trigger_regime_check,
+        options=_with_answer_states(*_regime_vocabulary()),
+        writes=WRITES_STRUCTURAL_REGIME,
+        consumer="structural_regime.effective_segments",
+        answer_key="regime",
+        cadence=CADENCE_ONCE,
+        expiry="until the trader answers or the labels agree again",
+        priority=44,
         dormant_until="",
     ),
     QuestionKind(
