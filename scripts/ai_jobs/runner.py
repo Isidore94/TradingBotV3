@@ -215,6 +215,8 @@ NIGHT_BUDGET_FLAG = "night_budget"
 MODEL_SLOT_PRIORITY = (
     "daily_digest",
     "day_review_narration",
+    # R1 (2026-09-26): the show reads the story, so it is protected right after it.
+    "day_review_show",
     "market_story_narration",
     "setup_research",
     "journal_enrichment",
@@ -1019,11 +1021,14 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         cohorts,
         day_review_narration,
         day_review_facts,
+        day_review_show_night,
         digest,
         econ_brief_narration,
         enrichment,
         evidence_report,
         exit_note_fields,
+        exit_windows_night,
+        family_side_evidence,
         improvement_ideas,
         journal_auto_tag,
         market_story_narration,
@@ -1331,6 +1336,21 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             ),
             max_attempts=3,
         ),
+        # S11 (2026-09-26), INSIDE stage 1 after `prediction_contrast`: when M5
+        # families usually peak and how five exit rules paid. It reads the
+        # outcome log `outcome_sweep` finalized above and feeds nothing in the
+        # night; ahead of `day_review_facts` so the Sunday slate keeps it.
+        JobSlot(
+            name="exit_windows",
+            goal="trade_identification",
+            run=exit_windows_night.run_exit_windows,
+            reserve_minutes=5.0,
+            description=(
+                "Exit-window truth per M5 family: peak timing, give-back and five "
+                "exit rules with a 1R stop (deterministic, no model)"
+            ),
+            max_attempts=3,
+        ),
         # Packet WS-10D (2026-09-12), APPENDED at the END of the deterministic
         # stage, after `theta_pick_grading`, and it CLOSES the block. It reads
         # the Market Journal's own entries and the exchange calendar, writes
@@ -1379,6 +1399,20 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             run=day_review_facts.run_day_review_facts,
             reserve_minutes=5.0,
             description="Refresh current and recent Day Review facts (no model)",
+            max_attempts=3,
+        ),
+        # S12 (2026-09-26), DIRECTLY after `day_review_facts` and now the LAST
+        # stage-1 slot (`_STAGE_ONE_LAST_SLOT`), so the Sunday slate keeps it.
+        # Shadow SP4 evidence per (setup family, side); nothing in the night reads it.
+        JobSlot(
+            name="family_side_evidence",
+            goal="setup_quality",
+            run=family_side_evidence.run_family_side_evidence,
+            reserve_minutes=5.0,
+            description=(
+                "SP4 shadow evidence per setup family and side: beat SPY, move in ATR, "
+                "tracker R, and the challenger trial (deterministic, no model)"
+            ),
             max_attempts=3,
         ),
         # ------------------------------------------------------------------
@@ -1450,6 +1484,21 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description=(
                 "Grounded overnight story of one session, plus the rolling D1 "
                 "view of what the trader believes lately"
+            ),
+            max_attempts=3,
+            uses_model=True,
+        ),
+        # R1 (2026-09-26), inside stage 2 DIRECTLY after `day_review_narration`:
+        # it reads that night's verified story beside the day pack. A rejected
+        # deck is degraded and keeps the last good file; the desk then shows facts.
+        JobSlot(
+            name="day_review_show",
+            goal="coaching",
+            run=day_review_show_night.run_day_review_show,
+            reserve_minutes=5.0,
+            description=(
+                "The Day Review Show: 6-10 grounded slides for one session, "
+                "numbers printed from the pack"
             ),
             max_attempts=3,
             uses_model=True,
@@ -1746,10 +1795,10 @@ NIGHT_KINDS = (NIGHT_WEEKNIGHT, NIGHT_SATURDAY, NIGHT_SUNDAY)
 WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration", "ticker_briefs", "setup_keys_narration")
 
 #: The deterministic stage (decision 0018 stage 1), which every night runs. It
-#: ENDS at `day_review_facts`, which closes that stage today; a later packet
-#: appending inside stage 1 lands inside this set automatically because the set
-#: is derived from the slate, not written out twice.
-_STAGE_ONE_LAST_SLOT = "day_review_facts"
+#: ENDS at `family_side_evidence` (S12, directly after `day_review_facts`); a
+#: later packet appending inside stage 1 lands inside this set automatically
+#: because the set is derived from the slate, not written out twice.
+_STAGE_ONE_LAST_SLOT = "family_side_evidence"
 
 
 def _night_evening_date(moment: datetime):

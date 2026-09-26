@@ -1106,7 +1106,9 @@ def test_the_slot_sits_at_the_end_of_the_deterministic_stage(tree):
     assert "measured_report" in expected
     assert expected.index("measured_report") == expected.index("market_story_rollups") + 1
     assert expected.index("measured_report") == expected.index("day_review_facts") - 1
-    assert expected.index("day_review_facts") == expected.index("ai_summary") - 1
+    # S12 (2026-09-26): the SP4 family evidence closes stage 1 after the facts.
+    assert expected.index("day_review_facts") == expected.index("family_side_evidence") - 1
+    assert expected.index("family_side_evidence") == expected.index("ai_summary") - 1
     # The existing pin is not weakened: the real slate still equals it exactly.
     assert tuple(slot.name for slot in runner.default_slots()) == expected
 

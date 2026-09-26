@@ -275,6 +275,41 @@ def test_a_previous_night_without_stage_three_is_complete_only_if_it_ended_befor
     ]
 
 
+def test_a_night_whose_rows_predate_goal_and_tokens_says_unknown_not_zero():
+    from ai_jobs import digest
+
+    # The 2026-09-24 night as the live ledger holds it: `tokens` is {} and no row has a goal.
+    rows = [
+        {"job": "journal_import", "status": "ok", "session_date": "2026-09-24",
+         "started_at": _at("24T22:00"), "tokens": {}},
+        {"job": "econ_brief", "status": "degraded_no_narrative", "session_date": "2026-09-24",
+         "started_at": _at("24T22:35"), "tokens": {}},
+        {"job": "improvement_ideas", "status": "ok", "session_date": "2026-09-24",
+         "started_at": _at("25T01:00"), "tokens": {}},
+    ]
+    goal_line, token_line = digest.night_telemetry_lines(rows, "2026-09-25")
+    assert goal_line == "slots per goal (night of 2026-09-24): unknown (rows carry no goal)"
+    assert token_line == "tokens (night of 2026-09-24): unknown (rows carry no tokens)"
+
+
+def test_a_night_with_some_unstamped_slots_counts_them_as_unknown():
+    from ai_jobs import digest
+
+    rows = [
+        {"job": "journal_import", "goal": "journal", "status": "ok",
+         "session_date": "2026-09-24", "started_at": _at("24T22:00")},
+        {"job": "econ_brief", "status": "ok", "session_date": "2026-09-24",
+         "started_at": _at("24T22:35")},
+        {"job": "improvement_ideas", "goal": "setup_quality", "status": "ok",
+         "session_date": "2026-09-24", "started_at": _at("25T01:00"),
+         "tokens": {"prompt_tokens": 10, "completion_tokens": 1, "calls": 1}},
+    ]
+    goal_line, token_line = digest.night_telemetry_lines(rows, "2026-09-25")
+    assert goal_line.endswith("; unknown goal: 1 slot")
+    assert "journal: ok 1 / degraded 0" in goal_line
+    assert token_line.startswith("tokens (night of 2026-09-24): 10/1 over 1 calls")
+
+
 def test_the_digest_file_carries_the_lines_and_the_narrator_never_sees_them(
     tmp_path, monkeypatch
 ):

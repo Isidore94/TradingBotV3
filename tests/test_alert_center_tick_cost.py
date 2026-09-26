@@ -314,7 +314,7 @@ class TestTheAnyBounceWatchAsksOnce:
         """The levels builder and the evaluation both need today's M5 bars."""
         from chart_watch import ANY_BOUNCE_KINDS, AnyBounceWatch
 
-        from ui.panels import alert_center_panel as panel_mod
+        from alert_center_support import patch_alert_center_global
 
         panel = _panel(tmp_path)
         asked = []
@@ -325,8 +325,8 @@ class TestTheAnyBounceWatchAsksOnce:
         monkeypatch.setattr(panel, "_d1_bars_for", lambda symbol: [])
         # Levels have to come back truthy or the evaluation - the second read -
         # is skipped and the test proves nothing.
-        monkeypatch.setattr(panel_mod, "any_bounce_levels", lambda **kwargs: {"vwap": 100.0})
-        monkeypatch.setattr(panel_mod, "evaluate_any_bounce_watch", lambda *a, **k: None)
+        patch_alert_center_global(monkeypatch, "any_bounce_levels", lambda **kwargs: {"vwap": 100.0})
+        patch_alert_center_global(monkeypatch, "evaluate_any_bounce_watch", lambda *a, **k: None)
         panel._any_bounce_watches = [
             AnyBounceWatch(
                 symbol="NVDA",

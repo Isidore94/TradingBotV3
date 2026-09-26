@@ -5,12 +5,18 @@ the trader SEES; every alert is still recorded, still reaches the review-queue
 door, the Working-now strip and the evidence files. Rows on names the trader
 typed, Focus names, armed watches, price alerts and regime-pause rows always
 show. Unknown (grades not loaded, Best list not ranked yet) shows.
+
+S2 (finding F5): a separate switch, default on, hides M5 rows whose alert time
+is 09:30-10:00 ET. PROVEN rows and the always-show rows above still show; an
+alert with no timezone-aware time is unknown and shows.
 """
 
 from __future__ import annotations
 
 import threading
 import time
+from datetime import datetime
+from datetime import time as dt_time
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -32,6 +38,16 @@ MODES = (
 DEFAULT_MODE = GRADE_B_UP
 PASSING_GRADES = frozenset({setup_grades.PROVEN, setup_grades.A, setup_grades.B})
 
+#: S2: the "hide the first 30 minutes" switch (machine-local, default on).
+SETTING_FIRST30 = "alert_show_hide_first30"
+DEFAULT_FIRST30 = True
+FIRST30_LABEL = "Hide first 30 min"
+#: The `hidden_by_show` detail reason for a first-30 hide.
+REASON_FIRST30 = "first30"
+_ET_NAME = "America/New_York"
+_FIRST30_START = dt_time(9, 30)
+_FIRST30_END = dt_time(10, 0)
+
 # How often the typed-name lookup re-stats longs.txt / shorts.txt (seconds).
 _STAT_INTERVAL_SECONDS = 30.0
 _lock = threading.Lock()
@@ -52,6 +68,37 @@ def set_mode(value: str) -> None:
     if value not in {key for key, _label in MODES}:
         value = DEFAULT_MODE
     project_paths.save_local_setting(SETTING_SHOW_FILTER, value)
+
+
+def first30_enabled() -> bool:
+    """The saved first-30 switch; unreadable keeps the default (on)."""
+    try:
+        value = project_paths.get_local_setting(SETTING_FIRST30, DEFAULT_FIRST30)
+    except Exception:  # noqa: BLE001 - a preference read never costs a surface
+        return DEFAULT_FIRST30
+    return value if isinstance(value, bool) else DEFAULT_FIRST30
+
+
+def set_first30_enabled(enabled: bool) -> None:
+    project_paths.save_local_setting(SETTING_FIRST30, bool(enabled))
+
+
+def alert_time(alert: Any) -> datetime | None:
+    """The alert's timezone-aware receive time, or None (unknown)."""
+    when = getattr(alert, "received_at", None)
+    if isinstance(when, datetime) and when.tzinfo is not None and when.utcoffset() is not None:
+        return when
+    return None
+
+
+def in_first30(when: datetime | None) -> bool:
+    """True for 09:30:00 <= ET time < 10:00:00; a naive or missing time is False."""
+    if not isinstance(when, datetime) or when.tzinfo is None or when.utcoffset() is None:
+        return False
+    from zoneinfo import ZoneInfo
+
+    clock = when.astimezone(ZoneInfo(_ET_NAME)).time()
+    return _FIRST30_START <= clock < _FIRST30_END
 
 
 def daytrade_grade(lookup: Mapping[str, Any] | None, alert: Any) -> str | None:
@@ -90,6 +137,35 @@ def on_best(keys: frozenset, symbol: Any, side: Any) -> bool:
     return (symbol, _side(side)) in keys or (symbol, "") in keys
 
 
+def hide_reason(
+    show_mode: str,
+    *,
+    grade: str | None,
+    best: frozenset | None,
+    symbol: Any,
+    side: Any,
+    privileged: bool,
+    first30: bool = False,
+    when: datetime | None = None,
+) -> str:
+    """Why this M5 row is hidden: `first30`, the Show mode, or "" (shows).
+
+    Privileged rows always show; so do PROVEN and unknown-grade rows under the
+    first-30 switch. Unknown grade / unranked Best shows under the Show mode.
+    """
+    if privileged:
+        return ""
+    if first30 and in_first30(when) and grade is not None and grade != setup_grades.PROVEN:
+        return REASON_FIRST30
+    if show_mode == ALL:
+        return ""
+    if show_mode == BEST_NOW:
+        return show_mode if best is not None and not on_best(best, symbol, side) else ""
+    if grade is None:
+        return ""
+    return show_mode if grade not in PASSING_GRADES else ""
+
+
 def hides(
     show_mode: str,
     *,
@@ -98,23 +174,32 @@ def hides(
     symbol: Any,
     side: Any,
     privileged: bool,
+    first30: bool = False,
+    when: datetime | None = None,
 ) -> bool:
-    """True when this M5 row is hidden. Unknown grade / unranked Best shows."""
-    if privileged or show_mode == ALL:
-        return False
-    if show_mode == BEST_NOW:
-        return best is not None and not on_best(best, symbol, side)
-    if grade is None:
-        return False
-    return grade not in PASSING_GRADES
+    """True when this M5 row is hidden (see `hide_reason`)."""
+    return bool(
+        hide_reason(
+            show_mode,
+            grade=grade,
+            best=best,
+            symbol=symbol,
+            side=side,
+            privileged=privileged,
+            first30=first30,
+            when=when,
+        )
+    )
 
 
-def hidden_text(count: int, new: int = 0) -> str:
-    """"N hidden by Show filter (M New)"; "" for none."""
+def hidden_text(count: int, new: int = 0, *, first30: int = 0) -> str:
+    """"N hidden by Show filter (M New[, K first30])"; "" for none."""
     count = int(count or 0)
     if not count:
         return ""
-    return f"{count} hidden by Show filter ({int(new or 0)} New)"
+    first30 = int(first30 or 0)
+    extra = f", {first30} {REASON_FIRST30}" if first30 else ""
+    return f"{count} hidden by Show filter ({int(new or 0)} New{extra})"
 
 
 def count_hidden(verdicts: Iterable[tuple[Any, bool, bool]]) -> tuple[int, int]:

@@ -46,6 +46,8 @@ COLUMNS = (
     ("verdict", "Verdict"),
 )
 VERDICTS_FILE_NAME = "permutation_verdicts.json"
+#: S12: the SP4 shadow trial's Saturday line per side sits in this file beside the report.
+SP4_EVIDENCE_FILE_NAME = "family_side_evidence.json"
 
 NO_REPORT_TEXT = (
     "No setup-keys report yet. Run the backfill and the search "
@@ -60,6 +62,10 @@ CAVEAT_TEXT = (
 _VERDICT_TEXT = {"no_key_found": "no key found", "too_little_data": "too little data"}
 
 
+#: Combo text for the M5 horizons (held30 = key "0"); swing keys read as session counts.
+HORIZON_LABELS = {"0": "first 30 minutes", "bracket_1r": "+1R before -1R"}
+
+
 def _pct(value: Any) -> str:
     return "-" if value is None else f"{float(value) * 100:.0f}%"
 
@@ -70,7 +76,8 @@ def _num(value: Any, fmt: str) -> str:
 
 def horizons_in(report: Mapping[str, Any] | None, population: str) -> list[str]:
     pops = (report or {}).get("populations") or {}
-    return sorted(((pops.get(population) or {}).get("horizons") or {}), key=lambda text: int(text))
+    return sorted(((pops.get(population) or {}).get("horizons") or {}),
+                  key=lambda text: (0, int(text), "") if str(text).isdigit() else (1, 0, str(text)))
 
 
 def _verdict_cells(verdict: Mapping[str, Any] | None) -> dict[str, str]:
@@ -185,8 +192,26 @@ def read_verdicts(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _read_both(report_path: Path, verdicts_path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    return read_report(report_path), read_verdicts(verdicts_path)
+def read_sp4_lines(path: Path) -> list[str]:
+    """The SP4 trial's line per side from the family evidence; the "no trial yet" lines otherwise."""
+    import points_challenger
+
+    try:
+        target = Path(path)
+        payload = json.loads(target.read_text(encoding="utf-8")) if target.is_file() else {}
+    except (OSError, ValueError):
+        payload = {}
+    lines = payload.get("saturday_lines") if isinstance(payload, dict) else None
+    if isinstance(lines, list) and lines and all(isinstance(line, str) for line in lines):
+        return list(lines)
+    return points_challenger.saturday_lines({})
+
+
+def _read_both(
+    report_path: Path, verdicts_path: Path, sp4_path: Path | None = None
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[str]]:
+    sp4 = read_sp4_lines(sp4_path) if sp4_path is not None else []
+    return read_report(report_path), read_verdicts(verdicts_path), sp4
 
 
 class SetupKeysPanel(QFrame):
@@ -202,6 +227,8 @@ class SetupKeysPanel(QFrame):
         self.report_path = Path(report_path)
         # P12: the verdicts sit beside the report (live: SETUP_PERMUTATION_VERDICTS_FILE).
         self.verdicts_path = self.report_path.parent / VERDICTS_FILE_NAME
+        # S12 (live: FAMILY_SIDE_EVIDENCE_FILE, the same folder).
+        self.sp4_path = self.report_path.parent / SP4_EVIDENCE_FILE_NAME
         self._report: dict[str, Any] | None = None
         self._verdicts: dict[str, Any] | None = None
         self._worker: ReadWorker | None = None
@@ -224,6 +251,10 @@ class SetupKeysPanel(QFrame):
         self.status_label.setWordWrap(True)
         controls.addWidget(self.status_label, stretch=1)
         layout.addLayout(controls)
+        self.sp4_label = QLabel("")
+        self.sp4_label.setWordWrap(True)
+        self.sp4_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(self.sp4_label)
 
         self.table = QTableWidget(0, len(COLUMNS))
         self.table.setHorizontalHeaderLabels([label for _key, label in COLUMNS])
@@ -245,8 +276,8 @@ class SetupKeysPanel(QFrame):
             return
         self.refresh_button.setEnabled(False)
         self.status_label.setText("Reading the report...")
-        path, verdicts_path = self.report_path, self.verdicts_path
-        worker = ReadWorker(lambda: _read_both(path, verdicts_path), self)
+        path, verdicts_path, sp4_path = self.report_path, self.verdicts_path, self.sp4_path
+        worker = ReadWorker(lambda: _read_both(path, verdicts_path, sp4_path), self)
         worker.finished_with.connect(self._on_read)
         worker.failed.connect(self._on_failed)
         self._worker = worker
@@ -255,7 +286,8 @@ class SetupKeysPanel(QFrame):
     def _on_read(self, result) -> None:
         self.refresh_button.setEnabled(True)
         self._worker = None
-        report, verdicts = result
+        report, verdicts, sp4_lines = result
+        self.sp4_label.setText("\n".join(sp4_lines or ()))
         if report is None:
             self.status_label.setText(NO_REPORT_TEXT.format(path=self.report_path))
             return
@@ -278,7 +310,7 @@ class SetupKeysPanel(QFrame):
         self.horizon_input.blockSignals(True)
         self.horizon_input.clear()
         for horizon in horizons_in(self._report, population):
-            label = "first 30 minutes" if horizon == "0" else f"{horizon} session(s)"
+            label = HORIZON_LABELS.get(horizon) or f"{horizon} session(s)"
             self.horizon_input.addItem(label, horizon)
         index = self.horizon_input.findData(current)
         self.horizon_input.setCurrentIndex(index if index >= 0 else 0)

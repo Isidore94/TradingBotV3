@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QToolTip
 
 import avwape_side
 import compression_chip
+import earnings_warning
 from ui import theme
 from ui.models.setup import SetupRow
 from ui.models.setup_table_model import ROW_ROLE, SetupTableModel
@@ -189,6 +190,31 @@ class SetupTableDelegate(QStyledItemDelegate):
         except Exception:
             return None
 
+    @staticmethod
+    def _earnings_badge(row) -> str:
+        """S10b: "ER 5d" for a SHORT 0-14 days before earnings, else "". Never raises."""
+        if not isinstance(row, SetupRow):
+            return ""
+        try:
+            return earnings_warning.badge_text(row.days_to_earnings, row.side)
+        except Exception:
+            return ""
+
+    def _earnings_tooltip(self, index) -> str:
+        """The bucket cell's earnings warning line for a SHORT (S10b). Memory only."""
+        key = _COLUMN_KEYS[index.column()] if index.column() < len(_COLUMN_KEYS) else ""
+        if key != "bucket":
+            return ""
+        row = index.data(ROW_ROLE)
+        if not isinstance(row, SetupRow):
+            return ""
+        try:
+            return earnings_warning.short_into_earnings(
+                row.days_to_earnings, row.side, earnings_warning.cached_stat()
+            )
+        except Exception:
+            return ""
+
     def _wrong_side_tooltip(self, index) -> str:
         """The bucket cell's extra line when the row is on the wrong side.
 
@@ -220,7 +246,11 @@ class SetupTableDelegate(QStyledItemDelegate):
         """
         extra = [
             text
-            for text in (self._wrong_side_tooltip(index), self._compression_tooltip(index))
+            for text in (
+                self._wrong_side_tooltip(index),
+                self._compression_tooltip(index),
+                self._earnings_tooltip(index),
+            )
             if text
         ]
         if not extra:
@@ -268,6 +298,9 @@ class SetupTableDelegate(QStyledItemDelegate):
             if compression is not None and compression.flag:
                 # PCT-3: the same reasoning for the third chip.
                 width += _chip_width(option.font, compression_chip.COMPRESSED_LABEL) + _CHIP_GAP
+            earnings_badge = self._earnings_badge(index.data(ROW_ROLE))
+            if earnings_badge:
+                width += _chip_width(option.font, earnings_badge) + _CHIP_GAP
         return QSize(width, max(size.height(), _ROW_HEIGHT))
 
     def paint(self, painter: QPainter, option, index) -> None:  # noqa: N802
@@ -339,14 +372,24 @@ class SetupTableDelegate(QStyledItemDelegate):
             # hidden, nothing is re-ordered, no score moves.
             compression = self._compression_read(row)
             if compression is not None and compression.flag:
+                last_chip = (
+                    self._chip(
+                        painter,
+                        option,
+                        rect,
+                        compression_chip.COMPRESSED_LABEL,
+                        compression_chip.COMPRESSED_TOKEN,
+                        study=is_study,
+                        after=last_chip,
+                    )
+                    or last_chip
+                )
+            # S10b: a SHORT 0-14 days before earnings is badged, last. Display only.
+            earnings_badge = self._earnings_badge(row)
+            if earnings_badge:
                 self._chip(
-                    painter,
-                    option,
-                    rect,
-                    compression_chip.COMPRESSED_LABEL,
-                    compression_chip.COMPRESSED_TOKEN,
-                    study=is_study,
-                    after=last_chip,
+                    painter, option, rect, earnings_badge, "caution",
+                    study=is_study, after=last_chip,
                 )
         elif key == "score" and is_setup and row.score is not None:
             self._score(painter, option, rect, row.score, selected)

@@ -162,6 +162,22 @@ def _canonical(value) -> str:
     return json.dumps(value, sort_keys=True, indent=1, default=str)
 
 
+# S10c adds these day-trade cell fields on top; every pre-existing value must not move.
+S10C_ADDED = {
+    "grade_2r", "n_2r", "wins_2r", "sessions_2r", "win_rate_2r", "low_bound_2r",
+    "avg_r_2r", "cum_r_2r", "undecided_2r", "eod_n", "eod_r_mean", "eod_r_median",
+    "reach_2r_hits", "reach_2r_n", "reach_2r_rate",
+}
+
+
+def _without_s10c(value):
+    if isinstance(value, dict):
+        return {k: _without_s10c(v) for k, v in value.items() if k not in S10C_ADDED}
+    if isinstance(value, list):
+        return [_without_s10c(v) for v in value]
+    return value
+
+
 def test_the_fixture_inputs_are_the_generators_output():
     contract = load_fixture_contract(FIXTURE)
     inputs = contract["inputs"]
@@ -174,4 +190,10 @@ def test_grades_and_snapshot_are_byte_identical_to_main(tmp_path):
     contract = load_fixture_contract(FIXTURE)
     # `load_episodes` joins the D1 snapshot; an absent one keeps it off live stores.
     actual = build_outputs(contract["inputs"], tmp_path / "absent_scoring_snapshot.json")
-    assert _canonical(actual) == _canonical(contract["expected"])
+    expected = contract["expected"]
+    # S10c only appends the 2R sentence to the rules text.
+    rules = actual["setup_grades"]["rules"]
+    assert rules.startswith(expected["setup_grades"]["rules"][:-1])
+    assert "2R grade" in rules
+    actual["setup_grades"]["rules"] = expected["setup_grades"]["rules"]
+    assert _canonical(_without_s10c(actual)) == _canonical(expected)

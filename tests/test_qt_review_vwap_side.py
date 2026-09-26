@@ -263,7 +263,6 @@ class TestShowTimeIsWhenItIsChecked:
 class TestTheMeasurementIsTheGatesOwnOverCachedBars:
     def _panel_at_eleven(self, monkeypatch):
         QApplication.instance() or QApplication([])
-        from ui.panels import alert_center_panel
         from ui.panels.alert_center_panel import AlertCenterPanel
         from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
 
@@ -276,7 +275,9 @@ class TestTheMeasurementIsTheGatesOwnOverCachedBars:
             def now(cls, tz=None):  # noqa: D102 - stdlib signature
                 return today if tz is None else today.astimezone(tz)
 
-        monkeypatch.setattr(alert_center_panel, "datetime", _At11)
+        from alert_center_support import patch_alert_center_global
+
+        patch_alert_center_global(monkeypatch, "datetime", _At11)
         return panel, today
 
     @staticmethod

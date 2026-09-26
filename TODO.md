@@ -56,80 +56,16 @@ Gates #257-#263: none judged yet (first proof tonight and Monday).
 
 ### Phase B - simpler code, truer numbers (no live data needed)
 
-Order for the morning session (trader 2026-09-26 00:40 PT): R1 first, then B0, then
-S10a (kill `h1_blue_after_red`), S10b (earnings warning on shorts), S12 (the points
-challenger, spec frozen), S1 with S10c (the second grade on top), then S2 onward, then
-the rest of B. Each packet names goal, files, tests and
-ask-first status; a builder that finds the code disagreeing with a line here reports
-it instead of forcing it. The desk is DOWN (closed 21:51 PT on the trader's word);
-restart only on the trader's word.
+Built 2026-09-26 on `claude/p8b-phaseB-2026-09-26` (not merged; needs the trader's
+word): R1, B0, B1b, B3, B8, B9, B11, B12, B13, P4b, A6 steps 2-3, S1-S6, S8, S10b, S10c,
+S11, S12 (SP4 shadow, trial starts the first night it runs), S13. Left here: items that need a live day, a trader decision or an ask-first yes.
 
-- **R1 Day Review Show** (recap ->8; the trader: "day recap is boring and hard to parse;
-  mix the fonts, a presentation mode, the local AI cooks it up each night, fun but
-  informative, keep the stats"). Two builders, shared module first.
-  - `day_review_show.py` (pure): schema `day_review_show_v1` = `{title <=60, slides: 6-10
-    of {kind: open|tape|number|scoreboard|trade|miss|read|lesson|tomorrow|close, title
-    <=48, body <=220, stat: {value <=16, label <=40} | null, source_ids: 1-4}}`. A
-    deterministic **fallback deck** built from the day pack alone (report card six lines
-    as a scoreboard, truth lines, Alerts line, walkaway counts, internals, SPY path) so
-    Show works every day. A **verifier** that rejects WHOLE (last good file kept, ledger
-    `degraded`): every `source_id` in `day_review_pack.allowed_source_ids`; every number
-    in title/body/stat appears verbatim in the cited sources; tickers only from the pack;
-    no mood words next to a result (RULES TJ-7; mood is report-only); one slide per kind
-    except number/trade. The model never supplies a stat value: it picks the source and
-    writes the caption; the desk prints the number from the pack.
-  - Night slot `day_review_show` (goal coaching, `uses_model`, reserve 5 min), in
-    `EXPECTED_SLOT_ORDER` and `MODEL_SLOT_PRIORITY` directly after `day_review_narration`
-    (stage 2; decision 0018 boundaries unchanged; update the order pins with the reason).
-    Input: the day pack + that night's verified narration. Output
-    `<DAY_REVIEW_DIR>/shows/<date>.json` with model, prompt_version, inputs_hash.
-  - Desk: a **Show** button beside "Review my day"; a full-window overlay, one slide at a
-    time; Right/Space next, Left back, Esc close, A auto-advance 8 s; footer "3/9 - told
-    by gemma3:12b - sources on hover"; kind accent stripe and one deterministic glyph per
-    kind (Segoe UI Emoji). Fonts set with `QFont` in code, sized through `theme.px`:
-    headline Bahnschrift SemiBold, big numbers Cascadia Mono SemiBold, prose Georgia,
-    captions Segoe UI (all installed on the desk; Qt substitutes if absent). One
-    `QFrame#DayReviewShow` variant block in `theme.qss`; no per-widget stylesheets. The
-    show JSON rides the Day Review worker's one payload; the tape slide reuses the SPY
-    session bars already in it. A deck that failed its checks shows the fallback deck
-    with a "facts only" badge. Gate #267.
-- **B0 Desk abort 2026-09-24** (safety): `gui_crash.log` holds a "Fatal Python error:
-  Aborted" from the 09-24 desk (exec line app.py:2386); find the aborting thread, fix or
-  guard, and make the crash log stamp its own time.
-- **B8 Alert feed as model/view** (snappiness): `add_alert` is 7.3 ms/alert at 1,000 and
-  grows with the feed (widget per row). After A6 step 2: `QAbstractListModel` + delegate;
-  prove with `desk_bench alert_center.add_alert[1000]`.
-- **B9 Working-lately build** (snappiness): `build_payload` 16-28 s (`read_inputs` 15 s);
-  cache or incrementalise the three reads; prove with the bench op.
 - **B10 Young GC** (snappiness): 150 ms/min of young sweeps; skip a sweep when the gen-0
   count is small or lengthen the tick, only with `desk_perf_report` before/after.
-- **B11 Two unread slot outputs**: `daily_digest` narration and `setup_research`
-  narration have no desk page. Surface each on Day Review / Weekend Prep (default) or the
-  trader kills the slot.
-- **B12 Day Review startup warning**: `DayReviewPanel.eventFilter` runs before
-  `entry_text` exists (`8f82213a`); `getattr` guard, one test.
-- **P4b Econ brief prompt** (night AI ->8): three nights running the econ model restates
-  yesterday's "1 p.m. Treasury auction" and the verifier rightly rejects the whole
-  summary ("a time ... is not the time of an event it cites", two attempts a night).
-  In `scripts/ai_jobs/econ_brief.py`: give the model only the session's own calendar
-  events, label the prior brief's prose "yesterday - do not restate", and on the retry
-  quote the rejected sentence as a do-not-write example. Fixture from the 09-25 night.
-- **B1b Telemetry truth** (night AI): `digest.night_telemetry_lines` printed all-zero
-  "slots per goal (night of 2026-09-24)" because those rows predate the `goal` field;
-  say "unknown (rows carry no goal)" / "unknown (rows carry no tokens)" instead of 0.
-- **B13 Focus break-state repaint** (snappiness): `alert_center_panel._poll_focus_d1_interest`
-  (~line 5374) emits `focusBreakStatesChanged` on every poll; 29 stalls / 3.6 s in one
-  idle hour. Emit only when a state changed. Prove with `desk_perf_report.py`.
 
 - **A4b One RVOL**: golden fixture from today's outputs of `rvol.py`,
   `intraday_rvol_service.py`, `movers_scan.py` first; unify only where the numbers are
   identical, otherwise one module with the variant named.
-- **A6 Alert Center split, steps 2-3** (quality): step 1 is in Phase A (gates, items,
-  Strength Board mixin; 10,125 -> 9,412 lines). Next: the pullback / wall / H1 / any-bounce
-  clusters, which need the tests' monkeypatches re-pointed first; `add_alert[1000]`
-  before and after (7.3 ms/alert baseline).
-- **B3 Sunday ritual card** (recap): bulk confirm + plan review in one card; "exit early /
-  held losers" per setup family.
 - **B7 Theta measured** (theta ->6): why 5,896 picks are unmeasured; fix the measurement
   path; a theta outcome line on Research. Trader decides if theta stays a goal.
 - **C4a weekly-options facet** (permutations): `setup_age` is in Phase A; the
@@ -283,39 +219,6 @@ S1 and keep the order. The two 500 MB logs are read with
   trades at +1R or 60 min (F14); ignore LRSI-20 and the H1 fades until S9 re-weights them.
 
 **Packets (order):**
-- **S1 Tell the truth on the Daytrade Tracker** (grades ->7; no ask-first):
-  `setup_scoreboard.py` / `ui/panels/setup_tracker_panel.py` cells show, beside the
-  bracket grade, "EOD close R" mean, "reach 2R" share and n; the grade line says "1:1
-  bracket". `setup_grades.cell_line` gains the two numbers; golden tests updated with
-  the reason. Read the outcome log the way `bracket_results` does.
-- **S2 First-30 Show filter** (noise ->7; presentation only, like P9): `alert_show_filter.py`
-  gains a "hide the first 30 minutes" switch, default on, that never hides PROVEN,
-  Focus, typed names or chart-watch hits; `hidden_by_show` detail says `first30`.
-  Everything is still recorded. One test per exemption.
-- **S3 Bracket outcome in the permutation search** (permutations ->7; no ask-first):
-  `setup_permutation_backfill.m5_rows` adds horizon `bracket_1r` (win = +1R before -1R
-  by first decisive row, r = final close R) beside `held30`, built from EVERY decided
-  alert (join `intraday_bounce_candidates.csv` confirmed rows to the outcome log by
-  event_id, not only tracker-keyed rows); `setup_permutation_search` runs both
-  horizons; the report and `setup_keys_narration` name the horizon in every line.
-  Fixture test with 6 events; refuse live paths as today.
-- **S4 Tape-relative swing search** (permutations ->7; no ask-first): swing `win` =
-  side return beats SPY over the horizon (reuse `setup_grades.tape_result`); the search
-  refuses to publish a population whose selection window has under 20 sessions and
-  writes that reason into the report. Needs the April-August backfill (trader's owed
-  run) to have anything to say.
-- **S5 Side-by-tape line** (grades, recap; display only): Setup Tracker and Day Review
-  get one line "last 20 sessions, tape-relative: longs beat SPY X% (excess Y%), shorts
-  Z% (W%)", from the session-horizon outcomes on a worker. No gating.
-- **S6 Trendline facet + M5 structure facets** (permutations; scan edit with NO output
-  change, trader 2026-09-24; the sidecar is shadow): write `trendline_break_recent`,
-  `trendline_within_alert_range` and the direction onto the scan row (P11 mechanism,
-  golden parity test) and register `@facet("trendline")`. In `m5_setup_key_stamp.py`
-  add pure `@m5_facet`s over the alert's cached bars: `m5_ema_stack` (8/21 order and
-  price side), `m5_pdh_pdl` (above / inside / below yesterday's range),
-  `m5_open_range` (vs the first-30-minute range, only after 10:00 ET),
-  `m5_compression` (12-bar range vs 20-bar ATR, squeeze then expansion),
-  `m5_side_vs_d1_env` (side aligned with the D1 environment). Fixture test per facet.
 - **S7 Shadow engines for the missing setups** (intraday ->8; `m5_signal_engines.py`
   is shadow by design, so no ask-first until graduation): (a) prev-day high/low
   break-and-hold with RVOL >= 1.5 after 10:00 ET (the P8b adoption gate already trusts
@@ -323,93 +226,18 @@ S1 and keep the order. The two 500 MB logs are read with
   `bullish_strong`; (c) M5 compression break; (d) intraday trendline break from pivots.
   Events go to the sidecar and are measured by the S3 bracket; graduation only through
   the `docs/SETUPS_TEST.md` ladder.
-- **S8 Retest-entry study** (intraday; shadow research in `scripts/research_warehouse/`):
-  measure "enter at the retest" (fill only if price returns within 0.25 ATR of the
-  level within 6 bars, else no trade) against "enter at the flag close" for M5 alerts
-  and Movers, from cached bars; report the two EVs per family on Research.
 - **S9 Tier composite redesign** (grades/noise; ASK-FIRST `bounce_bot_lib/learning.py`,
   golden fixtures, trader's quoted yes): weight segments by information (distance from
   zero x confidence) or by the four most specific dimensions (bounce_type,
   bounce_combo, setup_family, time_bucket) instead of by n; cap the weight of
   `internals_breadth`, `rrs_*_alignment` and `market_environment`. Propose, with the
   F2 numbers, before touching anything. Ties into P14.
-- **S10a Kill `h1_blue_after_red`** (noise ->7; ASK-FIRST `bounce_bot_lib/legacy.py`,
-  satisfied for this exact change by the trader's words 2026-09-26: "Sure kill it", on
-  the finding F3: 34.1% win, n=994, EOD -0.41R). Turn the bounce type off where the
-  live desk reads it: `BOUNCE_TYPE_DEFAULTS` / its `CHECK_BOUNCE_*` flag in
-  `bounce_bot_lib/legacy.py`, AND any persisted M5 settings that override the defaults
-  (find the settings key the desk saves; set it too, or the kill never reaches the
-  desk). Golden fixtures FIRST: run the detector goldens on the fixture tapes with the
-  type on and off; every other alert byte-identical, only `h1_blue_after_red` rows
-  gone. The learning state keeps the segment's history; the Daytrade Tracker shows the
-  family as "off since 2026-09-26". One CHANGELOG line; GATES "#268: on the next
-  session no `h1_blue_after_red` alert is confirmed, the other components' counts are
-  in line with the prior session [lead]".
-- **S10b Earnings warning on short setups** (grades/noise; annotate only, no ask-first;
-  the trader 2026-09-26: "leave those shorts, just warn me whenever those charts pop
-  up", on F10: shorts 3-14 days before earnings lost 3.6-5.7% vs SPY). Pure
-  `earnings_warning.short_into_earnings(days_to_next_earnings, side) -> str`: for a
-  SHORT within 0-14 days of the next earnings date, "earnings in N d - shorts 3-14 d
-  before earnings: X% vs SPY (60 d)" with X read from the live
-  `master_avwap_scan_factor_leaderboard.csv` row (`days_to_next_earnings`, SHORT, h5;
-  plain wording when the row is absent). Shown wherever a short chart pops up: the
-  Setup Tracker row (badge + tooltip through the existing delegate, SHORT rows only),
-  the M5 alert row's grade line and the chart review header for SHORT alerts (days from
-  the earnings dates cache `chart_snapshot.earnings_anchor_dates` uses; unknown date =
-  no warning, never a guess), the Movers Rip-weak row. It never hides, sorts or mutes.
-  Tests: the boundary days, unknown date, long side silent, the leaderboard fallback.
-- **S10c Second grade on top** (grades ->7; scoring code, the trader 2026-09-26: "we can
-  do this on top of what we already do"): keep the 1:1 bracket grade exactly as it is
-  (badges, Show filter and sorting keep reading it). Add, per day-trade cell, a 2R
-  grade from the same ladder on "+2R before -1R" (`target_2r_hit` is cumulative like
-  `target_1r_hit`; first decisive row decides; avg R = 3p - 1) and the EOD close R mean
-  and median. `setup_grades.daytrade_cells` returns the extra fields; `cell_line` reads
-  "1:1 C - 2R D - EOD +0.04R - n 427"; the Daytrade Tracker shows the three. New golden
-  fixtures for the new fields; the existing grade goldens must not change. This is S1's
-  second half; build them together.
-- **S11 Exit-window truth** (intraday ->8, recap; display only, no ask-first; from F14).
-  A deterministic night slot `exit_windows` (goal trade_identification, no model) reads
-  the outcome log in chunks and writes `exit_windows.json` beside the setup grades: per
-  (bounce type, side) the share of alerts peaking within 30/60/120 min, mean MFE by 60
-  and 120 min, the give-back when +1R printed, and the EV of five rules with a 1R stop
-  (hold to close, exit at 60 min, +1R or 60 min, +1R or 120 min, the 1:1 bracket). The
-  Daytrade Tracker gets an "Exit by" column ("peak <= 60 min 49%; +1R/60m -0.05R vs
-  hold -0.30R"); the M5 alert row and the chart review header get one line ("this
-  family usually peaks inside 60 min; +1R has beaten holding by 0.25R"); the Trade
-  Mentor's exit questions quote it. Facts only, never a rule the desk enforces. Fixture
-  test with 8 events; a test that the desk only formats.
-- **S12 = P13 Points challenger SP4, spec frozen 2026-09-26** (grades ->8; the trader:
-  "let's redo the points system to reflect this - I want those excellent 5 swing setups
-  to be higher than the garbage setups like my longs favourite zone"). Shadow first, no
-  ask-first until promotion:
-  - Nightly deterministic `family_side_evidence.json` (slot after `day_review_facts`, goal
-    setup_quality): per (setup_family, side) over the trailing 40 completed sessions:
-    tape-relative beat rate and Wilson low bound at 5 sessions, mean excess vs SPY, mean
-    and median move in ATR at 5 and 10 sessions, payoff, the tracker's avg_total_r, n and
-    sessions. From `master_avwap_session_horizon_outcomes.csv`, `d1_features_history.csv`
-    (atr20) and the attribute leaderboard. Fixture-tested; refuses to write with under
-    15 sessions of data.
-  - Pure `points_challenger.py`: `sp4_points(row, evidence)` = champion priority score +
-    adjust, adjust = 60 x (beat_low_h5 - 0.50) + 20 x mean_move_atr_h10, clamped to
-    [-40, +40], only when n >= 80 and sessions >= 15, else 0. Frozen numbers; do not tune
-    them after looking. Today that gives `avwap_retest_followthrough` SHORT about +38,
-    `avwap_band_bounce` SHORT about +30, `favorite_zone_watch` LONG about -14,
-    `avwap_breakout` LONG about -22: a bucket-sized swing (bucket edges 32 / 69 / 121).
-  - Desk: a shadow "SP4" column and chip on the Setup Tracker beside the live points;
-    the live sort, buckets and alerts do not change. The Saturday report carries one
-    line per side: champion top quartile vs SP4 top quartile, tape-relative excess and
-    tracker R over the entry sessions so far.
-  - SP4 rules, fixed now: 20 new entry sessions from the first night it runs, then 5
-    sessions to mature. Success = SP4 top quartile beats the champion top quartile by
-    >= 0.5% excess at 5 sessions AND >= 0.10R tracker R. Downside stop = SP4 trails by
-    > 0.5% after 10 entry sessions. Rollback = delete the column. Promotion to live
-    points is ask-first (`legacy.py`), golden fixtures, trader's quoted yes.
-- **S13 Exit review for the short runners** (grades; measurement first): the tracker's
-  target/stop exits book -0.04R on `avwap_retest_followthrough` SHORT and -0.03R on
-  `avwap_band_bounce` SHORT while those names run +1.2 / +0.9 ATR in 10 sessions (F17).
-  Measure, per family x side, R under three exit models (current; stop only, hold 10
-  sessions; trail 1 ATR from the extreme) from the same outcomes, and show the three on
-  the Setup Tracker. No exit rule changes until the trader picks one.
+- **S10a Kill `h1_blue_after_red`** (noise; ASK-FIRST `bounce_bot_lib/legacy.py`). Held
+  2026-09-26: the builder found the type already never alerts (`H1_ALERTS_RETIRED = True`
+  since 07-17; H1 colour signals are logged learning-only, so F3's n=994 are learning
+  rows). It has no default flag and no saved setting. "Kill" can only mean "stop
+  recording it": one new constant + one skip in `check_h1_color_setups`, which is wider
+  than the trader's "Sure kill it". Trader: stop recording it (yes/no)?
 
 ### Phase C - needs live days (trigger named)
 
@@ -434,7 +262,6 @@ S1 and keep the order. The two 500 MB logs are read with
 - P14 (retire PROVEN, raise the M5 bar) and any permutation promotion: quoted yes needed.
 - The 142 owed gates in `docs/GATES.md`: one batch pass/drop.
 - Dead-script review: yes or no.
-- B11: surface the two unread slot outputs, or kill the slots.
 - Risk per trade ($) in Settings, `trading_plan.md`, the 139 setup tags waiting.
 
 ## Carried over

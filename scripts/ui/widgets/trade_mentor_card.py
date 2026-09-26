@@ -75,6 +75,25 @@ from trade_mentor_schedule import (
 )
 from swallowed import note_swallowed
 
+
+def _exit_window_quote(question: Any, session: str) -> str:
+    """S11: the exit-window fact for a same-session trade, from memory only ("" otherwise)."""
+    try:
+        opened = str(getattr(question, "opened_at", "") or getattr(question, "trade_date", "") or "")[:10]
+        if not opened or opened != str(session or "")[:10]:
+            return ""
+        import exit_windows
+
+        exit_windows.request_warm()
+        return exit_windows.mentor_quote(
+            exit_windows.cached_lookup(),
+            getattr(question, "setup_guess", ""),
+            getattr(question, "direction", ""),
+        )
+    except Exception as exc:  # noqa: BLE001 - a fact line never costs the question
+        note_swallowed("exit window quote not built", exc, quiet=True)
+        return ""
+
 #: The trader's own reason when they dismiss a card by hand. Kept distinct from
 #: every absence reason the service records: "I looked and had nothing to say"
 #: is a different fact from "nobody was there".
@@ -1744,7 +1763,11 @@ class TradeMentorCard(QWidget):
         holder_layout = QVBoxLayout(box_holder)
         holder_layout.setContentsMargins(0, 0, 0, 0)
         holder_layout.setSpacing(2)
-        prompt = QLabel(f"You closed this on {session}. {check.EXIT_PROMPT}", box_holder)
+        quote = _exit_window_quote(question, session)
+        prompt = QLabel(
+            f"You closed this on {session}. {check.EXIT_PROMPT}" + (f"\n{quote}" if quote else ""),
+            box_holder,
+        )
         prompt.setObjectName("MutedLabel")
         prompt.setWordWrap(True)
         holder_layout.addWidget(prompt)

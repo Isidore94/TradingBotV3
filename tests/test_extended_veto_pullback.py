@@ -276,7 +276,7 @@ def test_extended_veto_limits_the_real_pullback_dispatch_and_keeps_the_existing_
 ):
     """M15 may be a companion fetch, but it is never a direct veto-watch leg."""
     import armed_alert_expiry
-    from ui.panels import alert_center_panel as panel_module
+    import threading
 
     panel = _panel(tmp_path, monkeypatch)
     try:
@@ -307,7 +307,7 @@ def test_extended_veto_limits_the_real_pullback_dispatch_and_keeps_the_existing_
             def start(self):
                 self._target(*self._args)
 
-        monkeypatch.setattr(panel_module.threading, "Thread", _InlineThread)
+        monkeypatch.setattr(threading, "Thread", _InlineThread)
         monkeypatch.setattr(panel, "_run_pullback_sma_evaluation", lambda built, _now: jobs.extend(built))
         moment = datetime(2026, 9, 22, 11, 5)
         assert panel._dispatch_pullback_sma_evaluation([watch], moment)

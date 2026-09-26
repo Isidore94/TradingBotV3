@@ -56,6 +56,18 @@ PERFORMANCE_COLUMNS = (
     # uses; blank for a segment the state has never seen, because "not tracked"
     # and "tracked and unremarkable" are different facts.
     ("champion_tier", "Tier"),
+    # S1 + S10c: the setup grades on the Bounce Types tab - the 1:1 bracket
+    # grade (+1R before -1R) the badges sort by, the 2R grade (+2R before -1R),
+    # EOD close R and the share that reached +2R, from `setup_grades`.
+    ("grade_1r", "1:1 bracket"),
+    ("grade_2r", "2R grade"),
+    ("eod_r_mean", "EOD R"),
+    ("eod_r_median", "EOD med R"),
+    ("reach_2r_rate", "Reach 2R"),
+    ("grade_n", "Grade n"),
+    # S11: when the family usually peaks and +1R-or-60-min vs holding, from
+    # `exit_windows.json` (facts only, never enforced).
+    ("exit_by", "Exit by"),
     ("sample_count", "N"),
     ("avg_close_r", "Avg R"),
     ("median_close_r", "Med R"),
@@ -91,8 +103,11 @@ PERCENT_KEYS = {
     "target_2r_rate",
     "stop_rate",
     "held_rate",
+    "reach_2r_rate",
 }
 SIGNED_KEYS = {
+    "eod_r_mean",
+    "eod_r_median",
     "avg_close_r",
     "median_close_r",
     "avg_mfe_r",
@@ -299,6 +314,10 @@ class DaytradeTrackerPanel(QFrame):
         #: the Qt thread (R4 B4).
         self._learning_state: dict = {}
         self._performance_rows: list[dict[str, Any]] = []
+        #: The persisted setup grades payload, read on the held/ran worker.
+        self._setup_grades: dict = {}
+        #: S11: the persisted exit-window payload, read on the same worker.
+        self._exit_windows: dict = {}
 
         self.refresh_button = QPushButton("Re-aggregate Outcomes")
         self.refresh_button.setObjectName("PrimaryButton")
@@ -562,7 +581,8 @@ class DaytradeTrackerPanel(QFrame):
         table.sortByColumn(column, _Qt.SortOrder.DescendingOrder)
 
     def _make_table(self, columns) -> tuple[DataTable, TrackerTableModel]:
-        numeric = {key for key, _label in columns if key not in {"direction", "segment", "dimension", "recommendation", "status", "example_symbols"}}
+        text_keys = {"direction", "segment", "dimension", "recommendation", "status", "example_symbols", "grade_1r", "grade_2r", "exit_by"}
+        numeric = {key for key, _label in columns if key not in text_keys}
         model = TrackerTableModel(
             columns,
             percent_keys=PERCENT_KEYS,
@@ -640,9 +660,15 @@ class DaytradeTrackerPanel(QFrame):
         # the Qt thread, and nothing expensive belongs there.
         state = load_bounce_learning_state() or {}
         self._learning_state = state
-        perf_rows = apply_champion_tier(
-            apply_held_and_ran(self._performance_rows, self._held_run_summaries),
-            state,
+        perf_rows = apply_exit_windows(
+            apply_setup_grades(
+                apply_champion_tier(
+                    apply_held_and_ran(self._performance_rows, self._held_run_summaries),
+                    state,
+                ),
+                self._setup_grades,
+            ),
+            self._exit_windows,
         )
         by_dimension: dict[str, list[dict]] = {}
         for row in perf_rows:
@@ -749,6 +775,10 @@ class DaytradeTrackerPanel(QFrame):
         window_text = ""
         coverage_text = ""
         if isinstance(summaries, dict) and "summaries" in summaries:
+            grades = summaries.get("setup_grades")
+            self._setup_grades = grades if isinstance(grades, dict) else {}
+            exits = summaries.get("exit_windows")
+            self._exit_windows = exits if isinstance(exits, dict) else {}
             window_text = held_run_window_text(summaries.get("window"))
             coverage_text = outcome_coverage_text(summaries.get("outcome_coverage"))
             summaries = summaries.get("summaries")
@@ -767,9 +797,15 @@ class DaytradeTrackerPanel(QFrame):
             current = self.status_label.text()
             if text not in current:
                 self.status_label.setText(f"{current} {text}".strip())
-        rows = apply_champion_tier(
-            apply_held_and_ran(self._performance_rows, self._held_run_summaries),
-            getattr(self, "_learning_state", {}) or {},
+        rows = apply_exit_windows(
+            apply_setup_grades(
+                apply_champion_tier(
+                    apply_held_and_ran(self._performance_rows, self._held_run_summaries),
+                    getattr(self, "_learning_state", {}) or {},
+                ),
+                self._setup_grades,
+            ),
+            getattr(self, "_exit_windows", {}) or {},
         )
         by_dimension: dict[str, list[dict]] = {}
         for row in rows:
@@ -874,6 +910,48 @@ def apply_held_and_ran(rows, summaries) -> list[dict]:
         row["held_rate"] = (cell or {}).get("hold_rate")
         row["held_run_score"] = (cell or {}).get("held_run_score")
         row["measured"] = measured_text(cell)
+        out.append(row)
+    return out
+
+
+def apply_setup_grades(rows, payload) -> list[dict]:
+    """Join `setup_grades`' day-trade cells onto the Bounce Types rows (S1 + S10c).
+
+    Keyed ``(bounce type, side)`` as `setup_grades.daytrade_key`. Other
+    dimensions and a type with no cell get blanks, never a substitute number.
+    """
+    import setup_grades
+
+    lookup = setup_grades.daytrade_lookup(payload)
+    out: list[dict] = []
+    for raw in rows or ():
+        row = dict(raw)
+        cell = None
+        if str(row.get("dimension") or "").strip() == "bounce_type":
+            cell = lookup.get(setup_grades.daytrade_key(row.get("segment"), row.get("direction")))
+        cell = cell or {}
+        row["grade_1r"] = setup_grades.badge(cell.get("grade")) if cell else ""
+        row["grade_2r"] = setup_grades.badge(cell.get("grade_2r")) if "grade_2r" in cell else ""
+        row["eod_r_mean"] = cell.get("eod_r_mean")
+        row["eod_r_median"] = cell.get("eod_r_median")
+        row["reach_2r_rate"] = cell.get("reach_2r_rate")
+        row["grade_n"] = cell.get("n") if cell else None
+        out.append(row)
+    return out
+
+
+def apply_exit_windows(rows, payload) -> list[dict]:
+    """S11: the "Exit by" text on Bounce Types rows, keyed (bounce type, side). Formats only."""
+    import exit_windows
+
+    cells = exit_windows.lookup(payload)
+    out: list[dict] = []
+    for raw in rows or ():
+        row = dict(raw)
+        cell = None
+        if str(row.get("dimension") or "").strip() == "bounce_type":
+            cell = cells.get(exit_windows.key_for(row.get("segment"), row.get("direction")))
+        row["exit_by"] = exit_windows.tracker_text(cell)
         out.append(row)
     return out
 
@@ -984,6 +1062,31 @@ def load_held_run_report() -> dict:
             # read. A second pass over the 308 MB file to count four kinds
             # would be the panel's expensive read done twice.
             "outcome_coverage": held_run_score.terminal_coverage(episodes),
+            "setup_grades": _read_setup_grades(),
+            "exit_windows": _read_exit_windows(),
         }
     except Exception:
-        return {"summaries": {}, "window": {}, "outcome_coverage": {}}
+        return {
+            "summaries": {}, "window": {}, "outcome_coverage": {},
+            "setup_grades": _read_setup_grades(), "exit_windows": _read_exit_windows(),
+        }
+
+
+def _read_exit_windows() -> dict:
+    """S11: the night's exit-window payload, `{}` when absent. NEVER on the Qt thread."""
+    try:
+        import exit_windows
+
+        return exit_windows.read_payload()
+    except Exception:  # noqa: BLE001 - the Exit by column is then blank
+        return {}
+
+
+def _read_setup_grades() -> dict:
+    """The grades the working-lately build last published, `{}` when absent. NEVER on the Qt thread."""
+    try:
+        from ui.services.working_lately_service import read_persisted_grades
+
+        return read_persisted_grades()
+    except Exception:  # noqa: BLE001 - the grade columns are then blank
+        return {}

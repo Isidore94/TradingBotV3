@@ -3,7 +3,9 @@
     python scripts/setup_permutation_backfill.py --scratch <dir> \
         --features <copy of d1_features_history.csv> \
         (--horizons <copy of master_avwap_session_horizon_outcomes.csv> | --daily-bars <copy of daily_bars dir>) \
-        [--m5-outcomes <copy of intraday_bounce_outcomes.csv>] [--m5-stamps <copy>] [--review-events <copy>] \
+        [--spy-bars <copy of SPY daily bars, csv or parquet>] \
+        [--m5-outcomes <copy of intraday_bounce_outcomes.csv>] [--m5-candidates <copy of intraday_bounce_candidates.csv>] \
+        [--m5-stamps <copy>] [--review-events <copy>] \
         [--scan-reports <copy dir>] [--environment <copy of the d1 environment store>] \
         --out <scratch>/permutation_outcomes.parquet
 
@@ -12,11 +14,14 @@ was on the scan date (``f_<facet>`` columns):
 
 - **swing**: the session's last scan row per (symbol, side, scan date) - the
   `session_horizon_outcomes` v2 grain, joined on the same ``scan_row_id`` - at
-  1/3/5/10 exchange sessions. ``win`` = the v2 ``favorable`` flag; ``r`` = the
-  side return in ATR20 units of the scan row (close to close, so the v2
-  gap-aware execution convention and the literal one book the same number).
-  With ``--daily-bars`` the v2 build is re-run over the whole history
-  (``window_sessions=None``) instead of reading the 30-session file.
+  1/3/5/10 exchange sessions. ``win`` = the side return beat SPY's side
+  return over the same sessions (`setup_grades.tape_result`, S4); a row whose
+  tape is unknown (no SPY close, immature, unmeasured) is left out, never a
+  loss. ``r`` = the side return in ATR20 units of the scan row (close to
+  close, so the v2 gap-aware execution convention and the literal one book the
+  same number). With ``--daily-bars`` the v2 build is re-run over the whole
+  history (``window_sessions=None``) instead of reading the 30-session file;
+  SPY comes from ``--spy-bars``, else ``<daily-bars>/SPY.csv``.
 - **m5**: one row per MEASURED M5 episode (`held_run_score.build_episodes`),
   family = its bounce type, ``win`` = the level held 30 minutes, ``r`` = the
   episode's MFE_R (held_run_score's MFE rule). Its facets come from the
@@ -27,6 +32,13 @@ was on the scan date (``f_<facet>`` columns):
   The M5-native facets (P11, ``f_m5_*``) join the same way: the stamp's M5
   part wins, else the registered row's entry time, RVOL and bounce type (the
   VWAP distance and SPY state need the live stamp and are unknown otherwise).
+  Horizon name ``held30``.
+- **m5, horizon ``bracket_1r``** (S3, with ``--m5-candidates``): one row per
+  DECIDED alert - every ``confirmed`` event id in the candidates log joined to
+  the outcome log - ``win`` = +1R before -1R on the first decisive row
+  (`setup_grades.bracket_results`), ``r`` = the final row's close R (None
+  while unsettled). Facets are joined exactly as for ``held30``; an alert with
+  no D1 scan row keeps its row with unknown D1 facets.
 
 Refuses any input or output inside a live store: copy first.
 """
@@ -53,12 +65,18 @@ import setup_permutations as sp  # noqa: E402  (pure; imports no store path)
 POPULATION_SWING = "swing"
 POPULATION_M5 = "m5"
 SWING_HORIZONS = (1, 3, 5, 10)
-#: The M5 population has one horizon: the first 30 minutes (held_run_score).
+#: Both M5 horizons are same-session (horizon 0, no embargo); ``horizon_name`` tells them apart.
 M5_HORIZON = 0
+HORIZON_HELD30 = "held30"
+HORIZON_BRACKET_1R = "bracket_1r"
+BRACKET_OUTCOME_KIND = "bracket_1r_first_decisive"
+SWING_OUTCOME_KIND = "tape_relative_session_v2"
+#: Rows per pandas chunk when reading the multi-GB M5 logs.
+CSV_CHUNK_ROWS = 250_000
 BACKFILL_VERSION = "setup_permutation_backfill.v1"
 
 BASE_COLUMNS = (
-    "population", "episode_id", "symbol", "side", "family", "session", "horizon",
+    "population", "episode_id", "symbol", "side", "family", "session", "horizon", "horizon_name",
     "win", "r", "r_unit", "outcome_kind", "permutation_rule_version", "backfill_version",
 )
 
@@ -70,6 +88,10 @@ def facet_column(name: str) -> str:
 def output_columns() -> list[str]:
     """D1 facets then the M5-native facets (P11): the m5 population is searched on the union."""
     return [*BASE_COLUMNS, *(facet_column(name) for name in (*sp.FACETS, *sp.M5_FACETS))]
+
+
+def swing_horizon_name(horizon: int) -> str:
+    return f"{int(horizon)}_sessions"
 
 
 def _unknown_m5() -> dict[str, str]:
@@ -339,7 +361,7 @@ def key_representatives(
 # --- outcomes
 
 
-def _swing_row(keyed: KeyedRow, horizon: int, favorable: Any, side_return_pct: Any, entry_close: Any) -> dict:
+def _swing_row(keyed: KeyedRow, horizon: int, win: bool, side_return_pct: Any, entry_close: Any) -> dict:
     ret = _number(side_return_pct)
     close = _number(entry_close) or keyed.last_close
     r = None
@@ -353,10 +375,11 @@ def _swing_row(keyed: KeyedRow, horizon: int, favorable: Any, side_return_pct: A
         "family": keyed.family,
         "session": keyed.session,
         "horizon": int(horizon),
-        "win": _truthy(favorable),
+        "horizon_name": swing_horizon_name(horizon),
+        "win": bool(win),
         "r": r,
         "r_unit": "atr20",
-        "outcome_kind": "favorable_direction_session_v2",
+        "outcome_kind": SWING_OUTCOME_KIND,
         "permutation_rule_version": keyed.rule_version,
         "backfill_version": BACKFILL_VERSION,
         **{facet_column(name): value for name, value in keyed.facets.items()},
@@ -364,8 +387,44 @@ def _swing_row(keyed: KeyedRow, horizon: int, favorable: Any, side_return_pct: A
     }
 
 
-def swing_rows_from_horizons(horizons_path: Path, keyed: Mapping[tuple[str, str, str], KeyedRow]) -> list[dict]:
+def read_spy_closes(path: Path | None) -> dict[str, float]:
+    """``{iso date: close}`` from a copied SPY daily-bar file (csv or parquet); {} when absent."""
+    if path is None or not Path(path).is_file():
+        return {}
+    import pandas as pd
+
+    frame = pd.read_parquet(path) if Path(path).suffix.lower() == ".parquet" else pd.read_csv(path)
+    column = next((c for c in ("datetime", "date") if c in frame.columns), None)
+    if column is None or "close" not in frame.columns:
+        return {}
+    days = pd.to_datetime(frame[column].astype(str).str[:10], errors="coerce")
+    closes = pd.to_numeric(frame["close"], errors="coerce")
+    return {day.date().isoformat(): float(close) for day, close in zip(days, closes, strict=False)
+            if not pd.isna(day) and not pd.isna(close) and close > 0}
+
+
+def _tape_win(keyed: KeyedRow, horizon_row: Mapping[str, Any], spy_closes: Mapping[str, float],
+              tally: dict[str, int]) -> bool | None:
+    """True / False = the side return beat SPY's side return; None = unknown (the row is left out)."""
+    import setup_grades
+
+    row = dict(horizon_row)
+    row["measured"] = "true" if _truthy(horizon_row.get("measured")) else "false"
+    outcome = setup_grades.tape_result({"side": keyed.side}, row, spy_closes)
+    if outcome == setup_grades.UNKNOWN:
+        tally["swing_tape_unknown"] = tally.get("swing_tape_unknown", 0) + 1
+        return None
+    return outcome == setup_grades.WIN
+
+
+def swing_rows_from_horizons(
+    horizons_path: Path,
+    keyed: Mapping[tuple[str, str, str], KeyedRow],
+    spy_closes: Mapping[str, float] | None = None,
+    counts: dict[str, int] | None = None,
+) -> list[dict]:
     by_id = {row.scan_row_id: row for row in keyed.values()}
+    tally = counts if counts is not None else {}
     out = []
     for row in _read_rows(horizons_path):
         horizon = int(_number(row.get("horizon_sessions")) or 0)
@@ -374,12 +433,20 @@ def swing_rows_from_horizons(horizons_path: Path, keyed: Mapping[tuple[str, str,
         match = by_id.get(_text(row.get("scan_row_id")))
         if match is None:
             continue
-        out.append(_swing_row(match, horizon, row.get("favorable"), row.get("side_return_pct"), row.get("entry_close")))
+        win = _tape_win(match, row, spy_closes or {}, tally)
+        if win is None:
+            continue
+        out.append(_swing_row(match, horizon, win, row.get("side_return_pct"), row.get("entry_close")))
     return out
 
 
 def swing_rows_from_daily_bars(
-    bars_dir: Path, keyed: Mapping[tuple[str, str, str], KeyedRow], *, last_completed: date
+    bars_dir: Path,
+    keyed: Mapping[tuple[str, str, str], KeyedRow],
+    *,
+    last_completed: date,
+    spy_closes: Mapping[str, float] | None = None,
+    counts: dict[str, int] | None = None,
 ) -> list[dict]:
     import pandas as pd
 
@@ -414,12 +481,16 @@ def swing_rows_from_daily_bars(
         history, closes_for, horizons=SWING_HORIZONS, last_completed_session=last_completed, window_sessions=None,
     )
     by_id = {row.scan_row_id: row for row in keyed.values()}
+    tally = counts if counts is not None else {}
     out = []
     for row in build.rows:
         match = by_id.get(_text(row.get("scan_row_id")))
         if match is None or not row.get("measured"):
             continue
-        out.append(_swing_row(match, row["horizon_sessions"], row.get("favorable"), row.get("side_return_pct"),
+        win = _tape_win(match, row, spy_closes or {}, tally)
+        if win is None:
+            continue
+        out.append(_swing_row(match, row["horizon_sessions"], win, row.get("side_return_pct"),
                               row.get("entry_close")))
     return out
 
@@ -470,6 +541,142 @@ def _registered_inputs(rows: Iterable[Mapping[str, Any]], sink: dict[str, dict],
         yield row
 
 
+def _m5_event_facets(
+    event_id: str,
+    symbol: str,
+    side: str,
+    session: str,
+    *,
+    keyed: Mapping[tuple[str, str, str], KeyedRow],
+    stamps: Mapping[str, Mapping[str, Any]] | None,
+    registered: Mapping[str, dict],
+    previous: dict[str, str],
+    tally: dict[str, int],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """(D1 facets, M5 facets) for one alert: the live stamp when usable, else the recompute."""
+    if session not in previous:
+        previous[session] = previous_session_text(session)
+    d1 = keyed.get((symbol, side, previous[session]))
+    facets = d1.facets if d1 else {name: sp.UNKNOWN for name in sp.FACETS}
+    record = (stamps or {}).get(event_id)
+    live = live_stamp_facets(record)
+    if live is not None:
+        tally["m5_live_stamped"] = tally.get("m5_live_stamped", 0) + 1
+        tally["m5_live_stamp_disagreed"] = tally.get("m5_live_stamp_disagreed", 0) + int(live != facets)
+        facets = live
+    m5_facets = live_m5_facets(record)
+    if m5_facets is not None:
+        tally["m5_live_m5_stamped"] = tally.get("m5_live_m5_stamped", 0) + 1
+    else:
+        m5_facets = sp.m5_facets_for(registered.get(event_id), side).as_dict()
+    return facets, m5_facets
+
+
+def confirmed_event_ids(candidates_path: Path) -> set[str]:
+    """Every event id the candidates log ever marked ``confirmed`` (pandas chunks, two columns)."""
+    import pandas as pd
+
+    out: set[str] = set()
+    for chunk in pd.read_csv(candidates_path, usecols=["event_id", "event_type"], chunksize=CSV_CHUNK_ROWS,
+                             dtype=str, keep_default_na=False):
+        confirmed = chunk.loc[chunk["event_type"].str.strip().str.lower() == "confirmed", "event_id"]
+        out.update(text.strip() for text in confirmed if text.strip())
+    return out
+
+
+#: The outcome-log columns the bracket and the M5 facet recompute read.
+BRACKET_COLUMNS = frozenset({
+    "event_id", "event_type", "logged_at", "trade_date", "symbol", "direction", "entry_time", "entry_price",
+    "risk_per_share", "bars_elapsed", "close_r", "target_1r_hit", "target_2r_hit", "stop_hit", "eod_close",
+    "context_json",
+})
+_FLAG_TEXT = ("true", "1", "1.0", "yes")
+
+
+def _decided_outcome_rows(outcomes_path: Path, keep: set[str]) -> Iterable[dict]:
+    """Outcome-log rows of ``keep`` events that can matter to the bracket: registered, final or flagged.
+
+    An unflagged update row never decides (the flags are cumulative), so it is
+    dropped in the chunk; context_json is kept only on registered rows.
+    """
+    import pandas as pd
+
+    for chunk in pd.read_csv(outcomes_path, usecols=lambda column: column in BRACKET_COLUMNS,
+                             chunksize=CSV_CHUNK_ROWS, dtype=str, keep_default_na=False):
+        chunk = chunk[chunk["event_id"].str.strip().isin(keep)]
+        if chunk.empty:
+            continue
+        kind = chunk["event_type"].str.strip().str.lower()
+        flagged = False
+        for column in ("stop_hit", "target_1r_hit", "target_2r_hit"):
+            if column in chunk.columns:
+                flagged = flagged | chunk[column].str.strip().str.lower().isin(_FLAG_TEXT)
+        chunk = chunk[kind.isin(("registered", "final")) | flagged]
+        if "context_json" in chunk.columns:
+            chunk = chunk.assign(context_json=chunk["context_json"].where(kind.loc[chunk.index] == "registered", ""))
+        yield from chunk.to_dict("records")
+
+
+def m5_bracket_rows(
+    outcomes_path: Path,
+    candidates_path: Path,
+    keyed: Mapping[tuple[str, str, str], KeyedRow],
+    *,
+    stamps: Mapping[str, Mapping[str, Any]] | None = None,
+    counts: dict[str, int] | None = None,
+) -> list[dict]:
+    """S3: one ``bracket_1r`` row per decided confirmed alert, keyed or not."""
+    import m5_setup_key_stamp
+    import setup_grades
+
+    tally = counts if counts is not None else {}
+    confirmed = confirmed_event_ids(Path(candidates_path))
+    registered: dict[str, dict] = {}
+    symbols: dict[str, str] = {}
+    tz = m5_setup_key_stamp._local_tz()
+    rows = []
+    for row in _registered_inputs(_decided_outcome_rows(Path(outcomes_path), confirmed), registered, tz):
+        event_id = _text(row.get("event_id"))
+        symbols.setdefault(event_id, _text(row.get("symbol")).upper())
+        rows.append(row)
+    results = setup_grades.bracket_results(rows)
+    ignored: dict[str, int] = {}  # the held30 pass already counts the live stamps
+    previous: dict[str, str] = {}
+    out = []
+    for result in results:
+        if result["result"] not in (setup_grades.WIN, setup_grades.LOSS):
+            tally["m5_bracket_undecided"] = tally.get("m5_bracket_undecided", 0) + 1
+            continue
+        event_id = result["event_id"]
+        side, session, symbol = _side(result["side"]), _text(result["trade_date"])[:10], symbols.get(event_id, "")
+        if not side or not session or not symbol:
+            continue
+        facets, m5_facets = _m5_event_facets(
+            event_id, symbol, side, session, keyed=keyed, stamps=stamps, registered=registered,
+            previous=previous, tally=ignored,
+        )
+        out.append({
+            "population": POPULATION_M5,
+            "episode_id": event_id,
+            "symbol": symbol,
+            "side": side,
+            "family": result["bounce_type"] or sp.UNKNOWN,
+            "session": session,
+            "horizon": M5_HORIZON,
+            "horizon_name": HORIZON_BRACKET_1R,
+            "win": result["result"] == setup_grades.WIN,
+            "r": result["eod_r"],
+            "r_unit": "close_r",
+            "outcome_kind": BRACKET_OUTCOME_KIND,
+            "permutation_rule_version": sp.PERMUTATION_RULE_VERSION,
+            "backfill_version": BACKFILL_VERSION,
+            **{facet_column(name): value for name, value in facets.items()},
+            **{facet_column(name): value for name, value in m5_facets.items()},
+        })
+    tally["m5_confirmed_events"] = len(confirmed)
+    return out
+
+
 def m5_rows(
     m5_path: Path,
     keyed: Mapping[tuple[str, str, str], KeyedRow],
@@ -487,7 +694,6 @@ def m5_rows(
     import held_run_score
     import m5_setup_key_stamp
 
-    unknown = {name: sp.UNKNOWN for name in sp.FACETS}
     tally = counts if counts is not None else {}
     tally.setdefault("m5_live_stamped", 0)
     tally.setdefault("m5_live_stamp_disagreed", 0)
@@ -504,21 +710,10 @@ def m5_rows(
         session = _text(episode.trade_date)[:10]
         if not side or not session:
             continue
-        if session not in previous:
-            previous[session] = previous_session_text(session)
-        d1 = keyed.get((episode.symbol, side, previous[session]))
-        facets = d1.facets if d1 else unknown
-        record = (stamps or {}).get(episode.event_id)
-        live = live_stamp_facets(record)
-        if live is not None:
-            tally["m5_live_stamped"] += 1
-            tally["m5_live_stamp_disagreed"] += int(live != facets)
-            facets = live
-        m5_facets = live_m5_facets(record)
-        if m5_facets is not None:
-            tally["m5_live_m5_stamped"] += 1
-        else:
-            m5_facets = sp.m5_facets_for(registered.get(episode.event_id), side).as_dict()
+        facets, m5_facets = _m5_event_facets(
+            episode.event_id, episode.symbol, side, session, keyed=keyed, stamps=stamps,
+            registered=registered, previous=previous, tally=tally,
+        )
         out.append({
             "population": POPULATION_M5,
             "episode_id": episode.event_id,
@@ -527,6 +722,7 @@ def m5_rows(
             "family": episode.bounce_type or sp.UNKNOWN,
             "session": session,
             "horizon": M5_HORIZON,
+            "horizon_name": HORIZON_HELD30,
             "win": bool(episode.held),
             "r": episode.mfe_r,
             "r_unit": "mfe_r",
@@ -557,32 +753,51 @@ def build_permutation_outcomes(
     stores: ContextStores | None = None,
     last_completed: date | None = None,
     m5_stamps: Path | None = None,
+    m5_candidates: Path | None = None,
+    spy_bars: Path | None = None,
+    spy_closes: Mapping[str, float] | None = None,
 ) -> BackfillResult:
-    """Every population row. Refuses live paths before it opens anything."""
+    """Every population row. Refuses live paths before it opens anything.
+
+    SPY closes for the tape-relative swing win: ``spy_closes``, else ``spy_bars``,
+    else ``<daily_bars>/SPY.csv``. With none, every swing row's tape is unknown
+    and none is written.
+    """
     stores = stores or ContextStores()
-    refuse_live([features, horizons, daily_bars, m5_outcomes, m5_stamps, *stores.paths()])
+    refuse_live([features, horizons, daily_bars, m5_outcomes, m5_stamps, m5_candidates, spy_bars,
+                 *stores.paths()])
     if horizons is None and daily_bars is None:
         raise ValueError("give --horizons or --daily-bars for the swing outcomes")
     representatives = session_representatives(Path(features))
     keyed = key_representatives(Path(features), representatives, stores)
+    if spy_closes is None:
+        spy_source = spy_bars or (Path(daily_bars) / "SPY.csv" if daily_bars is not None else None)
+        spy_closes = read_spy_closes(spy_source)
+    swing_counts: dict[str, int] = {"swing_tape_unknown": 0}
     if horizons is not None:
-        swing = swing_rows_from_horizons(Path(horizons), keyed)
+        swing = swing_rows_from_horizons(Path(horizons), keyed, spy_closes, swing_counts)
     else:
         import market_calendar
 
         finished = last_completed or market_calendar.last_completed_session(datetime.now(market_calendar.MARKET_TZ))
-        swing = swing_rows_from_daily_bars(Path(daily_bars), keyed, last_completed=finished)
+        swing = swing_rows_from_daily_bars(Path(daily_bars), keyed, last_completed=finished, spy_closes=spy_closes,
+                                           counts=swing_counts)
     stamp_counts: dict[str, int] = {}
-    m5 = []
+    m5: list[dict] = []
+    bracket: list[dict] = []
     if m5_outcomes:
         import m5_setup_key_stamp
 
         stamps = m5_setup_key_stamp.read_stamps(Path(m5_stamps)) if m5_stamps else None
         m5 = m5_rows(Path(m5_outcomes), keyed, as_of=last_completed or date.today(), stamps=stamps,
                      counts=stamp_counts)
+        if m5_candidates:
+            bracket = m5_bracket_rows(Path(m5_outcomes), Path(m5_candidates), keyed, stamps=stamps,
+                                      counts=stamp_counts)
     return BackfillResult(
-        rows=[*swing, *m5],
-        counts={"scan_rows_keyed": len(keyed), "swing_rows": len(swing), "m5_rows": len(m5), **stamp_counts},
+        rows=[*swing, *m5, *bracket],
+        counts={"scan_rows_keyed": len(keyed), "swing_rows": len(swing), "spy_closes": len(spy_closes),
+                **swing_counts, "m5_rows": len(m5), "m5_bracket_rows": len(bracket), **stamp_counts},
     )
 
 
@@ -614,6 +829,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--daily-bars", type=Path)
     parser.add_argument("--m5-outcomes", type=Path)
     parser.add_argument("--m5-stamps", type=Path, help="copy of m5_setup_key_stamps.jsonl (joined on event_id)")
+    parser.add_argument("--m5-candidates", type=Path,
+                        help="copy of intraday_bounce_candidates.csv: adds the bracket_1r horizon (S3)")
+    parser.add_argument("--spy-bars", type=Path, help="copy of SPY daily bars (csv or parquet) for the tape win")
     parser.add_argument("--review-events", type=Path)
     parser.add_argument("--scan-reports", type=Path)
     parser.add_argument("--environment", type=Path)
@@ -623,7 +841,7 @@ def main(argv: list[str] | None = None) -> int:
     stores = ContextStores(reports_dir=args.scan_reports, review_events=args.review_events,
                            m5_outcomes=args.m5_outcomes, environment=args.environment)
     everything = [args.scratch, args.features, args.horizons, args.daily_bars, args.out, args.m5_stamps,
-                  *stores.paths()]
+                  args.m5_candidates, args.spy_bars, *stores.paths()]
     roots = live_roots()  # taken before LOCALAPPDATA is pointed at scratch
     try:
         refuse_live(everything, roots)
@@ -645,6 +863,7 @@ def main(argv: list[str] | None = None) -> int:
     result = build_permutation_outcomes(
         args.features, horizons=args.horizons, daily_bars=args.daily_bars, m5_outcomes=args.m5_outcomes,
         stores=stores, last_completed=args.last_completed, m5_stamps=args.m5_stamps,
+        m5_candidates=args.m5_candidates, spy_bars=args.spy_bars,
     )
     write_parquet(result.rows, args.out)
     print(json.dumps({"out": str(args.out), **result.counts}))

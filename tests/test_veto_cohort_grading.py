@@ -634,16 +634,24 @@ def test_the_scope_can_be_selected_on_demand():
         # appended inside stage 1 directly after the miss contrast and still
         # ahead of the pair that closes the stage.
         "prediction_contrast",
+        # LEAD AMENDMENT 2026-09-26 (S11): exit-window truth, a deterministic
+        # stage 1 slot directly after `prediction_contrast`.
+        "exit_windows",
         "market_story_rollups",
         "measured_report",
         # AI-R3 keeps the factual day pack current before stage-2 stories.
         "day_review_facts",
+        # LEAD AMENDMENT 2026-09-26 (S12): the SP4 family evidence, a
+        # deterministic slot directly after the facts; it now closes stage 1.
+        "family_side_evidence",
         # Stage 2: the original pair, plus Phase 0.31's bounded story narration.
         # TJ-4 (2026-09-20) appends the day story inside the stage, ahead of the
         # briefs: gate #158 wants it finished before 23:30 Pacific and the
         # briefs reserve 120 minutes.
         "ai_summary",
         "day_review_narration",
+        # R1 (2026-09-26): the Day Review Show reads that story, so it follows it.
+        "day_review_show",
         # TJ-16 item 4 (2026-09-20): the grounded word tagger, appended inside
         # stage 2 after `ai_summary` (the `day_review_facts` / `ai_summary`
         # boundary stays adjacent) and before the two-hour briefs.

@@ -406,13 +406,22 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         # a deterministic stage 1 slot registered DIRECTLY after `miss_contrast`
         # after this packet was built.
         "prediction_contrast",
+        # LEAD AMENDMENT 2026-09-26 (S11): exit-window truth, a deterministic
+        # stage 1 slot directly after `prediction_contrast`.
+        "exit_windows",
         "market_story_rollups",
         "measured_report",
         # AI-R3 refreshes the bounded facts before any story reads them.
         "day_review_facts",
+        # LEAD AMENDMENT 2026-09-26 (S12): the SP4 family evidence, a
+        # deterministic slot directly after the facts; it now closes stage 1.
+        "family_side_evidence",
         # LEAD AMENDMENT 2026-09-20 (TJ-4 integration): the day story, inside
         # stage 2 and ahead of the briefs.
         "day_review_narration",
+        # LEAD AMENDMENT 2026-09-26 (R1): the Day Review Show reads that story,
+        # so it follows it directly, still inside stage 2.
+        "day_review_show",
         # LEAD AMENDMENT 2026-09-20 (TJ-16 item 4): the grounded word tagger, a
         # stage 2 model slot. A weeknight has no `ai_summary`, so it sits
         # directly before `ticker_briefs` here.

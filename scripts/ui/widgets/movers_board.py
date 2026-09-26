@@ -93,6 +93,8 @@ def symbol_text(row: dict[str, Any]) -> str:
     parts = [str(row.get("symbol") or "")]
     if row.get("er"):
         parts.append("ER")
+    if row.get("earnings_badge"):
+        parts.append(f"⚠{row['earnings_badge']}")
     if "streak" in row:
         change = row.get("rank_change")
         if change is None:
@@ -102,6 +104,21 @@ def symbol_text(row: dict[str, Any]) -> str:
         elif change < 0:
             parts.append(f"▼{-change}")
     return " ".join(parts)
+
+
+def _tag_short_earnings(rows: list[dict[str, Any]]) -> None:
+    """S10b: tag each weak (short) row 0-14 days before earnings. Memory only; display only."""
+    try:
+        import earnings_warning
+
+        for row in rows:
+            days = earnings_warning.cached_days_to_next_earnings(row.get("symbol"))
+            text = earnings_warning.warning_for_symbol(row.get("symbol"), "SHORT")
+            if text:
+                row["earnings_warning"] = text
+                row["earnings_badge"] = f"{days}d"
+    except Exception as exc:  # noqa: BLE001 - a warning never costs the board
+        note_swallowed("movers earnings warning not tagged", exc, quiet=True)
 
 
 def is_new(row: dict[str, Any]) -> bool:
@@ -340,6 +357,8 @@ def _row_tooltip(row: dict[str, Any]) -> str:
         parts.append(f"group {row['group']}")
     if row.get("er"):
         parts.append("earnings today / after last close")
+    if row.get("earnings_warning"):
+        parts.append(str(row["earnings_warning"]))
     if row.get("stale"):
         parts.append("stale bars")
     if row.get("note"):
@@ -483,6 +502,13 @@ class MoversBoard(QWidget):
     def __init__(self, parent=None, *, persist: bool = True) -> None:
         super().__init__(parent)
         self.setObjectName("MoversBoard")
+        try:
+            import earnings_warning
+
+            # S10b: load earnings dates on its background thread before the first tick.
+            earnings_warning.request_warm()
+        except Exception as exc:  # noqa: BLE001
+            note_swallowed("earnings warning warm not started", exc, quiet=True)
         self._persist = persist
         self._board: dict[str, Any] = {}
         self._mode = self._setting(MOVERS_MODE_SETTING, "pop")
@@ -914,6 +940,8 @@ class MoversBoard(QWidget):
         for section, name in self._lists_in_view():
             rows = [r for r in rows_for(self._board, name, self._side)
                     if hidden_key(r) not in hidden]
+            if name == "weak":
+                _tag_short_earnings(rows)
             columns_mode = "dip" if name in ("strong", "weak") else self._mode
             section.set_rows(rows, columns_mode, "short" if name == "weak" else self._side)
             section.empty_label.setText(self._empty_text(rows, name))

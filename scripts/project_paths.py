@@ -429,6 +429,9 @@ AUTO_OPENING_REGIME_HISTORY_FILE = RUNTIME_DATA_DIR / "auto_opening_regime_histo
 # Dated, append-only copies of `working_lately/setup_grades_latest.json`, one
 # JSONL per day. `setup_grades_history` owns it.
 SETUP_GRADES_HISTORY_DIR = LOCAL_SETTINGS_DIR / "working_lately" / "setup_grades_history"
+# S11: when M5 families usually peak and how five exit rules paid, per
+# (bounce type, side), beside the setup grades. `ai_jobs.exit_windows_night` owns it.
+EXIT_WINDOWS_FILE = LOCAL_SETTINGS_DIR / "working_lately" / "exit_windows.json"
 # Append-only JSONL log of the trader's pick verdicts: star likes (with origin
 # alert timeframe/surface), X dislikes (with the typed reason), unfavorites.
 # Lives in the shared home so it syncs across machines and can be handed to an
@@ -796,6 +799,9 @@ MASTER_AVWAP_TIER_OUTCOMES_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_ti
 MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE = (
     PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_session_horizon_outcomes.csv"
 )
+# S12: per (setup family, side) tape-relative evidence and the SP4 shadow trial.
+# `ai_jobs.family_side_evidence` owns it; read by the Setup Tracker and Setup keys.
+FAMILY_SIDE_EVIDENCE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "family_side_evidence.json"
 # P1-4 4c: the setup-permutation search report (shadow only). Written by
 # `setup_permutation_search.py --out`; read by Research -> Setup keys and the
 # Saturday `setup_keys_narration` slot. Nothing ranks, filters or alerts on it.

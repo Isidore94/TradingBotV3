@@ -337,6 +337,10 @@ EXPECTED_SLOT_ORDER = (
     # which closes the reads it counts - and still ahead of `day_review_facts`
     # for the Sunday-slate reason above it.
     "prediction_contrast",
+    # S11 (2026-09-26): exit-window truth from the M5 outcome log. Deterministic,
+    # no model; after `outcome_sweep` finalizes the day's outcomes, and ahead of
+    # `day_review_facts` so the Sunday slate keeps it. Nothing above reads its file.
+    "exit_windows",
     # WS-10D (2026-09-12): the Market Journal's weekly/monthly/quarterly rollups.
     # Deterministic, no model; it reads the daily stories and the exchange calendar
     # and feeds nothing above it, so it CLOSES the deterministic stage.
@@ -346,8 +350,12 @@ EXPECTED_SLOT_ORDER = (
     # reads what the slots above it wrote and feeds nothing above it, so it
     # CLOSES the deterministic stage.
     "measured_report",
-    # TJ-17: current and recent saved facts close stage 1 before any story.
+    # TJ-17: current and recent saved facts before any story.
     "day_review_facts",
+    # S12 (2026-09-26): the SP4 family evidence. Deterministic, no model; the
+    # brief puts it directly after `day_review_facts`, so it now CLOSES stage 1
+    # (`_STAGE_ONE_LAST_SLOT`) and keeps its Sunday slot. Nothing above reads it.
+    "family_side_evidence",
     # stage 2 - the original pair moved here by decision 0018; Phase 0.31
     # appends the bounded market-story narration inside the same stage.
     "ai_summary",
@@ -355,9 +363,12 @@ EXPECTED_SLOT_ORDER = (
     # Appended INSIDE stage 2 and deliberately AHEAD of `ticker_briefs`: gate
     # #158 reads the ledger for a day story finished before 23:30 Pacific, and
     # the briefs reserve 120 minutes in front of it. It cannot go further
-    # forward either - `ai_summary` sits directly after `day_review_facts` and
+    # forward either - `ai_summary` sits directly after `family_side_evidence` and
     # two other pins say so.
     "day_review_narration",
+    # R1 (2026-09-26): the Day Review Show reads that night's verified story, so
+    # it sits DIRECTLY after it, still inside stage 2 (decision 0018 unchanged).
+    "day_review_show",
     # TJ-16 item 4 (2026-09-20): grounded codes for the trader's own words.
     # A local MEDIUM model slot, so it is in stage 2 - after `ai_summary`
     # because AI-R3 pins `day_review_facts` directly before that name, and

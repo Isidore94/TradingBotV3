@@ -751,6 +751,7 @@ def test_the_slot_order_pins_are_the_ones_this_packet_moves():
         "the TJ-5 adjacency pin moved; re-read it before editing"
     )
     scopes = (ROOT_DIR / "tests" / "test_opt_in_evidence_scopes.py").read_text(encoding="utf-8")
-    assert '"day_review_narration", "observation_tags", "week_review_narration"' in scopes, (
+    # R1 put day_review_show after day_review_narration.
+    assert '"day_review_narration", "day_review_show", "observation_tags"' in scopes, (
         "the opt-in `allowed` list moved; re-read it before editing"
     )

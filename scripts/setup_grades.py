@@ -19,6 +19,9 @@ Two populations, ONE ladder, never pooled:
   -1R**? A row that shows both for the first time is a LOSS (the adverse extreme
   first, as `real_miss` does). An alert that touched neither is undecided and
   counted apart, never a zero. SPY-relative does not apply to a bracket.
+  Beside it (S10c): a 2R grade on the same ladder (+2R before -1R), the EOD
+  close R mean and median, and the share that reached +2R. The 1:1 grade is
+  the one badges, the Show filter and sorting read.
 
 PROVEN and A also need the family's cumulative R over the window to be >= 0
 (`cum_r_lately`, the sum of each pick's own R); unknown is not >= 0.
@@ -61,7 +64,8 @@ RULES_TEXT = (
     "New: under 30. "
     "Swing wins are wins vs SPY (the pick's 5-session side return beat SPY's) "
     "when 30+ picks have one, else the plain win with 'tape: unknown'. "
-    "Day trade wins are +1R before -1R."
+    "Day trade wins are +1R before -1R (the 1:1 bracket). "
+    "2R grade: +2R before -1R on the same ladder, avg R = 3p - 1."
 )
 
 #: The swing tape horizon: the tracker's 5-session favorable-direction question.
@@ -355,6 +359,105 @@ def swing_cells(
 
 
 # ---------------------------------------------------------------------------
+# side by tape (S5): one display line, never a gate
+# ---------------------------------------------------------------------------
+
+#: How many scan sessions the side-by-tape line looks back over.
+SIDE_BY_TAPE_SESSIONS = 20
+SIDE_BY_TAPE_UNKNOWN = (
+    "Side by tape: unknown (no measured 5-session results vs SPY yet)."
+)
+
+
+def _spy_side_return(
+    row: Mapping[str, Any], side: str, spy_closes: Mapping[str, float] | None
+) -> float | None:
+    """SPY's same-side return over the row's entry -> target sessions, or None."""
+    closes = spy_closes or {}
+    entry = _float(closes.get(str(row.get("scan_date") or "").strip()[:10]))
+    target = _float(closes.get(str(row.get("target_session") or "").strip()[:10]))
+    if entry is None or entry <= 0 or target is None:
+        return None
+    spy_return = (target / entry - 1.0) * 100.0
+    return spy_return if side == "LONG" else -spy_return
+
+
+def side_by_tape(
+    horizon_rows: Any,
+    spy_closes: Mapping[str, float] | None,
+    *,
+    as_of: str = "",
+    sessions: int = SIDE_BY_TAPE_SESSIONS,
+) -> dict[str, Any]:
+    """Longs and shorts vs SPY over the last ``sessions`` scan sessions.
+
+    Every 5-session horizon row whose `tape_result` is WIN or LOSS counts; an
+    UNKNOWN row is left out. The window is the newest ``sessions`` scan dates
+    that have at least one decided row. Per side: n, wins, the beat share and
+    the mean excess (side return minus SPY's same-side return, in points).
+    """
+    index = horizon_rows if isinstance(horizon_rows, Mapping) else horizon_index(horizon_rows)
+    decided: list[tuple[str, str, bool, float]] = []
+    for (_symbol, side, scan_day), row in index.items():
+        outcome = tape_result({"side": side}, row, spy_closes, as_of=as_of)
+        if outcome == UNKNOWN:
+            continue
+        spy_side = _spy_side_return(row, side, spy_closes)
+        side_return = _float(row.get("side_return_pct"))
+        if spy_side is None or side_return is None:
+            continue
+        decided.append((scan_day, side, outcome == WIN, side_return - spy_side))
+    days = sorted({day for day, *_ in decided})[-int(sessions):] if sessions > 0 else []
+    kept = set(days)
+    out: dict[str, Any] = {
+        "sessions": len(days),
+        "first": days[0] if days else "",
+        "last": days[-1] if days else "",
+        "as_of": str(as_of or "")[:10],
+    }
+    for side in ("LONG", "SHORT"):
+        rows = [(won, excess) for day, s, won, excess in decided if s == side and day in kept]
+        n = len(rows)
+        wins = sum(1 for won, _ in rows if won)
+        out[side.lower()] = {
+            "n": n,
+            "wins": wins,
+            "beat_pct": (wins / n * 100.0) if n else None,
+            "excess_pct": (sum(excess for _, excess in rows) / n) if n else None,
+        }
+    return out
+
+
+def side_by_tape_line(summary: Mapping[str, Any] | None) -> str:
+    """The one line, from a `side_by_tape` summary. Formatting only."""
+    summary = summary or {}
+    count = _int(summary.get("sessions"))
+    if not count:
+        return SIDE_BY_TAPE_UNKNOWN
+
+    def part(side: str) -> str:
+        cell = summary.get(side) or {}
+        beat, excess = _float(cell.get("beat_pct")), _float(cell.get("excess_pct"))
+        if excess is not None:
+            excess = round(excess, 2) + 0.0  # never print "-0.00"
+        if side == "long":
+            if not _int(cell.get("n")) or beat is None or excess is None:
+                return "longs vs SPY unknown"
+            return f"longs beat SPY {beat:.0f}% (excess {excess:+.2f}%)"
+        if not _int(cell.get("n")) or beat is None or excess is None:
+            return "shorts unknown"
+        return f"shorts {beat:.0f}% ({excess:+.2f}%)"
+
+    long_n = _int((summary.get("long") or {}).get("n"))
+    short_n = _int((summary.get("short") or {}).get("n"))
+    return (
+        f"Last {count} sessions, tape-relative: {part('long')}, {part('short')}. "
+        f"n {long_n} long / {short_n} short, scan dates "
+        f"{summary.get('first')} to {summary.get('last')}."
+    )
+
+
+# ---------------------------------------------------------------------------
 # day trade: +1R before -1R
 # ---------------------------------------------------------------------------
 
@@ -363,12 +466,45 @@ def _flag(value: Any) -> bool:
     return str(value or "").strip().lower() in {"true", "1", "yes"}
 
 
+#: `setup_scoreboard.RISK_FLOOR_PCT_OF_ENTRY`: a stop closer than this % of entry has no usable R.
+EOD_RISK_FLOOR_PCT = 0.1
+
+
+def _first_decisive(ordered: list, target_field: str) -> str | None:
+    """WIN / LOSS on the first row where the target or the stop is set; stop wins a tie."""
+    for _index, row in ordered:
+        if _flag(row.get("stop_hit")):
+            return LOSS
+        if _flag(row.get(target_field)):
+            return WIN
+    return None
+
+
+def _eod_r(final_row: Mapping[str, Any] | None) -> float | None:
+    """The final row's ``close_r``, or None when it is blank, the old 0/entry
+    sentinel (`setup_scoreboard.unsettled_close_mask`) or under the risk floor."""
+    if not final_row:
+        return None
+    close_r = _float(final_row.get("close_r"))
+    if close_r is None or close_r in (float("inf"), float("-inf")):
+        return None
+    entry = _float(final_row.get("entry_price"))
+    if close_r == 0 and entry is not None and _float(final_row.get("eod_close")) == entry:
+        return None
+    risk = _float(final_row.get("risk_per_share"))
+    if not entry or risk is None or abs(risk) / abs(entry) * 100.0 < EOD_RISK_FLOOR_PCT:
+        return None
+    return close_r
+
+
 def bracket_results(outcome_rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """One result per alert: did it reach +1R before -1R?
+    """One result per alert: did it reach +1R before -1R? And +2R before -1R?
 
     The flags on the outcome log are cumulative, so the FIRST row (by bars
     elapsed) on which either is set decides. Both set first on the same row is a
     LOSS - the adverse extreme is assumed first when the bar cannot say.
+    A finished alert also carries ``eod_r`` (its final row's close R, None
+    when unsettled) and ``reached_2r`` (any row flags +2R); an open one has None.
     """
     from setup_scoreboard import bounce_type_from_event_id
 
@@ -382,18 +518,11 @@ def bracket_results(outcome_rows: Iterable[Mapping[str, Any]]) -> list[dict[str,
         ordered = sorted(
             enumerate(rows), key=lambda item: (_int(item[1].get("bars_elapsed")), item[0])
         )
-        outcome = None
-        for _index, row in ordered:
-            target, stop = _flag(row.get("target_1r_hit")), _flag(row.get("stop_hit"))
-            if stop:
-                outcome = LOSS
-                break
-            if target:
-                outcome = WIN
-                break
-        if outcome is None:
-            finished = any(str(row.get("event_type") or "").strip().lower() == "final" for row in rows)
-            outcome = UNDECIDED if finished else OPEN
+        finals = [row for _i, row in ordered if str(row.get("event_type") or "").strip().lower() == "final"]
+        finished = bool(finals)
+        undecided = UNDECIDED if finished else OPEN
+        outcome = _first_decisive(ordered, "target_1r_hit") or undecided
+        outcome_2r = _first_decisive(ordered, "target_2r_hit") or undecided
         first = rows[0]
         results.append(
             {
@@ -402,6 +531,9 @@ def bracket_results(outcome_rows: Iterable[Mapping[str, Any]]) -> list[dict[str,
                 "side": str(first.get("direction") or "").strip().upper(),
                 "bounce_type": bounce_type_from_event_id(event_id),
                 "result": outcome,
+                "result_2r": outcome_2r,
+                "eod_r": _eod_r(finals[-1]) if finished else None,
+                "reached_2r": any(_flag(row.get("target_2r_hit")) for row in rows) if finished else None,
             }
         )
     return results
@@ -413,6 +545,11 @@ def daytrade_cells(results: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]
     An alert carrying several bounce types counts under EACH of them, as the
     Daytrade Tracker counts it. The bracket trade's R is +1 or -1, so avg R is
     ``2 * win_rate - 1``: positive exactly when it wins more than it loses.
+
+    S10c: beside it, ``*_2r`` fields grade +2R before -1R on the same ladder
+    (R is +2 or -1, so avg R is ``3p - 1``); ``eod_r_mean`` / ``eod_r_median``
+    over ``eod_n`` settled finals; ``reach_2r_rate`` over finished alerts. A
+    result without those fields (an older caller) leaves them unmeasured.
     """
     from held_run_score import bounce_components
 
@@ -421,7 +558,12 @@ def daytrade_cells(results: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]
         for component in bounce_components(result.get("bounce_type")) or ():
             key = (str(component), str(result.get("side") or "").upper())
             tally = tallies.setdefault(
-                key, {"wins": 0, "losses": 0, "undecided": 0, "open": 0, "sessions": set()}
+                key,
+                {
+                    "wins": 0, "losses": 0, "undecided": 0, "open": 0, "sessions": set(),
+                    "wins_2r": 0, "losses_2r": 0, "undecided_2r": 0, "sessions_2r": set(),
+                    "eod": [], "reach_hits": 0, "reach_n": 0,
+                },
             )
             outcome = result.get("result")
             if outcome == WIN:
@@ -434,6 +576,21 @@ def daytrade_cells(results: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]
                 tally["open"] += 1
             if outcome in (WIN, LOSS) and result.get("trade_date"):
                 tally["sessions"].add(result["trade_date"])
+            outcome_2r = result.get("result_2r")
+            if outcome_2r == WIN:
+                tally["wins_2r"] += 1
+            elif outcome_2r == LOSS:
+                tally["losses_2r"] += 1
+            elif outcome_2r == UNDECIDED:
+                tally["undecided_2r"] += 1
+            if outcome_2r in (WIN, LOSS) and result.get("trade_date"):
+                tally["sessions_2r"].add(result["trade_date"])
+            eod_r = _float(result.get("eod_r"))
+            if eod_r is not None:
+                tally["eod"].append(eod_r)
+            if result.get("reached_2r") is not None:
+                tally["reach_n"] += 1
+                tally["reach_hits"] += 1 if result.get("reached_2r") else 0
     cells = []
     for (bounce_type, side), tally in tallies.items():
         n = tally["wins"] + tally["losses"]
@@ -452,9 +609,45 @@ def daytrade_cells(results: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]
             undecided=tally["undecided"],
             open=tally["open"],
             key=daytrade_key(bounce_type, side),
+            **_second_grade(tally),
         )
         cells.append(cell)
     return cells
+
+
+def _second_grade(tally: Mapping[str, Any]) -> dict[str, Any]:
+    """The 2R grade, EOD close R and reach-2R fields of one tally (S10c)."""
+    from statistics import median
+
+    wins, losses = tally["wins_2r"], tally["losses_2r"]
+    n = wins + losses
+    graded = grade_for(
+        n=n,
+        sessions=len(tally["sessions_2r"]),
+        wins=wins,
+        avg_r=(3 * wins / n - 1) if n else None,
+        # Each 2R bracket alert is +2R or -1R.
+        cum_r_lately=float(2 * wins - losses) if n else None,
+    )
+    eod = tally["eod"]
+    reach_n = tally["reach_n"]
+    return {
+        "grade_2r": graded["grade"],
+        "n_2r": n,
+        "wins_2r": wins,
+        "sessions_2r": graded["sessions"],
+        "win_rate_2r": graded["win_rate"],
+        "low_bound_2r": graded["low_bound"],
+        "avg_r_2r": graded["avg_r"],
+        "cum_r_2r": graded["cum_r_lately"],
+        "undecided_2r": tally["undecided_2r"],
+        "eod_n": len(eod),
+        "eod_r_mean": round(sum(eod) / len(eod), 6) if eod else None,
+        "eod_r_median": round(float(median(eod)), 6) if eod else None,
+        "reach_2r_hits": tally["reach_hits"],
+        "reach_2r_n": reach_n,
+        "reach_2r_rate": (tally["reach_hits"] / reach_n) if reach_n else None,
+    }
 
 
 def daytrade_key(bounce_type: Any, side: Any) -> str:
@@ -563,11 +756,22 @@ def cell_line(cell: Mapping[str, Any] | None) -> str:
     """One line: ``PROVEN · win vs SPY 62% (low 55%) · cum R +4.1 · n 114``.
 
     A swing cell graded on the tape shows its win vs SPY and that n; one graded
-    on the plain win adds ``tape: unknown``. A day-trade cell shows its bracket
-    win. Unknown cum R prints as ``cum R unknown``.
+    on the plain win adds ``tape: unknown``. A day-trade cell with the S10c
+    fields reads ``1:1 C · 2R D · EOD +0.04R · n 427`` (n = 1:1 decided); one
+    without them shows its bracket win. Unknown cum R prints as ``cum R unknown``.
     """
     if not cell:
         return badge(NEW)
+    if "grade_2r" in cell:
+        eod = _float(cell.get("eod_r_mean"))
+        return " · ".join(
+            (
+                f"1:1 {badge(cell.get('grade'))}",
+                f"2R {badge(cell.get('grade_2r'))}",
+                f"EOD {eod:+.2f}R" if eod is not None else "EOD unknown",
+                f"n {int(cell.get('n') or 0)}",
+            )
+        )
     parts = [badge(cell.get("grade"))]
     n = int(cell.get("n") or 0)
     if cell.get("grade_basis") == "tape":
