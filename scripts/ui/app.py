@@ -589,6 +589,17 @@ class MainWindow(QMainWindow):
         self.bounce_status_proxy = BounceStatusProxy(self.trading_panel.bounce_panel, self)
         self.bounce_status_proxy.setVisible(False)
         status.addPermanentWidget(self.rule_chip)
+        # P8 B4: "Inputs: N trades missing stop/setup"; hidden at 0. Read on its
+        # worker, re-read (coalesced) when the journal or the Mentor changes.
+        from ui.widgets.missing_inputs_chip import MissingInputsChip
+
+        self.missing_inputs_chip = MissingInputsChip(self)
+        self.missing_inputs_chip.openTradeRequested.connect(self._open_mentor_on_missing_input)
+        mentor_card = self.trading_panel.alert_center.chart_review.mentor_card
+        mentor_card.inputsFiled.connect(self.missing_inputs_chip.request_refresh)
+        self.journal_panel.trades_tab.dataChanged.connect(self.missing_inputs_chip.request_refresh)
+        self.trade_mentor_service.promptDue.connect(self.missing_inputs_chip.request_refresh)
+        status.addPermanentWidget(self.missing_inputs_chip)
         status.addPermanentWidget(self.setup_status)
         self.market_regime_status = QLabel("Auto regime: n/a")
         status.addPermanentWidget(self.market_regime_status)
@@ -1394,6 +1405,8 @@ class MainWindow(QMainWindow):
             self._start_tag_review_badge()
             # Day Recap coach: today's rule, read on its own worker.
             self.rule_chip.start()
+            # P8 B4: the missing-inputs chip's first read, same seam.
+            self.missing_inputs_chip.refresh()
         # ST6.3 trigger (a): once, after the window is actually on screen - for
         # the same reason the badge waits. The build opens three stores on a
         # worker, and a thread started during construction runs while a test is
@@ -2088,6 +2101,17 @@ class MainWindow(QMainWindow):
             self._journal_importer = service
         return service
 
+    def _open_mentor_on_missing_input(self, question) -> None:
+        """The Inputs chip's click: the Mentor on the oldest trade missing a stop or setup."""
+        try:
+            from journal_store import JournalStore
+
+            self.trading_panel.alert_center.chart_review.open_mentor_on_trade(
+                question, store=JournalStore()
+            )
+        except Exception:  # noqa: BLE001 - a chip click never costs the desk
+            logging.debug("Mentor could not open on a missing-inputs trade.", exc_info=True)
+
     def _pause_trade_mentor(self) -> None:
         self.trade_mentor_service.pause_today()
         self.trading_panel.alert_center.chart_review.hide_mentor_card()
@@ -2128,6 +2152,10 @@ class MainWindow(QMainWindow):
                 chip.shutdown()
         except Exception as swallowed_exc:  # noqa: BLE001 - shutdown must not raise
             note_swallowed("rule chip shutdown failed", swallowed_exc)
+        try:
+            self.missing_inputs_chip.shutdown()
+        except Exception as swallowed_exc:  # noqa: BLE001 - shutdown must not raise
+            note_swallowed("missing-inputs chip shutdown failed", swallowed_exc)
         self._join_rule_size_baseline()
         for panel in (
             self.trading_panel,
