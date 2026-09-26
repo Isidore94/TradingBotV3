@@ -38,6 +38,7 @@ from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton, QVBox
 
 import evidence_stats
 from ai_jobs import improvement_ideas
+from slot_output_reads import note_slot_output_read
 from ui import theme
 from ui.read_worker import ReadWorker, join_worker
 
@@ -328,6 +329,8 @@ class IdeasCard(QWidget):
         self._set_enabled(not self._writing)
         self.empty_note.setVisible(not self.rows)
         self._refresh_summary()
+        if self.rows:
+            note_slot_output_read("improvement_ideas")
 
     # -- what the card says ------------------------------------------------
     def summary_text(self) -> str:

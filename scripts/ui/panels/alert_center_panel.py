@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import threading
 import time
 from collections import OrderedDict, defaultdict
@@ -83,8 +82,6 @@ from chart_watch import (
 )
 from intraday_history import (
     H1_MINUTES as H1_INTERVAL_MINUTES,
-    bucket_end as _intraday_bucket_end,
-    last_completed_bucket as _intraday_last_bucket,
 )
 import focus_adoption_gate
 import alert_show_filter
@@ -136,12 +133,10 @@ from ui.models.bounce import (
     SYMBOL_RE,
     is_auto_pick_alert,
     is_chart_watch_alert,
-    is_entry_assist_text,
     is_regime_pause_alert,
     REGIME_PAUSE_TRIGGER_PREFIX,
 )
 from ui.widgets.alert_chart_review import AlertChartReview
-from ui.widgets.alert_feed_item import AlertFeedItem
 from ui.widgets.armed_watch_list import ArmedWatchList
 from ui.widgets.entry_assist_board import EntryAssistBoard
 from ui.widgets.focus_strength_board import FocusStrengthBoard
@@ -152,6 +147,32 @@ from ui.widgets.strength_page import StrengthPage
 from ui.widgets.tab_drawer import TabDrawer
 from ui.widgets.setup_detail_view import SetupDetailView
 from swallowed import note_swallowed
+from ui.panels.alert_center.items import _ClickableItem
+from ui.panels.alert_center.strength_board import StrengthBoardAdoptionMixin
+from ui.panels.alert_center.gates import (  # noqa: F401 - re-exported for callers and tests
+    _D1_DEVELOPING_PREFIXES,
+    _D1_PUSH_LABELS,
+    _D1_READY_PREFIXES,
+    _PROVEN_RE,
+    _TIER_RANK,
+    _TIER_RE,
+    _bar_close,
+    _d1_alert_prefix,
+    _is_feed_noise_alert,
+    alert_is_loud,
+    alert_passes_feed_gate,
+    alert_passes_min_tier,
+    alert_should_sound,
+    d1_push_event,
+    extract_alert_tier,
+    favorite_category_for_alert,
+    favorite_origin_for_alert,
+    intraday_last_bucket_end,
+    is_developing_d1_alert,
+    is_entry_assist_alert,
+    is_proven_alert,
+    is_ready_d1_alert,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - annotation only, never imported at runtime
     # `attach_strength_board` imports the real class inside the method, so the
@@ -171,31 +192,13 @@ M5_BAR_DICT_CACHE_LIMIT = 240
 #: "Not passed": `arm_d1_event_watch` reads the trendline report itself.
 _UNREAD = object()
 
-_TIER_RE = re.compile(r"\[([SABCD])-TIER\]", re.IGNORECASE)
-
 MIN_TIER_CHOICES = (
     ("All alerts", "all"),
     ("B tier and above", "B"),
     ("A tier and above", "A"),
     ("S tier / PROVEN only", "S"),
 )
-_TIER_RANK = {"S": 4, "A": 3, "B": 2, "C": 1, "D": 0}
 MAX_FEED_ITEMS = 250
-
-
-def intraday_last_bucket_end(moment: datetime, interval_minutes: int):
-    """When this timeframe's most recent COMPLETED bucket finished, or None.
-
-    The armed poll's "is there anything new to judge?" question, asked once
-    per interval per tick rather than once per watch: a completed bar is the
-    only thing that can change a pullback verdict, and resolving the session
-    window is the expensive part (PCT-1 review blocker 3b). Pure bucket math
-    on the desk's market-local clock, so a stubbed cache cannot change it.
-    """
-    bucket = _intraday_last_bucket(moment, interval_minutes)
-    if bucket is None:
-        return None
-    return _intraday_bucket_end(bucket, interval_minutes)
 MAX_D1_FEED_ITEMS = 100
 
 ALERT_SPLIT_KEY = "qt_alert_center_split_sizes_v2"
@@ -231,253 +234,6 @@ FLIP_REVERIFY_MAX_ATTEMPTS = 5
 #: one 30-second tick with the coalesced redraws and room to spare.
 AUTO_ADOPT_BATCH_LIMIT = 10
 
-# D1 focus alerts that mark a stock TURNING INTO a favorite / high-conviction
-# name: the scan confirmed a genuine bucket upgrade. An armed-level crossing
-# is still only developing evidence and stays out of both actionable feeds. A
-# final Favorite / High Conviction bucket result belongs in the D1 Focus feed
-# (user rule 2026-07-09: "only things that turn a stock into a favourite or
-# high conviction bucket stock"). Generic champion D1 flags retain their live
-# routing under the normal tier gate.
-_D1_READY_PREFIXES = {
-    # The D1 Focus feed is the M5 band-zone rubric: a scanned name bouncing off
-    # AVWAPE / 1st-dev / 15-21EMA or breaking the next band, confirmed on two
-    # completed bars. A fresh Favorite / High Conviction bucket upgrade still
-    # surfaces here too.
-    "MASTER_AVWAP_D1_ZONE",
-    "MASTER_AVWAP_D1_BUCKET_UPGRADE",
-    # Pre-armed tier flip: a non-S/A name closed through the A/S upgrade-target
-    # level the scan armed one small move away - the headline D1 Focus event
-    # (few per day, rvol/context gated, predicted pending next-scan confirm).
-    "MASTER_AVWAP_D1_TIER_FLIP",
-}
-_D1_DEVELOPING_PREFIXES = {
-    "MASTER_AVWAP_D1_RESEARCH",
-    # Compatibility with messages already queued by an older bot process.
-    "MASTER_AVWAP_D1_UPGRADE_TRIGGER",
-    "MASTER_AVWAP_D1_UPGRADE_WATCH",
-}
-
-
-def _bar_close(bar: object) -> float | None:
-    try:
-        return float(bar["close"])  # type: ignore[index]
-    except (KeyError, TypeError, ValueError):
-        return None
-
-
-def _d1_alert_prefix(alert: BounceAlert) -> str:
-    return str(alert.raw_text or "").split(":", 1)[0].strip().upper()
-
-
-def is_developing_d1_alert(alert: BounceAlert) -> bool:
-    return _d1_alert_prefix(alert) in _D1_DEVELOPING_PREFIXES
-
-
-def _is_feed_noise_alert(alert: BounceAlert) -> bool:
-    if is_developing_d1_alert(alert):
-        return True
-    text = f"{alert.raw_text} {alert.trigger}".strip().lower()
-    return not alert.is_d1 and alert.side == "WATCH" and "candle has closed" in text
-
-
-def is_ready_d1_alert(alert: BounceAlert) -> bool:
-    return _d1_alert_prefix(alert) in _D1_READY_PREFIXES
-
-
-# Short labels for the scanner's own D1 focus alerts, so the hourly phone push
-# reads "NVDA bucket upgrade" rather than a 200-character raw alert line.
-_D1_PUSH_LABELS = {
-    "MASTER_AVWAP_D1_ZONE": "D1 zone",
-    "MASTER_AVWAP_D1_BUCKET_UPGRADE": "bucket upgrade",
-    "MASTER_AVWAP_D1_TIER_FLIP": "tier flip",
-}
-
-
-def d1_push_event(alert: BounceAlert) -> dict[str, str] | None:
-    """What the hourly D1 phone push should carry for this alert, if anything.
-
-    One classifier, here rather than in the Auto Pilot service, because this
-    module already owns which D1 alerts are actionable and which are developing
-    research. The phone therefore names exactly the events the D1 Focus feed
-    shows, and the two can never drift apart.
-    """
-    symbol = str(getattr(alert, "symbol", "") or "").strip().upper()
-    if not symbol:
-        return None
-    kind = ""
-    payload = getattr(alert, "payload", None)
-    if isinstance(payload, dict):
-        kind = str(payload.get("chart_watch_kind") or payload.get("focus_d1_kind") or "")
-    label = ""
-    if kind:
-        # Armed D1 levels and D1 event watches: the trader asked for exactly
-        # this condition, so it belongs on the phone by definition.
-        label = D1_LEVEL_KINDS.get(kind) or D1_EVENT_KINDS.get(kind) or ""
-        if not label:
-            return None
-    elif getattr(alert, "is_d1", False) and is_ready_d1_alert(alert):
-        label = _D1_PUSH_LABELS.get(_d1_alert_prefix(alert), "D1 event")
-    else:
-        return None
-    return {
-        "symbol": symbol,
-        "label": label,
-        "time_text": str(getattr(alert, "time_text", "") or ""),
-    }
-
-
-def extract_alert_tier(alert: BounceAlert) -> str:
-    match = _TIER_RE.search(str(alert.raw_text or ""))
-    return match.group(1).upper() if match else ""
-
-
-# "BANGER" was retired 2026-09-01 (trader: "We can probably remove this because
-# idk what it is"). It was only ever a literal token match against alert text,
-# and nothing in the tree ever emitted the token: 0 of 8,818 recorded review
-# rows carried banger=True. PROVEN is the top alert class and is untouched.
-
-
-# Learning-loop PROVEN stamp: this exact bounce configuration (type/combo/
-# swing trait/family/focus) has a measured winning record (n>=12, avg>=+0.45R,
-# median>=0). These are the "see it live, take it" alerts.
-_PROVEN_RE = re.compile(r"\bPROVEN\b")
-
-
-def is_proven_alert(alert: BounceAlert) -> bool:
-    return bool(_PROVEN_RE.search(str(alert.raw_text or "")))
-
-
-def is_entry_assist_alert(alert: BounceAlert) -> bool:
-    return str(alert.tag or "") == "entry_assist" or is_entry_assist_text(alert.raw_text)
-
-
-def alert_passes_min_tier(alert: BounceAlert, mode: str) -> bool:
-    """Filter policy for the live feed (D1 alerts route to their own feed).
-
-    PROVEN alerts always pass (they are the sit-back-and-wait trades), and so
-    does entry-assist output — the trader clicked a button asking for it, so it
-    must never be swallowed by the tier gate. Chart-watch hits pass for the
-    same reason: the trader armed that exact condition from the M5 chart.
-    Untiered alerts (regime notes, pause-watch summaries) pass everything
-    except the S-only mode, where only PROVEN/S-tier remain.
-    """
-    if mode in ("", "all"):
-        return True
-    if (
-        is_proven_alert(alert)
-        or is_entry_assist_alert(alert)
-        or is_chart_watch_alert(alert)
-    ):
-        return True
-    tier = extract_alert_tier(alert)
-    if not tier:
-        return mode != "S"
-    return _TIER_RANK.get(tier, 0) >= _TIER_RANK.get(mode, 0)
-
-
-def alert_is_loud(alert: BounceAlert) -> bool:
-    """Alerts worth a sound: proven configs, S/A tiers, ready D1, and
-    chart-watch hits (the trader armed the exact condition and is
-    waiting on it)."""
-    return (
-        is_proven_alert(alert)
-        or is_ready_d1_alert(alert)
-        or is_chart_watch_alert(alert)
-        or extract_alert_tier(alert) in {"S", "A"}
-    )
-
-
-def alert_passes_feed_gate(alert: BounceAlert, mode: str, *, is_focus: bool = False) -> bool:
-    """Liked (focus) picks always surface; everything else obeys the tier gate."""
-    return is_focus or alert_passes_min_tier(alert, mode)
-
-
-def alert_should_sound(alert: BounceAlert, *, is_focus: bool = False) -> bool:
-    """Liked (focus) picks always sound; everything else needs to be loud."""
-    return is_focus or alert_is_loud(alert)
-
-
-def favorite_category_for_alert(alert: BounceAlert) -> str:
-    """Where the ★ files a pick: D1/H1 alerts are swing material, the rest M5.
-
-    Matches the trader's split: longs/shorts.txt alerts are M5 day-trade
-    based, while bot-generated D1/H1 output is multi-day swing evidence.
-    """
-    if alert.is_d1 or str(alert.timeframe or "").strip().lower() in {"d1", "h1", "1h"}:
-        return "swing"
-    return "m5"
-
-
-def favorite_origin_for_alert(alert: BounceAlert) -> str:
-    """Which alert flavor a verdict came from - logged so the tracker can grade
-    H1-sourced picks separately from D1-sourced ones (and M5 likewise)."""
-    if alert.is_d1:
-        return "d1"
-    if str(alert.timeframe or "").strip().lower() in {"h1", "1h"}:
-        return "h1"
-    return "m5"
-
-
-class _ClickableItem(QFrame):
-    clicked = Signal(object)
-    favoriteToggled = Signal(object)  # alert
-    dislikeRequested = Signal(object)  # alert
-    symbolClicked = Signal(object)  # alert - ticker name click -> chart snapshot
-
-    def __init__(
-        self,
-        alert: BounceAlert,
-        *,
-        focus_category: str = "",
-        show_favorite_button: bool = False,
-        favorite_hint: str = "",
-        parent=None,
-    ) -> None:
-        super().__init__(parent)
-        self.alert = alert
-        feed_item = AlertFeedItem(
-            alert,
-            focus_category=focus_category,
-            show_favorite_button=show_favorite_button,
-            favorite_hint=favorite_hint,
-        )
-        feed_item.favoriteToggled.connect(lambda: self.favoriteToggled.emit(self.alert))
-        feed_item.dislikeRequested.connect(lambda: self.dislikeRequested.emit(self.alert))
-        feed_item.symbolClicked.connect(lambda: self.symbolClicked.emit(self.alert))
-        self.feed_item = feed_item
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(feed_item)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-    def set_repeat_count(
-        self,
-        count: int,
-        *,
-        latest_trigger: str = "",
-        latest_alert: BounceAlert | None = None,
-    ) -> None:
-        """Forward R4 section 6.3's fold to the row this wrapper contains.
-
-        This class wraps an ``AlertFeedItem`` rather than subclassing it, so
-        the repeat badge has to be forwarded explicitly - the feed only ever
-        holds wrappers, so without this the fold silently fails over to a new
-        row and the whole control does nothing.
-        """
-        self.feed_item.set_repeat_count(
-            count,
-            latest_trigger=latest_trigger,
-            latest_alert=latest_alert,
-        )
-
-    @property
-    def repeat_badge(self):
-        return self.feed_item.repeat_badge
-
-    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        self.clicked.emit(self.alert)
-        super().mousePressEvent(event)
-
 
 #: R4 A10: `held_run_score`'s segment index and the D1 setups by session, built
 #: once per process PER TRADING DAY. `None` means "not built yet"; a dict - even
@@ -502,7 +258,7 @@ _HELD_RUN_INDEX_MEMO: dict | None = None
 _CLAIM_KEYS_UNREAD = object()
 
 
-class AlertCenterPanel(QFrame):
+class AlertCenterPanel(StrengthBoardAdoptionMixin, QFrame):
     """The sit-back-and-wait surface, split into two stacked feeds.
 
     Top: the live intraday stream (bounce alerts, RW/RS movers, regime
@@ -585,6 +341,12 @@ class AlertCenterPanel(QFrame):
         # review rows are deferred to the queue's worker and use the click's context.
         self._arm_queue_obj = None
         self._force_async_arms = False
+        # B6: one hidden_by_show row per (day, symbol, side); the write and the
+        # store read of today's keys run on one evidence worker, never here.
+        self._show_hidden_seen: set[tuple[str, str, str]] = set()
+        self._show_hidden_executor = None
+        self._show_hidden_last = None
+        self._show_hidden_store_keys: dict[str, set[tuple[str, str]]] = {}
         self._deferred_review_events: list | None = None
         self._arm_review_override: tuple | None = None
         self._alerts: list[BounceAlert] = []
@@ -1568,6 +1330,7 @@ class AlertCenterPanel(QFrame):
                 self._enqueue_review_alert(alert)
             if self.show_filter_hides(alert):
                 # P9: posted to the M5 bar's backing list above; no row, no sound.
+                self._record_show_hidden(alert)
                 self._emit_feed_status()
                 return
             decision = self._repetition_decision(alert, is_focus=is_focus)
@@ -2033,6 +1796,70 @@ class AlertCenterPanel(QFrame):
 
     def show_filter_hides(self, alert: BounceAlert) -> bool:
         return self.show_filter_verdict(alert)[0]
+
+    def _record_show_hidden(self, alert: BounceAlert) -> None:
+        """B6: the first hide per (day, symbol, side) queues one `hidden_by_show` row.
+
+        The Qt thread only checks an in-memory set; the store read and the append
+        run on the evidence worker. Best-effort: a failure loses the row, never the alert.
+        """
+        path = self._review_events_path
+        if path is None:
+            return
+        symbol = str(alert.symbol or "").strip().upper()
+        side = str(alert.side or "").strip().upper()
+        key = (self._ignored_market_date or date.today().isoformat(), symbol, side)
+        if key in self._show_hidden_seen:
+            return
+        self._show_hidden_seen.add(key)
+        try:
+            grade = self.show_filter_grade(alert)
+        except Exception:  # noqa: BLE001 - evidence never costs the alert
+            grade = None
+        detail = {"grade": grade or "", "show_mode": self.show_filter_mode()}
+        try:
+            if self._show_hidden_executor is None:
+                from concurrent.futures import ThreadPoolExecutor
+
+                self._show_hidden_executor = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="show-hidden-evidence"
+                )
+            self._show_hidden_last = self._show_hidden_executor.submit(
+                self._write_show_hidden, alert, symbol, side, detail, path
+            )
+        except Exception as exc:  # noqa: BLE001
+            note_swallowed("hidden_by_show evidence not queued", exc, quiet=True)
+
+    def _write_show_hidden(self, alert, symbol: str, side: str, detail: dict, path) -> None:
+        """Evidence worker: skip a key already in today's store, else append the row."""
+        try:
+            import review_events
+
+            day = review_events._trade_date_text()
+            keys = self._show_hidden_store_keys.get(day)
+            if keys is None:
+                keys = {
+                    (str(row.get("symbol") or "").upper(), str(row.get("side") or "").upper())
+                    for row in review_events.load_review_events(path)
+                    if row.get("action") == "hidden_by_show"
+                    and str(row.get("trade_date") or "") == day
+                }
+                self._show_hidden_store_keys = {day: keys}
+            if (symbol, side) in keys:
+                return
+            keys.add((symbol, side))
+            record_review_event("hidden_by_show", alert=alert, detail=detail, path=path)
+        except Exception as exc:  # noqa: BLE001 - a failed evidence write loses the event
+            note_swallowed("hidden_by_show review event write failed", exc, quiet=True)
+
+    def flush_show_hidden_writes(self, timeout: float = 10.0) -> None:
+        """Wait for queued hidden_by_show writes (tests, shutdown)."""
+        last = self._show_hidden_last
+        if last is not None:
+            try:
+                last.result(timeout=timeout)
+            except Exception as exc:  # noqa: BLE001
+                note_swallowed("hidden_by_show flush failed", exc, quiet=True)
 
     def show_filter_hidden_counts(self) -> tuple[int, int]:
         """`(rows, new)` the Show filter holds back from the feed, one per name+side."""
@@ -6428,6 +6255,10 @@ class AlertCenterPanel(QFrame):
 
     def shutdown(self) -> None:
         """Drain queued arms (bounded); anything not armed is logged loudly."""
+        executor = self._show_hidden_executor
+        if executor is not None:
+            self.flush_show_hidden_writes(timeout=2.0)
+            executor.shutdown(wait=False)
         queue = self._arm_queue_obj
         if queue is None:
             return
@@ -9613,475 +9444,6 @@ class AlertCenterPanel(QFrame):
             QApplication.beep()
         self.movers_board.show_status(line)
         self.statusChanged.emit(line)
-
-    def attach_strength_board(self, service, focus_service=None) -> None:
-        """Host the M5 Strength Board at the foot of the Strength page.
-
-        `MainWindow` builds and owns the one `StrengthBoardService`; this
-        panel is given it. Called once at startup - a second call would add a
-        second board to the page, but nothing does.
-
-        Deliberately NOT here: any refresh, timer, thread or fetch. The
-        service's single-flight owner and its 15-minute clock are unchanged by
-        the move, and the board is still batched yfinance over
-        `universe_all.txt` with **zero IB traffic**. The only thing this panel
-        adds is a parent and the chart route for a row click - the same route
-        every other board on this panel takes.
-        """
-        from ui.panels.strength_board_panel import StrengthBoardPanel
-
-        adopting_service = (
-            self.focus_service if focus_service is None else focus_service
-        )
-        board = StrengthBoardPanel(service=service, focus_service=adopting_service)
-        board.symbolActivated.connect(self._chart_strength_board_symbol)
-        self.strength_board = board
-        # T1.4 (trader, 2026-09-04): *"I want all shorts and longs on the RS/RW
-        # board TC2000 to bne auto added to the M5 focus picks."* The refresh
-        # signal, then once for the board already in hand - a desk that starts
-        # mid-session must not wait fifteen minutes for its first placement.
-        self._strength_focus_service = adopting_service
-        try:
-            service.boardChanged.connect(self._auto_adopt_strength_board)
-        except Exception:
-            logging.warning(
-                "Strength board auto-Focus could not be connected.", exc_info=True
-            )
-        else:
-            try:
-                self._auto_adopt_strength_board(service.board())
-            except Exception:
-                logging.warning(
-                    "Strength board auto-Focus failed on the attached board.",
-                    exc_info=True,
-                )
-
-        # The alert column's floor is 360 px and the tab stack already claims
-        # 170 of it. The board asks for 270 (two side tables, each with a
-        # heading row and an "Add all" button), and a widget's minimum reaches
-        # the splitter, so hosting it bare would raise the floor the charts
-        # are sized against - the one thing this move must not do. The page
-        # is a scroll area, so the board's minimum stops there: at a normal
-        # column width nothing scrolls sideways, and a trader who drags the
-        # column narrower gets a scrollbar instead of narrower charts.
-        self.strength_page.attach_strength_board(board)
-
-    #: The `symbol` on the ONE review-event row the board's auto-join writes.
-    #: `record_review_event` refuses a row with no symbol, and this event is
-    #: about the BOARD rather than about any one name - the names are in the
-    #: detail. An underscore makes it unrepresentable as a ticker under this
-    #: repo's own grammar (`ui.models.bounce.SYMBOL_RE`), so no symbol-keyed
-    #: join can ever match it, and no scanner alert had to be invented for it.
-    STRENGTH_BOARD_EVENT_SYMBOL = "M5_STRENGTH_BOARD"
-
-    #: The `Scan` column's vocabulary (packet WS-10B, WISHLIST 10B). The
-    #: trader reads the TC2000 board beside their own screen and the one
-    #: question it could not answer was "this name is on the list - why is it
-    #: not being scanned?". Every verdict here is written at the moment this
-    #: method decides, from the numbers it decided on, and rendered verbatim by
-    #: `strength_board_panel`; a refusal carries the ADOPTION GATE's own words
-    #: rather than a paraphrase, because a second wording of one rule is a
-    #: second rule.
-    ADOPTION_ADOPTED = "adopted"
-    ADOPTION_ALREADY = "already_in_focus"
-    ADOPTION_STAGED = "staged (AWAY)"
-    ADOPTION_NOT_TODAY = "not today"
-    ADOPTION_DECLINED = "declined today"
-
-    def _auto_adopt_strength_board(self, board: dict) -> None:
-        """Place the TC2000 board's parity rows on M5 Focus (packet T1.4).
-
-        Trader, 2026-09-04: *"I want all shorts and longs on the RS/RW board
-        TC2000 to bne auto added to the M5 focus picks."*
-
-        This is the MACHINE placing a name, so it is modelled on the
-        regime-pause auto-join and not on the board's own "Add" button:
-
-        * only rows with an EMPTY ``failed_floors`` are considered - those are
-          the rows the TC2000 parity list shows, and a greyed near-miss is a
-          name that missed one of the trader's own filters;
-        * the ONE adoption gate is re-run on the row's own numbers (the board
-          is up to fifteen minutes old), and UNKNOWN fails as it always does;
-        * a symbol the trader said "Not today" to this session is skipped, so
-          the next refresh cannot undo their answer - and so is a symbol they
-          took OFF a focus side today through ANY door (``store.declined_today``,
-          fix round 1). ``_ignored_symbols`` only ever holds names the "Not
-          today" verb parked; the Focus-review walkthrough, the Focus list's own
-          remove button, the cross-focus toggle and the Master AVWAP panel all
-          remove without parking, and every one of them was being undone by the
-          next fifteen-minute refresh. The record is kept in the STORE, so a
-          fifth removal door counts for free;
-        * the write goes through the STORE plus an auto-pick marker, NEVER
-          ``FocusService.add``, which would forge a trader "like" into
-          ``pick_feedback.jsonl``. An existing entry is COUNTED, never
-          re-marked: absence of a marker is what makes a pick the trader's.
-
-        It NEVER removes. A name that drops off the board stays on Focus - the
-        ten-session fade and "Not today" own removal.
-
-        **WS-10B (2026-09-12) changed two things and neither is the gate.**
-
-        1. **AWAY STAGES.** DESK adopting and AWAY doing nothing at all was
-           half the auto-mode matrix: AWAY is meant to STAGE and let the return
-           to the desk adopt. The eligible rows now go into the EXISTING
-           auto-populate queue (`autopilot_core.stage_auto_populate_candidates`,
-           one owner, one lock, one file) rather than into Focus, so
-           `_poll_auto_pick_queue`'s drain - which re-measures on the flip back
-           to DESK before it adopts anything - is still the only door an
-           unattended pick can come through. Nothing new polls: this rides
-           `boardChanged` exactly as the adoption already did. EVENING and OFF
-           still do nothing.
-        2. **EVERY ROW SAYS WHY.** The verdicts above are collected per side
-           and pushed to the board's own table, where they render as the last
-           column, `Scan`. Computed HERE, at the moment of the decision, and
-           never recomputed by the view - a display that re-ran the gate on
-           slightly older numbers would disagree with the machine about the
-           trader's own list. One INFO line per refresh carries the same
-           counts to `trading_bot.log`.
-
-        **Scanner inclusion and Focus adoption stay DISTINCT contracts.** A row
-        the gate refuses is not scanned as a consolation prize; if the trader
-        ever wants every board row in the scan set regardless, that is a
-        separate selection and a separate decision.
-
-        Cheap enough for the Qt thread by construction: a walk over the board's
-        own rows, a pure-Python gate per row, the store writes the store
-        already batches, and - only when AWAY - one JSON read/write of the
-        staging queue, the same file this panel's drain already reads on its
-        own poll. No fetch, no re-measurement, no timer.
-        """
-        if not isinstance(board, dict):
-            return
-        try:
-            mode = self._auto_mode_now()
-        except Exception:
-            return
-        rows_by_side: dict[str, list[dict]] = {
-            side: [row for row in (board.get(side) or []) if isinstance(row, dict)]
-            for side in ("long", "short")
-        }
-        total_rows = sum(len(rows) for rows in rows_by_side.values())
-        verdicts: dict[str, dict[str, str]] = {"long": {}, "short": {}}
-
-        if mode not in ("DESK", "AWAY"):
-            # EVENING and OFF do not adopt or stage from this board.
-            # The board still says so, per row: "nothing happened" was the
-            # answer this packet exists to replace.
-            for side, rows in rows_by_side.items():
-                for row in rows:
-                    symbol = str(row.get("symbol") or "").strip().upper()
-                    if symbol:
-                        verdicts[side][symbol] = f"mode {mode}"
-            self._publish_strength_board_adoption(verdicts, total_rows)
-            return
-
-        focus_service = (
-            getattr(self, "_strength_focus_service", None) or self.focus_service
-        )
-        store = getattr(focus_service, "store", None)
-        if store is None:
-            # Nothing was decided, so nothing is claimed: the column stays
-            # blank rather than reading "not adopted", which would name a
-            # refusal that never happened.
-            return
-        import focus_adoption_gate
-
-        as_of = str(board.get("as_of") or "")
-        declined_today = getattr(store, "declined_today", None)
-        wanted_by_side: dict[str, list[str]] = {"long": [], "short": []}
-        strengths: dict[tuple[str, str], object] = {}
-        refused: list[str] = []
-
-        # ------------------------------------------------------ phase 1: judge
-        # Both sides judged before anything is written, so the verdict a row
-        # carries is the verdict that decided it - not a second opinion formed
-        # after the store moved underneath it.
-        for side in ("long", "short"):
-            for row in rows_by_side[side]:
-                symbol = str(row.get("symbol") or "").strip().upper()
-                if not symbol or not SYMBOL_RE.fullmatch(symbol):
-                    continue
-                missed = [str(text) for text in (row.get("failed_floors") or ())]
-                if missed:
-                    # Greyed near-miss: it is not on the trader's TC2000 list.
-                    verdicts[side][symbol] = "not adopted: floor " + "; ".join(missed)
-                    continue
-                if symbol in self._ignored_symbols:
-                    verdicts[side][symbol] = self.ADOPTION_NOT_TODAY
-                    refused.append(f"{symbol} (you said not today)")
-                    continue
-                if callable(declined_today):
-                    try:
-                        taken_off = bool(declined_today(symbol, side, "m5"))
-                    except Exception:
-                        taken_off = False
-                    if taken_off:
-                        verdicts[side][symbol] = self.ADOPTION_DECLINED
-                        refused.append(f"{symbol} (you took it off today)")
-                        continue
-                passes, reason = focus_adoption_gate.passes_focus_adoption_gate(
-                    side,
-                    row.get("last"),
-                    row.get("prev_high"),
-                    row.get("prev_low"),
-                    row.get("session_vwap"),
-                )
-                if not passes:
-                    # Named, not counted - the same way `_add_all` names one.
-                    verdicts[side][symbol] = f"not adopted: {reason}"
-                    refused.append(f"{symbol} ({reason})")
-                    continue
-                strengths[(side, symbol)] = row.get("strength")
-                wanted_by_side[side].append(symbol)
-
-        # -------------------------------------------------------- phase 2: act
-        adopted: list[str] = []
-        staged: list[str] = []
-        side_counts = {"long": 0, "short": 0}
-        already_auto = 0
-        already_trader_owned = 0
-
-        if mode == "AWAY":
-            self._stage_strength_board_picks(
-                store, wanted_by_side, strengths, verdicts, staged
-            )
-        else:
-            for side in ("long", "short"):
-                wanted = wanted_by_side[side]
-                if not wanted:
-                    continue
-                # ONE write per side, not one per name. `add_many` rewrites the
-                # focus file, the membership file and the pick clocks once for
-                # the batch; sixty names through `add` measured 781 ms on the Qt
-                # thread and the board's row count is not bounded by anything
-                # this panel controls. The MARKER stays per name - it carries
-                # that row's own strength, and `mark_auto_adopted` is a dict
-                # write plus a save.
-                try:
-                    added = list(store.add_many(wanted, side, "m5"))
-                except Exception:
-                    logging.warning(
-                        "Strength board could not place %s on M5 Focus.",
-                        ", ".join(wanted),
-                        exc_info=True,
-                    )
-                    for symbol in wanted:
-                        verdicts[side][symbol] = "not adopted: add failed"
-                        refused.append(f"{symbol} (add failed)")
-                    continue
-                marker_writer = getattr(store, "mark_auto_adopted", None)
-                for symbol in added:
-                    if callable(marker_writer):
-                        try:
-                            marker_writer(
-                                symbol,
-                                side,
-                                "m5",
-                                staged_at=as_of,
-                                reason=(
-                                    f"M5 Strength Board (TC2000) {side} row, "
-                                    f"strength {strengths.get((side, symbol))}"
-                                ),
-                            )
-                        except Exception:
-                            # An evidence store never costs the event it
-                            # records: a lost marker reads as the trader's own
-                            # name, which is the safe direction (packet R2).
-                            logging.warning(
-                                "Strength board could not mark %s as auto-adopted.",
-                                symbol,
-                                exc_info=True,
-                            )
-                    verdicts[side][symbol] = self.ADOPTION_ADOPTED
-                    adopted.append(symbol)
-                    side_counts[side] += 1
-                # Everything asked for and not added was already there. Which
-                # KIND of "already there" is the interesting number - the
-                # regime-pause auto-join distinguishes them the same way - and
-                # it is a COUNT only: no marker is ever written over a name the
-                # trader typed.
-                reader = getattr(store, "is_auto_adopted", None)
-                for symbol in wanted:
-                    if symbol in added:
-                        continue
-                    verdicts[side][symbol] = self.ADOPTION_ALREADY
-                    ours = False
-                    if callable(reader):
-                        try:
-                            ours = bool(reader(symbol, side, "m5"))
-                        except Exception:
-                            ours = False
-                    if ours:
-                        already_auto += 1
-                    else:
-                        already_trader_owned += 1
-
-        self._publish_strength_board_adoption(verdicts, total_rows)
-        if not adopted and not staged and not refused:
-            return
-        self._record_review_event(
-            "strength_board_auto_focus",
-            symbol=self.STRENGTH_BOARD_EVENT_SYMBOL,
-            detail={
-                "mode": mode,
-                "side_counts": side_counts,
-                "adopted": adopted,
-                "staged": staged,
-                "refused": refused,
-                "already_auto": already_auto,
-                "already_trader_owned": already_trader_owned,
-                "as_of": as_of,
-            },
-        )
-        if adopted:
-            self.statusChanged.emit(
-                f"★ {side_counts['long']} long, {side_counts['short']} short "
-                "added to M5 Focus from the TC2000 board."
-            )
-        elif staged:
-            self.statusChanged.emit(
-                f"{len(staged)} TC2000 board name(s) staged for your return "
-                "(AWAY stages, it never adopts)."
-            )
-
-    def _stage_strength_board_picks(
-        self,
-        store,
-        wanted_by_side: dict[str, list[str]],
-        strengths: dict[tuple[str, str], object],
-        verdicts: dict[str, dict[str, str]],
-        staged: list[str],
-    ) -> None:
-        """AWAY: put the eligible rows in the EXISTING staging queue (WS-10B).
-
-        The trader is not at the desk, so nothing may be adopted - but a board
-        that discovers a name at 11:00 and forgets it by the time they sit down
-        is the discovery thrown away. `stage_auto_populate_candidates` is the
-        one owner of that queue: it holds the lock, it applies the per-side
-        cap, it refuses a name already on a watchlist or already decided today,
-        and the desk's own drain re-measures every queued pick on the flip back
-        before adopting it. Passing the STORE's shared paths rather than the
-        module defaults keeps a test store inside its sandbox.
-
-        `gate_bar_end` is deliberately left as the staging function writes it
-        (empty, with no profile to read one from). An empty measured-bar stamp
-        REFUSES at adoption (`pending_pick_gate_ok`), so a board pick can only
-        be adopted after the flip's re-verification has measured it against the
-        live tape - which is exactly the guarantee AWAY staging is for.
-        """
-        pending_path = getattr(self, "_auto_pick_pending_path", None)
-        wanted = [
-            (side, symbol)
-            for side in ("long", "short")
-            for symbol in wanted_by_side[side]
-        ]
-        if not wanted:
-            return
-        if pending_path is None:
-            for side, symbol in wanted:
-                verdicts[side][symbol] = "not adopted: no staging queue on this desk"
-            return
-        try:
-            from autopilot_core import (
-                load_auto_populate_pending_picks,
-                stage_auto_populate_candidates,
-            )
-
-            candidates: dict[str, list[dict]] = {"longs": [], "shorts": []}
-            for side, symbol in wanted:
-                try:
-                    score = float(strengths.get((side, symbol)))
-                except (TypeError, ValueError):
-                    score = 0.0
-                candidates[f"{side}s"].append(
-                    {
-                        "symbol": symbol,
-                        "reason": f"M5 Strength Board (TC2000) {side} row",
-                        "score": score,
-                    }
-                )
-            stage_auto_populate_candidates(
-                candidates,
-                "strength_board",
-                pending_path=pending_path,
-                longs_path=store.shared_watchlist_path("long", "m5"),
-                shorts_path=store.shared_watchlist_path("short", "m5"),
-            )
-            queued = load_auto_populate_pending_picks(pending_path)
-        except Exception:
-            logging.warning(
-                "Strength board could not stage %d TC2000 name(s) for the return "
-                "to the desk.",
-                len(wanted),
-                exc_info=True,
-            )
-            for side, symbol in wanted:
-                verdicts[side][symbol] = "not adopted: staging failed"
-            return
-        for side, symbol in wanted:
-            if symbol in (queued.get("pending", {}).get(side) or {}):
-                # Staged now, or staged by an earlier refresh - either way the
-                # name is waiting in the queue the drain reads.
-                verdicts[side][symbol] = self.ADOPTION_STAGED
-                staged.append(symbol)
-                continue
-            try:
-                on_focus = symbol in store.focus_symbols(side, "m5")
-            except Exception:
-                on_focus = False
-            verdicts[side][symbol] = (
-                self.ADOPTION_ALREADY
-                if on_focus
-                else "not adopted: the staging queue is full or this name was "
-                "already decided today"
-            )
-
-    def _publish_strength_board_adoption(
-        self, verdicts: dict[str, dict[str, str]], total_rows: int
-    ) -> None:
-        """The `Scan` column and the one log line per refresh (WS-10B items 2-3).
-
-        Presentation and evidence only: it writes no store, reaches no
-        detector, and a failure here can never cost an adoption - the decisions
-        are already made and persisted by the time this runs.
-        """
-        panel = getattr(self, "strength_board", None)
-        setter = getattr(panel, "set_adoption", None)
-        if callable(setter):
-            try:
-                setter(verdicts)
-            except Exception:
-                logging.warning(
-                    "Strength board could not show its Scan column.", exc_info=True
-                )
-        if not total_rows:
-            return
-        counts: dict[str, int] = {}
-        adopted = staged = other = 0
-        for side_map in verdicts.values():
-            for text in side_map.values():
-                if text == self.ADOPTION_ADOPTED:
-                    adopted += 1
-                    continue
-                if text == self.ADOPTION_STAGED:
-                    staged += 1
-                    continue
-                other += 1
-                reason = text[len("not adopted: "):] if text.startswith("not adopted: ") else text
-                counts[reason] = counts.get(reason, 0) + 1
-        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-        reasons = "; ".join(f"{reason} x{count}" for reason, count in ranked[:6])
-        if len(ranked) > 6:
-            reasons += "; ..."
-        logging.info(
-            "Strength board: %d rows, %d adopted, %d staged, %d not adopted "
-            "(reasons: %s)",
-            total_rows,
-            adopted,
-            staged,
-            other,
-            reasons or "none",
-        )
 
     def _show_board_symbol_snapshot(self, symbol: str, side: str = "") -> None:
         """RS/RW-board ticker click: use the same cache-only quick look."""

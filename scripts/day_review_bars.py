@@ -97,6 +97,13 @@ def decided_symbols(session: str, sources: Any) -> set[str]:
                 names.add(symbol)
     except Exception:
         _log.info("Day Review trades were unavailable while selecting session bars.", exc_info=True)
+    try:
+        # B6: the Best-right-now names, so their log can be graded from this tape.
+        import best_now_outcomes
+
+        names |= best_now_outcomes.logged_symbols(_session_text(session))
+    except Exception:
+        _log.info("The Best-right-now log was unavailable while selecting session bars.", exc_info=True)
     return names
 
 

@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 import week_coach
+from slot_output_reads import note_slot_output_read
 from ui.read_worker import ReadWorker, join_worker
 
 #: How many questions the section lists (newest first).
@@ -332,6 +333,8 @@ class WeekCoachCard(QFrame):
             self._questions_layout.addWidget(QLabel("No questions yet."))
         for question in questions:
             self._questions_layout.addWidget(self._question_widget(question))
+        if any(isinstance(q, Mapping) and q.get("answer") for q in questions):
+            note_slot_output_read("week_questions")
 
     def _question_widget(self, question: Mapping[str, Any]) -> QWidget:
         box = QFrame()

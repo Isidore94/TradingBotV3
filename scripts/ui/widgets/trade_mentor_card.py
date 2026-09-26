@@ -236,6 +236,8 @@ class TradeMentorCard(QWidget):
     skipped = Signal(dict)
     #: (str) - a line for the host's status area. Never a dialog.
     statusChanged = Signal(str)
+    #: A trade's answers or setup reached the journal (the missing-inputs chip re-reads).
+    inputsFiled = Signal()
 
     def __init__(
         self,
@@ -2478,6 +2480,7 @@ class TradeMentorCard(QWidget):
             choice.setEnabled(False)
         # The setup question is answered, so the Save gate stops waiting on it.
         self._setup_confirmed.add(str(trade_id))
+        self.inputsFiled.emit()
         fields = self._answer_inputs.get(str(trade_id), {})
         controls = fields.get("setup")
         if controls is not None:
@@ -2912,6 +2915,7 @@ class TradeMentorCard(QWidget):
             }
         for trade_id in filed:
             self._drop_trade_block(trade_id)
+        self.inputsFiled.emit()
         total = self._trade_fields_filed + saved
         self._trade_fields_filed = total
         if self._answer_inputs:
@@ -3018,6 +3022,72 @@ class TradeMentorCard(QWidget):
         slot = manual_slot(moment)
         self.show_slot(slot)
         return slot
+
+    def open_on_trade(self, question, store=None) -> str:
+        """The missing-inputs chip's click: put ONE trade on the card, on its first gap.
+
+        A card already up keeps its slot and its rows; otherwise a manual slot
+        opens it. The trade is added beside any rows already there (never
+        replacing them) and filed like every other row when the card is left.
+        Returns the field the card is positioned on, or "".
+        """
+        import trade_mentor_trade_check as check
+
+        if self._slot is None:
+            self.give_a_read()
+        if store is not None and self._trade_store is None:
+            self._trade_store = store
+        if not self._trade_check_session:
+            self._trade_check_session = str(getattr(self._slot, "session", "") or "")
+        key = str(question.trade_id)
+        if key not in self._trade_blocks:
+            had_rows = bool(self._answer_inputs)
+            task = check.TradeCheckTask(
+                reviewed_session=str(getattr(question, "trade_date", "") or ""),
+                journal_ready=True,
+                trades=(question,),
+            )
+            self._add_trade_block(question, task)
+            if not had_rows:
+                self.trade_check_label.setText(
+                    "Missing inputs - the oldest recent trade without a stop or a "
+                    "confirmed setup. Answer what you remember and press its Save."
+                )
+            self.trade_check_label.setVisible(True)
+            self.trade_check_box.setVisible(True)
+            self.save_answers_button.setVisible(True)
+            self._refresh_save_gate()
+        self.setVisible(True)
+        return self._position_on_first_gap(key)
+
+    def _position_on_first_gap(self, trade_id: str) -> str:
+        """Focus the trade's first missing question, in the card's asking order."""
+        question = self._trade_questions.get(str(trade_id))
+        target, field_name = None, ""
+        for name in tuple(getattr(question, "missing", ()) or ()):
+            if name == "setup" and str(trade_id) in self._setup_choice_boxes:
+                target = self._setup_choice_boxes[str(trade_id)]
+            else:
+                controls = self._answer_inputs.get(str(trade_id), {}).get(name)
+                target = controls[1] if controls is not None else None
+            if target is not None:
+                field_name = name
+                break
+        if target is None:
+            target = self._trade_blocks.get(str(trade_id))
+        self._positioned_on = (str(trade_id), field_name, target)
+        if target is not None:
+            target.setFocus()
+        return field_name
+
+    def positioned_on(self) -> tuple[str, str]:
+        """(trade id, field) the last :meth:`open_on_trade` focused."""
+        held = getattr(self, "_positioned_on", None) or ("", "", None)
+        return held[0], held[1]
+
+    def positioned_widget(self):
+        held = getattr(self, "_positioned_on", None) or ("", "", None)
+        return held[2]
 
     def hide_card(self) -> None:
         self._stash_draft()

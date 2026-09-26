@@ -218,14 +218,14 @@ def _with_tracker_write_line(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _with_ai_night_lines(payload: dict[str, Any]) -> dict[str, Any]:
-    """Add the night AI chain lines (Ollama probe, budget, journal import); audit worker only."""
+    """Add the night AI lines (probe, budget, journal import, timing, broker import); audit worker only."""
     if not isinstance(payload, dict):
         return payload
     try:
-        from operations_audit import ai_night_lines
+        from operations_audit import ai_night_lines, ai_telemetry_lines
 
         merged = dict(payload)
-        merged["ai_night_lines"] = list(ai_night_lines())
+        merged["ai_night_lines"] = list(ai_night_lines()) + list(ai_telemetry_lines())
         return merged
     except Exception:
         return payload

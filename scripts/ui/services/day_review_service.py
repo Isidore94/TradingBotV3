@@ -634,13 +634,34 @@ class DayReviewService:
         except Exception:  # noqa: BLE001 - the strip never costs the day
             _log.debug("The Day Review glance could not be built.", exc_info=True)
         try:
-            payload["truth"] = self._truth(session, journal_trades, payload["trades"])
+            payload["truth"] = self._truth_with_alerts(session, journal_trades, payload["trades"])
         except Exception as exc:  # noqa: BLE001 - the truth lines never cost the day
-            payload["truth"] = {"lines": [f"The truth lines could not be built: {exc}"], "grades": {}}
+            payload["truth"] = {
+                "lines": [f"The truth lines could not be built: {exc}", self._alerts_line(session)],
+                "grades": {},
+            }
             _log.debug("The Day Review truth lines could not be built.", exc_info=True)
         if problems:
             payload["error"] = " · ".join(problems)
         return payload
+
+    @classmethod
+    def _truth_with_alerts(cls, session: str, journal_trades, day_trades) -> dict[str, Any]:
+        """The truth lines plus B6's "Alerts:" line (shown / hidden / acted on, Best-right-now)."""
+        truth = cls._truth(session, journal_trades, day_trades)
+        truth["lines"] = [*(truth.get("lines") or ()), cls._alerts_line(session)]
+        return truth
+
+    @staticmethod
+    def _alerts_line(session: str) -> str:
+        """Read on this worker; a failure says unknown and never costs the other lines."""
+        try:
+            import alert_noise_report
+
+            return alert_noise_report.build_day_line(session)
+        except Exception as exc:  # noqa: BLE001
+            _log.debug("The Day Review alerts line could not be built.", exc_info=True)
+            return f"Alerts: unknown ({exc})"
 
     @staticmethod
     def _truth(session: str, journal_trades, day_trades) -> dict[str, Any]:

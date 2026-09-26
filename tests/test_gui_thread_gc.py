@@ -162,3 +162,134 @@ def test_a_deadline_of_zero_means_never_defer():
     finally:
         timer.stop()
         gc.enable()
+
+
+# -- freezing the survivors of each full sweep ----------------------------
+
+
+def _freeze_harness(**kwargs):
+    """(timer, clock, calls): every collect/freeze/unfreeze recorded in order."""
+    from ui.app import UiActivityMonitor, install_gui_thread_gc
+
+    calls: list = []
+    clock = [100.0]
+    activity = UiActivityMonitor(_app, clock=lambda: clock[0])
+    timer = install_gui_thread_gc(
+        _app,
+        interval_ms=50,
+        activity_monitor=activity,
+        collector=lambda generation=2: calls.append(("collect", generation)),
+        freezer=lambda: calls.append(("freeze", None)),
+        unfreezer=lambda: calls.append(("unfreeze", None)),
+        **kwargs,
+    )
+    return timer, clock, calls
+
+
+def test_every_full_sweep_freezes_its_survivors_and_young_sweeps_do_not():
+    timer, clock, calls = _freeze_harness(full_every_ticks=3)
+    try:
+        for _ in range(6):
+            clock[0] += 5.0
+            timer.timeout.emit()
+        assert calls == [
+            ("collect", 0),
+            ("collect", 0),
+            ("collect", 2),
+            ("freeze", None),
+            ("collect", 0),
+            ("collect", 0),
+            ("collect", 2),
+            ("freeze", None),
+        ]
+    finally:
+        timer.stop()
+        gc.enable()
+
+
+def test_every_nth_full_sweep_unfreezes_first_then_freezes_again():
+    timer, clock, calls = _freeze_harness(full_every_ticks=1, unfreeze_every_full_sweeps=3)
+    try:
+        for _ in range(6):
+            clock[0] += 5.0
+            timer.timeout.emit()
+        full = [name for name, _ in calls]
+        assert full == [
+            "collect", "freeze",
+            "collect", "freeze",
+            "unfreeze", "collect", "freeze",
+            "collect", "freeze",
+            "collect", "freeze",
+            "unfreeze", "collect", "freeze",
+        ]
+        assert all(gen == 2 for name, gen in calls if name == "collect")
+    finally:
+        timer.stop()
+        gc.enable()
+
+
+def test_production_defaults_freeze_with_the_real_gc_and_release_every_30th():
+    from ui.app import UiActivityMonitor, _GuiGcController
+
+    controller = _GuiGcController(UiActivityMonitor(_app))
+    assert controller.freezer is gc.freeze
+    assert controller.unfreezer is gc.unfreeze
+    assert controller.unfreeze_every_full_sweeps == 30
+
+
+def test_a_fake_collector_never_freezes_the_real_heap():
+    """A test passing only a fake collector must not freeze pytest's heap."""
+    before = gc.get_freeze_count()
+    timer, activity, clock, swept = _harness(full_every_ticks=1)
+    try:
+        clock[0] += 5.0
+        timer.timeout.emit()
+        assert swept == [2]
+        assert gc.get_freeze_count() == before
+    finally:
+        timer.stop()
+        gc.enable()
+
+
+class _Node:
+    def __init__(self):
+        self.other = None
+
+
+def test_real_gc_frozen_survivors_are_skipped_until_the_release_sweep():
+    """After sweep+freeze the freeze count grows and a later full sweep does not
+    walk the frozen objects: a cycle that became garbage while frozen survives
+    ordinary full sweeps and is reclaimed only by the unfreeze sweep."""
+    import weakref
+
+    from ui.app import UiActivityMonitor, _GuiGcController
+
+    clock = [100.0]
+    activity = UiActivityMonitor(_app, clock=lambda: clock[0])
+    controller = _GuiGcController(
+        activity, full_every_ticks=1, unfreeze_every_full_sweeps=3, full_idle_ms=0.0
+    )
+    was_enabled = gc.isenabled()
+    gc.disable()
+    gc.unfreeze()
+    try:
+        a, b = _Node(), _Node()
+        a.other, b.other = b, a
+        probe = weakref.ref(a)
+
+        before = gc.get_freeze_count()
+        clock[0] += 5.0
+        controller.sweep()  # full sweep 1: collect, freeze
+        assert gc.get_freeze_count() > before
+
+        del a, b  # the cycle is garbage now, but frozen
+        controller.sweep()  # full sweep 2: frozen objects not walked
+        assert probe() is not None, "a full sweep walked the frozen heap"
+
+        controller.sweep()  # full sweep 3: unfreeze, collect, freeze
+        assert probe() is None, "the release sweep did not reclaim frozen garbage"
+        assert gc.get_freeze_count() > 0
+    finally:
+        gc.unfreeze()
+        if was_enabled:
+            gc.enable()

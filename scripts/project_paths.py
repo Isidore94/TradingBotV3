@@ -148,10 +148,14 @@ LOCAL_SETTINGS_DIR = _default_local_settings_dir()
 LOCAL_SETTINGS_FILE = LOCAL_SETTINGS_DIR / "local_settings.json"
 
 
-#: (mtime_ns, size, payload) for the settings file as last read. Keyed on the
-#: file's own stamp rather than a timeout, so an edit is picked up on the very
-#: next call and an unchanged file is never parsed twice.
-_local_settings_cache: tuple[int, int, dict] | None = None
+#: (path, mtime_ns, size, payload, monotonic time of last stat) for the settings
+#: file as last read. Parsed again only when the stamp moves; stat'ed at most
+#: once per ``LOCAL_SETTINGS_RESTAT_SECONDS``.
+_local_settings_cache: tuple[str, int, int, dict, float] | None = None
+LOCAL_SETTINGS_RESTAT_SECONDS = 1.0
+_local_settings_clock = time.monotonic
+#: Bumped by every invalidation, so an in-flight read cannot re-cache stale data.
+_local_settings_generation = 0
 _local_settings_lock = threading.Lock()
 #: Serialises in-process read-modify-write of the settings file (P2-11d).
 _local_settings_write_lock = threading.Lock()
@@ -170,10 +174,25 @@ def _load_local_settings() -> dict:
     ``save_local_setting`` mutate what they get back, and handing out the cache
     itself would let one caller's edit appear in every later read without ever
     reaching disk.
+
+    The file is stat'ed at most once per ``LOCAL_SETTINGS_RESTAT_SECONDS``; writes
+    in this process invalidate at once, another process's edit shows within 1 s.
     """
     global _local_settings_cache
+    path = LOCAL_SETTINGS_FILE
+    key = str(path)
+    now = float(_local_settings_clock())
+    with _local_settings_lock:
+        generation = _local_settings_generation
+        cached = _local_settings_cache
+        if (
+            cached is not None
+            and cached[0] == key
+            and 0.0 <= now - cached[4] < LOCAL_SETTINGS_RESTAT_SECONDS
+        ):
+            return dict(cached[3])
     try:
-        stat = LOCAL_SETTINGS_FILE.stat()
+        stat = path.stat()
         stamp = (stat.st_mtime_ns, stat.st_size)
     except OSError:
         with _local_settings_lock:
@@ -181,17 +200,33 @@ def _load_local_settings() -> dict:
         return {}
     with _local_settings_lock:
         cached = _local_settings_cache
-        if cached is not None and (cached[0], cached[1]) == stamp:
-            return dict(cached[2])
+        if cached is not None and cached[0] == key and (cached[1], cached[2]) == stamp:
+            _local_settings_cache = (key, stamp[0], stamp[1], cached[3], now)
+            return dict(cached[3])
     try:
-        payload = json.loads(LOCAL_SETTINGS_FILE.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
     if not isinstance(payload, dict):
         return {}
     with _local_settings_lock:
-        _local_settings_cache = (stamp[0], stamp[1], dict(payload))
+        # A write that invalidated while this read was in flight wins: never
+        # cache what may be the pre-write file.
+        if _local_settings_generation == generation:
+            _local_settings_cache = (key, stamp[0], stamp[1], dict(payload), now)
     return payload
+
+
+def _load_local_settings_from_disk() -> dict:
+    """The settings as they are ON DISK right now, for every read-modify-write.
+
+    The 1 s re-stat window is fine for reads, but a writer that builds on a
+    cached copy can overwrite a key another process saved inside that second
+    (the single-use Questrade token is exactly such a key). Writers call this
+    under ``_local_settings_write_lock``.
+    """
+    invalidate_local_settings_cache()
+    return _load_local_settings()
 
 
 def invalidate_local_settings_cache() -> None:
@@ -200,9 +235,10 @@ def invalidate_local_settings_cache() -> None:
     A same-millisecond write can land on an unchanged mtime on some filesystems,
     so writers say so explicitly rather than trusting the stamp to move.
     """
-    global _local_settings_cache
+    global _local_settings_cache, _local_settings_generation
     with _local_settings_lock:
         _local_settings_cache = None
+        _local_settings_generation += 1
 
 
 def _resolve_persistent_data_dir() -> tuple[Path, str]:
@@ -326,6 +362,8 @@ def get_diagnostics_dir() -> Path:
 # Kept on local disk rather than the shared store: caches are replaceable and
 # would only bloat the operational folder and the hourly cold push to the DAS.
 LOCAL_LOG_DIR = LOCAL_SETTINGS_DIR / "logs"
+#: When the trader last saw each night slot's output on screen (`slot_output_reads`).
+SLOT_OUTPUT_READS_FILE = LOCAL_SETTINGS_DIR / "slot_output_reads.json"
 RUNTIME_DATA_DIR = DATA_DIR / "runtime"
 REPORTS_DIR = OUTPUT_DIR / "reports"
 AI_SUMMARY_EXPORT_DIR = REPORTS_DIR / "ai_summaries"
@@ -499,6 +537,9 @@ MOVERS_DIP_OUTCOMES_FILE = PERSISTENT_DATA_DIR / "movers_dip_outcomes.jsonl"
 # Movers board Pop outcome log (P8 P7, 2026-09-25): append-only evidence of each
 # name's entry on the Pop list and its +15/+30/+60 minute move, MFE and MAE in ATRs.
 MOVERS_POP_OUTCOMES_FILE = PERSISTENT_DATA_DIR / "movers_pop_outcomes.jsonl"
+# Best-right-now log (B6, 2026-09-25): append-only evidence of each name's first
+# appearance on the strip per day; `best_now_outcomes.py` grades it vs SPY.
+BEST_NOW_LOG_FILE = PERSISTENT_DATA_DIR / "best_now_log.jsonl"
 # Options chase log (P10, 2026-09-25): append-only evidence of each OTM option
 # the Movers Pop table showed (or refused) and its +30/+60/close outcomes.
 OPTIONS_CHASE_LOG_FILE = PERSISTENT_DATA_DIR / "options_chase_log.jsonl"
@@ -905,24 +946,26 @@ def get_master_avwap_watchlist_details() -> dict[str, str]:
 def save_tracker_storage_dir(path: str) -> Path:
     target = Path(path).expanduser()
     LOCAL_SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
-    payload = _load_local_settings()
-    payload["shared_data_dir"] = str(target)
-    LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    invalidate_local_settings_cache()
+    with _local_settings_write_lock:
+        payload = _load_local_settings_from_disk()
+        payload["shared_data_dir"] = str(target)
+        LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        invalidate_local_settings_cache()
     return target
 
 
 def clear_tracker_storage_dir() -> None:
     if not LOCAL_SETTINGS_FILE.exists():
         return
-    payload = _load_local_settings()
-    payload.pop("shared_data_dir", None)
-    if payload:
-        LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    with _local_settings_write_lock:
+        payload = _load_local_settings_from_disk()
+        payload.pop("shared_data_dir", None)
+        if payload:
+            LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            invalidate_local_settings_cache()
+            return
+        LOCAL_SETTINGS_FILE.unlink(missing_ok=True)
         invalidate_local_settings_cache()
-        return
-    LOCAL_SETTINGS_FILE.unlink(missing_ok=True)
-    invalidate_local_settings_cache()
 
 
 def get_local_setting(key: str, default=None):
@@ -952,7 +995,7 @@ def save_local_settings(values: dict) -> None:
         return
     LOCAL_SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
     with _local_settings_write_lock:
-        payload = _load_local_settings()
+        payload = _load_local_settings_from_disk()
         payload.update(values)
         tmp = LOCAL_SETTINGS_FILE.with_name(LOCAL_SETTINGS_FILE.name + ".tmp")
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -967,8 +1010,7 @@ def blank_local_setting_if_equal(key: str, expected: str) -> bool:
     was taken is never blanked. Returns True when it blanked the field.
     """
     with _local_settings_write_lock:
-        invalidate_local_settings_cache()  # compare against disk, not a cached copy
-        payload = _load_local_settings()
+        payload = _load_local_settings_from_disk()  # compare against disk, not a cached copy
         if str(payload.get(key) or "") != str(expected):
             return False
         payload[key] = ""

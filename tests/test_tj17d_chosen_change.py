@@ -35,6 +35,7 @@ MEASURABLE = "read_accuracy_rest_of_day"
 SECOND_MEASURABLE = "trade_win_rate_day"
 NOW = datetime(2026, 9, 19, 18, 0, tzinfo=timezone.utc)
 FOLLOW_THROUGH_NOW = datetime(2026, 9, 23, 22, 0, tzinfo=timezone.utc)
+TRACKING_WEEK = "2026-W39"  # the exchange week NEXT_SESSION falls in
 
 
 def _reading(name, *, start_session=None, end_session="", scope=None, **_kwargs):
@@ -69,6 +70,9 @@ def _install_kept_process_ideas(monkeypatch, tmp_path):
     monkeypatch.setattr(
         improvement_ideas, "measure", _reading,
     )
+    # Pin "this week" to the week these fixtures choose in (NOW = 2026-09-19,
+    # observation starts Monday 2026-09-21); the wall clock must not decide it.
+    monkeypatch.setattr(improvement_ideas, "_current_tracking_week", lambda: TRACKING_WEEK)
     first = fx.stored_idea_row(
         "Wait for a confirmed D1 turn before acting.",
         session=SESSION,

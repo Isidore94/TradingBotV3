@@ -91,6 +91,93 @@ def test_the_cached_settings_cannot_be_mutated_by_a_caller(tmp_path, monkeypatch
     assert pp.get_local_setting("probe") == "one"
 
 
+def _count_stats(monkeypatch, target: Path) -> dict:
+    """Count stat calls against one file, leaving every other stat alone."""
+    seen = {"count": 0}
+    real_stat = Path.stat
+
+    def counting_stat(self, *args, **kwargs):
+        if self == target:
+            seen["count"] += 1
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", counting_stat)
+    return seen
+
+
+def _settings_with_clock(tmp_path, monkeypatch):
+    import project_paths as pp
+
+    settings = tmp_path / "local_settings.json"
+    settings.write_text('{"probe": "one"}', encoding="utf-8")
+    monkeypatch.setattr(pp, "LOCAL_SETTINGS_FILE", settings)
+    monkeypatch.setattr(pp, "LOCAL_SETTINGS_DIR", tmp_path)
+    clock = [5_000.0]
+    monkeypatch.setattr(pp, "_local_settings_clock", lambda: clock[0], raising=False)
+    pp.invalidate_local_settings_cache()
+    return pp, settings, clock
+
+
+def test_settings_are_stated_at_most_once_per_second(tmp_path, monkeypatch):
+    """2026-09-24: ~85 s of Qt-thread stalls sat in this function's path.stat."""
+    pp, settings, clock = _settings_with_clock(tmp_path, monkeypatch)
+    stats = _count_stats(monkeypatch, settings)
+
+    for _ in range(50):
+        assert pp.get_local_setting("probe") == "one"
+        clock[0] += 0.01
+    assert stats["count"] == 1, f"stat'ed {stats['count']} times inside one second"
+
+    clock[0] += 1.0
+    assert pp.get_local_setting("probe") == "one"
+    assert stats["count"] == 2
+
+
+def test_a_same_process_save_is_visible_on_the_next_read(tmp_path, monkeypatch):
+    pp, settings, clock = _settings_with_clock(tmp_path, monkeypatch)
+    assert pp.get_local_setting("probe") == "one"
+
+    pp.save_local_setting("probe", "two")
+    assert pp.get_local_setting("probe") == "two"
+    pp.save_local_settings({"probe": "three", "other": 1})
+    assert pp.get_local_setting("probe") == "three"
+    assert pp.blank_local_setting_if_equal("probe", "three")
+    assert pp.get_local_setting("probe") == ""
+
+
+def test_another_process_edit_shows_after_the_restat_window(tmp_path, monkeypatch):
+    pp, settings, clock = _settings_with_clock(tmp_path, monkeypatch)
+    assert pp.get_local_setting("probe") == "one"
+
+    settings.write_text('{"probe": "outside"}', encoding="utf-8")
+    stamp = settings.stat().st_mtime_ns + 5_000_000_000
+    os.utime(settings, ns=(stamp, stamp))
+    clock[0] += 1.01
+    assert pp.get_local_setting("probe") == "outside"
+
+
+def test_a_save_never_builds_on_a_cached_copy_another_process_outdated(tmp_path, monkeypatch):
+    """Reviewer blocker 2026-09-25: inside the 1 s window a read-modify-write that
+    trusted the cache overwrote a key another process had just saved (the
+    single-use Questrade token is such a key). Writers must read the disk."""
+    pp, settings, clock = _settings_with_clock(tmp_path, monkeypatch)
+    assert pp.get_local_setting("probe") == "one"  # cached
+
+    settings.write_text('{"probe": "one", "questrade_refresh_token": "NEW"}', encoding="utf-8")
+    clock[0] += 0.2  # still inside the re-stat window
+    pp.save_local_settings({"unrelated": 1})
+    on_disk = json.loads(settings.read_text(encoding="utf-8"))
+    assert on_disk["questrade_refresh_token"] == "NEW"
+    assert on_disk["unrelated"] == 1
+
+    settings.write_text('{"probe": "one", "questrade_refresh_token": "NEWER"}', encoding="utf-8")
+    clock[0] += 0.2
+    pp.save_tracker_storage_dir(str(tmp_path / "shared"))
+    assert json.loads(settings.read_text(encoding="utf-8"))["questrade_refresh_token"] == "NEWER"
+    pp.clear_tracker_storage_dir()
+    assert json.loads(settings.read_text(encoding="utf-8"))["questrade_refresh_token"] == "NEWER"
+
+
 def test_a_missing_settings_file_reads_as_empty(tmp_path, monkeypatch):
     import project_paths as pp
 

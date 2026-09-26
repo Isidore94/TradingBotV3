@@ -73,7 +73,7 @@ in the same commit.
 ## Performance on the Qt thread
 - Lists diff, never rebuild. Stylesheets count as expensive Qt work; widget variants live in `theme.qss`. Fonts are sized in px. Materialize chart bars through `ChartDataService.cached_bar_dicts`.
 - A burst of one signal gets ONE reaction, coalesced at the LISTENER by `SignalCoalescer` (200 ms leading edge). Adoption drains at most 10 picks per cycle as pacing only; no pick is withheld or dropped, and a deferred pick is never marked seen.
-- All cyclic GC runs on the GUI thread (`gc.disable()`). Activity may delay a sweep but never cancel it; every wait has a tick deadline. After the window shows, sweep the startup heap before `gc.freeze()` in `main()`.
+- All cyclic GC runs on the GUI thread (`gc.disable()`). Activity may delay a sweep but never cancel it; every wait has a tick deadline. After the window shows, sweep the startup heap before `gc.freeze()` in `main()`; after every later full sweep freeze its survivors too, and every 30th full sweep unfreeze everything first and collect it.
 - A candle that breaks `low <= open,close <= high` is drawn dashed and hollow, clamped, kept out of the scale, and logged; never silently dropped.
 - `ScanCycleClock` measures and formats, decides nothing, and never calls `sleep`, `wait`, `start` or `Thread`.
 - The exchange calendar is memoized; the stall watchdog's cap is per hour; `ui/thread_cpu_gauge.py` is always on and measures every thread once a minute. Never rate a timer from its docstring; measure it.

@@ -942,6 +942,25 @@ class AlertChartReview(QWidget):
             self.econ_block.setVisible(False)
             self.mentor_popup.hide()
 
+    def open_mentor_on_trade(self, question, store=None) -> str:
+        """Open the Mentor on ONE trade at its first missing question (the Inputs chip)."""
+        try:
+            field_name = self.mentor_card.open_on_trade(question, store=store)
+            self.mentor_popup.show()
+            # The trader clicked for this, so the popup may take focus.
+            self.mentor_popup.raise_()
+            self.mentor_popup.activateWindow()
+            widget = self.mentor_card.positioned_widget()
+            if widget is not None:
+                self.mentor_scroll.ensureWidgetVisible(widget)
+                widget.setFocus()
+            return field_name
+        except Exception:  # noqa: BLE001 - a chip click never costs the chart
+            import logging
+
+            logging.debug("Trade Mentor could not open on a trade.", exc_info=True)
+            return ""
+
     def _on_give_a_read(self) -> None:
         try:
             self.mentor_card.give_a_read()

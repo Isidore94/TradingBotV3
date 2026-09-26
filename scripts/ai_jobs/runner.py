@@ -635,6 +635,7 @@ def _run_slots_locked(
 
         started = datetime.now().astimezone()
         clock = time.perf_counter()
+        _reset_slot_usage()
         try:
             extra_kwargs = dict(slot.model_free_kwargs or {}) if model_free else {}
             if overridden:
@@ -711,7 +712,7 @@ def _run_slots_locked(
                 model=str(outcome.get("model") or ""),
                 reason=row_reason,
                 outputs=outcome.get("outputs") or (),
-                tokens=outcome.get("tokens") or {},
+                tokens=_slot_tokens(outcome.get("tokens")),
                 # WS-AI1: a slot may add fields of its own to its ledger row -
                 # the daily summary adds `completion`. `ledger.record` only ever
                 # ADDS (setdefault), so a slot cannot overwrite a ledger field.
@@ -736,6 +737,7 @@ def _run_slots_locked(
                 session_date=run_session,
                 started_at=started,
                 error=f"{type(exc).__name__}: {exc}",
+                tokens=_slot_tokens(None),
                 path=ledger_path,
             )
             logging.exception("AI job %s failed; prior artifacts are untouched.", slot.name)
@@ -751,6 +753,30 @@ def _run_slots_locked(
             break
 
     return report
+
+
+def _reset_slot_usage() -> None:
+    """Zero the shared model client's per-slot token tally. Never raises."""
+    try:
+        import ai_summary
+
+        ai_summary.reset_slot_usage()
+    except Exception:  # noqa: BLE001 - telemetry must not cost a slot
+        logging.debug("AI jobs: token tally reset failed.", exc_info=True)
+
+
+def _slot_tokens(own: Any) -> dict[str, Any]:
+    """The slot's own tokens dict plus the measured model usage; slot keys win."""
+    tokens = dict(own) if isinstance(own, Mapping) else {}
+    try:
+        import ai_summary
+
+        measured = ai_summary.slot_usage()
+    except Exception:  # noqa: BLE001 - telemetry must not cost a slot
+        measured = {}
+    for key, value in measured.items():
+        tokens.setdefault(key, value)
+    return tokens
 
 
 def _budget_refusal(

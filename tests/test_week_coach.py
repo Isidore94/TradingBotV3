@@ -128,7 +128,7 @@ def _write_records(root: Path, days: dict[str, list[dict]], *, calls=None, recap
     root.mkdir(parents=True, exist_ok=True)
     for session, trades in days.items():
         record = {
-            "schema": dsr.SCHEMA, "session_date": session,
+            "schema": dsr.SCHEMA, "r_definition": dsr.R_DEFINITION, "session_date": session,
             "market_context": {"session_label": {"label": "unknown", "source": "none"}},
             "trades": {"n": len(trades), "rows": trades},
             "calls": {"n": 0, "rows": list((calls or {}).get(session, ()))},
