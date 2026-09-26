@@ -41,7 +41,12 @@ import points_challenger
 import regime_grades
 import setup_grades
 from research_explanations import build_plain_english_whats_working
-from theta_pick_tracker import THETA_NO_EXPORT_SENTENCE, theta_readout
+from theta_pick_tracker import (
+    THETA_NO_EXPORT_SENTENCE,
+    theta_outcome_counts,
+    theta_outcome_line,
+    theta_readout,
+)
 from ui import theme
 from ui.read_worker import ReadWorker, join_worker
 from ui.timer_utils import SignalCoalescer
@@ -690,6 +695,10 @@ class SetupTrackerPanel(QFrame):
         self.theta_grade_label = QLabel("")
         self.theta_grade_label.setObjectName("MutedLabel")
         self.theta_grade_label.setWordWrap(True)
+        # B7: the underlying-only outcome line (price vs level, not option P&L).
+        self.theta_outcome_label = QLabel(theta_outcome_line(None))
+        self.theta_outcome_label.setObjectName("MutedLabel")
+        self.theta_outcome_label.setWordWrap(True)
         # S16: the By regime tab's status line (current regime, day count, windows).
         self.regime_status_label = QLabel(regime_grades.status_sentence({}))
         self.regime_status_label.setObjectName("MutedLabel")
@@ -957,6 +966,7 @@ class SetupTrackerPanel(QFrame):
                 self.theta_table,
                 status=self.theta_status_label,
                 footer=self.theta_grade_label,
+                extra=(self.theta_outcome_label,),
             ),
             "Theta",
         )
@@ -1603,6 +1613,8 @@ class SetupTrackerPanel(QFrame):
             str(data.get("theta_population_sentence") or THETA_NO_EXPORT_SENTENCE)
         )
         self.theta_grade_label.setText(str(data.get("theta_grade_sentence") or ""))
+        # B7: counts came off the worker; only the formatting happens here.
+        self.theta_outcome_label.setText(theta_outcome_line(data.get("theta_outcome_counts")))
         # D1C-B: both lines were computed on the worker off the SAME comparison
         # the two tables came from. The Qt thread renders them and computes
         # neither - a leader line recomputed here could name a different setup
@@ -2086,6 +2098,7 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
         "sp4_chip": points_challenger.chip_text(evidence),
         "theta_population_sentence": theta.population_sentence(),
         "theta_grade_sentence": theta.grade_sentence(),
+        "theta_outcome_counts": theta_outcome_counts(raw["theta"]),
         "scan_factor_mtime_text": _latest_mtime_text(
             [MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE]
         ),
