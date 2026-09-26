@@ -499,6 +499,9 @@ MOVERS_DIP_OUTCOMES_FILE = PERSISTENT_DATA_DIR / "movers_dip_outcomes.jsonl"
 # Movers board Pop outcome log (P8 P7, 2026-09-25): append-only evidence of each
 # name's entry on the Pop list and its +15/+30/+60 minute move, MFE and MAE in ATRs.
 MOVERS_POP_OUTCOMES_FILE = PERSISTENT_DATA_DIR / "movers_pop_outcomes.jsonl"
+# Best-right-now log (B6, 2026-09-25): append-only evidence of each name's first
+# appearance on the strip per day; `best_now_outcomes.py` grades it vs SPY.
+BEST_NOW_LOG_FILE = PERSISTENT_DATA_DIR / "best_now_log.jsonl"
 # Options chase log (P10, 2026-09-25): append-only evidence of each OTM option
 # the Movers Pop table showed (or refused) and its +30/+60/close outcomes.
 OPTIONS_CHASE_LOG_FILE = PERSISTENT_DATA_DIR / "options_chase_log.jsonl"

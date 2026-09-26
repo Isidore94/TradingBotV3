@@ -20,6 +20,7 @@ from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import QFrame, QLabel, QSizePolicy, QVBoxLayout
 
 import best_now
+import best_now_outcomes
 from swallowed import note_swallowed
 
 BAR_SECONDS = 300
@@ -94,12 +95,15 @@ class BestNowStrip(QFrame):
         threaded: bool = True,
         clock: Callable[[], datetime] | None = None,
         limit: int = best_now.BEST_NOW_LIMIT,
+        log: Any = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("BestNowStrip")
         self._threaded = bool(threaded)
         self._clock = clock or datetime.now
         self._limit = max(1, int(limit))
+        # B6: first appearances go to the Best-right-now log, from the worker.
+        self._log = log if log is not None else best_now_outcomes.BestNowLog()
         self._results_provider: ResultsProvider | None = None
         self._movers_board: dict[str, Any] = {}
         self._swing_context: dict = {}
@@ -170,7 +174,9 @@ class BestNowStrip(QFrame):
         dips = best_now.dip_strong_rows(self._movers_board)
         context = dict(self._swing_context)
         if not self._threaded:
-            self._on_entries(self._generation, self._compute(results, dips, context, self._limit))
+            entries = self._compute(results, dips, context, self._limit)
+            self._record(entries, results)
+            self._on_entries(self._generation, entries)
             return
         if self._busy:
             self._pending = True
@@ -192,10 +198,19 @@ class BestNowStrip(QFrame):
             entries = self._compute(results, dips, context, limit)
         except Exception:  # noqa: BLE001 - never let the worker die silently busy
             entries = None
+        if entries is not None:
+            self._record(entries, results)
         try:
             self._entriesReady.emit(generation, entries)
         except RuntimeError as exc:  # widget already destroyed at shutdown
             note_swallowed("best-now result after the widget was destroyed", exc, quiet=True)
+
+    def _record(self, entries, results) -> None:
+        """Evidence only: a failed log write never costs the strip."""
+        try:
+            self._log.record(entries, results)
+        except Exception as exc:  # noqa: BLE001
+            note_swallowed("best-now log write failed", exc, quiet=True)
 
     def _on_entries(self, generation: int, entries: Any) -> None:
         self._busy = False
