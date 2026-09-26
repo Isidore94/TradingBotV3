@@ -1389,11 +1389,19 @@ class DayReviewPanel(QFrame):
             "SPY, this session", self.spy_note, self._chart_holder, stretch_last=True
         )
 
+        # B11: the night digest's narration, read on the day worker.
+        self.digest_note = QLabel("Night digest: not read yet.")
+        self.digest_note.setWordWrap(True)
+        self.digest_note.setTextFormat(Qt.PlainText)
+        self.digest_note.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.digest_section = self._section("Night digest", self.digest_note)
+
         column = QWidget()
         body = QVBoxLayout(column)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(10)
         body.addWidget(self.story_section)
+        body.addWidget(self.digest_section)
         body.addWidget(self.theses_section)
         body.addWidget(self.spy_section, 1)
         return column
@@ -1572,6 +1580,12 @@ class DayReviewPanel(QFrame):
         )
         desk_layout.persist_sizes(self, self.columns, COLUMN_SPLIT_KEY)
 
+        # S5: longs and shorts vs SPY over the last 20 sessions. Display only.
+        self.tape_side_note = QLabel("")
+        self.tape_side_note.setObjectName("MutedLabel")
+        self.tape_side_note.setWordWrap(True)
+        self.tape_side_note.setTextFormat(Qt.PlainText)
+
         glance_row = QHBoxLayout()
         glance_row.setContentsMargins(0, 0, 0, 0)
         glance_row.addWidget(self.glance_strip, 1)
@@ -1591,6 +1605,7 @@ class DayReviewPanel(QFrame):
         # The glance strip heads the page; the full report card sits under
         # "Details", still above the two columns that hold the story.
         body.addLayout(glance_row)
+        body.addWidget(self.tape_side_note)
         body.addWidget(self.report_card_section)
         body.addWidget(self.columns, 1)
         body.addWidget(self._walkaway_row())
@@ -2074,12 +2089,25 @@ class DayReviewPanel(QFrame):
         self._refresh_name_chart()
         self._render_ideas(session, list(payload.get("ideas") or []))
         self._render_mood(payload.get("mood"))
+        self._render_tape_and_digest(payload)
         self._sync_walk_entry(session, payload)
         if allow_backfill:
             for exit_session in tuple(payload.get("walkaway_backfill_sessions") or ()):
                 self._backfill_bars_for(str(exit_session))
         self.status.setText(_status_problems(payload.get("error")) or f"Day Review: {session}")
         self.statusChanged.emit(self.status.text())
+
+    def _render_tape_and_digest(self, payload: Mapping[str, Any]) -> None:
+        """S5's tape line and B11's digest narration. Formatting only: both were read on the worker."""
+        import setup_grades
+
+        tape = payload.get("side_by_tape")
+        self.tape_side_note.setText(
+            setup_grades.side_by_tape_line(tape if isinstance(tape, Mapping) else None)
+        )
+        digest = payload.get("digest_narration")
+        text = str(digest.get("text") or "") if isinstance(digest, Mapping) else ""
+        self.digest_note.setText(text or "Night digest: not read.")
 
     def _render_mood(self, section: Any) -> None:
         """TJ-7 / live gate #151: ONE line about the trader, from ONE payload.
