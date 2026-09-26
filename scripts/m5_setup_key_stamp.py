@@ -28,6 +28,11 @@ RVOL, bounce type), the bot's cached completed M5 bars up to the alert bar
 (VWAP distance in M5 ATR14; `register_bar_source`), and the SPY market-state
 shadow log at that bar. Never a bar after the alert bar; a missing input is
 unknown. The D1 part and the M5 part stand alone: either can be unknown.
+
+S6: the same cached bars also give the structure inputs (`structure_inputs`:
+EMA 8/21, previous day's range, first-30-minute range, 12-bar squeeze), and
+SPY's D1 environment label for the session before the alert is read from
+`d1_environment_store`.
 """
 
 from __future__ import annotations
@@ -408,6 +413,113 @@ def vwap_distance_atr(bars: Any, bar_close: datetime, tz: tzinfo) -> float | Non
     return round((kept[-1][3] - weighted / volume_sum) / atr, 6)
 
 
+# --- S6: M5 structure inputs over the same cached bars (regular session, completed bars only)
+
+M5_EMA_FAST = 8
+M5_EMA_SLOW = 21
+#: Regular-session M5 bars in a full session (09:30-16:00 ET); a short or holed day is unknown.
+M5_SESSION_BARS = 78
+M5_OPEN_RANGE_BARS = 6
+M5_COMPRESSION_BARS = 12
+M5_COMPRESSION_ATR_BARS = 20
+_REGULAR_OPEN_MINUTES = 9 * 60 + 30
+_REGULAR_CLOSE_MINUTES = 16 * 60
+
+STRUCTURE_INPUT_FIELDS = (
+    "alert_price", "m5_ema8", "m5_ema21", "prev_day_high", "prev_day_low", "open_range_high",
+    "open_range_low", "m5_range12_atr20", "m5_range12_break",
+)
+
+
+def _ema_last(values: list[float], length: int) -> float | None:
+    """EMA of ``values`` at the last value, seeded with the SMA of the first ``length``; None if under 2x."""
+    if len(values) < 2 * length:
+        return None
+    ema = sum(values[:length]) / length
+    alpha = 2.0 / (length + 1)
+    for value in values[length:]:
+        ema += alpha * (value - ema)
+    return ema
+
+
+def structure_inputs(bars: Any, bar_close: datetime, tz: tzinfo) -> dict[str, Any]:
+    """The S6 M5 structure inputs at the alert bar; None for any input the bars cannot say.
+
+    ``bars`` are naive local-time M5 bars stamped at their START and ``bar_close`` is the
+    alert bar's CLOSE in the same zone. Only bars that closed at or before it are read,
+    the last of them must be the alert bar, and it must be a regular-session bar. Only
+    regular-session bars (09:30-16:00 ET) count. EMA 8/21 over those bars (2x warm-up),
+    the previous full session's high/low, the first-30-minute range (only when the alert
+    bar starts at or after 10:00 ET), and the 12 bars before the alert bar (same session)
+    as a range in ATR20 plus where the alert bar closed against that range.
+    """
+    from zoneinfo import ZoneInfo
+
+    out: dict[str, Any] = dict.fromkeys(STRUCTURE_INPUT_FIELDS)
+    step = timedelta(minutes=M5_BAR_MINUTES)
+    exchange = ZoneInfo(_EXCHANGE_TZ)
+    kept = []
+    for bar in bars or ():
+        fields = _bar_fields(bar)
+        if fields is not None and fields[0] + step <= bar_close:
+            kept.append(fields)
+    kept.sort(key=lambda item: item[0])
+    if not kept or kept[-1][0] + step != bar_close:
+        return out
+    regular = []  # (et date, minutes after midnight ET, high, low, close)
+    for when, high, low, close, _volume in kept:
+        start = when.replace(tzinfo=tz).astimezone(exchange)
+        minutes = start.hour * 60 + start.minute
+        if _REGULAR_OPEN_MINUTES <= minutes < _REGULAR_CLOSE_MINUTES:
+            regular.append((start.date(), minutes, high, low, close))
+    alert_start = (bar_close - step).replace(tzinfo=tz).astimezone(exchange)
+    alert_minutes = alert_start.hour * 60 + alert_start.minute
+    if not regular or regular[-1][:2] != (alert_start.date(), alert_minutes):
+        return out  # the alert bar is not a regular-session bar
+    session_day = alert_start.date()
+    price = regular[-1][4]
+    out["alert_price"] = price
+
+    closes = [close for _day, _minutes, _high, _low, close in regular]
+    fast, slow = _ema_last(closes, M5_EMA_FAST), _ema_last(closes, M5_EMA_SLOW)
+    if fast is not None and slow is not None:
+        out["m5_ema8"], out["m5_ema21"] = round(fast, 6), round(slow, 6)
+
+    earlier_days = sorted({day for day, *_rest in regular if day < session_day})
+    if earlier_days:
+        previous = [bar for bar in regular if bar[0] == earlier_days[-1]]
+        minutes = [bar[1] for bar in previous]
+        full_day = list(range(_REGULAR_OPEN_MINUTES, _REGULAR_CLOSE_MINUTES, M5_BAR_MINUTES))
+        if len(previous) == M5_SESSION_BARS and minutes == full_day:
+            out["prev_day_high"] = max(bar[2] for bar in previous)
+            out["prev_day_low"] = min(bar[3] for bar in previous)
+
+    today = [bar for bar in regular if bar[0] == session_day]
+    opening = [bar for bar in today if bar[1] < _REGULAR_OPEN_MINUTES + M5_OPEN_RANGE_BARS * M5_BAR_MINUTES]
+    opening_minutes = [bar[1] for bar in opening]
+    if alert_minutes >= 10 * 60 and opening_minutes == [
+        _REGULAR_OPEN_MINUTES + index * M5_BAR_MINUTES for index in range(M5_OPEN_RANGE_BARS)
+    ]:
+        out["open_range_high"] = max(bar[2] for bar in opening)
+        out["open_range_low"] = min(bar[3] for bar in opening)
+
+    before = regular[:-1]
+    box = before[-M5_COMPRESSION_BARS:]
+    if (len(box) == M5_COMPRESSION_BARS and all(bar[0] == session_day for bar in box)
+            and len(before) >= M5_COMPRESSION_ATR_BARS + 1):
+        trs = [
+            max(high - low, abs(high - before[index - 1][4]), abs(low - before[index - 1][4]))
+            for index, (_day, _minutes, high, low, _close) in enumerate(before) if index > 0
+        ]
+        atr = sum(trs[-M5_COMPRESSION_ATR_BARS:]) / M5_COMPRESSION_ATR_BARS
+        box_high = max(bar[2] for bar in box)
+        box_low = min(bar[3] for bar in box)
+        if atr > 0:
+            out["m5_range12_atr20"] = round((box_high - box_low) / atr, 6)
+            out["m5_range12_break"] = "up" if price > box_high else "down" if price < box_low else "inside"
+    return out
+
+
 class SpyStateReader:
     """The SPY market-state engine's recorded state at a bar, from its shadow log (cached by size/mtime)."""
 
@@ -476,6 +588,15 @@ class SpyStateReader:
 _spy_reader: SpyStateReader | None = None
 
 
+def d1_environment_before(trade_date: Any, path: Any = None) -> str:
+    """SPY's D1 environment label for the session before ``trade_date`` (known before the open)."""
+    import d1_environment_store
+    import setup_permutation_backfill as bf
+
+    previous = bf.previous_session_text(_text(trade_date)[:10])
+    return d1_environment_store.label_for_session(previous, path=path) if previous else "unknown"
+
+
 def m5_part(row: Mapping[str, Any], *, symbol: str, side: str) -> dict[str, Any]:
     """The M5 key fields for one registered outcome row. Never raises: a failed input is unknown."""
     global _spy_reader
@@ -492,6 +613,7 @@ def m5_part(row: Mapping[str, Any], *, symbol: str, side: str) -> dict[str, Any]
                 bars = _cached_bars(symbol)
                 if bars:
                     inputs["vwap_dist_atr"] = vwap_distance_atr(bars, close, zone)
+                    inputs.update(structure_inputs(bars, close, zone))
             if _spy_reader is None:
                 _spy_reader = SpyStateReader()
             spy = _spy_reader.state_at(close.replace(tzinfo=zone))
@@ -499,6 +621,10 @@ def m5_part(row: Mapping[str, Any], *, symbol: str, side: str) -> dict[str, Any]
                 inputs["spy_state"], inputs["spy_side_sign"] = spy
     except Exception as exc:  # noqa: BLE001 - the M5 part never costs the record
         _log_once(f"M5 part: {type(exc).__name__}: {exc}")
+    try:
+        inputs["d1_environment"] = d1_environment_before(row.get("trade_date"))
+    except Exception as exc:  # noqa: BLE001 - the M5 part never costs the record
+        _log_once(f"D1 environment: {type(exc).__name__}: {exc}")
     key = sp.m5_facets_for(inputs, side)
     return {
         "m5_key": key.compact_key,

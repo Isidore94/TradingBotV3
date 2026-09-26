@@ -107,8 +107,11 @@ def test_a_junk_record_is_skipped_not_fatal():
 
 
 def test_the_column_is_appended_after_the_p11_columns():
-    assert sp.SCAN_ROW_COLUMNS[-1] == AGE
-    assert sp.SCAN_ROW_COLUMNS[-1 - len(sp.D1_HISTORY_COLUMNS):-1] == sp.D1_HISTORY_COLUMNS
+    # S6 appends its trendline columns after the age; nothing else follows it.
+    columns = sp.SCAN_ROW_COLUMNS[:-len(sp.TRENDLINE_COLUMNS)]
+    assert sp.SCAN_ROW_COLUMNS[-len(sp.TRENDLINE_COLUMNS):] == sp.TRENDLINE_COLUMNS
+    assert columns[-1] == AGE
+    assert columns[-1 - len(sp.D1_HISTORY_COLUMNS):-1] == sp.D1_HISTORY_COLUMNS
     assert AGE.startswith("perm_")
 
 
@@ -198,7 +201,7 @@ def scan_runs(tmp_path_factory):
 def test_the_scan_writes_the_setup_age(scan_runs):
     _parity, stamped, _plain = scan_runs
     row = stamped["history"][-1]
-    assert list(row)[-1] == AGE
+    assert list(row)[-1 - len(sp.TRENDLINE_COLUMNS)] == AGE
     assert row[AGE] == "3"
     key = dict(part.split("=", 1) for part in row["permutation_key"].split("|")[3].split(";"))
     assert key["setup_age"] == "setup_age_3_5"

@@ -742,6 +742,24 @@ def _setup_age(row, ctx, side):
     return _band(value, (3.0, 6.0, 11.0), ("setup_age_1_2", "setup_age_3_5", "setup_age_6_10", "setup_age_11_plus"))
 
 
+# --- S6: the scan's own D1 trendline read (appended `perm_trendline_*` columns)
+
+
+@facet("trendline", "trendline", quiet=("no_trendline",))
+def _trendline(row, ctx, side):
+    # A recent break wins over a nearby line; the direction is the way a break of the line goes.
+    broke = _flag(row.get("perm_trendline_break_recent"))
+    near = _flag(row.get("perm_trendline_within_alert_range"))
+    if broke is None or near is None:
+        return UNKNOWN
+    if not broke and not near:
+        return "no_trendline"
+    direction = (_text(row.get("perm_trendline_direction")) or "").lower()
+    if direction not in {"up", "down"}:
+        return UNKNOWN
+    return f"trendline_break_{direction}" if broke else f"trendline_near_{direction}"
+
+
 # --- stamping (4a): the scan-row columns and the honest input view
 
 #: `perm_dist_<ma>_atr` columns the enrichment step writes: (close - ma) / ATR20. The `perm_`
@@ -761,9 +779,15 @@ D1_HISTORY_COLUMNS = (
 )
 #: P8b: completed sessions since the setup tracker first saw this symbol/side/family.
 SETUP_AGE_COLUMN = "perm_setup_age_sessions"
-#: Every column P1-4 appends to `d1_features_history.csv`, in order (4a, then P11, then P8b).
+#: S6: the scan's own trendline read for priority rows (break, nearby line, break direction).
+TRENDLINE_COLUMNS = (
+    "perm_trendline_break_recent",
+    "perm_trendline_within_alert_range",
+    "perm_trendline_direction",
+)
+#: Every column P1-4 appends to `d1_features_history.csv`, in order (4a, then P11, then P8b, then S6).
 SCAN_ROW_COLUMNS = (*MA_DISTANCE_COLUMNS, WEEKLY_STREAK_COLUMN, *STAMP_COLUMNS, *D1_HISTORY_COLUMNS,
-                    SETUP_AGE_COLUMN)
+                    SETUP_AGE_COLUMN, *TRENDLINE_COLUMNS)
 
 _WEEKLY_TOP_PATTERN_FLAGS = (
     "top_pattern_weekly_ema15_hold",
@@ -993,6 +1017,42 @@ def setup_age_columns(feature_rows: Any, tracker_payload: Any, session_dates: An
     return aged
 
 
+# --- S6: the trendline columns (pure; the scan passes the priority row it already refined)
+
+#: The scan's trendline lookback (`legacy.PRIORITY_TRENDLINE_LOOKBACK_BARS`): with fewer cached bars
+#: the scan fetched its own, so "no line found" cannot be told from "too few bars".
+TRENDLINE_MIN_KNOWN_BARS = 200
+_TRENDLINE_DIRECTIONS = {"H-": "up", "H-break": "up", "L+": "down", "L-break": "down"}
+
+
+def trendline_columns(priority_row: Any, *, frame_bars: Any, last_close: Any, atr: Any) -> dict[str, Any]:
+    """The S6 ``perm_trendline_*`` columns for one refined priority row; None where the scan cannot say.
+
+    ``priority_row`` holds the scan's `find_directional_trendline_candidate` fields (a row the
+    directional refine never looked at has none: unknown). ``frame_bars`` is the cached daily bar
+    count the refine saw; "no line" is only claimed when it had the full lookback and an ATR.
+    """
+    out: dict[str, Any] = dict.fromkeys(TRENDLINE_COLUMNS)
+    if not isinstance(priority_row, Mapping) or "trendline_break_recent" not in priority_row:
+        return out
+    broke = bool(priority_row.get("trendline_break_recent"))
+    near = bool(priority_row.get("trendline_within_alert_range"))
+    if broke or near:
+        candidate = priority_row.get("trendline_break_candidate" if broke else "trendline_candidate")
+        line_type = candidate.get("type") if isinstance(candidate, Mapping) else None
+        direction = _TRENDLINE_DIRECTIONS.get(str(line_type or ""))
+        if direction is None:
+            return out
+        out.update({TRENDLINE_COLUMNS[0]: broke, TRENDLINE_COLUMNS[1]: near, TRENDLINE_COLUMNS[2]: direction})
+        return out
+    bars = _num(frame_bars)
+    atr_value = _num(atr)
+    if bars is not None and bars >= TRENDLINE_MIN_KNOWN_BARS and _num(last_close) is not None \
+            and atr_value is not None and atr_value > 0:
+        out.update({TRENDLINE_COLUMNS[0]: False, TRENDLINE_COLUMNS[1]: False})
+    return out
+
+
 # --- P11: M5-native facets over one alert's own inputs (group ``m5``)
 
 M5_PERMUTATION_RULE_VERSION = "setup_permutations.m5.v1"
@@ -1002,6 +1062,9 @@ M5_FACETS: dict[str, FacetSpec] = {}
 M5_INPUT_FIELDS = (
     "alert_bar_close", "alert_bar_complete", "session_rvol", "vwap_dist_atr", "spy_state", "spy_side_sign",
     "bounce_type",
+    # S6: structure over the cached bars (`m5_setup_key_stamp.structure_inputs`) and SPY's D1 label.
+    "alert_price", "m5_ema8", "m5_ema21", "prev_day_high", "prev_day_low", "open_range_high", "open_range_low",
+    "m5_range12_atr20", "m5_range12_break", "d1_environment",
 )
 
 
@@ -1102,3 +1165,85 @@ def _m5_spy_state(inputs, ctx, side):
 def _m5_bounce_type(inputs, ctx, side):
     bounce = _text(inputs.get("bounce_type"))
     return f"bounce_{bounce.lower().replace(' ', '_')}" if bounce else UNKNOWN
+
+
+# --- S6: M5 structure facets (inputs from `m5_setup_key_stamp.structure_inputs`; never in the label)
+
+#: A 12-bar box no wider than this many M5 ATR20 is a squeeze.
+M5_SQUEEZE_RANGE_ATR = 2.5
+#: The open-range facet only speaks once the alert bar starts at or after 10:00 ET (closes 10:05+).
+_OPEN_RANGE_DONE_MINUTES = 10 * 60 + 5
+
+
+def _above_inside_below(price: float | None, high: float | None, low: float | None,
+                        names: tuple[str, str, str]) -> str:
+    if price is None or high is None or low is None or high < low:
+        return UNKNOWN
+    if price > high:
+        return names[0]
+    return names[2] if price < low else names[1]
+
+
+@m5_facet("m5_ema_stack", in_label=False)
+def _m5_ema_stack(inputs, ctx, side):
+    # EMA 8 vs 21 order, then the alert close against both.
+    price, fast, slow = _num(inputs.get("alert_price")), _num(inputs.get("m5_ema8")), _num(inputs.get("m5_ema21"))
+    if price is None or fast is None or slow is None:
+        return UNKNOWN
+    order = "8over21" if fast >= slow else "8under21"
+    if price >= max(fast, slow):
+        where = "above_both"
+    elif price <= min(fast, slow):
+        where = "below_both"
+    else:
+        where = "between"
+    return f"m5ema_{order}_{where}"
+
+
+@m5_facet("m5_pdh_pdl", in_label=False)
+def _m5_pdh_pdl(inputs, ctx, side):
+    return _above_inside_below(_num(inputs.get("alert_price")), _num(inputs.get("prev_day_high")),
+                               _num(inputs.get("prev_day_low")), ("above_pdh", "inside_pd_range", "below_pdl"))
+
+
+@m5_facet("m5_open_range", in_label=False)
+def _m5_open_range(inputs, ctx, side):
+    # Only after the first 30 minutes are over; the alert bar close must be in exchange time.
+    text = _text(inputs.get("alert_bar_close"))
+    try:
+        local = datetime.fromisoformat(text) if text else None
+    except ValueError:
+        local = None
+    offset = local.utcoffset() if local is not None else None
+    if offset is None or offset.total_seconds() / 3600.0 not in _EXCHANGE_UTC_OFFSETS:
+        return UNKNOWN
+    if local.hour * 60 + local.minute < _OPEN_RANGE_DONE_MINUTES:
+        return UNKNOWN
+    return _above_inside_below(_num(inputs.get("alert_price")), _num(inputs.get("open_range_high")),
+                               _num(inputs.get("open_range_low")), ("above_or", "inside_or", "below_or"))
+
+
+@m5_facet("m5_compression", in_label=False)
+def _m5_compression(inputs, ctx, side):
+    # The 12 bars before the alert as a box in M5 ATR20: a squeeze, then where the alert bar closed.
+    ratio = _num(inputs.get("m5_range12_atr20"))
+    broke = (_text(inputs.get("m5_range12_break")) or "").lower()
+    if ratio is None or ratio < 0 or broke not in {"up", "down", "inside"}:
+        return UNKNOWN
+    if ratio > M5_SQUEEZE_RANGE_ATR:
+        return "no_squeeze"
+    return "squeeze_inside" if broke == "inside" else f"squeeze_break_{broke}"
+
+
+@m5_facet("m5_side_vs_d1_env", in_label=False)
+def _m5_side_vs_d1_env(inputs, ctx, side):
+    # SPY's D1 environment for the session before the alert, against the alert's side.
+    label = (_text(inputs.get("d1_environment")) or "").lower()
+    if side == UNKNOWN or label in {"", UNKNOWN}:
+        return UNKNOWN
+    if label in {"compressed", "mixed"}:
+        return f"d1_env_{label}"
+    trend = {"trending_up": "LONG", "trending_down": "SHORT"}.get(label)
+    if trend is None:
+        return UNKNOWN
+    return "side_with_d1_trend" if side == trend else "side_against_d1_trend"

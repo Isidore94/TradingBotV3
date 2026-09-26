@@ -98,6 +98,13 @@ def _history(hooks_on: bool) -> pd.DataFrame:
             feature_rows.append(row)
         if hooks_on:
             sp.setup_age_columns(feature_rows, tracker, [day.isoformat() for day in sessions[: s_index + 1]])
+            # S6: every trendline column filled (break, nearby line and no line across the symbols).
+            for n, row in enumerate(feature_rows):
+                refined = {"trendline_break_recent": n % 3 == 0, "trendline_within_alert_range": n % 3 == 1,
+                           "trendline_break_candidate": {"type": "H-break" if n % 2 else "L-break"},
+                           "trendline_candidate": {"type": "H-" if n % 2 else "L+"}}
+                row.update(sp.trendline_columns(refined, frame_bars=250, last_close=row["last_close"],
+                                                atr=row["atr20"]))
             spc.stamp_scan_rows(feature_rows, session=session, context=spc.SessionContext())
             for row in feature_rows:
                 row.pop("weekly_ema8_hold_weeks", None)  # not in the runner's CSV allowlist
@@ -144,6 +151,8 @@ def test_scan_factor_and_tier_exports_are_byte_identical_with_the_hooks_on(tmp_p
     assert set(sp.SCAN_ROW_COLUMNS) <= set(stamped.columns)
     assert stamped[list(sp.D1_HISTORY_COLUMNS)].notna().all().all()
     assert stamped[sp.SETUP_AGE_COLUMN].notna().all()
+    assert stamped[list(sp.TRENDLINE_COLUMNS[:2])].notna().all().all()
+    assert set(stamped["perm_trendline_direction"].dropna()) == {"up", "down"}
     assert stamped["permutation_rule_version"].eq(sp.PERMUTATION_RULE_VERSION).all()
     off = _export(tmp_path / "off", plain)
     on = _export(tmp_path / "on", stamped)

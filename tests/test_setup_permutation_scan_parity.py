@@ -40,6 +40,7 @@ SCRIPTS_DIR = sys.argv[2]
 DISABLE = sys.argv[3] == "off"
 SESSION_COUNT = int(sys.argv[4]) if len(sys.argv) > 4 else 260
 TRACKER_SEED = sys.argv[5] if len(sys.argv) > 5 else ""
+BARS_SHAPE = sys.argv[6] if len(sys.argv) > 6 else ""
 SYMBOL = "PKEY"
 os.environ["TRADINGBOTV3_DATA_DIR"] = str(SCRATCH / "home")
 os.environ["LOCALAPPDATA"] = str(SCRATCH / "localappdata")
@@ -66,6 +67,9 @@ if DISABLE:
     # P8b: the setup-age column is switched off the same way.
     if hasattr(runner, "permutation_setup_age_columns"):
         runner.permutation_setup_age_columns = lambda *args, **kwargs: 0
+    # S6: the trendline columns are switched off the same way.
+    if hasattr(runner, "permutation_trendline_columns"):
+        runner.permutation_trendline_columns = lambda *args, **kwargs: {}
 
 
 def _sessions(count):
@@ -81,6 +85,14 @@ for index, stamp in enumerate(stamps):
     base = 60.0 + index * 0.2 + (1.5 if index % 7 == 0 else 0.0)
     # Longer runs (P11) widen the last 20 ranges so ATR14 has a 252-session range to sit in.
     wide = 1.5 if SESSION_COUNT > 260 and index >= SESSION_COUNT - 20 else 1.0
+    if BARS_SHAPE == "trendline_break" and index >= 230:
+        # S6: lower highs from session 230 on, then a two-session pop through that falling line.
+        if index < SESSION_COUNT - 2:
+            step = index - 230
+            base = 106.0 - 0.15 * step + 2.0 * (1 - abs(step % 20 - 10) / 10)
+        else:
+            base = rows[SESSION_COUNT - 3][1] + (4.3 if index == SESSION_COUNT - 1 else 3.0)
+        wide = 1.0
     rows.append((stamp, base, base + wide, base - 1.0, base + 0.2))
 frame = pd.DataFrame(rows, columns=["datetime", "open", "high", "low", "close"])
 frame["volume"] = 1_000_000
@@ -128,8 +140,8 @@ VOLATILE_KEYS = {
 }
 
 
-def _run(tmp_path: Path, mode: str, sessions: int = 260, seed: Path | None = None) -> dict:
-    scratch = tmp_path / f"{mode}-{sessions}{'-seeded' if seed else ''}"
+def _run(tmp_path: Path, mode: str, sessions: int = 260, seed: Path | None = None, bars: str = "") -> dict:
+    scratch = tmp_path / f"{mode}-{sessions}{'-seeded' if seed else ''}{'-' + bars if bars else ''}"
     for name in ("home", "localappdata", "diag"):
         (scratch / name).mkdir(parents=True, exist_ok=True)
     child = scratch / "child.py"
@@ -138,7 +150,7 @@ def _run(tmp_path: Path, mode: str, sessions: int = 260, seed: Path | None = Non
     environment.pop("PYTHONPATH", None)
     completed = subprocess.run(
         [sys.executable, str(child), str(scratch), str(SCRIPTS_DIR), mode, str(sessions),
-         *([str(seed)] if seed else [])],
+         *([str(seed) if seed else "", bars] if bars else [str(seed)] if seed else [])],
         capture_output=True, text=True, timeout=900, env=environment, cwd=str(SCRIPTS_DIR),
     )
     assert completed.returncode == 0, completed.stderr[-4000:]
