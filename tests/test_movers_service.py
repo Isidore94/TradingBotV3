@@ -490,3 +490,88 @@ def test_a_short_running_worker_is_not_called_stuck():
     service._run_started = NOW - timedelta(minutes=1)
     assert "stuck" not in service.status_text()
     service.shutdown()
+
+
+class _PerfClock:
+    """A perf_counter the test moves by hand."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+class _SlowChase:
+    def __init__(self, clock, seconds):
+        self.clock, self.seconds = clock, seconds
+
+    def run(self, board, prices, *, now):
+        self.clock.now += self.seconds
+
+    def annotate(self, board):
+        return dict(board)
+
+    def close(self):
+        pass
+
+
+def _timed_service(chase_seconds=None, board_seconds=0.0):
+    """A service whose bar read costs `board_seconds` and chase `chase_seconds` of fake time."""
+    clock = _PerfClock()
+
+    class SlowBot(FakeBot):
+        def get_scan_symbol_set(self):
+            clock.now += board_seconds
+            return super().get_scan_symbol_set()
+
+    bot = SlowBot([], {"SPY": _naive_la_bars([400.0] * 14)})
+    service = svc.MoversService(
+        bot_provider=lambda: bot,
+        downloader=FakeDownloader({}),
+        universe_provider=lambda: [],
+        clock=lambda: NOW,
+        autostart=False,
+        options_chase=_SlowChase(clock, chase_seconds) if chase_seconds is not None else None,
+        push_sender=lambda *_a: {},
+        mode_provider=lambda: "OFF",
+        scanner=lambda: {},
+    )
+    service._perf_clock = clock
+    return service, clock
+
+
+def test_a_tick_records_its_wall_time_and_the_chase_share():
+    service, _clock = _timed_service(chase_seconds=1.1, board_seconds=3.1)
+    assert service.last_tick_s is None
+    service._worker({"long": [], "short": []})
+    assert service.last_chase_s == pytest.approx(1.1)
+    assert service.last_tick_s == pytest.approx(4.2)
+    assert "tick 4.2 s (chase 1.1 s)" in service.status_text()
+
+
+def test_a_tick_without_the_chase_shows_the_tick_only():
+    service, _clock = _timed_service(chase_seconds=None, board_seconds=0.5)
+    service._worker({"long": [], "short": []})
+    assert service.last_chase_s is None
+    assert "tick 0.5 s" in service.status_text()
+    assert "(chase" not in service.status_text()
+
+
+def test_a_slow_tick_warns_once_per_ten_minutes(caplog):
+    service, clock = _timed_service(chase_seconds=11.0)
+    with caplog.at_level("WARNING"):
+        service._run_once({"long": [], "short": []})
+        service._run_once({"long": [], "short": []})  # 11 s later: rate-limited
+        clock.now += svc.SLOW_TICK_WARN_SECONDS
+        service._run_once({"long": [], "short": []})
+    slow = [r for r in caplog.records if "Movers tick took" in r.getMessage()]
+    assert len(slow) == 2
+    assert "11.0 s" in slow[0].getMessage()
+
+
+def test_a_fast_tick_does_not_warn(caplog):
+    service, _clock = _timed_service(chase_seconds=2.0)
+    with caplog.at_level("WARNING"):
+        service._run_once({"long": [], "short": []})
+    assert not [r for r in caplog.records if "Movers tick took" in r.getMessage()]
