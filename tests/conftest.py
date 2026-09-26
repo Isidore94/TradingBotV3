@@ -73,6 +73,8 @@ os.environ["TRADINGBOT_DISABLE_BACKGROUND_MAINTENANCE"] = "1"
 # P2-11d: no test may read or write the real Windows Credential Manager. This
 # process gets an in-memory keyring; child processes get keyring's null backend.
 os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
+# secret_store and ai_credentials share one ctypes path; keep it in memory here.
+os.environ["TRADINGBOT_CREDENTIAL_BACKEND"] = "memory"
 try:
     import keyring as _keyring
     from keyring.backend import KeyringBackend as _KeyringBackend

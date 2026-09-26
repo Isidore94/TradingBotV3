@@ -1,4 +1,8 @@
-"""Machine-local secrets in Windows Credential Manager (via ``keyring``), P2-11d.
+"""Machine-local secrets in Windows Credential Manager, P2-11d.
+
+Storage goes through `ai_credentials` (the one ctypes Credential Manager path)
+in keyring's WinVault target layout, so secrets saved while this module used
+the ``keyring`` package still read.
 
 Two secrets moved out of ``local_settings.json``: the market-prep OpenAI key
 and the ntfy push token. Readers ask the credential store first and fall back
@@ -25,12 +29,16 @@ SECRET_SETTING_KEYS = (MARKET_PREP_OPENAI_KEY, PUSH_NTFY_TOKEN)
 
 
 def _keyring():
-    """The ``keyring`` module, or None when it is not installed."""
+    """A keyring-shaped view of this machine's credential store, or None ("JSON only")."""
     try:
-        import keyring
-    except Exception:  # an absent or broken keyring means "JSON only"
+        from ai_credentials import KeyringLayoutStore, default_backend
+
+        backend = default_backend()
+    except Exception:  # no usable credential store means "JSON only"
         return None
-    return keyring
+    if backend is None or not hasattr(backend, "read_entry"):
+        return None
+    return KeyringLayoutStore(backend)
 
 
 def read_keyring_secret(name: str) -> str:
@@ -152,7 +160,7 @@ def migrate_secrets_to_keyring(names: tuple[str, ...] = SECRET_SETTING_KEYS) -> 
 
 
 def _warm_and_migrate() -> None:
-    # One read loads keyring and its backend here, not later on the Qt thread.
+    # One read loads the credential backend here, not later on the Qt thread.
     read_keyring_secret(PUSH_NTFY_TOKEN)
     migrate_secrets_to_keyring()
 
