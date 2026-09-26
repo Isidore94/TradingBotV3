@@ -337,6 +337,10 @@ EXPECTED_SLOT_ORDER = (
     # which closes the reads it counts - and still ahead of `day_review_facts`
     # for the Sunday-slate reason above it.
     "prediction_contrast",
+    # S11 (2026-09-26): exit-window truth from the M5 outcome log. Deterministic,
+    # no model; after `outcome_sweep` finalizes the day's outcomes, and ahead of
+    # `day_review_facts` so the Sunday slate keeps it. Nothing above reads its file.
+    "exit_windows",
     # WS-10D (2026-09-12): the Market Journal's weekly/monthly/quarterly rollups.
     # Deterministic, no model; it reads the daily stories and the exchange calendar
     # and feeds nothing above it, so it CLOSES the deterministic stage.

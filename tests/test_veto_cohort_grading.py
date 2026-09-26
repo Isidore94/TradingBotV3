@@ -634,6 +634,9 @@ def test_the_scope_can_be_selected_on_demand():
         # appended inside stage 1 directly after the miss contrast and still
         # ahead of the pair that closes the stage.
         "prediction_contrast",
+        # LEAD AMENDMENT 2026-09-26 (S11): exit-window truth, a deterministic
+        # stage 1 slot directly after `prediction_contrast`.
+        "exit_windows",
         "market_story_rollups",
         "measured_report",
         # AI-R3 keeps the factual day pack current before stage-2 stories.
