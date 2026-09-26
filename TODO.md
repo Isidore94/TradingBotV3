@@ -295,25 +295,12 @@ S1 and keep the order. The two 500 MB logs are read with
   trades at +1R or 60 min (F14); ignore LRSI-20 and the H1 fades until S9 re-weights them.
 
 **Packets (order):**
-- **S7 Shadow engines for the missing setups** (intraday ->8; `m5_signal_engines.py`
-  is shadow by design, so no ask-first until graduation): (a) prev-day high/low
-  break-and-hold with RVOL >= 1.5 after 10:00 ET (the P8b adoption gate already trusts
-  PDH/PDL + VWAP); (b) VWAP reclaim after a first-30 flush, longs only in
-  `bullish_strong`; (c) M5 compression break; (d) intraday trendline break from pivots.
-  Events go to the sidecar and are measured by the S3 bracket; graduation only through
-  the `docs/SETUPS_TEST.md` ladder.
 - **S9 Tier composite redesign** (grades/noise; ASK-FIRST `bounce_bot_lib/learning.py`,
   golden fixtures, trader's quoted yes): weight segments by information (distance from
   zero x confidence) or by the four most specific dimensions (bounce_type,
   bounce_combo, setup_family, time_bucket) instead of by n; cap the weight of
   `internals_breadth`, `rrs_*_alignment` and `market_environment`. Propose, with the
   F2 numbers, before touching anything. Ties into P14.
-- **S10a Kill `h1_blue_after_red`** (noise; ASK-FIRST `bounce_bot_lib/legacy.py`). Held
-  2026-09-26: the builder found the type already never alerts (`H1_ALERTS_RETIRED = True`
-  since 07-17; H1 colour signals are logged learning-only, so F3's n=994 are learning
-  rows). It has no default flag and no saved setting. "Kill" can only mean "stop
-  recording it": one new constant + one skip in `check_h1_color_setups`, which is wider
-  than the trader's "Sure kill it". Trader: stop recording it (yes/no)?
 
 - **S15 Data for a definitive long answer** (the trader 2026-09-26: longs need the market;
   find setups that work when the market works). What the 2026-09-25/26 study could not see,
