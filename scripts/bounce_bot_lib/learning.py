@@ -554,16 +554,42 @@ def daytrade_grade_text(lookup: dict | None, *, direction: str, bounce_types: li
     return text
 
 
-_regime_cache: dict = {"day": None, "regime": ""}
+_regime_cache: dict = {"day": None, "stamp": None, "regime": "", "read_at": 0.0}
+#: An unknown regime (failed or empty read) is re-read after this many seconds.
+REGIME_UNKNOWN_RETRY_SECONDS = 300.0
+
+
+def _journal_stamp() -> tuple:
+    """(mtime_ns) of the journal and its WAL; a change means the regime rows may have moved."""
+    try:
+        from project_paths import JOURNAL_DB_FILE
+
+        base = Path(JOURNAL_DB_FILE)
+    except Exception:  # noqa: BLE001 - no path, no stamp
+        return ()
+    stamp = []
+    for path in (base, base.with_name(base.name + "-wal")):
+        try:
+            stamp.append(path.stat().st_mtime_ns)
+        except OSError:
+            stamp.append(None)
+    return tuple(stamp)
 
 
 def structural_regime_on(day) -> str:
-    """The trader's structural regime in force on `day` ("" = unknown), cached per day.
+    """The trader's structural regime in force on `day` ("" = unknown), cached.
 
-    Reads the journal's `structural_regime` rows read-only once per day.
+    Read-only from the journal; re-read when the day or the journal's mtime
+    changes, and an unknown result at most every REGIME_UNKNOWN_RETRY_SECONDS.
     """
+    import time
+
     key = str(day or "")[:10]
-    if _regime_cache["day"] == key:
+    stamp = _journal_stamp()
+    now = time.monotonic()
+    if _regime_cache["day"] == key and _regime_cache["stamp"] == stamp and (
+        _regime_cache["regime"] or now - _regime_cache["read_at"] < REGIME_UNKNOWN_RETRY_SECONDS
+    ):
         return _regime_cache["regime"]
     regime = ""
     try:
@@ -573,7 +599,7 @@ def structural_regime_on(day) -> str:
         regime = "" if label == regime_join.UNKNOWN else str(label)
     except Exception as exc:  # noqa: BLE001 - unknown contributes nothing
         logging.debug("Structural regime unavailable for the shadow tier: %s", exc)
-    _regime_cache.update(day=key, regime=regime)
+    _regime_cache.update(day=key, stamp=stamp, regime=regime, read_at=now)
     return regime
 
 

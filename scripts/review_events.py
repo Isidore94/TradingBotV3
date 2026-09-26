@@ -251,7 +251,9 @@ def alert_context_fields(alert) -> dict[str, Any]:
     raw_text = str(getattr(alert, "raw_text", "") or "")
     match = _TIER_RE.search(raw_text)
     fields["tier"] = match.group(1).upper() if match else ""
-    fields["proven"] = bool(_PROVEN_RE.search(raw_text))
+    # P14: `proven` is the Alert Center's grade bypass; the old stamp text
+    # counts only on rows written before it was retired.
+    fields["proven"] = bool(getattr(alert, "grade_bypass", None)) or bool(_PROVEN_RE.search(raw_text))
     # RETIRED 2026-09-01 (trader: "We can probably remove this because idk what
     # it is"). The column stays, always False, so every reader of the 8,818
     # historical rows keeps working and the row shape does not move. Nothing

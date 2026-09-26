@@ -198,3 +198,57 @@ def test_a_bypass_graded_row_escapes_the_open_burst_digest(s_only_panel, monkeyp
     s_only_panel._repetition_decision(_alert("BEE", "beetype", "C"), is_focus=False)
     s_only_panel._repetition_decision(_alert("CEE", "ceetype", "C"), is_focus=False)
     assert seen == {"BEE": True, "CEE": False}
+
+
+def test_review_events_record_the_grade_bypass_as_proven(s_only_panel):
+    """Review advisory: `proven` on a review row is the grade bypass, not the dead stamp."""
+    from review_events import alert_context_fields
+
+    s_only_panel.set_setup_grades(_grades_payload({"beetype": "B", "ceetype": "C"}))
+    bee, cee = _alert("BEE", "beetype", "C"), _alert("CEE", "ceetype", "C")
+    s_only_panel.add_alert(bee)
+    s_only_panel.add_alert(cee)
+    assert bee.grade_bypass is True and cee.grade_bypass is False
+    assert alert_context_fields(bee)["proven"] is True
+    assert alert_context_fields(cee)["proven"] is False
+    # A row written before P14 still reads its stamp.
+    old = _alert("OLD", "ceetype", "C")
+    old.raw_text = "[C-TIER] PROVEN OLD: Bounce confirmed"
+    assert alert_context_fields(old)["proven"] is True
+
+
+def test_an_unknown_regime_is_re_read_after_five_minutes_or_a_journal_change(monkeypatch):
+    """Review advisory: one failed read must not blank the regime for the whole day."""
+    import regime_join
+
+    from bounce_bot_lib import learning
+
+    clock = {"now": 1000.0}
+    stamp = {"value": (1, None)}
+    answer = {"segments": []}
+    reads = []
+
+    def read_segments(db_path=None):
+        reads.append(1)
+        return answer["segments"]
+
+    monkeypatch.setattr(regime_join, "read_segments", read_segments)
+    monkeypatch.setattr(learning, "_journal_stamp", lambda: stamp["value"])
+    monkeypatch.setattr("time.monotonic", lambda: clock["now"])
+    monkeypatch.setattr(learning, "_regime_cache", {"day": None, "stamp": None, "regime": "", "read_at": 0.0})
+
+    assert learning.structural_regime_on("2026-09-28") == ""
+    clock["now"] += 60
+    assert learning.structural_regime_on("2026-09-28") == ""
+    assert len(reads) == 1  # cached inside five minutes
+    answer["segments"] = [{"start_date": "2026-08-01", "regime": "range"}]
+    clock["now"] += learning.REGIME_UNKNOWN_RETRY_SECONDS
+    assert learning.structural_regime_on("2026-09-28") == "range"
+    assert len(reads) == 2
+    clock["now"] += 10_000
+    assert learning.structural_regime_on("2026-09-28") == "range"
+    assert len(reads) == 2  # a known regime holds while the journal is unchanged
+    answer["segments"] = [{"start_date": "2026-09-01", "regime": "recovery"}]
+    stamp["value"] = (2, None)
+    assert learning.structural_regime_on("2026-09-28") == "recovery"
+    assert len(reads) == 3
