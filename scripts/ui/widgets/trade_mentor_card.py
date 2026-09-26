@@ -257,6 +257,8 @@ class TradeMentorCard(QWidget):
     statusChanged = Signal(str)
     #: A trade's answers or setup reached the journal (the missing-inputs chip re-reads).
     inputsFiled = Signal()
+    #: (first_load) - the regime journal lane was read on a worker (S16).
+    regimeLaneChanged = Signal(bool)
 
     def __init__(
         self,
@@ -493,6 +495,20 @@ class TradeMentorCard(QWidget):
             "anything you typed is kept as a draft."
         )
         self.skip_button.clicked.connect(self.skip)
+        # S16: the trader's structural regime, typed here any time.
+        self._regime_lane: dict[str, Any] | None = None
+        self._regime_store = None
+        self._regime_loading = False
+        self._regime_reload = False
+        self._regime_dialog = None
+        self._regime_write_seq = 0
+        self._regime_writes: dict[str, Any] = {}
+        self.regime_button = QPushButton("Regime...")
+        self.regime_button.setToolTip(
+            "Say the market regime changed, or confirm your past regimes. "
+            "Nothing is written until you click."
+        )
+        self.regime_button.clicked.connect(lambda _checked=False: self.open_regime_dialog())
 
         self.status_label = QLabel("")
         self.status_label.setObjectName("MutedLabel")
@@ -505,6 +521,7 @@ class TradeMentorCard(QWidget):
         buttons.addWidget(self.unchanged_button)
         buttons.addWidget(self.skip_button)
         buttons.addStretch(1)
+        buttons.addWidget(self.regime_button)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -1298,6 +1315,11 @@ class TradeMentorCard(QWidget):
                 self._start_plan_write(subject, answer, moment)
                 queued += 1
                 continue
+            if mentor_questions.is_regime_click(kind, chosen):
+                # S16: a regime click appends a journal segment on a worker.
+                self._start_regime_answer_write(subject, answer, moment)
+                queued += 1
+                continue
             try:
                 outcome = mentor_questions.record_answer(
                     subject,
@@ -1319,7 +1341,7 @@ class TradeMentorCard(QWidget):
         if saved:
             parts.append(f"{saved} answer(s) filed")
         if queued:
-            parts.append(f"{queued} plan answer(s) being filed")
+            parts.append(f"{queued} answer(s) being filed")
         if retired:
             parts.append(f"{retired} question(s) retired")
         if failures:
@@ -1352,6 +1374,131 @@ class TradeMentorCard(QWidget):
 
     def _plan_write_failed(self, challenge_id: str, reason: str) -> None:
         self._set_status(f"Plan answer NOT stored ({reason}).")
+
+    # -- S16: the trader's structural regime --------------------------------
+    def regime_lane(self) -> dict[str, Any] | None:
+        """The last regime lane a worker read, or ``None`` before the first read."""
+        return dict(self._regime_lane) if self._regime_lane else None
+
+    def shown_slot(self) -> MentorSlot | None:
+        """The slot on the card while it is visible, else ``None``."""
+        return self._slot if self.isVisible() else None
+
+    def regime_store(self):
+        """The journal store the host handed for regime reads, or ``None``."""
+        return self._regime_store
+
+    def _regime_store_or_open(self):
+        """The journal store for a regime read or write. Called on a worker."""
+        if self._regime_store is not None:
+            return self._regime_store
+        from journal_store import JournalStore
+
+        return JournalStore()
+
+    def refresh_regime_lane(self, store=None) -> None:
+        """Read the regime journal on a worker; the Qt thread only keeps the result."""
+        if store is not None:
+            self._regime_store = store
+        if self._regime_loading:
+            self._regime_reload = True
+            return
+        self._regime_loading = True
+        today = self._now().date()
+
+        def call():
+            import structural_regime
+
+            return structural_regime.load_lane(self._regime_store_or_open(), today)
+
+        worker = _ExitWriteWorker("regime_lane", call)
+        worker.signals.done.connect(self._regime_lane_done)
+        worker.signals.failed.connect(self._regime_lane_failed)
+        QThreadPool.globalInstance().start(worker)
+
+    def _regime_lane_done(self, _name: str, lane: object) -> None:
+        self._regime_loading = False
+        first = self._regime_lane is None
+        self._regime_lane = dict(lane) if isinstance(lane, Mapping) else None
+        if self._regime_dialog is not None:
+            self._regime_dialog.set_lane(self._regime_lane)
+        self.regimeLaneChanged.emit(first)
+        if self._regime_reload:
+            self._regime_reload = False
+            self.refresh_regime_lane()
+
+    def _regime_lane_failed(self, _name: str, reason: str) -> None:
+        self._regime_loading = False
+        logging.warning("Regime journal unreadable: %s", reason)
+        if self._regime_dialog is not None:
+            self._regime_dialog.status_label.setText(f"Could not read the regime journal ({reason}).")
+        if self._regime_reload:
+            self._regime_reload = False
+            self.refresh_regime_lane()
+
+    def open_regime_dialog(self):
+        """Open the regime journal. It shows the lane; nothing is written until a click."""
+        from ui.widgets.regime_journal_dialog import RegimeJournalDialog
+
+        if self._regime_dialog is None:
+            self._regime_dialog = RegimeJournalDialog(self, today=self._now().date())
+            self._regime_dialog.segmentConfirmed.connect(self._start_regime_segment_write)
+        self._regime_dialog.set_lane(self._regime_lane)
+        if self._regime_lane is None:
+            self.refresh_regime_lane()
+        self._regime_dialog.show()
+        self._regime_dialog.raise_()
+        return self._regime_dialog
+
+    def _start_regime_segment_write(self, segment: Mapping[str, Any]) -> None:
+        """File one clicked segment (a change or a confirmed prefill) off the Qt thread."""
+        chosen = dict(segment or {})
+        moment = self._now()
+
+        def call():
+            return self._regime_store_or_open().append_structural_regime(
+                start_date=chosen.get("start_date"),
+                regime=chosen.get("regime"),
+                structure_note=chosen.get("structure_note") or "",
+                entered_at=moment,
+            )
+
+        self._start_regime_worker(call, chosen)
+
+    def _start_regime_answer_write(self, subject, answer: Mapping[str, Any], moment: datetime) -> None:
+        """File the weekly regime answer through `record_answer` off the Qt thread."""
+        import mentor_questions
+
+        def call():
+            return mentor_questions.record_answer(
+                subject, dict(answer), store=self._regime_store_or_open(), now=moment
+            )
+
+        self._start_regime_worker(call, None)
+
+    def _start_regime_worker(self, call: Callable[[], Any], segment: Mapping[str, Any] | None) -> None:
+        """One regime write on the pool; its ending is delivered to this card's slots."""
+        self._regime_write_seq += 1
+        token = f"regime_write:{self._regime_write_seq}"
+        self._regime_writes[token] = dict(segment) if segment is not None else None
+        worker = _ExitWriteWorker(token, call)
+        worker.signals.done.connect(self._regime_write_done)
+        worker.signals.failed.connect(self._regime_write_failed)
+        QThreadPool.globalInstance().start(worker)
+
+    def _regime_write_done(self, token: str, _row: object) -> None:
+        segment = self._regime_writes.pop(token, None)
+        self._set_status("Regime saved.")
+        if self._regime_dialog is not None:
+            self._regime_dialog.write_finished(True, "Regime saved.", segment)
+        self.refresh_regime_lane()
+
+    def _regime_write_failed(self, token: str, reason: str) -> None:
+        segment = self._regime_writes.pop(token, None)
+        message = f"Regime NOT stored ({reason})."
+        self._set_status(message)
+        if self._regime_dialog is not None:
+            self._regime_dialog.write_finished(False, message, segment)
 
     def _clear_trade_check(self) -> None:
         """Drop the trade section. A WAITING-READING row is not part of it.
