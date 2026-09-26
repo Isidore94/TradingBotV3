@@ -25,7 +25,6 @@ By hand (dry run by default):
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta

@@ -637,6 +637,9 @@ def test_the_scope_can_be_selected_on_demand():
         # LEAD AMENDMENT 2026-09-26 (S11): exit-window truth, a deterministic
         # stage 1 slot directly after `prediction_contrast`.
         "exit_windows",
+        # LEAD AMENDMENT 2026-09-26 (S17): the regime table, a deterministic
+        # stage 1 slot directly after `exit_windows`.
+        "market_regime_table",
         "market_story_rollups",
         "measured_report",
         # AI-R3 keeps the factual day pack current before stage-2 stories.

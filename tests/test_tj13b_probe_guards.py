@@ -665,6 +665,9 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
         # S11 (2026-09-26): `exit_windows`, pinned by `EXPECTED_SLOT_ORDER` in
         # stage 1 and set aside here.
         "exit_windows",
+        # S17 (2026-09-26): `market_regime_table`, pinned by `EXPECTED_SLOT_ORDER`
+        # directly after `exit_windows` and set aside here.
+        "market_regime_table",
         "day_review_facts",
         # S12 (2026-09-26): `family_side_evidence`, pinned by
         # `EXPECTED_SLOT_ORDER` directly after the facts and set aside here.
