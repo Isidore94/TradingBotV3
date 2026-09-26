@@ -266,6 +266,7 @@ class BounceService(QObject):
         self._regime_strip_bucket: datetime | None = None
         self._regime_strip_history: tuple[Any, dict, dict] | None = None
         self._regime_strip_loader: Callable[..., tuple[dict, dict, str]] | None = None
+        self._regime_strip_day_review_root: Any = None
         self._regimeStripReady.connect(self._on_regime_strip_ready)
         _SERVICE_REFS.add(self)
 
@@ -956,6 +957,12 @@ class BounceService(QObject):
             if history is None or history[0] != day:
                 loader = self._regime_strip_loader or mr.load_bars
                 d1, m5, _source = loader(mr.INDEXES, mr.INDEXES, m5_since=day - mr.INTRADAY_LOOKBACK)
+                # Cached Day Review files fill the sessions the lake lacks (QQQ/IWM).
+                from research_warehouse import exchange_calendar as xcal
+
+                m5 = {symbol: list(m5.get(symbol) or ()) for symbol in mr.INDEXES}
+                sessions = [s.session_date for s in xcal.sessions_between(day - mr.INTRADAY_LOOKBACK, day)]
+                mr.fill_m5_from_day_review(m5, mr.INDEXES, sessions, root=self._regime_strip_day_review_root, now=now)
                 history = self._regime_strip_history = (day, d1, m5)
             _day, d1, m5 = history
             bot = self._current_bot()

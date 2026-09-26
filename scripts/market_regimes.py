@@ -368,6 +368,82 @@ def load_bars(
     return d1_by_symbol, m5_by_symbol, "+".join(sources) or "none"
 
 
+M5_SOURCE_LAKE = "lake"
+M5_SOURCE_DAY_REVIEW = "day_review_yahoo"
+M5_SOURCE_NONE = "none"
+
+
+def _day_review_rows(symbol: str, bars: Iterable[Mapping[str, Any]], now: datetime) -> list[dict[str, Any]]:
+    """Day Review store bars (`dt` = zone-aware bar start) as bar rows; completed by `now` only."""
+    rows = []
+    for bar in bars or ():
+        stamp = bar.get("dt")
+        if not isinstance(stamp, datetime) or stamp.tzinfo is None:
+            continue
+        start = stamp.astimezone(MARKET_TZ)
+        end = start + timedelta(minutes=5)
+        if end > now:
+            continue
+        rows.append(
+            {
+                "symbol": symbol, "interval_start": start, "interval_end": end,
+                **{key: bar.get(key) for key in ("open", "high", "low", "close", "volume")},
+                "is_complete": True,
+            }
+        )
+    return rows
+
+
+def fill_m5_from_day_review(
+    m5_by_symbol: dict[str, list[dict[str, Any]]],
+    symbols: Sequence[str],
+    days: Iterable[date],
+    *,
+    root: Path | str | None = None,
+    now: datetime | None = None,
+) -> dict[tuple[str, str], str]:
+    """Fill (symbol, session) pairs the lake lacks from the Day Review M5 store, in place.
+
+    Cached files only (`day_review_bars.read_session_bars`), never a download; the
+    lake wins whenever it has any bar that session. Returns `{(session iso, symbol):
+    "lake" | "day_review_yahoo" | "none"}` for every pair asked about.
+    """
+    moment = (now or datetime.now(MARKET_TZ)).astimezone(MARKET_TZ)
+    wanted = [str(symbol).upper() for symbol in symbols]
+    lake_days = {
+        symbol: {
+            row["interval_start"].astimezone(MARKET_TZ).date()
+            for row in m5_by_symbol.get(symbol) or ()
+            if isinstance(row.get("interval_start"), datetime)
+        }
+        for symbol in wanted
+    }
+    sources: dict[tuple[str, str], str] = {}
+    filled: set[str] = set()
+    for day in sorted(set(days)):
+        need = [symbol for symbol in wanted if day not in lake_days[symbol]]
+        for symbol in wanted:
+            sources[(day.isoformat(), symbol)] = M5_SOURCE_NONE if symbol in need else M5_SOURCE_LAKE
+        if not need:
+            continue
+        try:
+            from day_review_bars import read_session_bars
+
+            stored = read_session_bars(day.isoformat(), root=Path(root) if root is not None else None) or {}
+        except Exception:  # noqa: BLE001 - an unreadable file is unknown, never a failure
+            logging.debug("Day Review bars unreadable for the regime reads.", exc_info=True)
+            continue
+        for symbol in need:
+            rows = _day_review_rows(symbol, stored.get(symbol) or (), moment)
+            if rows:
+                m5_by_symbol.setdefault(symbol, []).extend(rows)
+                sources[(day.isoformat(), symbol)] = M5_SOURCE_DAY_REVIEW
+                filled.add(symbol)
+    for symbol in filled:
+        m5_by_symbol[symbol].sort(key=lambda row: row["interval_start"])
+    return sources
+
+
 __all__ = [
     "INDEXES",
     "RULE",
@@ -376,6 +452,7 @@ __all__ = [
     "append_rows",
     "completed_before",
     "d1_env_key",
+    "fill_m5_from_day_review",
     "intraday_env_keys",
     "load_bars",
     "read_table",
