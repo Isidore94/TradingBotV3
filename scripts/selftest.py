@@ -136,6 +136,8 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     # launch and then fail the first time the trader opened Day Review.
     "day_review_pack",
     "ai_jobs.day_review_narration",
+    # R1: the Day Review worker imports the show deck inside `_show`.
+    "day_review_show",
     # TJ-5: the week story. Reached through a FUNCTION-LEVEL import on the
     # Weekend Prep worker - `weekend_prep_service.read_week_review` and
     # `week_strip` both import it inside themselves - and by the nightly slate,

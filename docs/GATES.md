@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #267 Day Review Show (R1): after the first night the slot runs, the ledger has a `day_review_show` row that is `ok` with `<DAY_REVIEW_DIR>/shows/<date>.json` written, or `degraded_no_narrative` with the reason; on the desk, Day Review's Show button opens a full-window deck for that day (told by the model, or a "facts only" badge) and Right/Left/A/Esc work [trader]
 - #264 Night telemetry (B1), what is left: Monday's digest facts carry a `slots per goal (night of 2026-09-25)` line with non-zero counts and a `tokens (night of <date>)` line with real totals, and System Health shows the Night AI and Broker import rows (tokens on every model-calling ledger row passed on the night of 2026-09-25: 12 rows) [lead]
 - #265 Alert noise (B6): after the next session `python scripts/alert_noise_report.py --day <date>` prints shown / hidden_by_show / acted counts that match the Day Review Alerts line, and `best_now_outcomes.py --summary` has rows for that day [lead]
 - #266 Missing-inputs chip (B4): with an open trade lacking a stop the status bar shows 'Inputs: N trades missing stop/setup', one click opens the Mentor on the oldest such trade at the stop question, and the chip disappears once every trade in the last 30 days has stop and confirmed setup [trader]

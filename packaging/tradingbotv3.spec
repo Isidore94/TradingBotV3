@@ -165,6 +165,8 @@ hiddenimports += [
 # the three above: package collection cannot see them, so a missing frozen import
 # has to fail here rather than at the first open.
 hiddenimports += ["day_review_index", "day_review_bars", "forecast_brief", "walkaway_day"]
+# R1: the Day Review worker imports the show deck module inside `_show`.
+hiddenimports += ["day_review_show"]
 # Econ morning brief (2026-09-24): the reminder service's worker imports the
 # view builder, which imports the fixed econ parser. Same reason as above.
 hiddenimports += ["econ_brief", "econ_events"]

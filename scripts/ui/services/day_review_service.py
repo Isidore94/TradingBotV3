@@ -99,6 +99,9 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     # P8-P5: plain truth lines over the last 20 sessions (CAD) and the bot's
     # grade of each of the day's trades as of its entry. Built on this worker.
     "truth",
+    # R1: the Day Review Show deck - the night's verified show, or the
+    # facts-only fallback - chosen on this worker (`day_review_show.desk_deck`).
+    "show",
 )
 
 #: The benchmark whose tape the page draws. One name, the desk's own. The PAGE
@@ -232,6 +235,7 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         "pnl_by_session": (),
         "glance": {},
         "truth": {},
+        "show": {},
     }
 
 
@@ -612,7 +616,10 @@ class DayReviewService:
             core_unread.append("report card")
             _log.debug("The Day Review report card could not be built.", exc_info=True)
         payload["pack_sources_unread"] = tuple(core_unread)
-        payload["story_freshness"] = self._story_freshness(session, payload, moment)
+        current_pack = self._current_pack(session, payload, moment)
+        payload["story_freshness"] = self._story_freshness(
+            session, payload, moment, current=current_pack
+        )
         if payload["story_freshness"]["state"] != "current":
             payload["day_story"] = None
         # TJ-6: the night's suggestions, in their own guard - one unreadable
@@ -641,6 +648,7 @@ class DayReviewService:
                 "grades": {},
             }
             _log.debug("The Day Review truth lines could not be built.", exc_info=True)
+        payload["show"] = self._show(session, payload, current_pack)
         if problems:
             payload["error"] = " · ".join(problems)
         return payload
@@ -819,18 +827,32 @@ class DayReviewService:
             return None
         return dict(stored)
 
-    def _story_freshness(
+    def _current_pack(
         self, session: str, payload: Mapping[str, Any], now: datetime
+    ) -> dict[str, Any] | None:
+        """The pack for what this read holds, or None when a core source was unread."""
+        if payload.get("pack_sources_unread"):
+            return None
+        try:
+            return self._compose_pack(session, payload, now=now, strict=True)
+        except Exception:  # noqa: BLE001 - `_story_freshness` names the failure
+            _log.debug("The current day facts could not be composed.", exc_info=True)
+            return None
+
+    def _story_freshness(
+        self, session: str, payload: Mapping[str, Any], now: datetime,
+        *, current: Mapping[str, Any] | None = None,
     ) -> dict[str, str]:
         """Compare current worker facts, the saved pack, and its verified story."""
         import day_review_pack
 
         if payload.get("pack_sources_unread"):
             return {"state": "unread", "reason": ", ".join(payload["pack_sources_unread"])}
-        try:
-            current = self._compose_pack(session, payload, now=now, strict=True)
-        except Exception as exc:  # noqa: BLE001
-            return {"state": "unread", "reason": f"current facts: {exc}"}
+        if current is None:
+            try:
+                current = self._compose_pack(session, payload, now=now, strict=True)
+            except Exception as exc:  # noqa: BLE001
+                return {"state": "unread", "reason": f"current facts: {exc}"}
         saved = day_review_pack.read_pack(session)
         if not isinstance(saved, Mapping):
             return {"state": "missing", "reason": "no saved day facts yet"}
@@ -844,6 +866,38 @@ class DayReviewService:
         if story.get("inputs_hash") != saved.get("inputs_hash"):
             return {"state": "stale", "reason": "story was written for older facts"}
         return {"state": "current", "reason": "story matches current facts"}
+
+    @staticmethod
+    def _show(
+        session: str, payload: Mapping[str, Any], current: Mapping[str, Any] | None
+    ) -> dict[str, Any]:
+        """The deck Show opens: the verified night show, or the facts-only fallback."""
+        try:
+            import json
+
+            import day_review_pack
+            import day_review_show
+
+            pack = current if isinstance(current, Mapping) else day_review_pack.read_pack(session)
+            try:
+                stored = json.loads(
+                    day_review_show.show_path(session).read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError):
+                stored = None
+            lines = [str(line) for line in (payload.get("truth") or {}).get("lines") or ()]
+            alerts = lines.pop() if lines and lines[-1].startswith("Alerts") else ""
+            return day_review_show.desk_deck(
+                stored if isinstance(stored, Mapping) else None,
+                pack,
+                session_date=session,
+                truth_lines=lines,
+                alerts_line=alerts,
+                spy_bars=payload.get("spy_m5_bars") or (),
+            )
+        except Exception:  # noqa: BLE001 - the show never costs the day
+            _log.debug("The Day Review show could not be chosen.", exc_info=True)
+            return {}
 
     def _compose_pack(
         self, session: str, data: Mapping[str, Any], *, now: datetime | None = None,

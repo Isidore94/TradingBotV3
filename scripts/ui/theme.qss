@@ -179,6 +179,36 @@ QPushButton#DayReviewReportCardLine:hover {
     color: @accent@;
 }
 
+/* R1 Day Review Show: the full-window slide overlay. One variant block; the
+   widget sets fonts in code and never a per-widget stylesheet. The stripe's
+   colour follows the slide kind (`showKind` property). */
+QFrame#DayReviewShow {
+    background: @bg_app@;
+    color: @text_primary@;
+}
+QFrame#DayReviewShow QLabel#DayReviewShowCaption {
+    color: @text_secondary@;
+}
+QFrame#DayReviewShow QLabel#DayReviewShowNumber {
+    color: @accent@;
+}
+QFrame#DayReviewShow QLabel#DayReviewShowBadge {
+    color: @caution@;
+    border: 1px solid @caution@;
+    border-radius: @radius@;
+    padding: 2px 8px;
+}
+QFrame#DayReviewShow QFrame#DayReviewShowStripe { background: @accent@; border-radius: 3px; }
+QFrame#DayReviewShow QFrame#DayReviewShowStripe[showKind="tape"] { background: @chart_blue@; }
+QFrame#DayReviewShow QFrame#DayReviewShowStripe[showKind="number"] { background: @chart_purple@; }
+QFrame#DayReviewShow QFrame#DayReviewShowStripe[showKind="scoreboard"] { background: @favorite@; }
+QFrame#DayReviewShow QFrame#DayReviewShowStripe[showKind="trade"] { background: @long@; }
+QFrame#DayReviewShow QFrame#DayReviewShowStripe[showKind="miss"] { background: @short@; }
+QFrame#DayReviewShow QFrame#DayReviewShowStripe[showKind="read"] { background: @chart_light_blue@; }
+QFrame#DayReviewShow QFrame#DayReviewShowStripe[showKind="lesson"] { background: @chart_yellow@; }
+QFrame#DayReviewShow QFrame#DayReviewShowStripe[showKind="tomorrow"] { background: @neutral@; }
+QFrame#DayReviewShow QFrame#DayReviewShowStripe[showKind="close"] { background: @text_secondary@; }
+
 /* Market Journal reader (G3): the meta line above the thought - session,
    timeframe, when it was written, who wrote it, the symbols. Secondary, so
    the words underneath are what the eye lands on. */
