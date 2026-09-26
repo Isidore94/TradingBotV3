@@ -144,9 +144,8 @@ def extract_alert_tier(alert: BounceAlert) -> str:
 # rows carried banger=True. PROVEN is the top alert class and is untouched.
 
 
-# Learning-loop PROVEN stamp: this exact bounce configuration (type/combo/
-# swing trait/family/focus) has a measured winning record (n>=12, avg>=+0.45R,
-# median>=0). These are the "see it live, take it" alerts.
+# The retired learning-loop PROVEN stamp (P14, 2026-09-26): new alerts never
+# carry it; it is read only for rows written before, and never passes the tier gate.
 _PROVEN_RE = re.compile(r"\bPROVEN\b")
 
 
@@ -158,23 +157,19 @@ def is_entry_assist_alert(alert: BounceAlert) -> bool:
     return str(alert.tag or "") == "entry_assist" or is_entry_assist_text(alert.raw_text)
 
 
-def alert_passes_min_tier(alert: BounceAlert, mode: str) -> bool:
+def alert_passes_min_tier(alert: BounceAlert, mode: str, *, grade_bypass: bool = False) -> bool:
     """Filter policy for the live feed (D1 alerts route to their own feed).
 
-    PROVEN alerts always pass (they are the sit-back-and-wait trades), and so
-    does entry-assist output — the trader clicked a button asking for it, so it
-    must never be swallowed by the tier gate. Chart-watch hits pass for the
-    same reason: the trader armed that exact condition from the M5 chart.
-    Untiered alerts (regime notes, pause-watch summaries) pass everything
-    except the S-only mode, where only PROVEN/S-tier remain.
+    P14: an M5 row whose setup grade is in `alert_show_filter.bypass_grades`
+    (`grade_bypass`, decided by the panel) always passes; the PROVEN stamp no
+    longer does. Entry-assist output passes too — the trader clicked a button
+    asking for it. Chart-watch hits pass for the same reason: the trader armed
+    that exact condition from the M5 chart. Untiered alerts (regime notes,
+    pause-watch summaries) pass everything except the S-only mode.
     """
     if mode in ("", "all"):
         return True
-    if (
-        is_proven_alert(alert)
-        or is_entry_assist_alert(alert)
-        or is_chart_watch_alert(alert)
-    ):
+    if grade_bypass or is_entry_assist_alert(alert) or is_chart_watch_alert(alert):
         return True
     tier = extract_alert_tier(alert)
     if not tier:
@@ -194,9 +189,11 @@ def alert_is_loud(alert: BounceAlert) -> bool:
     )
 
 
-def alert_passes_feed_gate(alert: BounceAlert, mode: str, *, is_focus: bool = False) -> bool:
+def alert_passes_feed_gate(
+    alert: BounceAlert, mode: str, *, is_focus: bool = False, grade_bypass: bool = False
+) -> bool:
     """Liked (focus) picks always surface; everything else obeys the tier gate."""
-    return is_focus or alert_passes_min_tier(alert, mode)
+    return is_focus or alert_passes_min_tier(alert, mode, grade_bypass=grade_bypass)
 
 
 def alert_should_sound(alert: BounceAlert, *, is_focus: bool = False) -> bool:

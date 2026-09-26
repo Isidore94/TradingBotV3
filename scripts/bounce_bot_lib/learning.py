@@ -28,9 +28,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from market_session import get_market_session_window
-from project_paths import INTRADAY_BOUNCE_OUTCOMES_FILE
+from project_paths import INTRADAY_BOUNCE_OUTCOMES_FILE, LOCAL_SETTINGS_DIR
 
 BOUNCE_LEARNING_STATE_FILE = INTRADAY_BOUNCE_OUTCOMES_FILE.with_name("intraday_bounce_learning_state.json")
+#: P14: the setup grades the Working-lately build publishes (`setup_grades`).
+SETUP_GRADES_FILE = LOCAL_SETTINGS_DIR / "working_lately" / "setup_grades_latest.json"
 
 MIN_SAMPLES = 10
 # A mute suppresses the live alert entirely, so it demands far more evidence
@@ -89,12 +91,10 @@ COMPOSITE_DIMENSIONS = (
     ("master_avwap_priority_bucket", 0.6),
     ("master_avwap_focus", 0.6),
 )
-# PROVEN segments (2026-07-09, user rule "see the best bounces live"): a
-# segment with real sample size, strong average AND non-negative median R is a
-# proven winner - a live bounce matching one gets stamped PROVEN, upgraded,
-# and bypasses the Alert Center tier gate the way the retired BANGER class
-# used to (P0 removed that class on 2026-09-01; this path is unchanged and the
-# comparison is kept only because it names the behaviour). Includes the
+# Proven segments: a segment with real sample size, strong average AND
+# non-negative median R floors a matching bounce's tier at A (S above
+# PROVEN_S_FLOOR_AVG_R). P14 (2026-09-26) retired the PROVEN stamp and its
+# tier-gate bypass: the alert carries its setup grade instead. Includes the
 # dimensions the tier composite does NOT blend (combos, swing traits, setup
 # family), because that is where the best measured results live
 # (trendline_break_recent +1.93R n=31, dynamic_vwap_upper_band +0.88R n=59,
@@ -330,10 +330,9 @@ def evaluate_bounce_quality(
     ``entry_quality_r``) of every segment this bounce belongs to, each shrunk
     by sample size; unknown segments simply do not contribute, so a bounce
     with no history lands in the neutral B/C range instead of failing.
-    A bounce matching any PROVEN segment (see PROVEN_* thresholds) is flagged
-    so the alert path can stamp it and the Alert Center gives it the bypass
-    the retired BANGER class used to get - unless a mute fires (proven
-    negatives keep the veto). The class is gone as of P0; the bypass is not.
+    A bounce matching any proven segment (see PROVEN_* thresholds) is flagged
+    and floored at A/S unless a mute fires (proven negatives keep the veto);
+    since P14 the alert prints its setup grade instead of a PROVEN stamp.
     """
     segments = (state or {}).get("segments") or {}
     direction = str(direction or "").strip().lower()
@@ -514,6 +513,45 @@ def evaluate_shadow_tier(
                 tier = label
                 break
     return {"tier": tier, "composite_r": round(composite, 3)}
+
+
+_grades_cache: dict = {"path": None, "mtime": None, "lookup": None}
+
+
+def load_daytrade_grade_lookup(path: Path | None = None) -> dict | None:
+    """`setup_grades.daytrade_lookup` of the published grades, mtime-cached; None when unreadable."""
+    grades_path = Path(path) if path else SETUP_GRADES_FILE
+    try:
+        mtime = grades_path.stat().st_mtime
+    except OSError:
+        return None
+    if _grades_cache["path"] == grades_path and _grades_cache["mtime"] == mtime:
+        return _grades_cache["lookup"]
+    try:
+        import setup_grades
+
+        payload = json.loads(grades_path.read_text(encoding="utf-8"))
+        lookup = setup_grades.daytrade_lookup(payload if isinstance(payload, dict) else {})
+    except (OSError, ValueError) as exc:
+        logging.warning("Could not load the setup grades: %s", exc)
+        return _grades_cache["lookup"]
+    _grades_cache.update(path=grades_path, mtime=mtime, lookup=lookup)
+    return lookup
+
+
+def daytrade_grade_text(lookup: dict | None, *, direction: str, bounce_types: list[str] | tuple = ()) -> str:
+    """P14: "1:1 B · 2R C" for the alert's best-graded bounce type; "unknown" without grades."""
+    if not lookup:
+        return "unknown"
+    import setup_grades
+
+    cell = setup_grades.daytrade_cell_for_alert(lookup, "-".join(bounce_types or ()), direction)
+    if not cell:
+        return f"1:1 {setup_grades.badge(setup_grades.NEW)}"
+    text = f"1:1 {setup_grades.badge(cell.get('grade'))}"
+    if cell.get("grade_2r"):
+        text += f" · 2R {setup_grades.badge(cell.get('grade_2r'))}"
+    return text
 
 
 _regime_cache: dict = {"day": None, "regime": ""}

@@ -1486,20 +1486,19 @@ def _migrate_csv_header(path, fieldnames):
         logging.warning("CSV header migration skipped for %s: %s", path, exc)
 
 
-def _format_bounce_alert_message(symbol, direction, levels_list, event_row, quality, exit_note="") -> str:
+def _format_bounce_alert_message(
+    symbol, direction, levels_list, event_row, quality, exit_note="", grade_text=""
+) -> str:
     """Alert text: tier + confirmation + trade plan + the measured reasons.
 
-    PROVEN bounces (a segment with strong measured avg AND median R matched
-    this alert) carry the token + the evidence so the trader sees WHY it is a
-    take-this-one alert; the Alert Center gives the token a tier-gate bypass
-    and an always-sound. PROVEN is the top alert class - BANGER, which this
-    line used to compare it to, was retired 2026-09-01.
+    P14 (trader 2026-09-26, "retire PROVEN"): a bounce matching a proven
+    segment no longer carries a PROVEN stamp; it prints its setup grade
+    (`grade_text`, e.g. "1:1 B · 2R C") where the proven evidence used to be.
     """
     row = event_row if isinstance(event_row, dict) else {}
     quality = quality if isinstance(quality, dict) else {}
     tier = str(quality.get("tier") or "B")
-    proven_token = "PROVEN " if quality.get("proven") else ""
-    parts = [f"[{tier}-TIER] {proven_token}{symbol}: Bounce confirmed ({direction}) from {levels_list}"]
+    parts = [f"[{tier}-TIER] {symbol}: Bounce confirmed ({direction}) from {levels_list}"]
 
     def _num(value):
         try:
@@ -1522,9 +1521,8 @@ def _format_bounce_alert_message(symbol, direction, levels_list, event_row, qual
         parts.append(f"take 50% at +1R {target_1r:.2f}, trail the rest")
     if exit_note:
         parts.append(str(exit_note))
-    proven_reasons = quality.get("proven_reasons") or []
-    if proven_reasons:
-        parts.append("proven: " + "; ".join(proven_reasons))
+    if quality.get("proven_reasons"):
+        parts.append(f"grade {grade_text or 'unknown'}")
     reasons = quality.get("reasons") or []
     if reasons:
         parts.append("why: " + "; ".join(reasons[:3]))
@@ -4000,7 +3998,7 @@ class BounceBot(EWrapper, EClient):
                 "priority_bucket": str(row.get("master_avwap_priority_bucket") or ""),
                 "focus_label": str(row.get("master_avwap_focus_label") or ""),
                 # The best measured segments live in dimensions the composite
-                # ignores; matching any PROVEN one flags the alert live.
+                # ignores; matching a proven one floors the live tier.
                 "bounce_combo": "+".join(bounce_type_keys),
                 "setup_family": str(row.get("master_avwap_setup_family") or ""),
             }
@@ -4026,6 +4024,20 @@ class BounceBot(EWrapper, EClient):
         except Exception as exc:
             logging.debug("Shadow S9 tier skipped: %s", exc)
             return {}
+
+    def _daytrade_grade_suffix(self, direction, levels):
+        """P14: the alert's setup grade text ("1:1 B · 2R C"); "unknown" on any failure."""
+        try:
+            from bounce_bot_lib.learning import daytrade_grade_text, load_daytrade_grade_lookup
+
+            return daytrade_grade_text(
+                load_daytrade_grade_lookup(),
+                direction=direction,
+                bounce_types=_bounce_type_keys_from_levels(levels or {}),
+            )
+        except Exception as exc:
+            logging.debug("Setup grade unavailable for the alert text: %s", exc)
+            return "unknown"
 
     def _measured_exit_suffix(self, direction, levels):
         """Tracker-measured exit stats for this bounce type ("" when unproven).
@@ -13438,6 +13450,9 @@ class BounceBot(EWrapper, EClient):
             bounce_msg = _format_bounce_alert_message(
                 symbol, direction, levels_list, event_row, quality,
                 exit_note=self._measured_exit_suffix(direction, levels),
+                grade_text=(
+                    self._daytrade_grade_suffix(direction, levels) if quality.get("proven_reasons") else ""
+                ),
             )
             h1_note = self._h1_confirmation_suffix(symbol, direction)
             if h1_note:

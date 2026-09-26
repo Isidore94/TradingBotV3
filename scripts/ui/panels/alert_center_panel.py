@@ -184,7 +184,7 @@ MIN_TIER_CHOICES = (
     ("All alerts", "all"),
     ("B tier and above", "B"),
     ("A tier and above", "A"),
-    ("S tier / PROVEN only", "S"),
+    ("S tier / top grade only", "S"),
 )
 MAX_FEED_ITEMS = 250
 MAX_D1_FEED_ITEMS = 100
@@ -585,7 +585,7 @@ class AlertCenterPanel(
         # automatic D1 interest flags, the tier-gate bypass, the always-sound -
         # only once it trades beyond yesterday's extreme in its own direction.
         # Below that it is not silenced: it simply falls back to the ordinary
-        # tier gate, so a genuinely strong bounce (S/A, PROVEN) still
+        # tier gate, so a genuinely strong bounce (S/A, top grade) still
         # comes through. "SYM|long" -> prev_day_gate state; the companion map
         # stamps when the break was first seen so the D1 event window opens
         # THERE and never replays what the name did while still inside
@@ -665,7 +665,7 @@ class AlertCenterPanel(
         self.min_tier_input.setCurrentIndex(max(0, self.min_tier_input.findData(saved_mode)))
         self.min_tier_input.currentIndexChanged.connect(self._on_prefs_changed)
 
-        self.sound_input = QCheckBox("Sound on S/A + PROVEN")
+        self.sound_input = QCheckBox("Sound on S/A")
         self.sound_input.setChecked(bool(get_local_setting("qt_alert_sound", True)))
         self.sound_input.toggled.connect(self._on_prefs_changed)
 
@@ -682,6 +682,10 @@ class AlertCenterPanel(
         # P9 (trader, 2026-09-25): which M5 rows show. Display only; every
         # alert is still recorded and still reaches the review-queue door.
         self._show_grades: dict = {}
+        #: P14: grades whose M5 rows pass the tier gate and first-30 switch.
+        self._bypass_grades: frozenset = frozenset()
+        #: `id(alert) -> (alert, bool)`; cleared when the grades change.
+        self._grade_bypass_cache: dict = {}
         self._show_best_keys: frozenset | None = None
         #: `id(alert) -> (alert, (hidden, is_new))`; cleared when any input changes.
         self._show_verdicts: dict = {}
@@ -700,13 +704,14 @@ class AlertCenterPanel(
             "names, armed watches, price alerts and regime-pause rows always show."
         )
         self.show_filter_input.currentIndexChanged.connect(self._on_show_filter_changed)
-        # S2: hide 09:30-10:00 ET M5 rows (PROVEN, Focus, typed, watches still show).
+        # S2: hide 09:30-10:00 ET M5 rows (top grade, Focus, typed, watches still show).
         self.first30_input = QCheckBox(alert_show_filter.FIRST30_LABEL)
         self.first30_input.setObjectName("AlertShowFirst30")
         self.first30_input.setToolTip(
             "Hide M5 alerts from 9:30 to 10:00 ET (they win less and end red on "
-            "average). PROVEN, Focus names, your typed names and armed watches "
-            "always show. Hidden rows are still recorded."
+            "average). Top-grade alerts (grade A; grade B while no A exists), Focus "
+            "names, your typed names and armed watches always show. Hidden rows are "
+            "still recorded."
         )
         self.first30_input.setChecked(alert_show_filter.first30_enabled())
         self.first30_input.toggled.connect(self._on_show_filter_changed)
@@ -1331,7 +1336,9 @@ class AlertCenterPanel(
         # is presented exactly as it was before the placement, so the rule
         # changes where the name goes and not how the row looks or sounds.
         auto_focused = self._auto_focus_regime_pause(alert)
-        if alert_passes_feed_gate(alert, self._min_tier_mode(), is_focus=is_focus):
+        if alert_passes_feed_gate(
+            alert, self._min_tier_mode(), is_focus=is_focus, grade_bypass=self._alert_grade_bypass(alert)
+        ):
             # The chart review queue is likewise decided before, and
             # independently of, how the row is presented.
             if not auto_focused:
@@ -1512,8 +1519,8 @@ class AlertCenterPanel(
                 "Ordinary alerts in the first minutes after the open are "
                 "grouped here so the burst does not bury the feed. Every one "
                 "of them is still in History, in the chart review queue, and "
-                "in the evidence log - nothing was dropped. PROVEN "
-                "configs, Focus names and anything you armed yourself bypass "
+                "in the evidence log - nothing was dropped. Focus names "
+                "and anything you armed yourself bypass "
                 "this entirely."
             )
         except Exception:
@@ -1661,7 +1668,9 @@ class AlertCenterPanel(
                 if sector_hidden is None:
                     sector_hidden = self._sector_hidden(alert, hide_sectors)
                     sector_memo[alert.symbol] = sector_hidden
-            if sector_hidden or not alert_passes_feed_gate(alert, mode, is_focus=is_focus):
+            if sector_hidden or not alert_passes_feed_gate(
+                alert, mode, is_focus=is_focus, grade_bypass=self._alert_grade_bypass(alert)
+            ):
                 continue
             key = self._feed_row_key(alert)
             hidden, is_new = self.show_filter_verdict(alert)
@@ -1759,7 +1768,30 @@ class AlertCenterPanel(
         import setup_grades
 
         self._show_grades = setup_grades.daytrade_lookup(payload)
+        bypass = alert_show_filter.bypass_grades(self._show_grades)
+        self._grade_bypass_cache.clear()
+        if bypass != self._bypass_grades:
+            # The tier gate and the first-30 switch read these: redraw by diff.
+            self._bypass_grades = bypass
+            self._show_verdicts.clear()
+            self._sync_feed()
         self._show_filter_inputs_changed(alert_show_filter.GRADE_B_UP)
+
+    def _alert_grade_bypass(self, alert: BounceAlert) -> bool:
+        """P14: an M5 row graded in `bypass_grades` passes the tier gate (cached per alert)."""
+        cached = self._grade_bypass_cache.get(id(alert))
+        if cached is not None and cached[0] is alert:
+            return cached[1]
+        verdict = False
+        if self._bypass_grades and str(alert.symbol or "").strip() and self._is_m5_review_alert(alert):
+            try:
+                verdict = self.show_filter_grade(alert) in self._bypass_grades
+            except Exception:  # noqa: BLE001 - unknown grade gets no bypass
+                verdict = False
+        if len(self._grade_bypass_cache) > MAX_FEED_ITEMS * 8:
+            self._grade_bypass_cache.clear()
+        self._grade_bypass_cache[id(alert)] = (alert, verdict)
+        return verdict
 
     def set_best_now_entries(self, entries) -> None:
         """The Best-right-now strip's rows (P1-5); the Best filter shows only these."""
@@ -1866,6 +1898,7 @@ class AlertCenterPanel(
             privileged=self._show_filter_privileged(alert),
             first30=self.first30_input.isChecked(),
             when=alert_show_filter.alert_time(alert),
+            bypass=self._bypass_grades,
         )
 
     def show_filter_hides(self, alert: BounceAlert) -> bool:
@@ -1979,7 +2012,10 @@ class AlertCenterPanel(
                 alert.symbol in self._ignored_symbols
                 or self._sector_hidden(alert, hide_sectors)
                 or not alert_passes_feed_gate(
-                    alert, mode, is_focus=self._alert_has_focus_privilege(alert)
+                    alert,
+                    mode,
+                    is_focus=self._alert_has_focus_privilege(alert),
+                    grade_bypass=self._alert_grade_bypass(alert),
                 )
             ):
                 continue
@@ -2503,7 +2539,10 @@ class AlertCenterPanel(
             if alert.symbol not in self._ignored_symbols
             and not self._sector_hidden(alert, hide_sectors)
             and alert_passes_feed_gate(
-                alert, mode, is_focus=self._alert_has_focus_privilege(alert)
+                alert,
+                mode,
+                is_focus=self._alert_has_focus_privilege(alert),
+                grade_bypass=self._alert_grade_bypass(alert),
             )
             and not self.show_filter_hides(alert)
         ]
