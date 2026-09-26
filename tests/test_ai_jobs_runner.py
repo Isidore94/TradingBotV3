@@ -341,6 +341,10 @@ EXPECTED_SLOT_ORDER = (
     # no model; after `outcome_sweep` finalizes the day's outcomes, and ahead of
     # `day_review_facts` so the Sunday slate keeps it. Nothing above reads its file.
     "exit_windows",
+    # S17 (2026-09-26): the multi-timeframe regime table. Deterministic, no model;
+    # it reads stored bars only and feeds nothing in the night, so it sits beside
+    # `exit_windows` inside stage 1 and ahead of `day_review_facts` (Sunday slate).
+    "market_regime_table",
     # WS-10D (2026-09-12): the Market Journal's weekly/monthly/quarterly rollups.
     # Deterministic, no model; it reads the daily stories and the exchange calendar
     # and feeds nothing above it, so it CLOSES the deterministic stage.

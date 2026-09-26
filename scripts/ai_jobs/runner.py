@@ -1031,6 +1031,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         family_side_evidence,
         improvement_ideas,
         journal_auto_tag,
+        market_regime_table,
         market_story_narration,
         measured_report_publish,
         miss_contrast,
@@ -1349,6 +1350,20 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description=(
                 "Exit-window truth per M5 family: peak timing, give-back and five "
                 "exit rules with a 1R stop (deterministic, no model)"
+            ),
+            max_attempts=3,
+        ),
+        # S17 (2026-09-26), INSIDE stage 1 directly after `exit_windows`: the
+        # multi-timeframe regime table. It reads stored bars only and feeds nothing
+        # in the night; ahead of `day_review_facts` so the Sunday slate keeps it.
+        JobSlot(
+            name="market_regime_table",
+            goal="market_read",
+            run=market_regime_table.run_market_regime_table,
+            reserve_minutes=5.0,
+            description=(
+                "Auto regimes on M5, M30, H1, H4, D1 and W for the indexes and sector "
+                "ETFs plus structure facts, appended per session (deterministic, no model)"
             ),
             max_attempts=3,
         ),

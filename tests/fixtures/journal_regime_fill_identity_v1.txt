@@ -1,0 +1,32 @@
+Journal market environment fill
+bars: fixture
+journal dates considered: 8
+trader-owned rows left alone: 1
+auto rows unchanged: 0
+rows to write: 7 (3 with an unknown field)
+  2026-08-13  mid up      short up      intraday unknown
+  2026-08-14  mid up      short down    intraday unknown
+  2026-08-16  mid up      short down    intraday unknown
+  2026-08-17  mid up      short down    intraday up
+  2026-08-18  mid range   short down    intraday up
+  2026-08-20  mid up      short up      intraday up
+  2026-08-21  mid up      short up      intraday up
+WRITTEN: 6  REFUSED (trader row): 1
+RegimeReading(trade_date='2026-08-13', mid_term_regime='up', short_term_regime='up', intraday_regime='unknown', notes='auto (journal_regime_auto_v1, champion Auto Market Bias; bars completed before the session, intraday at first entry 08:15 ET): SPY D1 bullish_weak, 5d bullish_strong, M5 unknown, M30 bullish_strong; QQQ D1 bearish_strong, 5d bearish_strong; IWM D1 bearish_weak, 5d bearish_strong')
+RegimeReading(trade_date='2026-08-14', mid_term_regime='up', short_term_regime='down', intraday_regime='unknown', notes='auto (journal_regime_auto_v1, champion Auto Market Bias; bars completed before the session, intraday at no entry time): SPY D1 bullish_weak, 5d bearish_weak, M5 unknown, M30 unknown; QQQ D1 bearish_strong, 5d bearish_strong; IWM D1 bearish_weak, 5d bearish_strong')
+RegimeReading(trade_date='2026-08-16', mid_term_regime='up', short_term_regime='down', intraday_regime='unknown', notes='auto (journal_regime_auto_v1, champion Auto Market Bias; bars completed before the session, intraday at not a session): SPY D1 bullish_weak, 5d bearish_strong, M5 unknown, M30 unknown; QQQ D1 bearish_strong, 5d bearish_strong; IWM D1 neutral_chop, 5d bearish_strong')
+RegimeReading(trade_date='2026-08-17', mid_term_regime='up', short_term_regime='down', intraday_regime='up', notes='auto (journal_regime_auto_v1, champion Auto Market Bias; bars completed before the session, intraday at first entry 09:50 ET): SPY D1 bullish_weak, 5d bearish_strong, M5 bullish_strong, M30 bearish_weak; QQQ D1 bearish_strong, 5d bearish_strong; IWM D1 neutral_chop, 5d bearish_strong')
+RegimeReading(trade_date='2026-08-18', mid_term_regime='range', short_term_regime='down', intraday_regime='up', notes='auto (journal_regime_auto_v1, champion Auto Market Bias; bars completed before the session, intraday at first entry 09:50 ET): SPY D1 neutral_chop, 5d bearish_strong, M5 bullish_strong, M30 neutral_chop; QQQ D1 bearish_strong, 5d bearish_strong; IWM D1 bullish_weak, 5d bullish_weak')
+RegimeReading(trade_date='2026-08-20', mid_term_regime='up', short_term_regime='up', intraday_regime='up', notes='auto (journal_regime_auto_v1, champion Auto Market Bias; bars completed before the session, intraday at first entry 09:50 ET): SPY D1 bullish_weak, 5d bullish_weak, M5 bullish_strong, M30 bearish_weak; QQQ D1 bearish_strong, 5d bearish_strong; IWM D1 bullish_weak, 5d bullish_strong')
+RegimeReading(trade_date='2026-08-21', mid_term_regime='up', short_term_regime='up', intraday_regime='up', notes='auto (journal_regime_auto_v1, champion Auto Market Bias; bars completed before the session, intraday at first entry 09:50 ET): SPY D1 bullish_weak, 5d bullish_weak, M5 bullish_strong, M30 bearish_strong; QQQ D1 bearish_strong, 5d bullish_weak; IWM D1 bearish_weak, 5d bullish_weak')
+Journal market environment fill
+bars: fixture
+journal dates considered: 3
+trader-owned rows left alone: 1
+auto rows unchanged: 0
+rows to write: 2 (0 with an unknown field)
+  2026-08-18  mid range   short down    intraday up
+  2026-08-20  mid up      short up      intraday up
+Dry run: nothing written. Re-run with --apply to write.
+RegimeReading(trade_date='2026-08-20', mid_term_regime='up', short_term_regime='up', intraday_regime='down', notes='auto (journal_regime_auto_v1, champion Auto Market Bias; bars completed before the session, intraday at first entry 11:40 ET): SPY D1 bullish_weak, 5d bullish_weak, M5 bearish_strong, M30 bearish_strong; QQQ D1 bearish_strong, 5d bearish_strong; IWM D1 bullish_weak, 5d bullish_strong')
+RegimeReading(trade_date='2026-08-20', mid_term_regime='unknown', short_term_regime='unknown', intraday_regime='unknown', notes='auto (journal_regime_auto_v1, champion Auto Market Bias; bars completed before the session, intraday at no entry time): SPY D1 unknown, 5d unknown, M5 unknown, M30 unknown; QQQ D1 unknown, 5d unknown; IWM D1 unknown, 5d unknown')

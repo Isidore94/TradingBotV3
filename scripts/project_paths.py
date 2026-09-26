@@ -426,6 +426,9 @@ AUTO_OPENING_ENV_FILE = RUNTIME_DATA_DIR / "auto_opening_environment.json"
 # Append-only per-session history of the opening regime: the day's first
 # regime read and its directional anchor. `opening_regime_history` owns it.
 AUTO_OPENING_REGIME_HISTORY_FILE = RUNTIME_DATA_DIR / "auto_opening_regime_history.jsonl"
+# S17: append-only auto regimes (M5..W env_key + structure facts) per session and
+# index / sector ETF. `ai_jobs.market_regime_table` owns it; rows are never re-labelled.
+MARKET_REGIME_TABLE_FILE = RUNTIME_DATA_DIR / "market_regime_table.jsonl"
 # Dated, append-only copies of `working_lately/setup_grades_latest.json`, one
 # JSONL per day. `setup_grades_history` owns it.
 SETUP_GRADES_HISTORY_DIR = LOCAL_SETTINGS_DIR / "working_lately" / "setup_grades_history"

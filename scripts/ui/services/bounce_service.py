@@ -179,6 +179,8 @@ class BounceService(QObject):
     technicalIntegrityChanged = Signal(object)  # advisory completed-M5 hierarchy, or {}
     entryAssistChanged = Signal(object)  # state dict from entry_assist_state(), or {}
     entryBoardChanged = Signal(object)  # board dict from entry_assist_board_snapshot(), or {}
+    regimeStripChanged = Signal(object)  # market_regimes.strip_readings() payload
+    _regimeStripReady = Signal(object)
     started = Signal()
     stopped = Signal()
     failed = Signal(str)
@@ -258,6 +260,13 @@ class BounceService(QObject):
         # worker, ready-signal, emitted from the GUI thread.
         self._entry_board_refreshing = False
         self._entryBoardReady.connect(self._on_entry_board_ready)
+        # S17 regime strip: the auto-regime timer below kicks a single-flight
+        # worker at most once per 5-minute bar; the Qt thread only formats.
+        self._regime_strip_refreshing = False
+        self._regime_strip_bucket: datetime | None = None
+        self._regime_strip_history: tuple[Any, dict, dict] | None = None
+        self._regime_strip_loader: Callable[..., tuple[dict, dict, str]] | None = None
+        self._regimeStripReady.connect(self._on_regime_strip_ready)
         _SERVICE_REFS.add(self)
 
         self._health_timer = QTimer(self)
@@ -918,6 +927,59 @@ class BounceService(QObject):
                 assist = None
         self._emit(self.autoRegimeChanged, reading or {})
         self._emit(self.entryAssistChanged, assist or {})
+        self._maybe_refresh_regime_strip()
+
+    def _maybe_refresh_regime_strip(self, now: datetime | None = None) -> bool:
+        """Start the regime-strip worker once per new 5-minute bucket; True when started."""
+        moment = now or datetime.now().astimezone()
+        bucket = moment.replace(minute=moment.minute - moment.minute % 5, second=0, microsecond=0)
+        if self._regime_strip_refreshing or bucket == self._regime_strip_bucket:
+            return False
+        self._regime_strip_bucket = bucket
+        self._regime_strip_refreshing = True
+        threading.Thread(
+            target=self._load_regime_strip_worker,
+            args=(moment,),
+            name="qt-regime-strip",
+            daemon=True,
+        ).start()
+        return True
+
+    def _load_regime_strip_worker(self, now: datetime) -> None:
+        """Worker: cached bot M5 + stored history -> six champion reads per index."""
+        payload: dict[str, Any] = {}
+        try:
+            import market_regimes as mr
+
+            day = now.date()
+            history = self._regime_strip_history
+            if history is None or history[0] != day:
+                loader = self._regime_strip_loader or mr.load_bars
+                d1, m5, _source = loader(mr.INDEXES, mr.INDEXES, m5_since=day - mr.INTRADAY_LOOKBACK)
+                history = self._regime_strip_history = (day, d1, m5)
+            _day, d1, m5 = history
+            bot = self._current_bot()
+            merged = {}
+            for symbol in mr.INDEXES:
+                live = []
+                if bot is not None:
+                    try:
+                        live = mr.live_m5_rows(symbol, bot.m5_chart_bars(symbol, max_sessions=5) or [], now=now)
+                    except Exception:  # noqa: BLE001 - no cached bars is unknown, never an error
+                        live = []
+                merged[symbol] = mr.merge_m5(m5.get(symbol) or [], live)
+            payload = mr.strip_readings(now, d1, merged)
+        except Exception:  # noqa: BLE001 - the strip shows unknown rather than failing the timer
+            logging.debug("Regime strip read failed.", exc_info=True)
+            payload = {}
+        self._emit(self._regimeStripReady, payload)
+
+    @Slot(object)
+    def _on_regime_strip_ready(self, payload: object) -> None:
+        self._regime_strip_refreshing = False
+        if not self._is_live():
+            return
+        self._emit(self.regimeStripChanged, payload if isinstance(payload, dict) else {})
 
     def entry_assist(self) -> dict | None:
         """Regime-tailored window toggle / movers output (legacy single button)."""
