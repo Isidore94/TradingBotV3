@@ -149,7 +149,8 @@ def test_the_scan_publishes_the_long_setups_file(runs):
     assert [row["setup"] for row in rows] == ["leader_pullback"]
     row = rows[0]
     assert row["entry_limit"] < row["close"]
-    assert row["stop"] < row["entry_limit"] < row["target"]
+    assert row["stop"] < row["entry_limit"]
+    assert row["exit"].startswith("hold up to 10 sessions, stop ")
     # SPY is the same pulled-back frame here: under its 20-day, so the market is not working.
     assert row["promoted"] is False
     assert row["status"] == "waiting for the market"

@@ -16,8 +16,9 @@ names, "Ya that's the post earnings play".
   gap-day low and the VWAP anchored at the gap day.
 
 Each row carries an entry (a LIMIT `ENTRY_ATR_BELOW` ATR under the scan close - the S8 /
-S15.9 fill rule, `research_warehouse.retest_entry`), a stop, the F16 / S13 exit ("take +1
-ATR or 10 sessions"), its strength reasons in plain words and the market gate
+S15.9 fill rule, `research_warehouse.retest_entry`), a stop, the exit (hold up to 10
+sessions, stop under the low - the long lab's time stop), its strength reasons in plain
+words and the market gate
 (`setup_permutations.long_regime_working`, the trader's regime first): when the market is
 not working the row still exists, reads "waiting for the market", and is not promoted.
 
@@ -44,8 +45,18 @@ POST_EARNINGS_DRIFT = "post_earnings_drift"
 SETUPS = (LEADER_PULLBACK, POST_EARNINGS_DRIFT)
 SETUP_LABELS = {LEADER_PULLBACK: "leader pullback", POST_EARNINGS_DRIFT: "post-earnings drift"}
 
-# --- thresholds, in ONE place. First cut from TODO F10 / F16-F23 (2026-09-26); the long-lab
-# builder calibrates them here and nowhere else.
+# --- thresholds, in ONE place. First cut from TODO F10 / F16-F23 (2026-09-26), then the long
+# lab (branch claude/p9-long-lab-2026-09-26: 1,996 names, 2025-12-17..2026-09-25):
+#   * the 10-session time stop beats "+1 ATR take" and a 1-ATR trail in almost every regime
+#     (take / trail ~0 ATR), so the exit is "hold up to 10 sessions, stop under the low";
+#   * pullback depth is the knob: in an up market (SPY above a rising 20-day) 3-25% off the
+#     high works (+0.4 to +0.6% vs SPY at 10 sessions), deeper than 25% loses (-2.6%), so
+#     25% is a hard cap;
+#   * RS deciles 9-10 are best (+1.2% vs SPY), so rows rank by RS first;
+#   * a 52-week high barely matters (<0.7 pt): a "strong once" path, never a rank input;
+#   * every rule loses in Aug-Sep 2026: the market gate is right;
+#   * live leader_pullback, Mar-May 2026: 58% win, +4.8% at 20 sessions (+1.2% vs SPY).
+# Recalibrate here and nowhere else.
 
 #: "Strong at one point" is looked for in this many sessions back from the scan session.
 STRONG_LOOKBACK_SESSIONS = 120
@@ -66,7 +77,7 @@ UNDER_AVWAP_PCT = (3.0, 12.0)
 #: ... or the close within `EMA_NEAR_ATR` ATR of one of these EMAs.
 EMA_LENGTHS = (21, 50)
 EMA_NEAR_ATR = 0.5
-#: And this % off the swing high, above this SMA.
+#: And this % off the swing high (25% is a HARD cap: deeper lost -2.6% vs SPY), above this SMA.
 OFF_HIGH_PCT = (8.0, 25.0)
 TREND_SMA = 200
 #: The run's volume = the mean of this many sessions ending at the swing high.
@@ -83,11 +94,12 @@ ENTRY_ATR_BELOW = RETEST_ATR_FRACTION
 #: The stop sits under the pullback / gap-day low when that is within this many ATR of
 #: the entry; otherwise it is this many ATR under the entry.
 STOP_MAX_ATR = 1.5
-#: The exit (F16 / S13): take +1 ATR, or sell after 10 sessions.
-TARGET_ATR = 1.0
+#: The exit (long lab): hold up to this many sessions with the stop under the low. The
+#: +`WEAK_MARKET_TAKE_ATR` ATR take is only a note, on a post-earnings drift in a weak market.
 TIME_EXIT_SESSIONS = 10
-#: Grading: the limit rests through session 1; the return is read at this session's close.
-GRADE_SESSIONS = 5
+WEAK_MARKET_TAKE_ATR = 1.0
+#: Grading: the limit rests through session 1; the return is read at the time stop's close.
+GRADE_SESSIONS = TIME_EXIT_SESSIONS
 #: Grading: a long's raw win counts only in a window where SPY rose more than this %.
 GRADE_SPY_UP_MIN_PCT = 1.0
 #: Focus: a promoted row is a Focus candidate for this many calendar days after its scan
@@ -262,14 +274,14 @@ def _plan(close: float, atr: float, structural_low: float | None, low_name: str)
         stop, basis = structural_low - 0.01, f"under the {low_name}"
     else:
         stop, basis = entry - STOP_MAX_ATR * atr, f"{STOP_MAX_ATR:g} ATR under the entry"
-    target = entry + TARGET_ATR * atr
+    take = entry + WEAK_MARKET_TAKE_ATR * atr
     return {
         "entry_limit": round(entry, 2),
         "stop": round(stop, 2),
         "stop_basis": basis,
-        "target": round(target, 2),
+        "weak_market_take": round(take, 2),
         "time_exit_sessions": TIME_EXIT_SESSIONS,
-        "exit": f"take +{TARGET_ATR:g} ATR at {target:.2f} or sell after {TIME_EXIT_SESSIONS} sessions",
+        "exit": f"hold up to {TIME_EXIT_SESSIONS} sessions, stop {stop:.2f} {basis}",
     }
 
 
@@ -317,14 +329,14 @@ def leader_pullback(
     pullback_volume = sum(pullback_volumes) / len(pullback_volumes)
     if run_volume <= 0 or pullback_volume >= run_volume:
         return None
-    strong = []
-    if made_52w_high(bars):
-        strong.append(f"made a 52-week high in the last {STRONG_LOOKBACK_SESSIONS} sessions")
+    high_52w = [f"made a 52-week high in the last {STRONG_LOOKBACK_SESSIONS} sessions"] if made_52w_high(bars) else []
+    ranked_strong = []
     run = best_run_pct(bars)
     if run is not None and run >= RUN_MIN_PCT:
-        strong.append(f"ran {run:.0f}% inside {RUN_MAX_SESSIONS} sessions")
+        ranked_strong.append(f"ran {run:.0f}% inside {RUN_MAX_SESSIONS} sessions")
     if rs_percentile is not None and rs_percentile >= 1.0 - RS_TOP_FRACTION:
-        strong.append(f"{RS_SESSIONS}-day strength vs SPY in the top {RS_TOP_FRACTION:.0%} of the scan")
+        ranked_strong.append(f"{RS_SESSIONS}-day strength vs SPY in the top {RS_TOP_FRACTION:.0%} of the scan")
+    strong = [*high_52w, *ranked_strong]
     if not strong:
         return None
     leaders = _leader_reasons(sector_top_third, top_pattern)
@@ -335,7 +347,8 @@ def leader_pullback(
     reasons = [*strong, *leaders,
                f"pulling back {off_high:.1f}% off the high, " + " and ".join(where),
                "above the 200-day", "lighter volume on the pullback"]
-    strength = len(strong) + len(leaders) + (rs_percentile or 0.0)
+    # A 52-week high qualifies a name but is never a rank input (long lab: <0.7 pt).
+    strength = len(ranked_strong) + len(leaders)
     return {
         "setup": LEADER_PULLBACK,
         "close": round(close, 2),
@@ -345,6 +358,7 @@ def leader_pullback(
         "pct_off_high": round(off_high, 2),
         "pct_under_avwap": None if under_vwap is None else round(under_vwap, 2),
         "leader": bool(leaders),
+        "rs_percentile": None if rs_percentile is None else round(rs_percentile, 4),
         "strength": round(strength, 3),
         "reasons": reasons,
         **_plan(close, atr_value, min(bar["low"] for bar in bars[high_index + 1:]), "pullback low"),
@@ -358,6 +372,7 @@ def post_earnings_drift(
     gap_is_up: Any,
     gap_atr_multiple: Any,
     atr: Any = None,
+    rs_percentile: float | None = None,
     sector_top_third: bool | None = None,
     top_pattern: bool | None = None,
 ) -> dict[str, Any] | None:
@@ -399,6 +414,7 @@ def post_earnings_drift(
         "gap_atr": round(gap_size, 3),
         "sessions_after_gap": after,
         "leader": bool(leaders),
+        "rs_percentile": None if rs_percentile is None else round(rs_percentile, 4),
         "strength": round(strength, 3),
         "reasons": reasons,
         **_plan(close, atr_value, gap_bar["low"], "gap-day low"),
@@ -426,12 +442,20 @@ def apply_market_gate(rows: list[dict[str, Any]], working: str, rule: str) -> li
         row["market_rule"] = rule
         row["promoted"] = working == "yes"
         row["status"] = STATUS_READY if row["promoted"] else STATUS_WAITING
+        take = _num(row.get("weak_market_take"))
+        if row.get("setup") == POST_EARNINGS_DRIFT and not row["promoted"] and take is not None \
+                and "take +" not in _text(row.get("exit")):
+            row["exit"] = f"{row.get('exit')}; weak market: take +{WEAK_MARKET_TAKE_ATR:g} ATR at {take:.2f}"
     return rows
 
 
 def rank(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Strongest first; ties by setup order then symbol."""
-    return sorted(rows, key=lambda row: (-(row.get("strength") or 0.0), SETUPS.index(row["setup"]), row["symbol"]))
+    """RS vs SPY first (long lab: deciles 9-10 best; unknown last), then strength, setup, symbol."""
+    def key(row):
+        rs = _num(row.get("rs_percentile"))
+        return (rs is None, -(rs or 0.0), -(row.get("strength") or 0.0), SETUPS.index(row["setup"]), row["symbol"])
+
+    return sorted(rows, key=key)
 
 
 def build_rows(
@@ -492,10 +516,12 @@ def build_rows(
             found.append(post_earnings_drift(
                 bars, gap_date=earnings.get("gap_date"), gap_is_up=earnings.get("gap_is_up"),
                 gap_atr_multiple=earnings.get("gap_atr_multiple"), atr=atr,
-                sector_top_third=sector_top, top_pattern=top_pattern))
+                rs_percentile=percentiles.get(symbol), sector_top_third=sector_top, top_pattern=top_pattern))
         for row in found:
             if row is not None:
-                out.append({"symbol": symbol, "as_of": as_of_text, "sector": sector, **row})
+                # `setup_family` names the setup so `longs_market_gate.row_is_exempt` knows the row waits on its own.
+                out.append({"symbol": symbol, "as_of": as_of_text, "sector": sector,
+                            "setup_family": row["setup"], **row})
     return {"as_of": as_of_text, "market_working": working, "market_rule": rule,
             "rows": rank(apply_market_gate(out, working, rule))}
 
@@ -547,7 +573,7 @@ def upsert_history(history: Iterable[Mapping[str, Any]], rows: Iterable[Mapping[
     rows = [dict(row) for row in rows]
     days = {_text(row.get("as_of")) for row in rows}
     kept = [dict(row) for row in history or () if _text(row.get("as_of")) not in days]
-    keep_keys = ("symbol", "as_of", "setup", "close", "atr", "entry_limit", "stop", "target",
+    keep_keys = ("symbol", "as_of", "setup", "close", "atr", "entry_limit", "stop", "rs_percentile",
                  "strength", "leader", "promoted", "market_working")
     return kept + [{key: row.get(key) for key in keep_keys} for row in rows]
 
@@ -573,7 +599,7 @@ def gate_line(payload: Mapping[str, Any] | None) -> str:
 
 
 def tracker_lines(payload: Mapping[str, Any] | None, *, limit: int = 12) -> list[str]:
-    """The Setup Tracker's Long leaders section: a head line, then the rows by strength."""
+    """The Setup Tracker's Long leaders section: a head line, then the rows in rank order."""
     if not payload:
         return ["Long leaders: no scan has published long setups yet."]
     rows = list(payload.get("rows") or ())
@@ -618,7 +644,7 @@ def focus_candidates(payload: Mapping[str, Any] | None, *, today: Any) -> dict[s
             continue
         out["longs"].append({
             "symbol": _text(row.get("symbol")).upper(),
-            "score": FOCUS_SCORE_BASE + (_num(row.get("strength")) or 0.0),
+            "score": FOCUS_SCORE_BASE + (_num(row.get("rs_percentile")) or 0.0) + (_num(row.get("strength")) or 0.0),
             "reason": f"Long leaders: {SETUP_LABELS.get(row.get('setup'), row.get('setup'))}",
         })
     return out

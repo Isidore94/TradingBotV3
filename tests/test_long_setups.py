@@ -53,12 +53,21 @@ def test_leader_pullback_fires_with_entry_stop_and_exit():
     assert row is not None and row["setup"] == ls.LEADER_PULLBACK
     close = bars[-1]["close"]
     assert row["entry_limit"] == round(close - 0.25 * 2.0, 2)
-    assert row["target"] == round(close - 0.5 + 2.0, 2)
     assert row["stop"] < row["entry_limit"]
     assert row["time_exit_sessions"] == 10
-    assert "take +1 ATR" in row["exit"] and "10 sessions" in row["exit"]
+    # Long lab: the 10-session time stop is the exit; no +1 ATR take by default.
+    assert row["exit"] == f"hold up to 10 sessions, stop {row['stop']:.2f} {row['stop_basis']}"
+    assert "target" not in row
     assert any("52-week high" in reason for reason in row["reasons"])
     assert row["leader"] is False
+    # Long lab: a 52-week high qualifies the name but is never a rank input.
+    assert row["strength"] == 0
+
+
+def test_the_off_high_cap_is_25_percent():
+    assert ls.OFF_HIGH_PCT[1] == 25.0
+    # ~26% off the high after 11 x 2.7% down days: past the hard cap.
+    assert ls.leader_pullback(_leader(pullback_sessions=11, step=0.0245), atr=2.0) is None
 
 
 def test_leader_bonus_raises_strength():
@@ -253,25 +262,39 @@ def test_a_stale_name_is_skipped():
     assert payload["rows"] == []
 
 
-def test_rank_is_by_strength():
-    rows = [{"symbol": "B", "setup": ls.LEADER_PULLBACK, "strength": 1.0},
-            {"symbol": "A", "setup": ls.POST_EARNINGS_DRIFT, "strength": 3.0},
-            {"symbol": "C", "setup": ls.LEADER_PULLBACK, "strength": 3.0}]
-    assert [row["symbol"] for row in ls.rank(rows)] == ["C", "A", "B"]
+def test_rank_is_by_rs_first_then_strength():
+    rows = [{"symbol": "B", "setup": ls.LEADER_PULLBACK, "strength": 3.0, "rs_percentile": 0.5},
+            {"symbol": "A", "setup": ls.POST_EARNINGS_DRIFT, "strength": 3.0, "rs_percentile": 0.95},
+            {"symbol": "C", "setup": ls.LEADER_PULLBACK, "strength": 1.0, "rs_percentile": 0.95},
+            {"symbol": "D", "setup": ls.LEADER_PULLBACK, "strength": 9.0, "rs_percentile": None},
+            {"symbol": "E", "setup": ls.LEADER_PULLBACK, "strength": 3.0, "rs_percentile": 0.95}]
+    assert [row["symbol"] for row in ls.rank(rows)] == ["E", "A", "C", "B", "D"]
+
+
+def test_post_earnings_drift_gets_the_take_note_only_in_a_weak_market():
+    bars, gap_day = _earnings()
+    row = ls.post_earnings_drift(bars, gap_date=gap_day, gap_is_up=True, gap_atr_multiple=2.5, atr=3.0)
+    lead = ls.leader_pullback(_leader(), atr=2.0)
+    weak = ls.apply_market_gate([dict(row), dict(lead)], "no", "trader")
+    assert weak[0]["exit"].endswith(f"; weak market: take +1 ATR at {row['weak_market_take']:.2f}")
+    assert "take +" not in weak[1]["exit"]
+    strong = ls.apply_market_gate([dict(row)], "yes", "trader")
+    assert "take +" not in strong[0]["exit"]
 
 
 # --- grading history
 
-def test_settle_uses_the_limit_fill_and_waits_for_the_target_session():
-    bars = _bars([100.0] * 10)
+def test_settle_uses_the_limit_fill_and_waits_for_the_time_stop():
+    bars = _bars([100.0] * 15)
     history = [{"symbol": "X", "as_of": bars[2]["date"], "entry_limit": 99.8}]
-    # Session 1's low (99.5) touches 99.8: filled at the limit.
+    # Session 1's low (99.5) touches 99.8: filled at the limit; read at the 10-session time stop.
+    assert ls.GRADE_SESSIONS == ls.TIME_EXIT_SESSIONS == 10
     settled = ls.settle(history, {"X": bars}, bars)
     assert settled[0]["outcome"] == "filled" and settled[0]["fill"] == 99.8
-    assert settled[0]["target_session"] == bars[7]["date"]
+    assert settled[0]["target_session"] == bars[12]["date"]
     assert settled[0]["return_pct"] == pytest.approx((100.0 / 99.8 - 1) * 100, abs=1e-3)
     # Not enough completed bars after the scan session: left unknown.
-    unsettled = ls.settle(history, {"X": bars[:7]}, bars)
+    unsettled = ls.settle(history, {"X": bars[:12]}, bars)
     assert "outcome" not in unsettled[0]
     no_fill = ls.settle([{"symbol": "X", "as_of": bars[2]["date"], "entry_limit": 90.0}], {"X": bars}, bars)
     assert no_fill[0]["outcome"] == "no_fill" and "return_pct" not in no_fill[0]
@@ -304,7 +327,8 @@ def test_focus_candidates_are_promoted_and_fresh():
     as_of = date.fromisoformat(payload["as_of"])
     got = ls.focus_candidates(payload, today=as_of + timedelta(days=3))
     assert [row["symbol"] for row in got["longs"]] == ["LEAD"] and got["shorts"] == []
-    assert got["longs"][0]["score"] > ls.FOCUS_SCORE_BASE
+    # Base + RS percentile + strength: this fixture has no RS read and only a 52-week high (not ranked).
+    assert got["longs"][0]["score"] == ls.FOCUS_SCORE_BASE
     assert ls.focus_candidates(payload, today=as_of + timedelta(days=5))["longs"] == []
     assert ls.focus_candidates(_scan("no"), today=as_of)["longs"] == []
 
@@ -320,3 +344,27 @@ def test_runner_bars_drop_a_forming_bar():
     bars = runner._long_setup_bars(frame, "2026-09-25")
     assert [bar["date"] for bar in bars] == ["2026-09-24", "2026-09-25"]
     assert runner._long_setup_bars(frame, None) == []
+
+
+# --- the longs-off gate (P9): these rows wait on their own and are never hidden by it
+
+def test_a_longs_off_day_still_shows_the_rows_waiting_for_the_market():
+    import longs_market_gate as gate
+
+    payload = _scan("no")
+    (row,) = payload["rows"]
+    assert gate.row_is_exempt(row) is True
+    off = gate.Verdict(day=payload["as_of"], verdict=gate.NO, rule="trader", reason="bear")
+    assert off.longs_off
+    assert gate.hides_long(off, "LONG", row["symbol"], exempt=gate.row_is_exempt(row)) is False
+    lines = ls.tracker_lines(payload)
+    assert "the market is not working for longs" in lines[0]
+    assert lines[1].startswith("1. LEAD leader pullback") and "| waiting for the market |" in lines[1]
+
+
+def test_both_setups_carry_the_exempt_family():
+    import longs_market_gate as gate
+
+    assert set(gate.EXEMPT_ROW_KEYS) == set(ls.SETUPS)
+    for setup in ls.SETUPS:
+        assert gate.row_is_exempt({"setup_family": setup, "side": "LONG"}) is True
