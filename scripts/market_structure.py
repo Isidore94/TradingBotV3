@@ -50,7 +50,7 @@ def _num(value: Any) -> float | None:
 
 
 def _clean(rows: Iterable[Mapping[str, Any]], as_of: date | None = None) -> list[dict]:
-    """Rows with a date and OHLC, before `as_of`, oldest first, one per date."""
+    """Rows with a date and OHLC (volume 0 when missing), before `as_of`, oldest first, one per date."""
     by_day: dict[date, dict] = {}
     for row in rows or ():
         day = _day(row)
@@ -59,7 +59,7 @@ def _clean(rows: Iterable[Mapping[str, Any]], as_of: date | None = None) -> list
             continue
         if as_of is not None and day >= as_of:
             continue
-        by_day[day] = {"session_date": day, **values}
+        by_day[day] = {"session_date": day, **values, "volume": _num(row.get("volume")) or 0.0}
     return [by_day[day] for day in sorted(by_day)]
 
 
@@ -89,6 +89,7 @@ def completed_weekly_bars(d1_rows: Iterable[Mapping[str, Any]], as_of: date) -> 
                 "high": max(row["high"] for row in members),
                 "low": min(row["low"] for row in members),
                 "close": members[-1]["close"],
+                "volume": sum(row["volume"] for row in members),
             }
         )
     return bars
