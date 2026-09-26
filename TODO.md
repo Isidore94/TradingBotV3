@@ -218,6 +218,27 @@ S1 and keep the order. The two 500 MB logs are read with
   `focus_swing_h1` LONG 71% / +2.5%, n=51; `focus_m5_strength_board` SHORT 68%). Liked
   breakouts long 28% beat (n=32), same failure as the scan's. Journal setup tags cannot
   be scored yet: 3 confirmed.
+- **F23 Longs when SPY is long** (the trader 2026-09-26: longs need the market, shorts do
+  not; judge longs on raw results in SPY-up windows, not vs SPY). Windows where SPY rose
+  more than 1% over 5 sessions, LONG rows n=2,262: all longs 48% win, +0.59% raw. What
+  separates them is SECTOR and STRENGTH, not the family: Technology 62% / +2.8%,
+  Healthcare 66% / +2.6%, Basic Materials 64% / +2.1%; Energy 18% / -4.3%, Consumer
+  Cyclical 35% / -0.8%, Financials 37% / -0.3%, Real Estate 30%. Families all sit at
+  44-50% (top pattern 50% / +0.96%, favourite zone 47% / +0.69%, breakout 38% / -0.4%).
+  Extended names >10% above the anchor 62% / +2.0%; the pullback -10..-3 56% / +1.7%;
+  the favourite zone 0-3% above the anchor 44% / +0.2%. The liked-long theme, Tech or
+  Healthcare + RS-vs-industry top tercile: 67% win, +3.3% raw, median +2.1% (n=346);
+  with the name's own 20-day trend UP 69% / +3.4% (n=258); at 10 sessions 61% / +3.3%.
+  The leader-pullback key in SPY-up windows: 64% / +3.2%. The trader's liked longs
+  themselves (n=161): Healthcare 63% / +3.5%, Technology 59% / +2.3%, Financials 35%,
+  Materials 36%; RS-high tercile 54% / +1.8% vs RS-low 44% / -0.3%; trend UP 55% vs DOWN
+  38%; UPPER_2 -> UPPER_3 zone 70% / +3.1% (n=20); mid-earnings age 28-60 sessions 60% /
+  +2.2%, 14-27 sessions 39%. Liked families: second-dev breakout 65% (median +2.6%,
+  n=23), avwape_to_1stdev 50% (mean +1.6%, median -0.1%: a few big winners), AVWAP
+  breakout 34%. The liked longs fade by 10 sessions (n=69 matured: 16% positive, -0.7%):
+  they are one-week trades. Theme to extract: strong-sector, RS-leading name in an
+  up-trend, bought either on a 3-10% pullback under the anchor or on strength above
+  UPPER_2, when SPY is above its 20-day; exit inside a week.
 - **S14 Long pullback study family** (grades ->8; the trader 2026-09-26: "I need a solid
   long setup"). Register `leader_pullback_long` as a STUDY family on the P1-4 4e path,
   not a scoring change: rows where side is LONG, `pct_from_current_vwap` is in [-10, -3],
