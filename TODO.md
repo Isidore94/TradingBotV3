@@ -183,6 +183,18 @@ S1 and keep the order. The two 500 MB logs are read with
 - **F8 Entry timing beats detection.** Movers Dip: 59 graded, 52.5% beat SPY, longs
   30.8% (n=13); the best-possible entry from the pullback low averages +0.58% vs -0.07%
   from the flag close.
+- **F14 Day trades do not go all day** (the trader's question, 2026-09-26; 19,994 alerts
+  since 08-01 with a final row). The day's best move comes early: 36% of alerts peak
+  within 30 min, 49% within 60, 66% within 120, 77% within 180. By 60 min the average
+  alert has shown 0.80R of its eventual 1.34R MFE. When +1R prints the trade gives back
+  1.0R (median) by the close; 5% of alerts (1,055) touched +1R and closed at or below 0.
+  Exit rules, EV per alert with a 1R stop: hold to the close -0.30R (the worst rule for
+  EVERY family); exit at 60 min -0.11R; +1R target or 60-min time stop -0.05R; the 1:1
+  bracket -0.05R; +2R target -0.11R. On the good families the +1R rules are positive
+  (`lrsi_cross_50` short +0.03R, `10_candle` short +0.03R, `regime_pause_rs` long +0.04R,
+  `vwap` short +0.03R) while holding them to the close loses 0.03R to 0.30R. Nothing on
+  the desk shows this: grades use the 1:1 bracket, tiers blend EOD entry quality with
+  a 60-minute "quick" R, and no surface says when a family's move usually peaks.
 
 **Findings, swings (D1):**
 - **F9 Short families carried the last six weeks.** Session-horizon outcomes 08-14 to
@@ -294,6 +306,17 @@ S1 and keep the order. The two 500 MB logs are read with
   "1:1 C - 2R D - EOD +0.04R - n 427"; the Daytrade Tracker shows the three. New golden
   fixtures for the new fields; the existing grade goldens must not change. This is S1's
   second half; build them together.
+- **S11 Exit-window truth** (intraday ->8, recap; display only, no ask-first; from F14).
+  A deterministic night slot `exit_windows` (goal trade_identification, no model) reads
+  the outcome log in chunks and writes `exit_windows.json` beside the setup grades: per
+  (bounce type, side) the share of alerts peaking within 30/60/120 min, mean MFE by 60
+  and 120 min, the give-back when +1R printed, and the EV of five rules with a 1R stop
+  (hold to close, exit at 60 min, +1R or 60 min, +1R or 120 min, the 1:1 bracket). The
+  Daytrade Tracker gets an "Exit by" column ("peak <= 60 min 49%; +1R/60m -0.05R vs
+  hold -0.30R"); the M5 alert row and the chart review header get one line ("this
+  family usually peaks inside 60 min; +1R has beaten holding by 0.25R"); the Trade
+  Mentor's exit questions quote it. Facts only, never a rule the desk enforces. Fixture
+  test with 8 events; a test that the desk only formats.
 
 ### Phase C - needs live days (trigger named)
 
