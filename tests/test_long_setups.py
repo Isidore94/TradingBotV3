@@ -226,11 +226,49 @@ def test_an_unknown_volume_fails_the_floor():
     assert ls.meets_liquidity_floor(bars[:19], 5000.0) is False
 
 
-def test_market_working_promotes_the_row():
-    payload = _scan("yes")
+LEADER = {"setup_family": "top_pattern_tracking"}
+
+
+def test_market_working_promotes_a_leader():
+    payload = _scan("yes", **LEADER)
     (row,) = payload["rows"]
     assert row["promoted"] is True and row["status"] == ls.STATUS_READY
     assert payload["market_working"] == "yes"
+
+
+def test_a_row_without_top_rs_or_the_leader_bonus_is_listed_not_promoted():
+    (row,) = _scan("yes")["rows"]
+    assert row["promoted"] is False and row["status"] == "listed, not promoted"
+
+
+def _gate_row(symbol, rs=None, leader=False):
+    return {"symbol": symbol, "setup": ls.LEADER_PULLBACK, "rs_percentile": rs, "leader": leader,
+            "strength": 0.0, "exit": "hold"}
+
+
+def test_promotion_needs_rs_in_the_top_two_deciles_or_the_leader_bonus():
+    rows = ls.apply_market_gate(ls.rank([_gate_row("A", 0.8), _gate_row("B", 0.79),
+                                         _gate_row("C", 0.1, leader=True), _gate_row("D")]), "yes", "trader")
+    assert {row["symbol"]: row["promoted"] for row in rows} == {"A": True, "B": False, "C": True, "D": False}
+
+
+def test_promotion_is_capped_at_ten_by_rs():
+    rows = [_gate_row(f"S{i:02d}", 0.8 + i * 0.01) for i in range(15)]
+    gated = ls.apply_market_gate(ls.rank(rows), "yes", "trader")
+    promoted = [row["symbol"] for row in gated if row["promoted"]]
+    assert ls.PROMOTE_MAX == 10 and promoted == [f"S{i:02d}" for i in range(14, 4, -1)]
+    assert all(row["status"] == "listed, not promoted" for row in gated if not row["promoted"])
+
+
+def test_the_stop_is_at_least_half_an_atr_under_the_entry():
+    # GTLB-like: the pullback low sits 0.27 under a 46.27 limit with a 2.31 ATR.
+    plan = ls._plan(46.85, 2.31, 46.01, "pullback low")
+    assert plan["entry_limit"] == round(46.85 - 0.25 * 2.31, 2)
+    assert plan["stop"] == round(46.85 - 0.25 * 2.31 - 0.5 * 2.31, 2)
+    assert plan["stop_basis"] == "0.5 ATR under the entry (the pullback low is closer)"
+    # A low 1 ATR under the entry keeps its own stop.
+    wide = ls._plan(46.85, 2.31, 46.85 - 1.25 * 2.31, "pullback low")
+    assert wide["stop_basis"] == "under the pullback low"
 
 
 @pytest.mark.parametrize("working", ["no", "unknown", ""])
@@ -311,7 +349,8 @@ def test_upsert_replaces_the_same_session():
 
 def test_phone_line_only_for_promoted_rows():
     assert ls.phone_line(_scan("no")) == ""
-    line = ls.phone_line(_scan("yes"))
+    assert ls.phone_line(_scan("yes")) == ""  # listed, not promoted
+    line = ls.phone_line(_scan("yes", **LEADER))
     assert line.startswith("Long leaders ") and "LEAD (leader pullback, limit" in line
 
 
@@ -323,12 +362,13 @@ def test_tracker_lines_head_and_rows():
 
 
 def test_focus_candidates_are_promoted_and_fresh():
-    payload = _scan("yes")
+    payload = _scan("yes", **LEADER)
     as_of = date.fromisoformat(payload["as_of"])
     got = ls.focus_candidates(payload, today=as_of + timedelta(days=3))
     assert [row["symbol"] for row in got["longs"]] == ["LEAD"] and got["shorts"] == []
-    # Base + RS percentile + strength: this fixture has no RS read and only a 52-week high (not ranked).
-    assert got["longs"][0]["score"] == ls.FOCUS_SCORE_BASE
+    # Base + RS percentile + strength: no RS read here, the leader bonus is the 1 point of strength.
+    assert got["longs"][0]["score"] == ls.FOCUS_SCORE_BASE + 1
+    assert ls.focus_candidates(_scan("yes"), today=as_of)["longs"] == []
     assert ls.focus_candidates(payload, today=as_of + timedelta(days=5))["longs"] == []
     assert ls.focus_candidates(_scan("no"), today=as_of)["longs"] == []
 

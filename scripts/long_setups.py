@@ -5,7 +5,10 @@ them their own setup. Basically anything super strong at one point should be a c
 for it. But especially leaders. The bot should really promote these." and, of the gap-up
 names, "Ya that's the post earnings play".
 
-* ``leader_pullback`` - a name that was strong at one point in the last
+* ``leader_pullback`` - the LIVE setup, from bars. Not `long_study_families.leader_pullback_long`,
+  which stays the S14 history study key: history scan rows lack these bar facts (52-week
+  high, run, 200-day, volume), so the two definitions differ on purpose (lead, 2026-09-26).
+  A name that was strong at one point in the last
   `STRONG_LOOKBACK_SESSIONS` (a 52-week high, a `RUN_MIN_PCT` run inside
   `RUN_MAX_SESSIONS`, or 63-day RS vs SPY in the universe's top decile), now pulling
   back: `UNDER_AVWAP_PCT` under the VWAP anchored at the swing high OR back at the 21/50
@@ -94,6 +97,8 @@ ENTRY_ATR_BELOW = RETEST_ATR_FRACTION
 #: The stop sits under the pullback / gap-day low when that is within this many ATR of
 #: the entry; otherwise it is this many ATR under the entry.
 STOP_MAX_ATR = 1.5
+#: ... and never closer than this many ATR under the entry (a low right under the limit is noise).
+STOP_MIN_ATR = 0.5
 #: The exit (long lab): hold up to this many sessions with the stop under the low. The
 #: +`WEAK_MARKET_TAKE_ATR` ATR take is only a note, on a post-earnings drift in a weak market.
 TIME_EXIT_SESSIONS = 10
@@ -113,8 +118,16 @@ FOCUS_SCORE_BASE = 3.0
 #: both the universe builder's own constants. An unknown cap or volume is no row.
 LIQUIDITY_VOLUME_SESSIONS = 20
 
+#: Promotion (lead, 2026-09-26, from the long lab's RS deciles 9-10 = +1.2% vs SPY): a row is
+#: promoted only in a working market, with 63-day RS at or above this percentile OR the leader
+#: bonus, and only the first `PROMOTE_MAX` such rows in rank (RS-first) order per scan. The rest
+#: stay listed.
+PROMOTE_RS_MIN_PERCENTILE = 0.8
+PROMOTE_MAX = 10
+
 STATUS_READY = "ready"
 STATUS_WAITING = "waiting for the market"
+STATUS_LISTED = "listed, not promoted"
 
 
 # --- small helpers
@@ -272,6 +285,8 @@ def _plan(close: float, atr: float, structural_low: float | None, low_name: str)
     entry = close - ENTRY_ATR_BELOW * atr
     if structural_low is not None and structural_low < entry and entry - structural_low <= STOP_MAX_ATR * atr:
         stop, basis = structural_low - 0.01, f"under the {low_name}"
+        if entry - stop < STOP_MIN_ATR * atr:
+            stop, basis = entry - STOP_MIN_ATR * atr, f"{STOP_MIN_ATR:g} ATR under the entry (the {low_name} is closer)"
     else:
         stop, basis = entry - STOP_MAX_ATR * atr, f"{STOP_MAX_ATR:g} ATR under the entry"
     take = entry + WEAK_MARKET_TAKE_ATR * atr
@@ -435,15 +450,25 @@ def market_gate(feature_rows: Iterable[Mapping[str, Any]]) -> tuple[str, str]:
     return UNKNOWN, UNKNOWN
 
 
+def promotable(row: Mapping[str, Any]) -> bool:
+    """RS in the top two deciles or the leader bonus (`PROMOTE_RS_MIN_PERCENTILE`)."""
+    rs = _num(row.get("rs_percentile"))
+    return bool(row.get("leader")) or (rs is not None and rs >= PROMOTE_RS_MIN_PERCENTILE)
+
+
 def apply_market_gate(rows: list[dict[str, Any]], working: str, rule: str) -> list[dict[str, Any]]:
-    """Every row keeps its place; only a working market (``yes``) promotes it."""
+    """Every row keeps its place. In a working market (``yes``) the first `PROMOTE_MAX`
+    promotable rows, in the given (ranked) order, are promoted; the rest are listed."""
+    promoted = 0
     for row in rows:
         row["market_working"] = working
         row["market_rule"] = rule
-        row["promoted"] = working == "yes"
-        row["status"] = STATUS_READY if row["promoted"] else STATUS_WAITING
+        row["promoted"] = working == "yes" and promoted < PROMOTE_MAX and promotable(row)
+        promoted += row["promoted"]
+        row["status"] = (STATUS_READY if row["promoted"]
+                         else STATUS_LISTED if working == "yes" else STATUS_WAITING)
         take = _num(row.get("weak_market_take"))
-        if row.get("setup") == POST_EARNINGS_DRIFT and not row["promoted"] and take is not None \
+        if row.get("setup") == POST_EARNINGS_DRIFT and working != "yes" and take is not None \
                 and "take +" not in _text(row.get("exit")):
             row["exit"] = f"{row.get('exit')}; weak market: take +{WEAK_MARKET_TAKE_ATR:g} ATR at {take:.2f}"
     return rows
@@ -523,7 +548,7 @@ def build_rows(
                 out.append({"symbol": symbol, "as_of": as_of_text, "sector": sector,
                             "setup_family": row["setup"], **row})
     return {"as_of": as_of_text, "market_working": working, "market_rule": rule,
-            "rows": rank(apply_market_gate(out, working, rule))}
+            "rows": apply_market_gate(rank(out), working, rule)}
 
 
 # --- grading (the scan settles; the Setup Tracker grades)
