@@ -571,6 +571,67 @@ def study_family_line(cell: Mapping[str, Any] | None) -> str:
     return f"{head}: " + " · ".join(part(basis) for basis in order) + dates
 
 
+def long_setup_cells(history_rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """One graded cell per p9 long setup (`long_setups.SETUPS`), over the settled history.
+
+    The same two bases as a study family, raw first (a long): ``raw`` = the filled
+    limit's 5-session return > 0, only in windows where SPY rose more than
+    `long_setups.GRADE_SPY_UP_MIN_PCT`; ``tape`` = the return beat SPY's, every filled
+    row. A limit that never filled is counted apart (``no_fill``), never a loss; an
+    unsettled row or an unknown SPY is left out.
+    """
+    import long_setups
+
+    tallies = {name: {"raw_n": 0, "raw_wins": 0, "raw_days": set(), "raw_values": [],
+                      "tape_n": 0, "tape_wins": 0, "tape_days": set(), "tape_values": [],
+                      "no_fill": 0, "days": set()} for name in long_setups.SETUPS}
+    for row in history_rows or ():
+        tally = tallies.get(str(row.get("setup") or ""))
+        outcome = str(row.get("outcome") or "")
+        if tally is None or not outcome:
+            continue
+        day = str(row.get("as_of") or "")[:10]
+        tally["days"].add(day)
+        if outcome == "no_fill":
+            tally["no_fill"] += 1
+            continue
+        side_return, spy_return = _float(row.get("return_pct")), _float(row.get("spy_return_pct"))
+        if outcome != "filled" or side_return is None or spy_return is None:
+            continue
+        tally["tape_n"] += 1
+        tally["tape_wins"] += 1 if side_return > spy_return else 0
+        tally["tape_days"].add(day)
+        tally["tape_values"].append(side_return - spy_return)
+        if spy_return > long_setups.GRADE_SPY_UP_MIN_PCT:
+            tally["raw_n"] += 1
+            tally["raw_wins"] += 1 if side_return > 0 else 0
+            tally["raw_days"].add(day)
+            tally["raw_values"].append(side_return)
+    cells = []
+    for name, tally in tallies.items():
+        days = sorted(tally["days"])
+        cells.append({
+            "family": name, "side": "LONG", "headline": "raw", "no_fill": tally["no_fill"],
+            "raw": _study_side_cell(tally["raw_n"], tally["raw_wins"], tally["raw_days"], tally["raw_values"])
+            if tally["raw_n"] else None,
+            "tape": _study_side_cell(tally["tape_n"], tally["tape_wins"], tally["tape_days"], tally["tape_values"])
+            if tally["tape_n"] else None,
+            "first": days[0] if days else "", "last": days[-1] if days else "",
+        })
+    return cells
+
+
+def long_setup_line(cell: Mapping[str, Any] | None) -> str:
+    """``leader_pullback LONG: raw in SPY-up windows B 64% ... · vs SPY C 55% ...; no fill 3``."""
+    cell = dict(cell or {})
+    if not cell.get("raw") and not cell.get("tape"):
+        no_fill = int(cell.get("no_fill") or 0)
+        extra = f" ({no_fill} limit(s) not filled)" if no_fill else ""
+        return f"{cell.get('family')} LONG: no settled filled rows yet{extra}."
+    line = study_family_line(cell).replace(" (study)", "", 1)
+    return f"{line}; limit not filled {int(cell.get('no_fill') or 0)}"
+
+
 # ---------------------------------------------------------------------------
 # day trade: +1R before -1R
 # ---------------------------------------------------------------------------
