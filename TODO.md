@@ -315,6 +315,35 @@ S1 and keep the order. The two 500 MB logs are read with
   recording it": one new constant + one skip in `check_h1_color_setups`, which is wider
   than the trader's "Sure kill it". Trader: stop recording it (yes/no)?
 
+- **S15 Data for a definitive long answer** (the trader 2026-09-26: longs need the market;
+  find setups that work when the market works). What the 2026-09-25/26 study could not see,
+  in the order it matters:
+  1. **A bull window.** Every swing number is 08-14 to 09-24. The April-July run is in the
+     permutation backfill the trader owes; run it, and the long cells go from n=26-64 to
+     hundreds.
+  2. **A point-in-time "market is working" label on every scan row**: SPY above its 20-day
+     AND the 20-day rising, plus breadth (share of the universe above its own 20-day) and
+     the sector's 5- and 20-day RS rank vs SPY. Deterministic, from daily bars, written
+     the P11 way (no output change). Today only `spy_above_sma20/50` exists on the row.
+  3. **Swing path facts**: MFE and MAE in ATR over 5, 10 and 20 sessions per horizon row,
+     from the daily bars (the horizons file is close-to-close only). This is what says
+     "consistently gives a sellable move" and what S13's exit models need. Add horizon 20.
+  4. **A conditional search mode in S4**: population = LONG rows whose entry-day regime
+     label is "working", win = raw side return > 0 (not vs SPY), facets as today. The
+     trader's framing, made mechanical.
+  5. **Sector and industry RS as facets** (`rs_vs_industry` tercile exists; add the sector
+     rank and `industry_13w`), and dollar-volume / market-cap buckets.
+  6. **Earnings age, split**: post-earnings drift (gap-up names) vs mid-cycle; the liked
+     longs (28-60 sessions best) and the scan (0-13 best) disagree, so the facet is
+     mixing two things.
+  7. **The trader's own labels at scale**: confirm the 139 waiting tags (Sunday card), keep
+     liking / claiming with the Mentor's "why", and let the journal carry planned stop and
+     target so the trader's longs get an R, not just a P&L. 161 liked longs is thin.
+  8. **Universe**: add the journal's traded names that the scan never sees (SPCX, DRAM) so
+     the trader's wins are measured against the same ruler.
+  9. **Fill model**: keep the next-open re-pricing (F18) as a standard column; add an
+     intraday-pullback entry variant for the leader-pullback family (S8).
+
 ### Phase C - needs live days (trigger named)
 
 - Gates #257/#258: tonight's ledger and Monday morning. #259-#263: Monday's session.
