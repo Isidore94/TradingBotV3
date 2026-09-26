@@ -35,6 +35,8 @@ def test_budget_priority_puts_plan_review_and_ideas_between_enrichment_and_tags(
     assert runner.MODEL_SLOT_PRIORITY == (
         "daily_digest",
         "day_review_narration",
+        # R1 (2026-09-26): the show reads the story, so it is protected next.
+        "day_review_show",
         "market_story_narration",
         "setup_research",
         "journal_enrichment",
@@ -87,6 +89,7 @@ LEAD_GOAL_MAP = {
     "daily_digest": "market_read",
     "day_review_facts": "coaching",
     "day_review_narration": "coaching",
+    "day_review_show": "coaching",
     "week_review_narration": "coaching",
     "week_questions": "coaching",
     "exit_note_fields": "coaching",

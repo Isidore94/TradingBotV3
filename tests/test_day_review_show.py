@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import sys
 from pathlib import Path
 
@@ -205,3 +206,103 @@ def test_every_kind_has_one_glyph():
 
 def test_the_show_lives_under_shows_by_date(tmp_path):
     assert show.show_path(SESSION, root=tmp_path) == tmp_path / "shows" / f"{SESSION}.json"
+
+
+# ---------------------------------------------------------------------------
+# the night slot `day_review_show`
+# ---------------------------------------------------------------------------
+def _night(tmp_path, reply=None, *, narration=None):
+    from ai_jobs import day_review_narration
+
+    pack = _pack()
+    day_review_pack.write_pack(pack, root=tmp_path)
+    if narration is not None:
+        day_review_narration._atomic_write(
+            day_review_narration.narration_path(SESSION, root=tmp_path), narration
+        )
+    calls = []
+
+    def _request(**kwargs):
+        calls.append(kwargs)
+        return {"summary": copy.deepcopy(reply or _good_reply()), "model": "gemma3:12b"}
+
+    return pack, calls, _request
+
+
+def test_the_night_writes_a_verified_show_with_its_stamps(tmp_path):
+    from ai_jobs import day_review_show_night as night
+
+    pack, calls, request = _night(tmp_path)
+    outcome = night.run_day_review_show(session_date=SESSION, root=tmp_path, request=request)
+    assert outcome["status"] == "ok", outcome
+    stored = json.loads(show.show_path(SESSION, root=tmp_path).read_text(encoding="utf-8"))
+    assert stored["model"] == "gemma3:12b"
+    assert stored["prompt_version"] == night.PROMPT_VERSION
+    assert stored["inputs_hash"] == show.inputs_hash(pack, None)
+    assert stored["pack_hash"] == pack["inputs_hash"]
+    assert stored["show"]["slides"][1]["stat"]["value"] == "+0.81%"
+    assert calls[0]["evidence"]["allowed_source_ids"]
+    assert show.desk_deck(stored, pack, session_date=SESSION)["facts_only"] is False
+    # Unchanged inputs cost no second call.
+    again = night.run_day_review_show(session_date=SESSION, root=tmp_path, request=request)
+    assert again["status"] == "ok" and len(calls) == 1
+
+
+def test_a_rejected_deck_is_degraded_and_keeps_the_last_good_file(tmp_path):
+    from ai_jobs import day_review_show_night as night
+
+    _pack_, _calls, request = _night(tmp_path)
+    night.run_day_review_show(session_date=SESSION, root=tmp_path, request=request)
+    path = show.show_path(SESSION, root=tmp_path)
+    before = path.read_bytes()
+    bad = _good_reply()
+    bad["slides"][1]["body"] = "SPY closed at 999."
+    # The facts moved, so a call is owed.
+    pack = day_review_pack.build_pack(SESSION, d1_label="range day")
+    day_review_pack.write_pack(pack, root=tmp_path)
+
+    def _bad(**_kwargs):
+        return {"summary": bad, "model": "gemma3:12b"}
+
+    outcome = night.run_day_review_show(session_date=SESSION, root=tmp_path, request=_bad)
+    assert outcome["status"] == "degraded_no_narrative"
+    assert "prior show was kept" in outcome["reason"]
+    assert path.read_bytes() == before
+
+
+def test_the_night_reads_only_a_story_written_for_this_pack(tmp_path):
+    from ai_jobs import day_review_show_night as night
+
+    pack = _pack()
+    story = {"inputs_hash": pack["inputs_hash"], "narration": {"headline": "Trend day", "sources": []}}
+    _p, calls, request = _night(tmp_path, narration=story)
+    night.run_day_review_show(session_date=SESSION, root=tmp_path, request=request)
+    assert calls[0]["evidence"]["previous_story"] == {"headline": "Trend day"}
+
+    stale = {"inputs_hash": "old", "narration": {"headline": "Old day"}}
+    other = tmp_path / "other"
+    _p, calls, request = _night(other, narration=stale)
+    night.run_day_review_show(session_date=SESSION, root=other, request=request)
+    assert calls[0]["evidence"]["previous_story"] == {}
+
+
+def test_no_pack_is_skipped_without_a_call(tmp_path):
+    from ai_jobs import day_review_show_night as night
+
+    calls = []
+    outcome = night.run_day_review_show(
+        session_date=SESSION, root=tmp_path, request=lambda **k: calls.append(k)
+    )
+    assert outcome["status"] == "skipped" and calls == []
+
+
+def test_the_slot_runs_directly_after_the_day_story():
+    from ai_jobs import runner
+
+    slots = runner.default_slots()
+    names = [slot.name for slot in slots]
+    assert names[names.index("day_review_narration") + 1] == "day_review_show"
+    slot = slots[names.index("day_review_show")]
+    assert slot.uses_model and slot.reserve_minutes == 5.0 and slot.goal == "coaching"
+    priority = runner.MODEL_SLOT_PRIORITY
+    assert priority[priority.index("day_review_narration") + 1] == "day_review_show"

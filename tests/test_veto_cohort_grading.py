@@ -644,6 +644,8 @@ def test_the_scope_can_be_selected_on_demand():
         # briefs reserve 120 minutes.
         "ai_summary",
         "day_review_narration",
+        # R1 (2026-09-26): the Day Review Show reads that story, so it follows it.
+        "day_review_show",
         # TJ-16 item 4 (2026-09-20): the grounded word tagger, appended inside
         # stage 2 after `ai_summary` (the `day_review_facts` / `ai_summary`
         # boundary stays adjacent) and before the two-hour briefs.
