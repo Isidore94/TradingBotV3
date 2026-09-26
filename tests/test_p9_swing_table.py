@@ -490,6 +490,7 @@ def test_nothing_is_read_on_the_qt_thread(qapp, monkeypatch):
     """The whole table path - context, rows, every cell and tooltip, the regime line - opens no file."""
     import builtins
     import io
+    import threading
 
     from PySide6.QtCore import Qt
 
@@ -500,13 +501,21 @@ def test_nothing_is_read_on_the_qt_thread(qapp, monkeypatch):
         opened: list[str] = []
         real_open, real_io_open = builtins.open, io.open
 
+        # Only the Qt (main) thread counts: a leftover worker from an earlier test in the
+        # same process may legitimately write its own file (seen: alert_chart_watches.json).
+        def on_qt_thread() -> bool:
+            return threading.current_thread() is threading.main_thread()
+
         def spy(file, *args, **kwargs):
-            opened.append(str(file))
+            if on_qt_thread():
+                opened.append(str(file))
             return real_open(file, *args, **kwargs)
 
         monkeypatch.setattr(builtins, "open", spy)
         monkeypatch.setattr(io, "open", spy)
-        monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: opened.append(str(self)) or "")
+        monkeypatch.setattr(
+            Path, "read_text", lambda self, *a, **k: (opened.append(str(self)) if on_qt_thread() else None) or ""
+        )
         panel.set_regime_grades(_regime_payload({key: entry}))
         panel.set_swing_context({"long_setups": _payload(_leader("NVDA"), _leader("MU")),
                                  "sp4": {"families": {"LONG|avwap_band_bounce": {"n": 99}}}})
