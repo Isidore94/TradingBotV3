@@ -350,8 +350,12 @@ EXPECTED_SLOT_ORDER = (
     # reads what the slots above it wrote and feeds nothing above it, so it
     # CLOSES the deterministic stage.
     "measured_report",
-    # TJ-17: current and recent saved facts close stage 1 before any story.
+    # TJ-17: current and recent saved facts before any story.
     "day_review_facts",
+    # S12 (2026-09-26): the SP4 family evidence. Deterministic, no model; the
+    # brief puts it directly after `day_review_facts`, so it now CLOSES stage 1
+    # (`_STAGE_ONE_LAST_SLOT`) and keeps its Sunday slot. Nothing above reads it.
+    "family_side_evidence",
     # stage 2 - the original pair moved here by decision 0018; Phase 0.31
     # appends the bounded market-story narration inside the same stage.
     "ai_summary",
@@ -359,7 +363,7 @@ EXPECTED_SLOT_ORDER = (
     # Appended INSIDE stage 2 and deliberately AHEAD of `ticker_briefs`: gate
     # #158 reads the ledger for a day story finished before 23:30 Pacific, and
     # the briefs reserve 120 minutes in front of it. It cannot go further
-    # forward either - `ai_summary` sits directly after `day_review_facts` and
+    # forward either - `ai_summary` sits directly after `family_side_evidence` and
     # two other pins say so.
     "day_review_narration",
     # R1 (2026-09-26): the Day Review Show reads that night's verified story, so

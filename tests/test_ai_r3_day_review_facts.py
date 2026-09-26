@@ -23,7 +23,10 @@ def test_day_review_facts_is_the_stage_one_tail_and_is_on_every_night_slate(tmp_
     facts = next(slot for slot in slots if slot.name == "day_review_facts")
 
     assert names.index("day_review_facts") == names.index("measured_report") + 1
-    assert runner._STAGE_ONE_LAST_SLOT == "day_review_facts"
+    # S12 (2026-09-26): `family_side_evidence` now closes stage 1 directly after
+    # the facts, so the facts are still inside it on every slate.
+    assert runner._STAGE_ONE_LAST_SLOT == "family_side_evidence"
+    assert names.index("family_side_evidence") == names.index("day_review_facts") + 1
     assert facts.uses_model is False
     assert facts.max_attempts == 3
     assert facts.reserve_minutes == 5.0

@@ -258,3 +258,17 @@ def test_the_evidence_path_is_beside_the_horizon_outcomes():
 
     assert Path(pp.FAMILY_SIDE_EVIDENCE_FILE).name == "family_side_evidence.json"
     assert Path(pp.FAMILY_SIDE_EVIDENCE_FILE).parent == Path(pp.MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE).parent
+
+
+def test_the_slot_closes_stage_one_directly_after_day_review_facts(tmp_path):
+    from ai_jobs import runner
+
+    slots = runner.default_slots()
+    names = [slot.name for slot in slots]
+    slot = next(s for s in slots if s.name == "family_side_evidence")
+    assert names.index("family_side_evidence") == names.index("day_review_facts") + 1
+    assert runner._STAGE_ONE_LAST_SLOT == "family_side_evidence"
+    assert slot.goal == "setup_quality" and slot.uses_model is False and slot.max_attempts == 3
+    for kind in ("weeknight", "saturday", "sunday"):
+        slate = runner.slots_for(kind, session_date="2026-09-25", ledger_path=tmp_path / "ledger.jsonl")
+        assert "family_side_evidence" in [s.name for s in slate], kind

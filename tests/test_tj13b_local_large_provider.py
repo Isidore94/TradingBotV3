@@ -413,6 +413,9 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         "measured_report",
         # AI-R3 refreshes the bounded facts before any story reads them.
         "day_review_facts",
+        # LEAD AMENDMENT 2026-09-26 (S12): the SP4 family evidence, a
+        # deterministic slot directly after the facts; it now closes stage 1.
+        "family_side_evidence",
         # LEAD AMENDMENT 2026-09-20 (TJ-4 integration): the day story, inside
         # stage 2 and ahead of the briefs.
         "day_review_narration",

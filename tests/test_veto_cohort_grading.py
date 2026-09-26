@@ -641,6 +641,9 @@ def test_the_scope_can_be_selected_on_demand():
         "measured_report",
         # AI-R3 keeps the factual day pack current before stage-2 stories.
         "day_review_facts",
+        # LEAD AMENDMENT 2026-09-26 (S12): the SP4 family evidence, a
+        # deterministic slot directly after the facts; it now closes stage 1.
+        "family_side_evidence",
         # Stage 2: the original pair, plus Phase 0.31's bounded story narration.
         # TJ-4 (2026-09-20) appends the day story inside the stage, ahead of the
         # briefs: gate #158 wants it finished before 23:30 Pacific and the

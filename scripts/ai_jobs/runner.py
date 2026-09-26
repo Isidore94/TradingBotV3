@@ -1028,6 +1028,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         evidence_report,
         exit_note_fields,
         exit_windows_night,
+        family_side_evidence,
         improvement_ideas,
         journal_auto_tag,
         market_story_narration,
@@ -1398,6 +1399,20 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             run=day_review_facts.run_day_review_facts,
             reserve_minutes=5.0,
             description="Refresh current and recent Day Review facts (no model)",
+            max_attempts=3,
+        ),
+        # S12 (2026-09-26), DIRECTLY after `day_review_facts` and now the LAST
+        # stage-1 slot (`_STAGE_ONE_LAST_SLOT`), so the Sunday slate keeps it.
+        # Shadow SP4 evidence per (setup family, side); nothing in the night reads it.
+        JobSlot(
+            name="family_side_evidence",
+            goal="setup_quality",
+            run=family_side_evidence.run_family_side_evidence,
+            reserve_minutes=5.0,
+            description=(
+                "SP4 shadow evidence per setup family and side: beat SPY, move in ATR, "
+                "tracker R, and the challenger trial (deterministic, no model)"
+            ),
             max_attempts=3,
         ),
         # ------------------------------------------------------------------
@@ -1780,10 +1795,10 @@ NIGHT_KINDS = (NIGHT_WEEKNIGHT, NIGHT_SATURDAY, NIGHT_SUNDAY)
 WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration", "ticker_briefs", "setup_keys_narration")
 
 #: The deterministic stage (decision 0018 stage 1), which every night runs. It
-#: ENDS at `day_review_facts`, which closes that stage today; a later packet
-#: appending inside stage 1 lands inside this set automatically because the set
-#: is derived from the slate, not written out twice.
-_STAGE_ONE_LAST_SLOT = "day_review_facts"
+#: ENDS at `family_side_evidence` (S12, directly after `day_review_facts`); a
+#: later packet appending inside stage 1 lands inside this set automatically
+#: because the set is derived from the slate, not written out twice.
+_STAGE_ONE_LAST_SLOT = "family_side_evidence"
 
 
 def _night_evening_date(moment: datetime):

@@ -108,6 +108,7 @@ SETUP_GOALS = {"setup_quality", "permutations"}
 SETUP_SLOTS = (
     "veto_cohort_grading", "like_cohort_grading", "pass_cohort_grading",
     "rejection_cohort_grading", "setup_research", "theta_pick_grading", "miss_contrast",
+    "family_side_evidence",
 )
 
 
