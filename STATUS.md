@@ -2,7 +2,7 @@
 
 Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `git log`.
 
-**Updated:** 2026-09-25 22:36 PT
+**Updated:** 2026-09-26 05:55 PT
 
 - **Live on `main`:** round 1 (`7d160b4b`, gates #257-#263) and round 2 Phase A
   (`81272d42`, merged 20:45 PT on the trader's word, gates #264-#266): perf tooling
@@ -28,11 +28,13 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
   summary into the night AI; phone-brief rule line; pre-Aug entry_at (outcome code, ask
   first); review of the per-trade Mentor Save (`182f3e08`); weekly-options facet needs a
   theta store (only 43 of 6,462 theta picks ever got an option quote: IB option data).
-- **Next action:** morning session (Opus 5.5): R1 Day Review Show, B0 abort look, then
-  Phase S (the 2026-09-25 setup study in `TODO.md`: why M5 is never A, shorts vs longs,
-  first-30 filter, bracket outcome and tape-relative wins in the permutation search).
-  Gates #257/#264 from tonight's ledger; #258 Monday 07:00; #259-#263, #265, #266 on
-  Monday's session.
+- **Gates read 2026-09-26 05:50 PT:** #257 passed (night of 09-25: ideas ok, setup_research
+  "narration absent", empty-evidence enrichment carries no tags, no event 2004). #264:
+  tokens on 12 model rows; the digest lines exist but describe the goal-less 09-24 night
+  (B1b); Health rows need a desk session. Econ brief still rejected (P4b). Evening GC on
+  the new code: 4.7 ms/min full, 13.5 young (idle desk).
+- **Next action:** morning session (Opus 5.5): R1, B0, S10a-c, then Phase S from S1;
+  P4b and B1b are small and can ride along. #258 Monday 07:00; #259-#266 on Monday.
 - **Trader actions owed:** set Risk per trade ($) in Settings > General; fill
   `trading_plan.md`; run the permutation backfill before Saturday; confirm setup tags
   (P2 screen); Task Scheduler "run whether logged on or not" on the night task;

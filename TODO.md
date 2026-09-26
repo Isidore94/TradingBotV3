@@ -49,8 +49,10 @@ Gates #257-#263: none judged yet (first proof tonight and Monday).
 - Also in Phase A: **A4 One R** (native `trade_r_multiple` in the three night readers,
   `r_definition` in the day record), **A6 step 1**, **B6 Noise report** (`alert_noise_report.py`,
   `best_now_outcomes.py`, Day Review Alerts line, gate #265), **B4 Missing-inputs chip**
-  (gate #266), **C4a setup_age facet**. Live perf proof: `desk_perf_report.py --day` on
-  the first session after the merge against the 09-24 baseline.
+  (gate #266), **C4a setup_age facet**. First perf read on the new code (09-25 20:50-21:52,
+  idle evening desk): full GC 4.7 ms/min (was 306-375), young 13.5 ms/min (was 156-173),
+  largest sweep 126 ms (was 842), 1 stall over 1 s. Market-hours proof: Monday's
+  `desk_perf_report.py --day 2026-09-28 --compare 2026-09-24`.
 
 ### Phase B - simpler code, truer numbers (no live data needed)
 
@@ -105,6 +107,18 @@ restart only on the trader's word.
   trader kills the slot.
 - **B12 Day Review startup warning**: `DayReviewPanel.eventFilter` runs before
   `entry_text` exists (`8f82213a`); `getattr` guard, one test.
+- **P4b Econ brief prompt** (night AI ->8): three nights running the econ model restates
+  yesterday's "1 p.m. Treasury auction" and the verifier rightly rejects the whole
+  summary ("a time ... is not the time of an event it cites", two attempts a night).
+  In `scripts/ai_jobs/econ_brief.py`: give the model only the session's own calendar
+  events, label the prior brief's prose "yesterday - do not restate", and on the retry
+  quote the rejected sentence as a do-not-write example. Fixture from the 09-25 night.
+- **B1b Telemetry truth** (night AI): `digest.night_telemetry_lines` printed all-zero
+  "slots per goal (night of 2026-09-24)" because those rows predate the `goal` field;
+  say "unknown (rows carry no goal)" / "unknown (rows carry no tokens)" instead of 0.
+- **B13 Focus break-state repaint** (snappiness): `alert_center_panel._poll_focus_d1_interest`
+  (~line 5374) emits `focusBreakStatesChanged` on every poll; 29 stalls / 3.6 s in one
+  idle hour. Emit only when a state changed. Prove with `desk_perf_report.py`.
 
 - **A4b One RVOL**: golden fixture from today's outputs of `rvol.py`,
   `intraday_rvol_service.py`, `movers_scan.py` first; unify only where the numbers are
