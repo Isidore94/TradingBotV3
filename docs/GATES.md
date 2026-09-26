@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #288 April-September permutations (S15 item 1): the Setup keys page shows the April-September report with April-July rows (swing selection window starts 2026-03-17) [trader]
 - #287 Theta measured (B7): after the next night `theta_pick_grading` reports 'N measured underlying-only', and Research > Setup Tracker > Theta shows the line 'Theta outcome (underlying only, not option P&L): N measured of M first appearances' with N > 0 [trader]
 - #286 Weekend Prep regime setups (S16 item 4): once the trader has typed the regime (#279) and the Working-lately build has run, Weekend Prep > Week ahead shows 'Setups in this regime' with the current regime and day count, the setups graded B or better (n 30+) in it, and the setups untested in it; with no regime typed it says "type the regime in the Mentor first" [trader]
 - #285 Regime read (S17.2, S16.4-5): after the first night with the table, that night's `market_story_narrations/<session>.json` carries an `opening` whose regime line names the trader's regime and its day count, and the ledger's `regime_read` row is `ok` with `regime_reads/<session>.json` written or `degraded_no_narrative` with the rejected word named [lead]
