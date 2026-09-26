@@ -581,12 +581,12 @@ def upsert_history(history: Iterable[Mapping[str, Any]], rows: Iterable[Mapping[
 # --- the words on the desk and the phone
 
 def row_line(row: Mapping[str, Any], number: int | None = None) -> str:
-    """``1. NVDA leader pullback | buy limit 120.10 | stop 115.20 (...) | take +1 ATR ... | ready``."""
+    """``1. NVDA leader pullback | buy limit 120.10 | hold up to 10 sessions, stop 115.20 ... | ready``."""
     head = f"{number}. " if number is not None else ""
+    exit_text = row.get("exit") or f"stop {_num(row.get('stop')) or 0:.2f}"
     return (f"{head}{row.get('symbol')} {SETUP_LABELS.get(row.get('setup'), row.get('setup'))}"
             f" | buy limit {_num(row.get('entry_limit')) or 0:.2f}"
-            f" | stop {_num(row.get('stop')) or 0:.2f} ({row.get('stop_basis') or ''})"
-            f" | {row.get('exit') or ''} | {row.get('status') or STATUS_WAITING}"
+            f" | {exit_text} | {row.get('status') or STATUS_WAITING}"
             f" | {'; '.join(row.get('reasons') or ())}")
 
 

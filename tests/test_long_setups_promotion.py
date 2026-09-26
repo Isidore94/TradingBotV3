@@ -23,7 +23,7 @@ PAYLOAD = {
     "rows": [
         {"symbol": "LEAD", "setup": ls.LEADER_PULLBACK, "as_of": "2026-09-25", "entry_limit": 99.5,
          "stop": 95.0, "stop_basis": "under the pullback low", "target": 101.5, "strength": 3.4,
-         "exit": "take +1 ATR at 101.50 or sell after 10 sessions", "promoted": True, "status": "ready",
+         "exit": "hold up to 10 sessions, stop 95.00 under the pullback low", "promoted": True, "status": "ready",
          "reasons": ["made a 52-week high in the last 120 sessions"]},
         {"symbol": "GAPR", "setup": ls.POST_EARNINGS_DRIFT, "as_of": "2026-09-25", "entry_limit": 50.0,
          "stop": 48.0, "target": 51.0, "strength": 1.5, "promoted": True, "status": "ready"},
@@ -79,7 +79,7 @@ def test_the_worker_reader_builds_the_section_from_the_files(tmp_path, monkeypat
     finally:
         service._LOOKING_BACK_CACHE.clear()
     assert lines[0].startswith("Long leaders (scan session 2026-09-25): 2 setups, 2 ready")
-    assert lines[1].startswith("1. LEAD leader pullback | buy limit 99.50 | stop 95.00")
+    assert lines[1].startswith("1. LEAD leader pullback | buy limit 99.50 | hold up to 10 sessions, stop 95.00 under the pullback low | ready")
     assert any(line.startswith("leader_pullback LONG: raw in SPY-up") for line in lines)
 
 
