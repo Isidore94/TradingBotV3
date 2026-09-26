@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #293 Longs off (P9): on a non-working day (your regime not bull run / recovery, or SPY under a rising 20-day) long alerts and long swing rows are hidden with the "Longs off: <reason> (since <date>)" banner in the Alert Center and the setups table; Focus, typed and held names still show, and unticking the switch shows every long [trader]
 - #290 PROVEN retired (P14): on the next session no alert says PROVEN; an alert that matched a proven segment says `grade 1:1 <X>`; with Min tier 'S tier / top grade only', grade-B `regime_pause_rs` long rows still show while no grade A exists [trader]
 - #289 Shadow S9 (S9): after 10 sessions with the shadow recorded, compare shadow S9 vs live tier by bracket outcome (+1R before -1R) per tier from `intraday_bounces.csv` `shadow_s9_tier` joined to the outcome log; promote or drop with the numbers [lead]
 - #288 April-September permutations (S15 item 1): the Setup keys page shows the April-September report with April-July rows (swing selection window starts 2026-03-17) [trader]
