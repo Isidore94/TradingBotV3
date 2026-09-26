@@ -1043,6 +1043,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         read_grades_mature,
         setup_keys_narration,
         setup_research,
+        swing_path_facts_night,
         theta_grading,
         week_review_narration,
         week_questions,
@@ -1416,8 +1417,8 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description="Refresh current and recent Day Review facts (no model)",
             max_attempts=3,
         ),
-        # S12 (2026-09-26), DIRECTLY after `day_review_facts` and now the LAST
-        # stage-1 slot (`_STAGE_ONE_LAST_SLOT`), so the Sunday slate keeps it.
+        # S12 (2026-09-26), DIRECTLY after `day_review_facts`, inside stage 1
+        # (S15's `swing_path_facts` now closes it), so the Sunday slate keeps it.
         # Shadow SP4 evidence per (setup family, side); nothing in the night reads it.
         JobSlot(
             name="family_side_evidence",
@@ -1427,6 +1428,20 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description=(
                 "SP4 shadow evidence per setup family and side: beat SPY, move in ATR, "
                 "tracker R, and the challenger trial (deterministic, no model)"
+            ),
+            max_attempts=3,
+        ),
+        # S15 (2026-09-26), directly after `family_side_evidence` and now the LAST
+        # stage-1 slot: the session-horizon file it reads is written by the scan, not a
+        # night slot, so the latest deterministic data slot is its anchor. Shadow only.
+        JobSlot(
+            name="swing_path_facts",
+            goal="setup_quality",
+            run=swing_path_facts_night.run_swing_path_facts,
+            reserve_minutes=5.0,
+            description=(
+                "Swing path facts per scan row: MFE/MAE in ATR over 1-20 sessions, "
+                "next-open and pullback fills (deterministic, no model)"
             ),
             max_attempts=3,
         ),
@@ -1810,10 +1825,10 @@ NIGHT_KINDS = (NIGHT_WEEKNIGHT, NIGHT_SATURDAY, NIGHT_SUNDAY)
 WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration", "ticker_briefs", "setup_keys_narration")
 
 #: The deterministic stage (decision 0018 stage 1), which every night runs. It
-#: ENDS at `family_side_evidence` (S12, directly after `day_review_facts`); a
+#: ENDS at `swing_path_facts` (S15, directly after S12's `family_side_evidence`); a
 #: later packet appending inside stage 1 lands inside this set automatically
 #: because the set is derived from the slate, not written out twice.
-_STAGE_ONE_LAST_SLOT = "family_side_evidence"
+_STAGE_ONE_LAST_SLOT = "swing_path_facts"
 
 
 def _night_evening_date(moment: datetime):

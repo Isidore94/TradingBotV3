@@ -267,7 +267,9 @@ def test_the_slot_closes_stage_one_directly_after_day_review_facts(tmp_path):
     names = [slot.name for slot in slots]
     slot = next(s for s in slots if s.name == "family_side_evidence")
     assert names.index("family_side_evidence") == names.index("day_review_facts") + 1
-    assert runner._STAGE_ONE_LAST_SLOT == "family_side_evidence"
+    # S15 (2026-09-26): `swing_path_facts` follows it and now closes stage 1.
+    assert runner._STAGE_ONE_LAST_SLOT == "swing_path_facts"
+    assert names.index("swing_path_facts") == names.index("family_side_evidence") + 1
     assert slot.goal == "setup_quality" and slot.uses_model is False and slot.max_attempts == 3
     for kind in ("weeknight", "saturday", "sunday"):
         slate = runner.slots_for(kind, session_date="2026-09-25", ledger_path=tmp_path / "ledger.jsonl")

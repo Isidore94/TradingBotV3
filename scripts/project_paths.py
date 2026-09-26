@@ -807,6 +807,10 @@ MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE = (
 # S12: per (setup family, side) tape-relative evidence and the SP4 shadow trial.
 # `ai_jobs.family_side_evidence` owns it; read by the Setup Tracker and Setup keys.
 FAMILY_SIDE_EVIDENCE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "family_side_evidence.json"
+# S15: swing path facts (MFE/MAE in ATR, next-open and pullback fills) per scan row x
+# horizon 1/3/5/10/20, joined to the horizons file on observation_id. The night slot
+# `swing_path_facts` (`ai_jobs.swing_path_facts_night`) is its one owner. Shadow only.
+SWING_PATH_FACTS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "swing_path_facts.csv"
 # P1-4 4c: the setup-permutation search report (shadow only). Written by
 # `setup_permutation_search.py --out`; read by Research -> Setup keys and the
 # Saturday `setup_keys_narration` slot. Nothing ranks, filters or alerts on it.
