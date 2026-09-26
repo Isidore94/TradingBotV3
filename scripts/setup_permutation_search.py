@@ -40,6 +40,11 @@ side: a baseline, then single facets, pairs and triples, never deeper.
   never pooled; each horizon block counts which rule said "working".
 - Each run also keeps a dated copy in `permutation_report_history/` and writes
   `permutation_verdicts.json` (P12, `setup_permutation_verdicts.py`), both beside --out.
+- S16: with the trader's regime timeline (``--journal-db``, read-only) every row
+  gets a ``regime`` facet (the structural regime on its session, `regime_join`),
+  searched like any facet, and the report's ``by_regime`` block gives each
+  family x side its per-regime baseline, current regime first (descriptive: no
+  key is chosen from it). Regimes are never pooled into one cell.
 
 Shadow only: the report ranks and annotates. Nothing reads it for a score, a
 filter or an alert.
@@ -456,8 +461,63 @@ def long_working_raw_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, A
     return out
 
 
-def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source: str = "") -> dict[str, Any]:
+REGIME_FACET = "regime"
+
+
+def with_regime_facet(
+    rows: Sequence[Mapping[str, Any]], segments: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """Copies of ``rows`` with ``f_regime`` = the trader's regime on the row's session."""
+    import regime_join
+
+    joiner = regime_join.Joiner(segments)
+    return [{**row, f"f_{REGIME_FACET}": joiner.label(row.get("session"))} for row in rows]
+
+
+def regime_block(
+    by_population: Mapping[str, Mapping[str, Sequence[Mapping[str, Any]]]],
+    segments: Sequence[Mapping[str, Any]],
+    data_day: str,
+) -> dict[str, Any]:
+    """Per population x horizon x family x side: each regime's own baseline stats."""
+    import regime_join
+
+    current = regime_join.label_for(data_day, segments) if data_day else regime_join.UNKNOWN
+    present: set[str] = set()
+    out: dict[str, Any] = {}
+    for population, horizons in by_population.items():
+        for horizon, members in horizons.items():
+            groups: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+            for row in members:
+                label = str(row.get(f"f_{REGIME_FACET}") or regime_join.UNKNOWN)
+                present.add(label)
+                family_side = f"{row.get('family') or sp.UNKNOWN} {row.get('side') or sp.UNKNOWN}"
+                groups[family_side][label].append(row)
+            out.setdefault(population, {})[str(horizon)] = {
+                family_side: {label: stats_for(group).as_dict() for label, group in sorted(regimes.items())}
+                for family_side, regimes in sorted(groups.items())
+            }
+    order = regime_join.ordered_regimes(present, current, segments)
+    return {
+        "current": None if current == regime_join.UNKNOWN else current,
+        "order": order,
+        "labels": {name: regime_join.regime_label(name) for name in order},
+        "note": "Descriptive per-regime baselines over all sessions; no key is chosen from them.",
+        "populations": out,
+    }
+
+
+def build_report(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    ledger_root: Path,
+    source: str = "",
+    segments: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """The whole report. ``segments`` (the trader's regime timeline) adds the regime facet."""
     rows = [*rows, *long_working_raw_rows(rows)]
+    if segments is not None:
+        rows = with_regime_facet(rows, segments)
     by_population: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
     for row in rows:
         by_population[str(row.get("population") or "")][horizon_key(row)].append(row)
@@ -553,6 +613,8 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source
             report["populations"][population]["definition"] = LONG_WORKING_RAW_DEFINITION
     data_day = report_data_date(report)
     report["data_date"] = data_day.isoformat() if data_day else ""
+    if segments is not None:
+        report["by_regime"] = regime_block(by_population, segments, report["data_date"])
     return report
 
 
@@ -658,9 +720,14 @@ def main(argv: list[str] | None = None) -> int:
                         help="default: permutation_report_history/ beside --out")
     parser.add_argument("--verdicts-out", type=Path, default=None,
                         help="default: permutation_verdicts.json beside --out")
+    parser.add_argument("--journal-db", type=Path, default=None,
+                        help="the journal holding the trader's regimes (read-only; default the live journal)")
     args = parser.parse_args(argv)
     rows = read_outcomes(args.outcomes)
-    report = build_report(rows, ledger_root=args.ledger_root, source=str(args.outcomes))
+    import regime_join
+
+    report = build_report(rows, ledger_root=args.ledger_root, source=str(args.outcomes),
+                          segments=regime_join.read_segments(args.journal_db))
     write_report(report, args.out)
     history_dir = args.history_dir or Path(args.out).parent / HISTORY_DIR_NAME
     append_history(report, history_dir)

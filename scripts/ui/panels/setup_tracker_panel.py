@@ -38,6 +38,7 @@ from project_paths import (
 import claimed_pick_evidence
 import exit_model_review
 import points_challenger
+import regime_grades
 import setup_grades
 from research_explanations import build_plain_english_whats_working
 from theta_pick_tracker import THETA_NO_EXPORT_SENTENCE, theta_readout
@@ -312,6 +313,9 @@ THETA_COLUMNS = (
     ("expiry_hold_rate", "Held at expiry"),
     ("n_expiry_graded", "Expiry n"),
 )
+
+#: S16. The tab that shows every grade per structural regime, current first.
+REGIME_TAB_TITLE = "By regime"
 
 #: S13. Three exit models per family x side, from `exit_model_review.review`.
 EXIT_MODEL_COLUMNS = (
@@ -686,6 +690,10 @@ class SetupTrackerPanel(QFrame):
         self.theta_grade_label = QLabel("")
         self.theta_grade_label.setObjectName("MutedLabel")
         self.theta_grade_label.setWordWrap(True)
+        # S16: the By regime tab's status line (current regime, day count, windows).
+        self.regime_status_label = QLabel(regime_grades.status_sentence({}))
+        self.regime_status_label.setObjectName("MutedLabel")
+        self.regime_status_label.setWordWrap(True)
         # S13: the Exit models tab's status line, from the worker's summary.
         self.exit_model_status_label = QLabel(exit_model_review.NO_DATA_SENTENCE)
         self.exit_model_status_label.setObjectName("MutedLabel")
@@ -780,6 +788,9 @@ class SetupTrackerPanel(QFrame):
         self.exit_model_table, self.exit_model_model = self._make_table(
             EXIT_MODEL_COLUMNS, text_key="family"
         )
+        self.regime_table, self.regime_model = self._make_table(
+            regime_grades.REGIME_TABLE_COLUMNS, text_key="other_regimes"
+        )
         # D1C-B: `Note` takes the slack on the populations block - it carries the
         # HC unmeasured sentence, and a rate column must never take it.
         self.claim_population_table, self.claim_population_model = self._make_table(
@@ -802,6 +813,18 @@ class SetupTrackerPanel(QFrame):
         )
 
         self.tabs.addTab(self.current_table, "Current Picks")
+        self.tabs.addTab(
+            self._make_explained_tab(
+                "S16, DISPLAY ONLY. Every grade inside ONE market regime - the regime you typed "
+                "in the Mentor, on the date of each pick, alert, trade or Focus name. The "
+                "current regime comes first; 'untested in this regime' means no rows there "
+                "yet, never a guess. Regimes are never pooled. 'All regimes' is the pooled "
+                "grade the badges, the Show filter and sorting still read.",
+                self.regime_table,
+                status=self.regime_status_label,
+            ),
+            REGIME_TAB_TITLE,
+        )
         self.tabs.addTab(
             self._make_explained_tab(
                 "Which setup families follow through in the FIRST 1-2 SESSIONS after entry (mark-to-market R, "
@@ -1592,6 +1615,9 @@ class SetupTrackerPanel(QFrame):
             str(data.get("exit_model_sentence") or exit_model_review.NO_DATA_SENTENCE)
         )
         self.sp4_chip_label.setText(str(data.get("sp4_chip") or points_challenger.chip_text({})))
+        self.regime_status_label.setText(
+            str(data.get("regime_sentence") or regime_grades.status_sentence({}))
+        )
         tape = data.get("side_by_tape")
         self.tape_side_label.setText(
             setup_grades.side_by_tape_line(tape if isinstance(tape, dict) else None)
@@ -2031,6 +2057,18 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
     signatures["exit_models"] = hashlib.sha1(
         repr(ranked["exit_models"]).encode("utf-8", "replace")
     ).hexdigest()
+    # S16: grades per regime, from the file the Working-lately worker publishes.
+    try:
+        from ui.services import working_lately_service
+
+        regime_payload = working_lately_service.read_persisted_regime_grades()
+    except Exception:  # noqa: BLE001 - one tab, never the tracker
+        logging.debug("Setup Tracker regime grades could not be read", exc_info=True)
+        regime_payload = {}
+    ranked["regime_grades"] = regime_grades.table_rows(regime_payload)
+    signatures["regime_grades"] = hashlib.sha1(
+        repr(ranked["regime_grades"]).encode("utf-8", "replace")
+    ).hexdigest()
     ranked["claim_population"] = claims["populations"]
     ranked["claim_setup"] = claims["setups"]
     return {
@@ -2044,6 +2082,7 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
         "side_by_tape": side_by_tape,
         "study_family_lines": study_family_lines,
         "exit_model_sentence": exit_model_review.review_sentence(exit_models),
+        "regime_sentence": regime_grades.status_sentence(regime_payload),
         "sp4_chip": points_challenger.chip_text(evidence),
         "theta_population_sentence": theta.population_sentence(),
         "theta_grade_sentence": theta.grade_sentence(),
@@ -2098,6 +2137,8 @@ def _table_render_plan(
          (signatures.get("theta"),)),
         ("exit_model_table", "exit_model_model", ranked.get("exit_models") or [],
          (signatures.get("exit_models"),)),
+        ("regime_table", "regime_model", ranked.get("regime_grades") or [],
+         (signatures.get("regime_grades"),)),
         # D1C-B: both blocks come off ONE build, so both memo on the same
         # four-store signature - a rewrite of any of them re-fits both.
         ("claim_population_table", "claim_population_model",

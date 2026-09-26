@@ -65,6 +65,11 @@ PERFORMANCE_COLUMNS = (
     ("eod_r_median", "EOD med R"),
     ("reach_2r_rate", "Reach 2R"),
     ("grade_n", "Grade n"),
+    # S16: the same 1:1 grade inside the trader's current regime ("untested in
+    # this regime" when it has no alerts there), then every regime, current
+    # first, ending with "all regimes" = the pooled grade the two columns above show.
+    ("regime_now", "This regime"),
+    ("regime_all", "By regime"),
     # S11: when the family usually peaks and +1R-or-60-min vs holding, from
     # `exit_windows.json` (facts only, never enforced).
     ("exit_by", "Exit by"),
@@ -329,6 +334,7 @@ class DaytradeTrackerPanel(QFrame):
         self._performance_rows: list[dict[str, Any]] = []
         #: The persisted setup grades payload, read on the held/ran worker.
         self._setup_grades: dict = {}
+        self._regime_grades: dict = {}
         #: S11: the persisted exit-window payload, read on the same worker.
         self._exit_windows: dict = {}
 
@@ -673,15 +679,18 @@ class DaytradeTrackerPanel(QFrame):
         # the Qt thread, and nothing expensive belongs there.
         state = load_bounce_learning_state() or {}
         self._learning_state = state
-        perf_rows = apply_exit_windows(
-            apply_setup_grades(
-                apply_champion_tier(
-                    apply_held_and_ran(self._performance_rows, self._held_run_summaries),
-                    state,
+        perf_rows = apply_regime_grades(
+            apply_exit_windows(
+                apply_setup_grades(
+                    apply_champion_tier(
+                        apply_held_and_ran(self._performance_rows, self._held_run_summaries),
+                        state,
+                    ),
+                    self._setup_grades,
                 ),
-                self._setup_grades,
+                self._exit_windows,
             ),
-            self._exit_windows,
+            self._regime_grades,
         )
         by_dimension: dict[str, list[dict]] = {}
         for row in perf_rows:
@@ -793,6 +802,8 @@ class DaytradeTrackerPanel(QFrame):
             self._setup_grades = grades if isinstance(grades, dict) else {}
             exits = summaries.get("exit_windows")
             self._exit_windows = exits if isinstance(exits, dict) else {}
+            by_regime = summaries.get("regime_grades")
+            self._regime_grades = by_regime if isinstance(by_regime, dict) else {}
             window_text = held_run_window_text(summaries.get("window"))
             coverage_text = outcome_coverage_text(summaries.get("outcome_coverage"))
             summaries = summaries.get("summaries")
@@ -811,15 +822,18 @@ class DaytradeTrackerPanel(QFrame):
             current = self.status_label.text()
             if text not in current:
                 self.status_label.setText(f"{current} {text}".strip())
-        rows = apply_exit_windows(
-            apply_setup_grades(
-                apply_champion_tier(
-                    apply_held_and_ran(self._performance_rows, self._held_run_summaries),
-                    getattr(self, "_learning_state", {}) or {},
+        rows = apply_regime_grades(
+            apply_exit_windows(
+                apply_setup_grades(
+                    apply_champion_tier(
+                        apply_held_and_ran(self._performance_rows, self._held_run_summaries),
+                        getattr(self, "_learning_state", {}) or {},
+                    ),
+                    self._setup_grades,
                 ),
-                self._setup_grades,
+                getattr(self, "_exit_windows", {}) or {},
             ),
-            getattr(self, "_exit_windows", {}) or {},
+            getattr(self, "_regime_grades", {}) or {},
         )
         by_dimension: dict[str, list[dict]] = {}
         for row in rows:
@@ -954,6 +968,33 @@ def apply_setup_grades(rows, payload) -> list[dict]:
     return out
 
 
+def apply_regime_grades(rows, payload) -> list[dict]:
+    """S16: this regime's grade and every regime's, on Bounce Types rows. Formats only.
+
+    Keyed ``(bounce type, side)`` as `setup_grades.daytrade_key`; other
+    dimensions get blanks. The pooled grade is labelled "all regimes".
+    """
+    import regime_grades
+    import setup_grades
+
+    payload = payload or {}
+    cells = payload.get("daytrade") or {}
+    out: list[dict] = []
+    for raw in rows or ():
+        row = dict(raw)
+        row["regime_now"] = ""
+        row["regime_all"] = ""
+        if payload and str(row.get("dimension") or "").strip() == "bounce_type":
+            entry = cells.get(setup_grades.daytrade_key(row.get("segment"), row.get("direction"))) or {}
+            by_regime = entry.get("by_regime") or {}
+            row["regime_now"] = regime_grades.this_regime_text(by_regime, payload.get("current"))
+            row["regime_all"] = regime_grades.by_regime_text(
+                by_regime, payload, pooled=entry.get("all") or {}
+            )
+        out.append(row)
+    return out
+
+
 def apply_exit_windows(rows, payload) -> list[dict]:
     """S11: the "Exit by" text on Bounce Types rows, keyed (bounce type, side). Formats only."""
     import exit_windows
@@ -1079,11 +1120,13 @@ def load_held_run_report() -> dict:
             "outcome_coverage": held_run_score.terminal_coverage(episodes),
             "setup_grades": _read_setup_grades(),
             "exit_windows": _read_exit_windows(),
+            "regime_grades": _read_regime_grades(),
         }
     except Exception:
         return {
             "summaries": {}, "window": {}, "outcome_coverage": {},
             "setup_grades": _read_setup_grades(), "exit_windows": _read_exit_windows(),
+            "regime_grades": _read_regime_grades(),
         }
 
 
@@ -1094,6 +1137,16 @@ def _read_exit_windows() -> dict:
 
         return exit_windows.read_payload()
     except Exception:  # noqa: BLE001 - the Exit by column is then blank
+        return {}
+
+
+def _read_regime_grades() -> dict:
+    """S16: the grades by regime the working-lately build last published. NEVER on the Qt thread."""
+    try:
+        from ui.services.working_lately_service import read_persisted_regime_grades
+
+        return read_persisted_regime_grades()
+    except Exception:  # noqa: BLE001 - the regime columns are then blank
         return {}
 
 
