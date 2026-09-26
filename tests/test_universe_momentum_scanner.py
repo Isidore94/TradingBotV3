@@ -30,7 +30,7 @@ import momentum_universe as mu  # noqa: E402
 import universe_builder as ub  # noqa: E402
 
 DAY = date(2026, 9, 28)
-GOOD = (50.0, 2.5e8)  # $50, $250M a day
+GOOD = (50.0, 5e6)  # $50, 5M shares a day
 
 
 def _sessions(count: int, *, end: date = DAY) -> list[date]:
@@ -104,17 +104,18 @@ def test_scanner_results_parse_into_admitted_names_with_their_scans():
     assert {row[2] for row in _FakeApp.subscriptions} == {5.0}
     assert {row[3] for row in _FakeApp.subscriptions} == {mu.MOMENTUM_CLIENT_ID}
     assert results["HIGH_VS_52W_HL"] == ["BRK-B", "NVDA"]  # rank order, warrant dropped, IB class -> dash
-    metrics = {"NVDA": GOOD, "BRK-B": GOOD, "PLTR": GOOD, "CHEAP": (4.99, 9e8), "THIN": (20.0, 49.9e6),
+    metrics = {"NVDA": GOOD, "BRK-B": GOOD, "PLTR": GOOD, "CHEAP": (4.99, 9e6), "THIN": (20.0, 999_999),
                "UNPRICED": (None, None)}
-    sighted = mu.sighted_symbols(results, metrics)
+    sighted = mu.sighted_symbols(results, metrics, market_caps=lambda names: {n: 5000.0 for n in names})
     assert sighted == {"BRK-B": ["HIGH_VS_52W_HL"], "NVDA": ["HIGH_VS_52W_HL", "HIGH_VS_26W_HL"],
                        "PLTR": ["HIGH_VS_26W_HL"]}
 
 
-def test_the_dollar_volume_floor_is_the_lowest_s15_bucket_edge():
-    import setup_permutations
-
-    assert mu.MOMENTUM_MIN_DOLLAR_VOLUME_M == setup_permutations.DOLLAR_VOLUME_EDGES_M[0]
+def test_the_floors_are_the_traders_minimum():
+    # The trader, 2026-09-26: "We want 1B market cap and a avg20 daily volume of shares
+    # traded to be 1m. That's my minimum" - the same floors as the base universe screen.
+    assert mu.MOMENTUM_MIN_AVG_VOLUME == ub.DEFAULT_MIN_AVG_VOLUME == 1_000_000
+    assert mu.MOMENTUM_MIN_MARKET_CAP_M == ub.DEFAULT_MIN_MARKET_CAP_M == 1000.0
     assert mu.MOMENTUM_MIN_PRICE == 5.0
     assert mu.MOMENTUM_KEEP_SESSIONS == 60 and mu.MOMENTUM_MAX_SYMBOLS == 300
 
@@ -166,7 +167,7 @@ def test_the_cap_keeps_the_most_recently_sighted_then_the_most_sighted():
 def test_ib_down_keeps_yesterdays_membership_and_never_writes(tmp_path):
     store = tmp_path / "momentum.json"
     days = _sessions(2)
-    report = mu.refresh_membership({"NVDA": GOOD}, today=days[0], path=store,
+    report = mu.refresh_membership({"NVDA": GOOD}, market_caps=_big_caps, today=days[0], path=store,
                                    fetch=lambda: {"HIGH_VS_52W_HL": ["NVDA"]})
     assert report["refreshed"] and report["members"] == ["NVDA"]
     before = store.read_bytes()
@@ -174,7 +175,7 @@ def test_ib_down_keeps_yesterdays_membership_and_never_writes(tmp_path):
     def down():
         raise ims.ScannerError("connect 127.0.0.1:7496 failed: refused")
 
-    report = mu.refresh_membership({"NVDA": GOOD}, today=days[1], path=store, fetch=down)
+    report = mu.refresh_membership({"NVDA": GOOD}, market_caps=_big_caps, today=days[1], path=store, fetch=down)
     assert report["members"] == ["NVDA"] and not report["refreshed"] and "refused" in report["error"]
     assert store.read_bytes() == before
 
@@ -187,17 +188,17 @@ def test_the_scanner_is_asked_once_a_day(tmp_path):
         calls.append(1)
         return {"HIGH_VS_52W_HL": ["NVDA"]}
 
-    mu.refresh_membership({"NVDA": GOOD}, today=DAY, path=store, fetch=fetch)
-    report = mu.refresh_membership({"NVDA": GOOD}, today=DAY, path=store, fetch=fetch)
+    mu.refresh_membership({"NVDA": GOOD}, market_caps=_big_caps, today=DAY, path=store, fetch=fetch)
+    report = mu.refresh_membership({"NVDA": GOOD}, market_caps=_big_caps, today=DAY, path=store, fetch=fetch)
     assert len(calls) == 1 and report["members"] == ["NVDA"] and not report["refreshed"]
-    mu.refresh_membership({"NVDA": GOOD}, today=DAY + timedelta(days=1), path=store, fetch=fetch, write=False)
+    mu.refresh_membership({"NVDA": GOOD}, market_caps=_big_caps, today=DAY + timedelta(days=1), path=store, fetch=fetch, write=False)
     assert len(calls) == 1
 
 
 def test_an_unreadable_store_is_never_overwritten(tmp_path):
     store = tmp_path / "momentum.json"
     store.write_text("{not json", encoding="utf-8")
-    report = mu.refresh_membership({"NVDA": GOOD}, today=DAY, path=store,
+    report = mu.refresh_membership({"NVDA": GOOD}, market_caps=_big_caps, today=DAY, path=store,
                                    fetch=lambda: {"HIGH_VS_52W_HL": ["NVDA"]})
     assert report["members"] == [] and report["error"].startswith("unreadable")
     assert store.read_text(encoding="utf-8") == "{not json"
@@ -236,7 +237,11 @@ def home(tmp_path):
         yield tmp_path, files
 
 
-def _build(metrics, *, scans=None, journal=None, **kwargs):
+def _big_caps(symbols, **_kwargs):
+    return {symbol: 5000.0 for symbol in symbols}
+
+
+def _build(metrics, *, scans=None, journal=None, caps=None, **kwargs):
     history = pd.DataFrame(columns=["symbol", "datetime", "close", "volume"])
 
     def fetch():
@@ -248,7 +253,7 @@ def _build(metrics, *, scans=None, journal=None, **kwargs):
             patch.object(ub, "fetch_optionable_symbols", return_value=["AAPL"]), \
             patch.object(ub, "fetch_price_history", return_value=history), \
             patch.object(ub, "compute_universe_metrics", return_value=metrics), \
-            patch.object(ub, "fetch_market_caps", return_value={}), \
+            patch.object(ub, "fetch_market_caps", side_effect=caps or _big_caps), \
             patch.object(ub, "journal_traded_symbols", return_value=journal or {}), \
             patch.object(mu, "fetch_momentum_scans", fetch):
         return ub.build_universe(write_outputs=True, **kwargs)
@@ -321,3 +326,18 @@ def test_a_broken_momentum_stage_never_fails_the_rebuild(home):
     with patch.object(mu, "refresh_membership", side_effect=RuntimeError("boom")):
         result = _build(_metrics(screen), force=True)
     assert result["momentum_scanner"] == [] and len(_read(files["all"])) == 30
+
+
+def test_a_momentum_name_under_one_billion_or_with_no_cap_is_not_admitted():
+    results = {"HIGH_VS_52W_HL": ["BIG", "SMALL", "NOCAP"]}
+    metrics = {"BIG": GOOD, "SMALL": GOOD, "NOCAP": GOOD}
+    caps = {"BIG": 1500.0, "SMALL": 999.0}
+    asked = []
+
+    def lookup(names):
+        asked.append(sorted(names))
+        return {name: caps[name] for name in names if name in caps}
+
+    assert mu.sighted_symbols(results, metrics, market_caps=lookup) == {"BIG": ["HIGH_VS_52W_HL"]}
+    assert asked == [["BIG", "NOCAP", "SMALL"]]  # caps asked once, only for names past price/volume
+    assert mu.sighted_symbols(results, metrics) == {}  # no cap lookup = every cap unknown

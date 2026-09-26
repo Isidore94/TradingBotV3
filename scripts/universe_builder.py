@@ -818,24 +818,27 @@ MOMENTUM_SOURCE = momentum_universe.MOMENTUM_SOURCE
 
 
 def _momentum_metrics_lookup(metrics: pd.DataFrame) -> dict[str, tuple[float | None, float | None]]:
-    """Symbol -> (last price, 20-session dollar volume) from the rebuild's own metrics; NaN is None."""
+    """Symbol -> (last price, 20-session mean share volume) from the rebuild's own metrics; NaN is None."""
     out: dict[str, tuple[float | None, float | None]] = {}
     if metrics is None or metrics.empty:
         return out
-    for symbol, price, dollar_volume in zip(
-        metrics["symbol"], metrics["last_price"], metrics["dollar_volume_20d"], strict=False
+    for symbol, price, avg_volume in zip(
+        metrics["symbol"], metrics["last_price"], metrics["avg_volume_20d"], strict=False
     ):
         out[str(symbol).upper()] = (
             None if pd.isna(price) else float(price),
-            None if pd.isna(dollar_volume) else float(dollar_volume),
+            None if pd.isna(avg_volume) else float(avg_volume),
         )
     return out
 
 
-def _momentum_stage(metrics: dict, *, write: bool) -> dict:
+def _momentum_stage(metrics: dict, *, write: bool, refresh: bool = False) -> dict:
     """The momentum_scanner members for this rebuild; any failure is no names, never a failed rebuild."""
     try:
-        return momentum_universe.refresh_membership(metrics, write=write)
+        return momentum_universe.refresh_membership(
+            metrics, write=write,
+            market_caps=lambda names: fetch_market_caps(sorted(names), refresh=refresh),
+        )
     except Exception as exc:
         logging.warning("Momentum universe source skipped for this rebuild.", exc_info=True)
         return {"refreshed": False, "sighted": 0, "error": str(exc) or type(exc).__name__, "members": []}
@@ -940,7 +943,7 @@ def build_universe(
     # The momentum_scanner source joins the LONG list only (the D1 scan reads the side lists) and
     # stays out of universe_all.txt, so the Strength Board, breadth and open-scan pool do not grow.
     # A name already on a side list, typed in an include file or added from the journal never moves.
-    momentum = _momentum_stage(momentum_metrics, write=write_outputs)
+    momentum = _momentum_stage(momentum_metrics, write=write_outputs, refresh=refresh)
     held = set(longs) | set(shorts) | set(journal) | set(include_all)
     momentum_added = [symbol for symbol in momentum["members"] if symbol not in held]
     longs = sorted(set(longs) | set(momentum_added))

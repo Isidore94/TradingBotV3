@@ -2,7 +2,7 @@
 
 Once a day, from the universe rebuild, IB scanner lists of strong US stocks (near 13/26/52-week
 highs, today's top % gainers) are pulled on this module's own client id. A sighted name that clears
-the price and dollar-volume floors (read from the rebuild's own yfinance metrics; unpriced = unknown =
+the price, share-volume and market-cap floors (read from the rebuild's own yfinance metrics; unpriced = unknown =
 not admitted) joins the membership and stays for MOMENTUM_KEEP_SESSIONS observed sessions after it
 was last sighted, so a name that was strong once is still scanned on its pullback. Capped at
 MOMENTUM_MAX_SYMBOLS, most recently sighted first.
@@ -29,9 +29,10 @@ MOMENTUM_SCAN_CODES = ("HIGH_VS_52W_HL", "HIGH_VS_26W_HL", "HIGH_VS_13W_HL", "TO
 #: IB's scanner answers at most 50 rows per subscription.
 MOMENTUM_SCAN_ROWS = 50
 MOMENTUM_MIN_PRICE = 5.0
-#: 20-session mean dollar volume floor ($M): the lowest S15 bucket edge
-#: (`setup_permutations.DOLLAR_VOLUME_EDGES_M[0]`), so every name lands in a measured bucket.
-MOMENTUM_MIN_DOLLAR_VOLUME_M = 50.0
+#: The trader's minimum (2026-09-26): 20-session mean share volume and market cap ($M), the same
+#: floors as the base universe screen (`universe_builder.DEFAULT_MIN_*`).
+MOMENTUM_MIN_AVG_VOLUME = 1_000_000
+MOMENTUM_MIN_MARKET_CAP_M = 1000.0
 #: A member stays this many observed sessions after it was last sighted.
 MOMENTUM_KEEP_SESSIONS = 60
 #: Most names the source may hold (most recently sighted first, then most sightings).
@@ -64,29 +65,36 @@ def sighted_symbols(
     results: Mapping[str, list[str]] | None,
     metrics: Mapping[str, tuple[float | None, float | None]],
     *,
+    market_caps: Callable[[list[str]], Mapping[str, float]] | None = None,
     min_price: float = MOMENTUM_MIN_PRICE,
-    min_dollar_volume_m: float = MOMENTUM_MIN_DOLLAR_VOLUME_M,
+    min_avg_volume: float = MOMENTUM_MIN_AVG_VOLUME,
+    min_market_cap_m: float = MOMENTUM_MIN_MARKET_CAP_M,
 ) -> dict[str, list[str]]:
     """Admitted symbol -> the scan codes that sighted it, in scan then rank order.
 
-    `metrics` is symbol -> (last price, 20-session mean dollar volume in $). A name with no
-    metrics, or a missing value, is unknown and not admitted.
+    `metrics` is symbol -> (last price, 20-session mean share volume). `market_caps` returns
+    symbol -> cap in $M for the names that pass price and volume (asked once). A missing
+    price, volume or cap is unknown and not admitted.
     """
-    out: dict[str, list[str]] = {}
+    sighted: dict[str, list[str]] = {}
     for code, names in (results or {}).items():
         for raw in names or ():
             symbol = str(raw or "").strip().upper()
             if not symbol:
                 continue
-            price, dollar_volume = metrics.get(symbol, (None, None))
-            if price is None or dollar_volume is None:
+            price, avg_volume = metrics.get(symbol, (None, None))
+            if price is None or avg_volume is None:
                 continue
-            if float(price) < min_price or float(dollar_volume) < min_dollar_volume_m * 1e6:
+            if float(price) < min_price or float(avg_volume) < min_avg_volume:
                 continue
-            codes = out.setdefault(symbol, [])
+            codes = sighted.setdefault(symbol, [])
             if code not in codes:
                 codes.append(str(code))
-    return out
+    caps = dict(market_caps(sorted(sighted)) or {}) if (market_caps and sighted) else {}
+    return {
+        symbol: codes for symbol, codes in sighted.items()
+        if float(caps.get(symbol) or 0.0) >= min_market_cap_m
+    }
 
 
 def empty_membership() -> dict[str, Any]:
@@ -161,6 +169,7 @@ def refresh_membership(
     today: date | None = None,
     path: Path | None = None,
     fetch: Callable[[], dict[str, list[str]]] | None = None,
+    market_caps: Callable[[list[str]], Mapping[str, float]] | None = None,
     write: bool = True,
 ) -> dict[str, Any]:
     """Refresh the store once per day and return the active members with a report for the ledger.
@@ -185,7 +194,7 @@ def refresh_membership(
             logging.warning("Momentum universe scanner unavailable; yesterday's membership kept: %s", exc)
             report["error"] = str(exc) or type(exc).__name__
         else:
-            sighted = sighted_symbols(results, metrics)
+            sighted = sighted_symbols(results, metrics, market_caps=market_caps)
             membership = update_membership(membership, sighted, today=day)
             from diagnostics.artifact_io import atomic_write_json
 
