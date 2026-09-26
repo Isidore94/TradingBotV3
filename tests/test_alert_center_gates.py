@@ -74,3 +74,11 @@ def test_gates_module_imports_no_qt():
         timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_clickable_item_lives_in_items_and_panel_reexports_it():
+    from ui.panels import alert_center_panel
+    from ui.panels.alert_center import items
+
+    assert items._ClickableItem.__module__ == "ui.panels.alert_center.items"
+    assert alert_center_panel._ClickableItem is items._ClickableItem
