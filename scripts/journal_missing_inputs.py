@@ -9,13 +9,19 @@ own rule (`trade_mentor_trade_check.missing_fields`): the stop when there is no
 is not `confirmed`, and no answer; the thesis when there are no notes and no
 answer. Absent data counts as missing; nothing is inferred.
 
-`load` reads the store off the Qt thread for the status-bar chip.
+`load` reads the store off the Qt thread for the status-bar chip. Read-only CLI
+(the journal is read through `JournalStore`'s normal path; nothing is written):
+
+    python scripts/journal_missing_inputs.py --summary [--since-days 30] [--db PATH]
 """
 
 from __future__ import annotations
 
+import argparse
+import sys
 from datetime import date, datetime, timedelta
-from typing import Any, Iterable, Mapping
+from pathlib import Path
+from typing import Any, Iterable, Mapping, Sequence
 
 import trade_mentor_trade_check as check
 from journal_store import TRADE_STATUSES
@@ -172,3 +178,48 @@ def load_chip(
     result = load(store, since_days=since_days, today=today)
     result["question"] = question_for(store, oldest_chip_row(result))
     return result
+
+
+def format_summary(result: Mapping[str, Any]) -> str:
+    """The CLI's counts, one line each."""
+    counts = result.get("counts") or {}
+    lines = [
+        f"Trades opened since {result.get('since')} ({result.get('since_days')} days) "
+        f"missing an input: {int(counts.get('trades') or 0)}",
+        f"  missing stop:   {int(counts.get('stop') or 0)}",
+        f"  missing setup:  {int(counts.get('setup') or 0)}",
+        f"  missing thesis: {int(counts.get('thesis') or 0)}",
+        f"  missing stop or setup (the chip): {int(counts.get('stop_or_setup') or 0)}",
+    ]
+    oldest = oldest_chip_row(result)
+    if oldest:
+        lines.append(
+            f"  oldest: {oldest['symbol']} {str(oldest['opened_at'])[:10]} "
+            f"({', '.join(oldest['missing'])})"
+        )
+    return "\n".join(lines)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--summary", action="store_true", help="print the counts only")
+    parser.add_argument("--since-days", type=int, default=SINCE_DAYS_DEFAULT)
+    parser.add_argument("--db", default="", help="journal database (default: the live one)")
+    args = parser.parse_args(argv)
+
+    from journal_store import JournalStore
+
+    store = JournalStore(Path(args.db)) if args.db else JournalStore()
+    result = load(store, since_days=args.since_days)
+    print(format_summary(result))
+    if not args.summary:
+        for row in result["rows"]:
+            print(
+                f"  {str(row['opened_at'])[:16]}  {row['symbol']:<8} {row['trade_id']}  "
+                f"missing {', '.join(row['missing'])}"
+            )
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised through main()
+    raise SystemExit(main(sys.argv[1:]))

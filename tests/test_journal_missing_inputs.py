@@ -151,3 +151,41 @@ def test_load_reads_the_store_and_the_mentor_answers(tmp_path):
     assert rows == {old: ["stop", "setup"], new: ["setup", "thesis"]}
     assert [row["trade_id"] for row in result["rows"]] == [old, new]
     assert mi.oldest_chip_row(result)["trade_id"] == old
+
+
+def _contents(db):
+    import sqlite3
+
+    conn = sqlite3.connect(db)
+    try:
+        return sorted(conn.iterdump())
+    finally:
+        conn.close()
+
+
+def test_the_cli_summary_prints_the_counts_and_writes_nothing(tmp_path, capsys):
+    from datetime import timedelta
+
+    import journal_missing_inputs as mi
+
+    store = new_store(tmp_path)
+    day = (date.today() - timedelta(days=3)).isoformat()
+    trade_id = add_round_trip(store, "AAA", day=day, entry_hour=7)
+    db = store.db_path
+    before = _contents(db)
+
+    assert mi.main(["--summary", "--db", str(db)]) == 0
+
+    out = capsys.readouterr().out
+    assert "missing an input: 1" in out
+    assert "missing stop:   1" in out
+    assert "missing setup:  1" in out
+    assert "missing thesis: 1" in out
+    assert "missing stop or setup (the chip): 1" in out
+    assert trade_id not in out  # --summary prints counts, not rows
+    # Read-only: the store's normal open may touch the file, never its rows.
+    assert _contents(db) == before
+
+    assert mi.main(["--db", str(db)]) == 0
+    assert trade_id in capsys.readouterr().out
+    assert _contents(db) == before
