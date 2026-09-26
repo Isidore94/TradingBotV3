@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import regime_grades
 import slot_narration
 import weekend_strength
 from ui.services import journal_feed
@@ -2951,6 +2952,13 @@ class WeekAheadPage(_StepPage):
         # the tab drives every page; the button object stays because `reload()`
         # still uses it as its own single-flight guard.
         self._layout.addWidget(self.report, 1)
+        # S16 item 4: setups that worked / are untested in the current regime (facts).
+        regime_label = QLabel("Setups in this regime (per-regime grades)")
+        regime_label.setObjectName("SectionSubtitle")
+        self.regime_setups_view = QTextBrowser()
+        self.regime_setups_view.setPlainText("Setups in this regime: press Refresh everything to read them.")
+        self._layout.addWidget(regime_label)
+        self._layout.addWidget(self.regime_setups_view, 1)
         # B11: the night's setup-research narration; the panel's worker fills it.
         research_label = QLabel("Setup research (night AI narration)")
         research_label.setObjectName("SectionSubtitle")
@@ -3154,11 +3162,11 @@ class WeekendPrepPanel(QFrame):
         self._start_setup_research()
 
     def _start_setup_research(self) -> None:
-        """B11: read the setup-research narration on a worker, beside the card."""
+        """B11: read the setup-research narration (and S16's per-regime grades) on a worker."""
         worker = getattr(self, "_setup_research_worker", None)
         if worker is not None and worker.isRunning():
             return
-        worker = _ReadWorker(_read_setup_research_narration, self)
+        worker = _ReadWorker(_read_setup_research_and_regime, self)
         worker.finished_with.connect(self._on_setup_research_ready)
         worker.failed.connect(self._on_setup_research_failed)
         self._setup_research_worker = worker
@@ -3170,10 +3178,17 @@ class WeekendPrepPanel(QFrame):
         self.week_ahead.setup_research_view.setPlainText(
             text or "Setup research: no narration yet."
         )
+        grades = payload.get("regime_grades") if isinstance(payload, dict) else None
+        self.week_ahead.regime_setups_view.setPlainText(
+            regime_grades.regime_setups_text(grades if isinstance(grades, dict) else None)
+        )
 
     def _on_setup_research_failed(self, message: str) -> None:
         self.week_ahead.setup_research_view.setPlainText(
             f"Setup research: could not be read ({message})."
+        )
+        self.week_ahead.regime_setups_view.setPlainText(
+            f"Setups in this regime: could not be read ({message})."
         )
 
     def _read_verdict(self) -> list:
@@ -3528,6 +3543,20 @@ def _read_setup_research_narration() -> dict:
         return slot_narration.read_setup_research_narration()
     except Exception as exc:  # noqa: BLE001 - one line, never the page
         return {"state": "unreadable", "text": f"Setup research: could not be read ({exc})."}
+
+
+def _read_setup_research_and_regime() -> dict:
+    """The narration plus the last published per-regime grades (S16 item 4). Worker side."""
+    read = dict(_read_setup_research_narration())
+    try:
+        from ui.services import working_lately_service
+
+        grades = working_lately_service.read_persisted_regime_grades()
+    except Exception:  # noqa: BLE001 - one card, never the page
+        logging.warning("Weekend Prep: grades by regime unreadable", exc_info=True)
+        grades = {}
+    read["regime_grades"] = grades if isinstance(grades, dict) else {}
+    return read
 
 
 def _read_after_like_block() -> dict:
