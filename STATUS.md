@@ -14,10 +14,9 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 - **Desk:** DOWN. Restarted 20:50 PT on `81272d42`, then closed cleanly 21:51 PT on the
   trader's word; restart only on the trader's word. Startup shows a pre-existing
   swallowed warning (`DayReviewPanel.eventFilter` before `entry_text`, `8f82213a`; B12).
-- **Perf baseline (09-24 market hours):** GUI blocked 1305 s, 3276 stalls, p90 743 ms;
-  full GC 306 ms/min, young 156 ms/min; add_alert 7.3 ms/alert at 1,000; Working-lately
-  build 16-28 s (worker). First live delta: `desk_perf_report.py --day <next session>
-  --compare 2026-09-24`.
+- **Perf:** 09-24 baseline GUI blocked 1305 s, full GC 306 ms/min, young 156; on the new
+  code (idle evening) full GC 4.7 ms/min, young 13.5. Monday: `desk_perf_report.py --day
+  2026-09-28 --compare 2026-09-24`.
 - **Night window:** the night AI starts 22:00 PT. No builders, merges or test runs
   22:00-02:00 PT.
 - **Last full suite:** 2026-09-25 Phase A tip: 12,404 passed, 2 order-dependent Qt
@@ -31,8 +30,7 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 - **Gates read 2026-09-26 05:50 PT:** #257 passed (night of 09-25: ideas ok, setup_research
   "narration absent", empty-evidence enrichment carries no tags, no event 2004). #264:
   tokens on 12 model rows; the digest lines exist but describe the goal-less 09-24 night
-  (B1b); Health rows need a desk session. Econ brief still rejected (P4b). Evening GC on
-  the new code: 4.7 ms/min full, 13.5 young (idle desk).
+  (B1b); Health rows need a desk session. Econ brief still rejected (P4b).
 - **Next action:** morning session (Opus 5.5): R1, B0, S10a-c, then Phase S from S1;
   P4b and B1b are small and can ride along. #258 Monday 07:00; #259-#266 on Monday.
 - **Trader actions owed:** set Risk per trade ($) in Settings > General; fill
