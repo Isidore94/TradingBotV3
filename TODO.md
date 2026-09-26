@@ -33,7 +33,7 @@ Monday; `journal_import` no ok row on 7 of the last 14 nights; Ollama first toke
 theta 6,462 picks, 0 measured, 566 pending; permutation report 1 (2 populations, 37 keys).
 Gates #257-#263: none judged yet (first proof tonight and Monday).
 
-### Phase A - measure and un-stall (no ask-first; in flight 2026-09-25)
+### Phase A - measure and un-stall (built 2026-09-25 on `claude/p8b-phaseA-2026-09-25`, awaiting the trader's merge)
 
 - **A1 Perf infra** (all goals): `desk_perf_report.py --day` from the stall and gauge
   logs; bench ops `alert_center.add_alert[1000]`, `working_lately`, `m5_chart`,
@@ -46,29 +46,28 @@ Gates #257-#263: none judged yet (first proof tonight and Monday).
 - **B1 Night telemetry** (night AI ->8, plumbing): tokens on every model-calling ledger
   row; digest lines "slots per goal" and "unread 14+ days"; Health rows for Ollama first
   token / story time and broker-import nights ok (gate #264).
+- Also in Phase A: **A4 One R** (native `trade_r_multiple` in the three night readers,
+  `r_definition` in the day record), **A6 step 1**, **B6 Noise report** (`alert_noise_report.py`,
+  `best_now_outcomes.py`, Day Review Alerts line, gate #265), **B4 Missing-inputs chip**
+  (gate #266), **C4a setup_age facet**. Live perf proof: `desk_perf_report.py --day` on
+  the first session after the merge against the 09-24 baseline.
 
 ### Phase B - simpler code, truer numbers (no live data needed)
 
-- **A4 One R** (recap ->8): `recap_rule_loop.trade_r`, `preference_trade_outcomes._canonical_r`,
-  `day_session_record` read `journal_analytics.trade_r_multiple`; pack-hash migration so
-  old packs stay readable. Trader's word in the 09-25 brief.
 - **A4b One RVOL**: golden fixture from today's outputs of `rvol.py`,
   `intraday_rvol_service.py`, `movers_scan.py` first; unify only where the numbers are
   identical, otherwise one module with the variant named.
-- **A6 Alert Center split** (quality): move the module-level gate/tier helpers and the D1,
-  digest/repetition, chart-watch and review-queue blocks into `ui/panels/alert_center/`,
-  behaviour-preserving, 3 steps each green; `add_alert[1000]` before and after.
-- **B6 Noise report** (noise ->8): `alert_noise_report.py --summary` from the review
-  events (shown / hidden by Show / acted on / Best-right-now hit rate) and one Day Review
-  line.
-- **B4 Missing-inputs nag** (inputs ->8): status-bar chip "N trades missing stop or
-  setup", one click opens the Mentor on the oldest.
+- **A6 Alert Center split, steps 2-3** (quality): step 1 is in Phase A (gates, items,
+  Strength Board mixin; 10,125 -> 9,412 lines). Next: the pullback / wall / H1 / any-bounce
+  clusters, which need the tests' monkeypatches re-pointed first; `add_alert[1000]`
+  before and after (7.3 ms/alert baseline).
 - **B3 Sunday ritual card** (recap): bulk confirm + plan review in one card; "exit early /
   held losers" per setup family.
 - **B7 Theta measured** (theta ->6): why 5,896 picks are unmeasured; fix the measurement
   path; a theta outcome line on Research. Trader decides if theta stays a goal.
-- **C4a D1 facets the scan can write** (permutations): setup age, weekly-options flag
-  (scan edit with no output change, trader 2026-09-24).
+- **C4a weekly-options facet** (permutations): `setup_age` is in Phase A; the
+  weekly-options flag needs a theta store that records `option_status` per scan date
+  (the theta path runs after the scan row is written). Only if theta stays a goal.
 - **B2 Flex readiness** (plumbing ->8): only if the 07:00 retry still leaves more than 1
   night in 5 without an import after five nights: statement-readiness probe and a later
   first attempt.
@@ -91,8 +90,6 @@ Gates #257-#263: none judged yet (first proof tonight and Monday).
 
 ## Carried over
 
-- `tests/test_p8_p8b_movers_adopt.py` then `tests/test_qt_compact_desk.py` in one process
-  can hit a FlowLayout "QWidgetItem already deleted" (A5 fixes).
 - Read the owed live gates in `docs/GATES.md`, newest first (#257 next).
 - TJ-8 cleanup after gates #145-#150: delete `market_journal_panel.py`,
   `daily_recap_panel.py`, the page class in `away_recap_panel.py`, dead tests, the
