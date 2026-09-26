@@ -135,7 +135,10 @@ def test_journal_regime_fill_output_is_byte_identical():
     text = render()
     if os.environ.get("REGEN_JOURNAL_REGIME_GOLDEN") == "1":
         GOLDEN.write_text(text, encoding="utf-8", newline="\n")
-    assert GOLDEN.read_bytes().decode("utf-8") == text
+    # Git may check the golden out with CRLF; the comparison is of the text itself.
+    assert GOLDEN.read_bytes().decode("utf-8").replace("
+", "
+") == text
 
 
 class _Entry:
