@@ -799,6 +799,9 @@ MASTER_AVWAP_TIER_OUTCOMES_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_ti
 MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE = (
     PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_session_horizon_outcomes.csv"
 )
+# S12: per (setup family, side) tape-relative evidence and the SP4 shadow trial.
+# `ai_jobs.family_side_evidence` owns it; read by the Setup Tracker and Setup keys.
+FAMILY_SIDE_EVIDENCE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "family_side_evidence.json"
 # P1-4 4c: the setup-permutation search report (shadow only). Written by
 # `setup_permutation_search.py --out`; read by Research -> Setup keys and the
 # Saturday `setup_keys_narration` slot. Nothing ranks, filters or alerts on it.
