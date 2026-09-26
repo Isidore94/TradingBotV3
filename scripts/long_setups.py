@@ -12,7 +12,7 @@ names, "Ya that's the post earnings play".
   `STRONG_LOOKBACK_SESSIONS` (a 52-week high, a `RUN_MIN_PCT` run inside
   `RUN_MAX_SESSIONS`, or 63-day RS vs SPY in the universe's top decile), now pulling
   back: `UNDER_AVWAP_PCT` under the VWAP anchored at the swing high OR back at the 21/50
-  EMA, `OFF_HIGH_PCT` off that high, above its 200-day, on lighter volume than the run.
+  EMA, `OFF_HIGH_PCT` off that high, above its 100-day and 200-day, on lighter volume than the run.
   A sector in the top RS third or a ``top_pattern_tracking`` row is a leader (a bonus).
 * ``post_earnings_drift`` - an earnings gap up of `PED_GAP_MIN_ATR`+ ATR that closed in
   the upper half of the gap day, now `PED_SESSIONS` sessions later and holding above the
@@ -80,9 +80,14 @@ UNDER_AVWAP_PCT = (3.0, 12.0)
 #: ... or the close within `EMA_NEAR_ATR` ATR of one of these EMAs.
 EMA_LENGTHS = (21, 50)
 EMA_NEAR_ATR = 0.5
-#: And this % off the swing high (25% is a HARD cap: deeper lost -2.6% vs SPY), above this SMA.
+#: And this % off the swing high (25% is a HARD cap: deeper lost -2.6% vs SPY).
 OFF_HIGH_PCT = (8.0, 25.0)
-TREND_SMA = 200
+#: The last completed close must be above EVERY one of these SMAs (the 50-day is NOT one: a
+#: pullback to the 50 is allowed). The trader, 2026-09-26: "Just requires above 100-200". The SMA
+#: study (2026-09-26): above all three lifted the leader pullback to +1.6-1.9% vs SPY in every
+#: SPY-rising window. A missing SMA is no setup.
+TREND_SMAS = (100, 200)
+TREND_SMA = max(TREND_SMAS)
 #: The run's volume = the mean of this many sessions ending at the swing high.
 RUN_VOLUME_SESSIONS = 20
 #: ATR length when the scan row has no ATR of its own (the scan's `atr20`).
@@ -317,8 +322,7 @@ def leader_pullback(
         return None
     closes = [bar["close"] for bar in bars]
     close = closes[-1]
-    sma = sum(closes[-TREND_SMA:]) / TREND_SMA
-    if close <= sma:
+    if any(close <= sum(closes[-length:]) / length for length in TREND_SMAS):
         return None
     recent = range(len(bars) - SWING_HIGH_LOOKBACK, len(bars))
     high_index = max(recent, key=lambda index: (bars[index]["high"], index))
@@ -361,7 +365,7 @@ def leader_pullback(
     where.extend(f"at the {length} EMA" for length in near_emas)
     reasons = [*strong, *leaders,
                f"pulling back {off_high:.1f}% off the high, " + " and ".join(where),
-               "above the 200-day", "lighter volume on the pullback"]
+               "above the 100-day and the 200-day", "lighter volume on the pullback"]
     # A 52-week high qualifies a name but is never a rank input (long lab: <0.7 pt).
     strength = len(ranked_strong) + len(leaders)
     return {
