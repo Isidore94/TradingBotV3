@@ -203,6 +203,21 @@ S1 and keep the order. The two 500 MB logs are read with
   say the same: its pullback rows to VWAP -> UPPER_1 with trend UP paid (+7%, +18%,
   +25%); its extended rows 16% above the anchor at S tier lost (-5%, -3%, -12%). SPCX
   and DRAM are not in the scan universe at all (no daily bars, no feature rows).
+- **F22 The trader's own labels** (cohort outcome files, entries since 08-01, 5 sessions,
+  side-adjusted, vs SPY). Liked / claimed D1 picks (n=312): +0.62% raw, 57% beat SPY;
+  liked LONGS +0.99% raw (n=161) against the scan's long book at -0.09%, though still
+  only 45% beat SPY; liked SHORTS 70% beat, +1.1%. Rejected rows: LONG -1.12% raw, 37%
+  beat (n=276); vetoed rows: LONG -1.56%, 30% beat (n=336). So the trader's long picks
+  beat the trader's long rejections by 2.1% and the vetoes by 2.6% in five sessions:
+  real selection skill on the long side. Best vetoes: "too extended from base" LONG
+  -4.4% / -2.4%, "incoming trendline" LONG -2.7%. Wrong vetoes: every SHORT veto class
+  went on to work (compressed +0.8%, incoming trendline +1.0%, uncoded +2.0%), and the
+  410 rejected shorts beat SPY 64%: the trader was too picky on shorts. Focus names
+  (n=6,620, 179 a day, 1,385 names) are the scan at large: LONG 43% beat, SHORT 64%;
+  the small hand-picked sources did best (`focus_swing` LONG 57% / +3.0%, n=63;
+  `focus_swing_h1` LONG 71% / +2.5%, n=51; `focus_m5_strength_board` SHORT 68%). Liked
+  breakouts long 28% beat (n=32), same failure as the scan's. Journal setup tags cannot
+  be scored yet: 3 confirmed.
 - **S14 Long pullback study family** (grades ->8; the trader 2026-09-26: "I need a solid
   long setup"). Register `leader_pullback_long` as a STUDY family on the P1-4 4e path,
   not a scoring change: rows where side is LONG, `pct_from_current_vwap` is in [-10, -3],
