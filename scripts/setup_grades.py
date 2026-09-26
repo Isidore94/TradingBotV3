@@ -359,6 +359,105 @@ def swing_cells(
 
 
 # ---------------------------------------------------------------------------
+# side by tape (S5): one display line, never a gate
+# ---------------------------------------------------------------------------
+
+#: How many scan sessions the side-by-tape line looks back over.
+SIDE_BY_TAPE_SESSIONS = 20
+SIDE_BY_TAPE_UNKNOWN = (
+    "Side by tape: unknown (no measured 5-session results vs SPY yet)."
+)
+
+
+def _spy_side_return(
+    row: Mapping[str, Any], side: str, spy_closes: Mapping[str, float] | None
+) -> float | None:
+    """SPY's same-side return over the row's entry -> target sessions, or None."""
+    closes = spy_closes or {}
+    entry = _float(closes.get(str(row.get("scan_date") or "").strip()[:10]))
+    target = _float(closes.get(str(row.get("target_session") or "").strip()[:10]))
+    if entry is None or entry <= 0 or target is None:
+        return None
+    spy_return = (target / entry - 1.0) * 100.0
+    return spy_return if side == "LONG" else -spy_return
+
+
+def side_by_tape(
+    horizon_rows: Any,
+    spy_closes: Mapping[str, float] | None,
+    *,
+    as_of: str = "",
+    sessions: int = SIDE_BY_TAPE_SESSIONS,
+) -> dict[str, Any]:
+    """Longs and shorts vs SPY over the last ``sessions`` scan sessions.
+
+    Every 5-session horizon row whose `tape_result` is WIN or LOSS counts; an
+    UNKNOWN row is left out. The window is the newest ``sessions`` scan dates
+    that have at least one decided row. Per side: n, wins, the beat share and
+    the mean excess (side return minus SPY's same-side return, in points).
+    """
+    index = horizon_rows if isinstance(horizon_rows, Mapping) else horizon_index(horizon_rows)
+    decided: list[tuple[str, str, bool, float]] = []
+    for (_symbol, side, scan_day), row in index.items():
+        outcome = tape_result({"side": side}, row, spy_closes, as_of=as_of)
+        if outcome == UNKNOWN:
+            continue
+        spy_side = _spy_side_return(row, side, spy_closes)
+        side_return = _float(row.get("side_return_pct"))
+        if spy_side is None or side_return is None:
+            continue
+        decided.append((scan_day, side, outcome == WIN, side_return - spy_side))
+    days = sorted({day for day, *_ in decided})[-int(sessions):] if sessions > 0 else []
+    kept = set(days)
+    out: dict[str, Any] = {
+        "sessions": len(days),
+        "first": days[0] if days else "",
+        "last": days[-1] if days else "",
+        "as_of": str(as_of or "")[:10],
+    }
+    for side in ("LONG", "SHORT"):
+        rows = [(won, excess) for day, s, won, excess in decided if s == side and day in kept]
+        n = len(rows)
+        wins = sum(1 for won, _ in rows if won)
+        out[side.lower()] = {
+            "n": n,
+            "wins": wins,
+            "beat_pct": (wins / n * 100.0) if n else None,
+            "excess_pct": (sum(excess for _, excess in rows) / n) if n else None,
+        }
+    return out
+
+
+def side_by_tape_line(summary: Mapping[str, Any] | None) -> str:
+    """The one line, from a `side_by_tape` summary. Formatting only."""
+    summary = summary or {}
+    count = _int(summary.get("sessions"))
+    if not count:
+        return SIDE_BY_TAPE_UNKNOWN
+
+    def part(side: str) -> str:
+        cell = summary.get(side) or {}
+        beat, excess = _float(cell.get("beat_pct")), _float(cell.get("excess_pct"))
+        if excess is not None:
+            excess = round(excess, 2) + 0.0  # never print "-0.00"
+        if side == "long":
+            if not _int(cell.get("n")) or beat is None or excess is None:
+                return "longs vs SPY unknown"
+            return f"longs beat SPY {beat:.0f}% (excess {excess:+.2f}%)"
+        if not _int(cell.get("n")) or beat is None or excess is None:
+            return "shorts unknown"
+        return f"shorts {beat:.0f}% ({excess:+.2f}%)"
+
+    long_n = _int((summary.get("long") or {}).get("n"))
+    short_n = _int((summary.get("short") or {}).get("n"))
+    return (
+        f"Last {count} sessions, tape-relative: {part('long')}, {part('short')}. "
+        f"n {long_n} long / {short_n} short, scan dates "
+        f"{summary.get('first')} to {summary.get('last')}."
+    )
+
+
+# ---------------------------------------------------------------------------
 # day trade: +1R before -1R
 # ---------------------------------------------------------------------------
 

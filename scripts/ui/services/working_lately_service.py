@@ -322,6 +322,24 @@ def _swing_tape_for(setups: Mapping[str, Any], reference: date, *, as_of: str) -
     return setup_grades.swing_tape_stats(picks, _horizon_index(), read_spy_closes(), as_of=as_of)
 
 
+def read_side_by_tape(as_of: str = "") -> dict[str, Any]:
+    """S5: `setup_grades.side_by_tape` as known on `as_of`. THE WORKER SIDE.
+
+    Cached on the horizon file, the SPY bars and `as_of`; an empty `as_of` is
+    the last completed session. A missing file gives an empty (unknown) summary.
+    """
+    import setup_grades
+
+    day = str(as_of or "")[:10] or _last_completed_session().isoformat()
+    path = _horizon_outcomes_path()
+
+    def build() -> dict[str, Any]:
+        return setup_grades.side_by_tape(_horizon_index(), read_spy_closes(), as_of=day)
+
+    key = (_file_key(path), _file_key(_spy_bars_path()), day)
+    return _cached("side_by_tape", key, build, keep=path.is_file())
+
+
 def _tape_inputs_key() -> tuple:
     return (
         _file_key(_scoring_snapshot_path()),

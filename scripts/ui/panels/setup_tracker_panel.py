@@ -36,6 +36,7 @@ from project_paths import (
     MASTER_AVWAP_TIER_PERFORMANCE_FILE,
 )
 import claimed_pick_evidence
+import setup_grades
 from research_explanations import build_plain_english_whats_working
 from theta_pick_tracker import THETA_NO_EXPORT_SENTENCE, theta_readout
 from ui import theme
@@ -589,6 +590,10 @@ class SetupTrackerPanel(QFrame):
 
         self.status_label = QLabel("Tracker exports have not been loaded yet.")
         self.status_label.setObjectName("MutedLabel")
+        # S5: one tape-relative line, formatted from the worker's summary.
+        self.tape_side_label = QLabel("")
+        self.tape_side_label.setObjectName("MutedLabel")
+        self.tape_side_label.setWordWrap(True)
         # Packet 3 receives the already-published display payload from the
         # host.  This panel never reads a store, ranks a row, or asks a model
         # to make the route available.
@@ -1047,6 +1052,7 @@ class SetupTrackerPanel(QFrame):
         layout.setSpacing(10)
         layout.addWidget(header)
         layout.addLayout(kpi_row)
+        layout.addWidget(self.tape_side_label)
         layout.addWidget(self.summary_view, 1)
         layout.addWidget(self.next_test_card)
         layout.addWidget(self.next_test_review_button)
@@ -1528,6 +1534,10 @@ class SetupTrackerPanel(QFrame):
             str(data.get("claim_leader") or CLAIM_NO_DATA_SENTENCE)
         )
         self.claim_footnote_label.setText(str(data.get("claim_footnote") or ""))
+        tape = data.get("side_by_tape")
+        self.tape_side_label.setText(
+            setup_grades.side_by_tape_line(tape if isinstance(tape, dict) else None)
+        )
 
         rendered: dict[str, tuple] = {}
         for table_name, model_name, rows, memo in _table_render_plan(
@@ -1930,6 +1940,14 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
     # rows - all of it here, beside the other exports, never on the Qt thread.
     claims = _read_claim_evidence()
     signatures["claims"] = claims["signature"]
+    # S5: longs and shorts vs SPY, 20 sessions. Display only; unknown on failure.
+    try:
+        from ui.services import working_lately_service
+
+        side_by_tape = working_lately_service.read_side_by_tape()
+    except Exception:  # noqa: BLE001 - one line, never the tracker
+        logging.debug("Setup Tracker tape line could not be built", exc_info=True)
+        side_by_tape = {}
     ranked["claim_population"] = claims["populations"]
     ranked["claim_setup"] = claims["setups"]
     return {
@@ -1940,6 +1958,7 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
         "human_focus_digest": digest,
         "raw": raw,
         "ranked": ranked,
+        "side_by_tape": side_by_tape,
         "theta_population_sentence": theta.population_sentence(),
         "theta_grade_sentence": theta.grade_sentence(),
         "scan_factor_mtime_text": _latest_mtime_text(

@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import slot_narration
 import weekend_strength
 from ui.services import journal_feed
 from ui.read_worker import ReadWorker, join_worker
@@ -2938,6 +2939,13 @@ class WeekAheadPage(_StepPage):
         # the tab drives every page; the button object stays because `reload()`
         # still uses it as its own single-flight guard.
         self._layout.addWidget(self.report, 1)
+        # B11: the night's setup-research narration; the panel's worker fills it.
+        research_label = QLabel("Setup research (night AI narration)")
+        research_label.setObjectName("SectionSubtitle")
+        self.setup_research_view = QTextBrowser()
+        self.setup_research_view.setPlainText("Setup research: press Refresh everything to read it.")
+        self._layout.addWidget(research_label)
+        self._layout.addWidget(self.setup_research_view, 1)
         self._finish_layout()
         service.weekAheadReady.connect(self._render)
 
@@ -3070,6 +3078,8 @@ class WeekendPrepPanel(QFrame):
         self.coverage_note.setWordWrap(True)
         self.tag_week.coverageChanged.connect(self.coverage_note.setText)
         self._verdict_worker = None
+        # B11: the setup-research narration, shown on Week Ahead, read on a ReadWorker.
+        self._setup_research_worker = None
 
         top = QHBoxLayout()
         top.addWidget(self.header, 1)
@@ -3129,6 +3139,30 @@ class WeekendPrepPanel(QFrame):
         worker.failed.connect(self._on_verdict_failed)
         self._verdict_worker = worker
         worker.start()
+        self._start_setup_research()
+
+    def _start_setup_research(self) -> None:
+        """B11: read the setup-research narration on a worker, beside the card."""
+        worker = getattr(self, "_setup_research_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        worker = _ReadWorker(_read_setup_research_narration, self)
+        worker.finished_with.connect(self._on_setup_research_ready)
+        worker.failed.connect(self._on_setup_research_failed)
+        self._setup_research_worker = worker
+        worker.start()
+
+    def _on_setup_research_ready(self, payload: object) -> None:
+        """Print the text the worker formatted. Formatting only."""
+        text = str(payload.get("text") or "") if isinstance(payload, dict) else ""
+        self.week_ahead.setup_research_view.setPlainText(
+            text or "Setup research: no narration yet."
+        )
+
+    def _on_setup_research_failed(self, message: str) -> None:
+        self.week_ahead.setup_research_view.setPlainText(
+            f"Setup research: could not be read ({message})."
+        )
 
     def _read_verdict(self) -> list:
         """Every store the card reads, and no widget. Runs on the worker.
@@ -3217,6 +3251,7 @@ class WeekendPrepPanel(QFrame):
             self.pages.setCurrentIndex(row)
 
     def shutdown(self) -> None:
+        join_worker(getattr(self, "_setup_research_worker", None))
         # Every page, not a named one: this listed only `walkaway` while it was
         # the only page with a thread, and that is exactly the kind of list
         # that silently stops being complete.
@@ -3473,6 +3508,14 @@ def _read_veto_cohort() -> list[dict[str, Any]]:
         row.update(_cohort_robust_fields(raw))
         rows.append(row)
     return rows
+
+
+def _read_setup_research_narration() -> dict:
+    """B11: `slot_narration.read_setup_research_narration`, never raising. Worker side."""
+    try:
+        return slot_narration.read_setup_research_narration()
+    except Exception as exc:  # noqa: BLE001 - one line, never the page
+        return {"state": "unreadable", "text": f"Setup research: could not be read ({exc})."}
 
 
 def _read_after_like_block() -> dict:

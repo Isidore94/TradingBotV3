@@ -38,6 +38,8 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Any, Mapping
 
+import slot_narration
+
 _log = logging.getLogger(__name__)
 
 #: What one read hands the page. Declared here so the page and this service
@@ -102,6 +104,10 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     # R1: the Day Review Show deck - the night's verified show, or the
     # facts-only fallback - chosen on this worker (`day_review_show.desk_deck`).
     "show",
+    # S5: longs and shorts vs SPY over 20 sessions, as known on the session.
+    "side_by_tape",
+    # B11: the night digest's narration for the session, read on this worker.
+    "digest_narration",
 )
 
 #: The benchmark whose tape the page draws. One name, the desk's own. The PAGE
@@ -236,6 +242,10 @@ def empty_payload(session_date: str = "") -> dict[str, Any]:
         "glance": {},
         "truth": {},
         "show": {},
+        # S5: `setup_grades.side_by_tape` as known on the session; {} is unknown.
+        "side_by_tape": {},
+        # B11: `slot_narration.read_digest_narration` for the session.
+        "digest_narration": {},
     }
 
 
@@ -649,6 +659,17 @@ class DayReviewService:
             }
             _log.debug("The Day Review truth lines could not be built.", exc_info=True)
         payload["show"] = self._show(session, payload, current_pack)
+        # S5 and B11: display lines, each in its own guard; a failure is unknown.
+        try:
+            from ui.services import working_lately_service
+
+            payload["side_by_tape"] = working_lately_service.read_side_by_tape(session)
+        except Exception:  # noqa: BLE001 - the tape line never costs the day
+            _log.debug("The Day Review tape line could not be built.", exc_info=True)
+        try:
+            payload["digest_narration"] = slot_narration.read_digest_narration(session)
+        except Exception:  # noqa: BLE001 - the digest never costs the day
+            _log.debug("The Day Review digest narration could not be read.", exc_info=True)
         if problems:
             payload["error"] = " · ".join(problems)
         return payload
