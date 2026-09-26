@@ -483,3 +483,75 @@ def table_rows(payload: Mapping[str, Any] | None) -> list[dict[str, Any]]:
         add("journal", str(side), "my closed trades", by_regime or {}, None)
     rows.sort(key=lambda item: item[0])
     return [row for _key, row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Weekend Prep: what has worked / is untested in the current regime (S16 item 4)
+# ---------------------------------------------------------------------------
+
+#: "Worked" = this grade or better inside the current regime (the ladder already
+#: needs n >= `setup_grades.MIN_N` for any letter grade).
+WORKED_MIN_GRADE = setup_grades.B
+NO_REGIME_TEXT = "Regime unknown: type the regime in the Mentor first."
+
+
+def _setups(payload: Mapping[str, Any]) -> list[tuple[str, str, str, Mapping[str, Any]]]:
+    out = []
+    for entry in (payload.get("swing") or {}).values():
+        out.append(("swing", str(entry.get("side") or ""), f"{entry.get('family')} ({entry.get('bucket')})",
+                    entry.get("by_regime") or {}))
+    for entry in (payload.get("daytrade") or {}).values():
+        out.append(("day trade", str(entry.get("side") or ""), str(entry.get("bounce_type") or ""),
+                    entry.get("by_regime") or {}))
+    return out
+
+
+def regime_setups(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Swing and day-trade setups that worked (B or better, n at the floor) and those
+    with no rows in the current regime. Grades are this module's own (shorts vs SPY
+    once 30+ have one, raw beside it). ``current`` is None when no regime is typed."""
+    payload = payload or {}
+    current = payload.get("current") or None
+    regime = str((current or {}).get("regime") or "")
+    worked: list[tuple[tuple, dict[str, Any]]] = []
+    untested: list[dict[str, Any]] = []
+    tested_not_worked = 0
+    if regime:
+        limit = setup_grades.sort_rank(WORKED_MIN_GRADE)
+        for kind, side, setup, by_regime in _setups(payload):
+            cell = by_regime.get(regime)
+            n = int((cell or {}).get("n") or 0)
+            row = {"kind": kind, "side": side, "setup": setup}
+            rank = setup_grades.sort_rank((cell or {}).get("grade"))
+            if not n:
+                untested.append(row)
+            elif n >= setup_grades.MIN_N and rank <= limit:
+                worked.append(((rank, -n, kind, setup, side), {**row, "text": cell_text(cell)}))
+            else:
+                tested_not_worked += 1
+    worked.sort(key=lambda item: item[0])
+    return {
+        "current": current,
+        "worked": [row for _key, row in worked],
+        "untested": untested,
+        "tested_not_worked": tested_not_worked,
+    }
+
+
+def regime_setups_text(payload: Mapping[str, Any] | None) -> str:
+    """The Weekend Prep card's text. Facts only; formatting only."""
+    view = regime_setups(payload)
+    current = view["current"]
+    if not current:
+        return NO_REGIME_TEXT
+    lines = [
+        f"Regime now: {current.get('label')} since {current.get('start_date')} (day {current.get('day_count')}).",
+        f"Worked in this regime (B or better, n {setup_grades.MIN_N}+):" + ("" if view["worked"] else " none yet"),
+    ]
+    lines += [f"  {row['kind']} {row['side']} {row['setup']}: {row['text']}" for row in view["worked"]]
+    lines.append("Untested in this regime (no rows yet):" + ("" if view["untested"] else " none"))
+    lines += [f"  {row['kind']} {row['side']} {row['setup']}" for row in view["untested"]]
+    if view["tested_not_worked"]:
+        lines.append(f"{view['tested_not_worked']} more tested here, not B or better (Setup Tracker, By regime).")
+    lines.append("Longs judged raw; shorts vs SPY once 30+ have it, raw beside it.")
+    return "\n".join(lines)
