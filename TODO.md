@@ -63,11 +63,11 @@ S11, S12 (SP4 shadow, trial starts the first night it runs), S13. Left here: ite
 - **B10 Young GC** (snappiness): 150 ms/min of young sweeps; skip a sweep when the gen-0
   count is small or lengthen the tick, only with `desk_perf_report` before/after.
 
-- **A4b One RVOL**: golden fixture from today's outputs of `rvol.py`,
-  `intraday_rvol_service.py`, `movers_scan.py` first; unify only where the numbers are
-  identical, otherwise one module with the variant named.
-- **B7 Theta measured** (theta ->6): why 5,896 picks are unmeasured; fix the measurement
-  path; a theta outcome line on Research. Trader decides if theta stays a goal.
+- **A4b One RVOL, step 2** (ASK-FIRST: `rvol.py` feeds the bounce RVOL alert gate): the
+  golden (`tests/test_rvol_golden.py`) shows `rvol.session_rvol` is byte-identical to
+  `session_rvol_from_baseline(slot_baselines(...))`; collapse it to a two-line call (-20
+  lines) on the trader's yes. Movers' RVOL stays a named variant (20 sessions, mean of
+  ratios, time-of-day keyed: its numbers differ).
 - **C4a weekly-options facet** (permutations): `setup_age` is in Phase A; the
   weekly-options flag needs a theta store that records `option_status` per scan date
   (the theta path runs after the scan row is written). Only if theta stays a goal.
@@ -239,16 +239,6 @@ S1 and keep the order. The two 500 MB logs are read with
   they are one-week trades. Theme to extract: strong-sector, RS-leading name in an
   up-trend, bought either on a 3-10% pullback under the anchor or on strength above
   UPPER_2, when SPY is above its 20-day; exit inside a week.
-- **S14 Long pullback study family** (grades ->8; the trader 2026-09-26: "I need a solid
-  long setup"). Register `leader_pullback_long` as a STUDY family on the P1-4 4e path,
-  not a scoring change: rows where side is LONG, `pct_from_current_vwap` is in [-10, -3],
-  and the name is `top_pattern_tracking` or sector Technology; tag them in the sidecar and
-  the session-horizon outcomes (scan edit with no output change), grade them on the
-  Setup Tracker like any family, and put the key first in S4's tape-relative search with
-  the `spy_trend`, `trend20` and `htf_trend_4h` facets. Promotion to a scored family is
-  ask-first with golden fixtures after two Saturday reports. Also a universe check: the
-  trader's SPCX and DRAM wins came from names the scan never sees; list the journal's
-  traded symbols missing from the universe on Health once a week.
 
 **Findings, swings (D1):**
 - **F9 Short families carried the last six weeks.** Session-horizon outcomes 08-14 to
@@ -301,100 +291,25 @@ S1 and keep the order. The two 500 MB logs are read with
   bounce_combo, setup_family, time_bucket) instead of by n; cap the weight of
   `internals_breadth`, `rrs_*_alignment` and `market_environment`. Propose, with the
   F2 numbers, before touching anything. Ties into P14.
+  Proposal (lead, 2026-09-26, read-only): the code differs from F2. `COMPOSITE_DIMENSIONS`
+  blends only bounce_type 1.0, time_bucket 0.4, market_environment 0.4, priority_bucket
+  0.6, focus 0.6, each entry shrunk n/(n+K); `internals_breadth` and `rrs_*` are not in it.
+  The real cause of C/D: the weights are fixed, so a huge near-zero bounce_type
+  (`h1_ema10_bounce` -0.03R n=2961) holds the biggest say, while the positive segments
+  (`regime_pause_rs`, `short|neutral_chop`, `avwap_retest_followthrough`) live in
+  bounce_combo / setup_family, which the composite never blends. Proposed: (1) blend
+  bounce_combo and setup_family too; (2) weight each segment by information,
+  w = base x min(1, |mean R| / SE), so a near-zero mean gets little say however big n is;
+  (3) cap time_bucket and market_environment at 0.25 each; (4) add the trader's structural
+  regime as a dimension once S16 has data. Golden fixtures of today's tiers first; ship
+  as a shadow tier beside the live one for 10 sessions. Needs the trader's quoted yes.
 
-- **S15 Data for a definitive long answer** (the trader 2026-09-26: longs need the market;
-  find setups that work when the market works). What the 2026-09-25/26 study could not see,
-  in the order it matters:
-  1. **A bull window.** Every swing number is 08-14 to 09-24. The April-July run is in the
-     permutation backfill the trader owes; run it, and the long cells go from n=26-64 to
-     hundreds.
-  2. **A point-in-time regime label on every scan row** - the trader's structural regime
-     from S16 first, then the machine's checks: SPY vs its 20-day and the 20-day slope,
-     breadth (share of the universe above its own 20-day), the sector's 5- and 20-day RS
-     rank. Deterministic, from daily bars, written the P11 way (no output change). Today
-     only `spy_above_sma20/50` exists on the row.
-  3. **Swing path facts**: MFE and MAE in ATR over 5, 10 and 20 sessions per horizon row,
-     from the daily bars (the horizons file is close-to-close only). This is what says
-     "consistently gives a sellable move" and what S13's exit models need. Add horizon 20.
-  4. **A conditional search mode in S4**: population = LONG rows whose entry-day regime
-     label is "working", win = raw side return > 0 (not vs SPY), facets as today. The
-     trader's framing, made mechanical.
-  5. **Sector and industry RS as facets** (`rs_vs_industry` tercile exists; add the sector
-     rank and `industry_13w`), and dollar-volume / market-cap buckets.
-  6. **Earnings age, split**: post-earnings drift (gap-up names) vs mid-cycle; the liked
-     longs (28-60 sessions best) and the scan (0-13 best) disagree, so the facet is
-     mixing two things.
-  7. **The trader's own labels at scale**: confirm the 139 waiting tags (Sunday card), keep
-     liking / claiming with the Mentor's "why", and let the journal carry planned stop and
-     target so the trader's longs get an R, not just a P&L. 161 liked longs is thin.
-  8. **Universe**: add the journal's traded names that the scan never sees (SPCX, DRAM) so
-     the trader's wins are measured against the same ruler.
-  9. **Fill model**: keep the next-open re-pricing (F18) as a standard column; add an
-     intraday-pullback entry variant for the leader-pullback family (S8).
+- **S15, what is left** (items 2-6, 8, 9 built 2026-09-26 on the p9 phase 1 branch): item 1,
+  the April-July permutation backfill, and item 7, the trader's labels at scale (the 139
+  tags, likes / claims with a "why", planned stop and target in the journal), are the
+  trader's.
 
-- **S16 The regime is the frame** (the trader 2026-09-26: "the market has different
-  regimes ... what's important is KNOWING the market regime and then having setups you KNOW
-  work in it. It's not working or not working, it just is what it is."). Build order:
-  1. **Regime journal, trader-authored.** A small vocabulary (`bull_run`, `weekly_hh_then
-     _compression`, `bear_channel_lower_highs`, `range`, `capitulation`, `recovery`) plus a
-     free structure note ("weekly HH, daily LH/LL channel"). Append-only segments with a
-     start date; typed by the trader in the Mentor (a weekly regime question, and again
-     whenever they say the regime changed), never inferred and never back-edited silently.
-     Store it beside the journal's `regimes` table (`trade_date`, `mid_term_regime`,
-     `short_term_regime`, `intraday_regime`, `source='auto'` from Auto Market Bias, 99 rows)
-     as `structural_regime` with `source='trader'`; the auto columns stay as the machine's
-     check. The trader types the past once: March-May 2026 bull run; June-July weekly
-     higher highs then compression; August-now bear channel with lower highs.
-  2. **Machine structure labels beside it, never over it**: weekly higher-high / higher-low
-     count, daily lower-high / lower-low channel from pivots (the scan's trendline pivot code,
-     `_find_trendline_pivots`), ATR-percentile compression. Shown next to the trader's label
-     so disagreement is visible.
-  3. **Everything joins on the regime of its date**: session-horizon outcomes, M5 outcomes,
-     journal trades, liked / vetoed / rejected cohorts, Focus outcomes. The Setup Tracker and
-     the Daytrade Tracker show every grade per regime, current regime first, and say
-     "unknown in this regime" rather than pooling. The Saturday search gets a `regime` facet
-     and reports per regime. The points challenger (S12) reads the current regime's cells.
-  4. **The market story is told inside the regime.** The night narration opens with the
-     regime and its day count ("bear channel, day 23, lower high on 09-18"), anchors on the
-     trader's own Mentor notes and observations for that regime (RECALLED / observation rows
-     already in the day pack), and the Weekend Prep card lists "setups that have worked in
-     this regime" and "setups untested in this regime". Trader's words first, facts second,
-     model prose last, verified as today.
-  5. **Regime change alerts are questions, not calls**: when the machine labels disagree with
-     the trader's regime for 3 sessions, the Mentor asks "still a bear channel?" once.
-  This is the frame S4, S12, S14 and S15 hang off; build the journal (1) first so the
-  backfill (S15 item 1) is labelled the day it lands.
 
-- **S17 Auto regimes on every timeframe, then the AI reads them** (the trader 2026-09-26:
-  M5, M30, H1, H4, D1 and Weekly auto regimes for context; the local AI turns them into
-  sensible summaries, or we prep them for a frontier AI). Two halves:
-  1. **Deterministic multi-timeframe regime table.** `journal_regime_fill.py` already reads
-     SPY / QQQ / IWM on D1, 5-day, M5 and M30 through the champion Auto Market Bias
-     (`env_key` labels `bullish_strong` ... `bearish_strong`, `neutral_chop`) and writes one
-     row per journal trade date. Generalise it into `market_regimes.py` + a night job
-     `market_regime_table` (goal market_read, no model): one JSONL row per session for SPY,
-     QQQ, IWM (and the sector ETFs the desk already tracks) with the env_key on M5, M30, H1,
-     H4, D1 and W, plus the structure facts from S16 item 2 (weekly HH/HL count, daily LH/LL
-     channel, ATR-percentile compression, distance to the 20-day and its slope). H1 and H4
-     come from the cached intraday bars aggregated the way M30 is today; W from daily bars.
-     Append-only, point in time (bars completed before the close), never re-labelled. Three
-     intraday snapshots (10:00, 12:00, close ET) for the intraday timeframes. Same
-     classifier, same thresholds as the champion: no new detector. Shown on the desk as one
-     regime strip (six cells per index) fed off the existing bias worker, no new timer.
-     Golden fixture from one recorded week.
-  2. **The AI reads, it does not decide.** Nightly `regime_read` slot (goal market_read,
-     `uses_model`, after `market_story_narration`): input = the table's last 20 sessions +
-     the trader's S16 regime + the structure facts; output = a bounded, grounded paragraph
-     ("weekly still in the compression that followed the March-May run; daily a bear channel
-     since 08-14 with a lower high on 09-18; H4 turned neutral 09-23; M30 has flipped bullish
-     twice this week and failed both times") whose every timeframe word and date is checked
-     against the table (reject whole, keep last good, as the day story does). It joins the
-     market story and the Day Review Show. In parallel `research_pack.py export` gains a
-     `market_regimes` section (the full table, the trader's regime journal, the setups-by-
-     regime grades from S16) so a frontier model can be handed one file and asked the big
-     questions: what changed between regimes, and which setups belong to which.
-  Order: the table first (it is facts and it feeds S12, S14, S16 at once); the local read
-  second; the frontier pack alongside.
 
 ### Phase C - needs live days (trigger named)
 
