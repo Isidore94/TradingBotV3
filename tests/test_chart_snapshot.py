@@ -1451,3 +1451,51 @@ def test_stale_d1_tail_triggers_one_backfill_with_cooldown(monkeypatch):
     finally:
         widget.deleteLater()
         app.processEvents()
+
+
+def _earnings_stat_counter(monkeypatch, tmp_path):
+    """Point the earnings cache at a temp file; return (path, clock, stat count)."""
+    import json
+
+    import project_paths
+
+    path = tmp_path / "earnings_dates_cache.json"
+    path.write_text(json.dumps({"symbols": {"AAA": ["2026-07-30"]}}), encoding="utf-8")
+    monkeypatch.setattr(project_paths, "EARNINGS_DATES_CACHE_FILE", path)
+    monkeypatch.setattr(chart_snapshot, "_earnings_dates_cache", [None, {}, None, None])
+    clock = [1_000.0]
+    monkeypatch.setattr(chart_snapshot, "_earnings_clock", lambda: clock[0], raising=False)
+    seen = {"count": 0}
+    real_stat = Path.stat
+
+    def counting_stat(self, *args, **kwargs):
+        if self == path:
+            seen["count"] += 1
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", counting_stat)
+    return path, clock, seen
+
+
+def test_earnings_map_is_stated_at_most_once_per_ttl(monkeypatch, tmp_path):
+    """The Qt thread called this every 60 s and more; each call was a path.stat."""
+    _path, clock, seen = _earnings_stat_counter(monkeypatch, tmp_path)
+
+    assert chart_snapshot.symbol_earnings_dates("AAA") == ["2026-07-30"]
+    clock[0] += 29.0
+    assert chart_snapshot.symbol_earnings_dates("AAA") == ["2026-07-30"]
+    assert seen["count"] == 1, f"stat'ed {seen['count']} times inside the TTL"
+
+
+def test_earnings_map_picks_up_a_changed_file_after_the_ttl(monkeypatch, tmp_path):
+    import json
+    import os
+
+    path, clock, _seen = _earnings_stat_counter(monkeypatch, tmp_path)
+    assert chart_snapshot.symbol_earnings_dates("AAA") == ["2026-07-30"]
+
+    path.write_text(json.dumps({"symbols": {"AAA": ["2026-10-29"]}}), encoding="utf-8")
+    stamp = path.stat().st_mtime_ns + 5_000_000_000
+    os.utime(path, ns=(stamp, stamp))
+    clock[0] += 30.1
+    assert chart_snapshot.symbol_earnings_dates("AAA") == ["2026-10-29"]
