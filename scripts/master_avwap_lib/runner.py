@@ -15,12 +15,14 @@ from .d1_zone_arms import build_d1_zone_arms
 from .setup_tagging import apply_setup_tag_payload, canonicalize_priority_setup_tags
 from master_avwap_shared import build_active_bounce_summary, load_master_avwap_events_for_date
 from setup_permutation_context import load_market_caps as load_permutation_market_caps
+from setup_permutation_context import load_trader_regime as load_permutation_trader_regime
 from setup_permutation_context import stamp_scan_rows as stamp_permutation_scan_rows
 from setup_permutations import SCAN_ROW_COLUMNS as PERMUTATION_SCAN_ROW_COLUMNS
 from setup_permutations import d1_history_columns as permutation_d1_history_columns
 from setup_permutations import earnings_gap_columns as permutation_earnings_gap_columns
 from setup_permutations import liquidity_columns as permutation_liquidity_columns
 from setup_permutations import ma_distance_columns as permutation_ma_distance_columns
+from setup_permutations import regime_columns as permutation_regime_columns
 from setup_permutations import sector_rank_columns as permutation_sector_rank_columns
 from setup_permutations import setup_age_columns as permutation_setup_age_columns
 from setup_permutations import trendline_columns as permutation_trendline_columns
@@ -3189,13 +3191,22 @@ def _run_master_impl(
     except Exception:
         logging.debug("Setup permutation trendline columns skipped for this scan.", exc_info=True)
 
-    # S15: dollar volume, market cap and sector rank from completed bars and the cap cache; appended, never scored.
+    # The scan's completed daily bars (a forming last bar dropped), shared by the S15 and regime columns.
+    completed_through, completed_bars = None, {}
     try:
         completed_through = _permutation_completed_through(daily_frames_by_symbol, scan_reference)
         completed_bars = {
             str(symbol).strip().upper(): _permutation_completed_bars(frame, completed_through)
             for symbol, frame in (daily_frames_by_symbol or {}).items()
         }
+    except Exception:
+        logging.debug("Setup permutation completed bars skipped for this scan.", exc_info=True)
+    completed_closes = {
+        symbol: [(bar["date"], bar["close"]) for bar in bars] for symbol, bars in completed_bars.items()
+    }
+
+    # S15: dollar volume, market cap and sector rank from completed bars and the cap cache; appended, never scored.
+    try:
         market_caps = load_permutation_market_caps()
         for feature_row in feature_rows:
             symbol = str(feature_row.get("symbol") or "").strip().upper()
@@ -3203,13 +3214,27 @@ def _run_master_impl(
                 completed_bars.get(symbol), market_cap_m=market_caps.get(symbol)))
         permutation_sector_rank_columns(
             feature_rows,
-            {symbol: [(bar["date"], bar["close"]) for bar in bars] for symbol, bars in completed_bars.items()},
+            completed_closes,
             {str(symbol).strip().upper(): (context or {}).get("sector")
              for symbol, context in (industry_context_by_symbol or {}).items()},
             as_of=completed_through,
         )
     except Exception:
         logging.debug("Setup permutation S15 columns skipped for this scan.", exc_info=True)
+
+    # S15 item 2: the market regime (the trader's label, SPY vs a rising 20-day, breadth); appended, never scored.
+    try:
+        spy_frame = fetch_daily_bars(ib, "SPY", D1_ENVIRONMENT_FETCH_DAYS)
+        permutation_regime_columns(
+            feature_rows,
+            trader_segment=load_permutation_trader_regime(today_run),
+            spy_closes=[(bar["date"], bar["close"])
+                        for bar in _permutation_completed_bars(spy_frame, completed_through)],
+            closes_by_symbol=completed_closes,
+            as_of=completed_through,
+        )
+    except Exception:
+        logging.debug("Setup permutation regime columns skipped for this scan.", exc_info=True)
 
     # P1-4 4a: stamp the shadow permutation key last, after every enricher; never fails the scan.
     try:
