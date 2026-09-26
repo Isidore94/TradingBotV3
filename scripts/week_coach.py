@@ -98,8 +98,7 @@ def list_weeks(root: Path | None = None) -> list[str]:
 
 
 def load_week(week: str, root: Path | None = None) -> dict[str, Any] | None:
-    payload = dsr._read_json(dsr.week_path(week, root=root))
-    return payload if payload and payload.get("schema") == dsr.WEEK_SCHEMA else None
+    return dsr.read_week(week, root=root)
 
 
 def load_records(sessions: Iterable[str], root: Path | None = None) -> list[dict[str, Any]]:

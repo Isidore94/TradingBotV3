@@ -144,7 +144,7 @@ def test_missing_is_unknown_never_zero():
     assert trades["t-open"]["origin"] == "unknown"
     assert trades["t-open"]["exit_reason"] == "unknown"
     assert trades["t-win"]["net_pnl"] == 120.0
-    assert trades["t-win"]["r_multiple"] == pytest.approx(2.0)
+    assert trades["t-win"]["r_multiple"] == pytest.approx(120.0 / 84.0)  # native R, not CAD 168/84
     assert trades["t-win"]["origin"] == "an_alert"
     assert trades["t-win"]["exit_reason"] == "target_hit"
     assert trades["t-win"]["legs"] and "raw_json" not in trades["t-win"]["legs"][0]

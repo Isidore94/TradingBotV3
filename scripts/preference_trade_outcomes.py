@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import market_calendar
+from journal_analytics import trade_r_multiple
 from project_paths import OUTPUT_DIR
 
 _log = logging.getLogger(__name__)
@@ -186,22 +187,9 @@ def _side(value: Any) -> str:
 
 
 def _canonical_r(trade) -> str:
-    """`net_pnl_cad / |planned_risk|`, blank when either half is missing.
-
-    One definition, stated in `ui/services/journal_feed.r_multiple` and repeated
-    here as arithmetic rather than as an import: that module is the Qt feed and
-    this is a headless nightly slot. Deliberately CAD - an R computed from a
-    native P&L against a risk typed in dollars mixes currencies, which is the
-    same defect the journal already fixed once.
-    """
-    try:
-        risk = float(trade.get("planned_risk"))
-        pnl = float(trade.get("net_pnl_cad"))
-    except (TypeError, ValueError):
-        return ""
-    if abs(risk) < 1e-9:
-        return ""
-    return f"{pnl / abs(risk):.4f}"
+    """The journal's one R (`journal_analytics.trade_r_multiple`, native), as text; blank when unknown."""
+    value = trade_r_multiple(dict(trade))
+    return "" if value is None else f"{value:.4f}"
 
 
 def _float_or_blank(value: Any) -> str:
@@ -763,18 +751,9 @@ def build_rows(
                 "trade_opened_at": str(trade.get("opened_at") or "") if trade else "",
                 "match_confidence": f"{float(match['confidence']):.2f}" if trade else "",
                 "match_basis": match["basis"],
-                # THE CANONICAL R (R1). `r_multiple` is a key that exists
-                # nowhere in scripts/: every traded row shipped a blank R, and
-                # the test that "covered" it invented the key on its fixture.
-                # The journal's one definition is `net_pnl_cad / |planned_risk|`
-                # (`ui/services/journal_feed.r_multiple`), computed here from
-                # the same two columns rather than imported, because this module
-                # is a headless nightly and that one lives behind the Qt feed.
-                # Blank when the trader never typed a risk - which is most rows,
-                # and is a real answer.
+                # The journal's one R, native currency; blank when no risk was typed.
                 "journal_r": _canonical_r(trade) if trade else "",
-                # CAD too. `net_pnl` is the trade's NATIVE currency, so a column
-                # holding both was adding USD to CAD one row apart.
+                # A money column, so CAD: it is summed across trades of mixed currency.
                 "journal_net_pnl": _float_or_blank(trade.get("net_pnl_cad")) if trade else "",
                 "paper_forward_return_h3": _float_or_blank(grade.get("h3")),
                 "paper_forward_return_h5": _float_or_blank(grade.get("h5")),

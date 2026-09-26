@@ -38,6 +38,9 @@ _log = logging.getLogger(__name__)
 
 SCHEMA = project_paths.DAY_SESSION_RECORD_SCHEMA
 WEEK_SCHEMA = "day_session_week_v1"
+#: Which R the trade rows carry: `journal_analytics.trade_r_multiple`, native currency.
+#: A record or week without it was written with the old CAD R and is re-read as native.
+R_DEFINITION = "native"
 
 #: Below this many results a rollup row says "too few to tell".
 MIN_N = 10
@@ -279,7 +282,7 @@ def setup_family(tags: Any) -> str:
 
 
 def _trades(inputs: Mapping[str, Any], shifts: list[dict[str, Any]]) -> dict[str, Any]:
-    from journal_analytics import counts_in_pnl
+    from journal_analytics import counts_in_pnl, trade_r_multiple
 
     payload = inputs.get("payload") or {}
     reviews = {
@@ -297,8 +300,8 @@ def _trades(inputs: Mapping[str, Any], shifts: list[dict[str, Any]]) -> dict[str
         counted = counts_in_pnl(dict(trade))
         pnl = _number(trade.get("net_pnl")) if closed else None
         pnl_cad = _number(trade.get("net_pnl_cad")) if closed else None
-        risk = _number(trade.get("planned_risk"))
-        r_value = pnl_cad / abs(risk) if pnl_cad is not None and risk and abs(risk) > 1e-9 else None
+        # The journal's one R, native currency; `net_pnl_cad` stays as the money column.
+        r_value = trade_r_multiple(dict(trade)) if closed else None
         review = reviews.get(trade_id) or {}
         answers = [_plain(row) for row in mentor_by_trade.get(trade_id) or ()]
         item = {name: _plain(trade.get(name)) for name in TRADE_FIELDS}
@@ -559,6 +562,7 @@ def build_record(session_date: str, inputs: Mapping[str, Any], *, built_at: date
     }
     record: dict[str, Any] = {
         "schema": SCHEMA,
+        "r_definition": R_DEFINITION,
         "session_date": session,
         "session_facts": facts,
         **sections,
@@ -745,6 +749,7 @@ def build_week(week: str, records: Sequence[Mapping[str, Any]], *, built_at: dat
     rules = [row for row in recap_rows if row.get("kind") == "rule"]
     body: dict[str, Any] = {
         "schema": WEEK_SCHEMA,
+        "r_definition": R_DEFINITION,
         "week": week,
         "sessions": [_text(record.get("session_date")) for record in records],
         "min_n": MIN_N,
@@ -823,9 +828,32 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def native_r(record: dict[str, Any]) -> dict[str, Any]:
+    """`record` with native R on every trade row; an old CAD-R record is recomputed in memory.
+
+    The file and its `content_hash` are untouched; the next rebuild replaces them.
+    """
+    if record.get("r_definition") == R_DEFINITION:
+        return record
+    from journal_analytics import trade_r_multiple
+
+    out = dict(record)
+    trades = dict(out.get("trades") or {})
+    rows = []
+    for row in trades.get("rows") or ():
+        row = dict(row)
+        closed = _text(row.get("status")).upper() == "CLOSED"
+        row["r_multiple"] = trade_r_multiple(row) if closed else None
+        rows.append(row)
+    trades["rows"] = rows
+    out["trades"] = trades
+    out["r_definition"] = R_DEFINITION
+    return out
+
+
 def read_record(session_date: str, *, root: Path | None = None) -> dict[str, Any] | None:
     payload = _read_json(record_path(session_date, root=root))
-    return payload if payload and payload.get("schema") == SCHEMA else None
+    return native_r(payload) if payload and payload.get("schema") == SCHEMA else None
 
 
 def write_record(record: Mapping[str, Any], *, root: Path | None = None) -> dict[str, Any]:
@@ -861,7 +889,7 @@ def write_week(week: str, *, root: Path | None = None, built_at: datetime) -> di
             continue
         payload = _read_json(path)
         if payload and payload.get("schema") == SCHEMA:
-            records.append(payload)
+            records.append(native_r(payload))
     if not records:
         return None
     body = build_week(week, records, built_at=built_at)
@@ -871,6 +899,42 @@ def write_week(week: str, *, root: Path | None = None, built_at: datetime) -> di
         return {"path": str(target), "changed": False}
     _atomic_text(target, json.dumps(body, indent=2, sort_keys=True, default=str) + "\n")
     return {"path": str(target), "changed": True}
+
+
+def read_week(week: str, *, root: Path | None = None) -> dict[str, Any] | None:
+    """One week file; a week written with the old CAD R is rebuilt in memory from its day records."""
+    payload = _read_json(week_path(week, root=root))
+    if not payload or payload.get("schema") != WEEK_SCHEMA:
+        return None
+    if payload.get("r_definition") == R_DEFINITION:
+        return payload
+    records = [
+        record for record in (read_record(session, root=root) for session in payload.get("sessions") or ())
+        if record
+    ]
+    if not records:
+        return payload
+    built = _moment(payload.get("built_at"))
+    return build_week(week, records, built_at=built) if built else payload
+
+
+def stale_weeks(*, root: Path | None = None) -> list[str]:
+    """Week files still written with the old CAD R."""
+    out = []
+    for path in sorted(records_dir(root).glob("week-????-W??.json")):
+        payload = _read_json(path)
+        if payload and payload.get("schema") == WEEK_SCHEMA and payload.get("r_definition") != R_DEFINITION:
+            out.append(path.stem[len("week-"):])
+    return out
+
+
+def refresh_stale_weeks(*, root: Path | None = None, built_at: datetime) -> list[str]:
+    """Rewrite every old CAD-R week file from its day records (read as native R)."""
+    done = []
+    for week in stale_weeks(root=root):
+        if write_week(week, root=root, built_at=built_at) is not None:
+            done.append(week)
+    return done
 
 
 # ---------------------------------------------------------------------------
@@ -1072,6 +1136,10 @@ def rebuild_recent(
             continue
         if written is not None:
             out["weeks"].append(week)
+    try:
+        out["weeks"].extend(week for week in refresh_stale_weeks(root=root, built_at=moment) if week not in out["weeks"])
+    except Exception as exc:  # noqa: BLE001 - an old week file stays readable as native in memory
+        out["failed"].append({"session": "old CAD-R weeks", "reason": str(exc)})
     return out
 
 
