@@ -383,6 +383,7 @@ def m5_sources(tmp_path, monkeypatch):
     monkeypatch.setattr(stamp, "_spy_log_path", lambda: log)
     path = tmp_path / "m5_setup_key_stamps.jsonl"
     monkeypatch.setattr(project_paths, "M5_SETUP_KEY_STAMPS_FILE", path)
+    monkeypatch.setattr(project_paths, "D1_ENVIRONMENT_FILE", tmp_path / "no_d1_environment.jsonl")
     monkeypatch.setattr(stamp, "_market_today", lambda: "2026-09-25")
     monkeypatch.delenv(stamp.ENABLED_ENV, raising=False)
     bot = _Bot(_alert_bars())
@@ -412,6 +413,9 @@ def test_the_sidecar_row_carries_the_d1_key_and_an_m5_key(m5_sources):
     assert record["m5_facets"] == {
         "m5_time_bucket": "first30", "m5_rvol_bucket": "rvol_2_3", "m5_vwap_dist_atr": "m5vwap_above_2atr",
         "m5_spy_state": "spy_bounce", "m5_bounce_type": "bounce_ema_15",
+        # S6: 26 bars, a partial previous day, an alert inside the first 30 minutes, no D1 label.
+        "m5_ema_stack": sp.UNKNOWN, "m5_pdh_pdl": sp.UNKNOWN, "m5_open_range": sp.UNKNOWN,
+        "m5_compression": sp.UNKNOWN, "m5_side_vs_d1_env": sp.UNKNOWN,
     }
     assert "first30" in record["m5_label"]
     assert record["m5_inputs"]["vwap_dist_atr"] == pytest.approx(2.1213, abs=1e-3)
@@ -492,7 +496,10 @@ def test_the_backfill_joins_the_d1_key_and_the_m5_key(tmp_path, monkeypatch):
     sidecar = tmp_path / "stamps.jsonl"
     live_event = f"AAA_long_{TODAY.strftime('%Y%m%d')}_06_40_00_ema_15"
     live = {"m5_time_bucket": "first30", "m5_rvol_bucket": "rvol_1_2", "m5_vwap_dist_atr": "m5vwap_below_2atr",
-            "m5_spy_state": "spy_rally", "m5_bounce_type": "bounce_ema_15"}
+            "m5_spy_state": "spy_rally", "m5_bounce_type": "bounce_ema_15",
+            # S6: the structure facets as a live stamp would carry them.
+            "m5_ema_stack": "m5ema_8over21_above_both", "m5_pdh_pdl": "above_pdh", "m5_open_range": "above_or",
+            "m5_compression": "squeeze_break_up", "m5_side_vs_d1_env": "side_with_d1_trend"}
     stamp.append_record({"schema": stamp.SCHEMA, "event_id": live_event, "status": stamp.STATUS_NO_SCAN_ROW,
                          "m5_rule_version": sp.M5_PERMUTATION_RULE_VERSION, "m5_facets": live}, sidecar)
     result = bf.build_permutation_outcomes(history, horizons=horizons, m5_outcomes=m5, last_completed=TODAY,
