@@ -18,10 +18,10 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
   2026-09-28 --compare 2026-09-24`.
 - **Night window:** the night AI starts 22:00 PT. No builders, merges or test runs
   22:00-02:00 PT.
-- **In flight:** `claude/p8b-phaseB-2026-09-26` (NOT merged; merge needs the trader's
-  word): R1 Show, B0, B1b, B3, B8, B9, B11-B13, P4b, A6 steps 2-3, S1-S6, S8, S10b/c,
-  S11-S13; gates #267-#277. Reviewer GO. Full suite 12,720 passed, 1 order flake
-  (`test_tj9q_review_round`, passes alone twice); ruff, smoke 7/7, selftest 105/105.
+- **Live on `main` (next restart):** Phase B + S (`2d59aace`, merged 2026-09-26 on the
+  trader's word; gates #267-#277). Full suite 12,720 passed + 1 order flake; selftest
+  105/105 source and frozen. In flight: S10a (stop recording `h1_blue_after_red`) and S7
+  (shadow engines), both on the trader's yes.
 - **Owed:** TLT/USO/HYG daily bars (scan-side, ask first); halted-name refetch; movers
   summary into the night AI; phone-brief rule line; pre-Aug entry_at (outcome code, ask
   first); review of the per-trade Mentor Save (`182f3e08`); weekly-options facet needs a
@@ -30,9 +30,8 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
   "narration absent", empty-evidence enrichment carries no tags, no event 2004). #264:
   tokens on 12 model rows; the digest lines exist but describe the goal-less 09-24 night
   (B1b); Health rows need a desk session. Econ brief still rejected (P4b).
-- **Next action:** trader: merge Phase B (yes/no); S10a (stop recording the retired
-  H1 type?); S7 (shadow engines edit the ask-first `m5_signal_engines.py`: yes/no).
-  Left for live days: A4b, B10, B7, C4a, B2, Phase C. #258 Monday 07:00.
+- **Next action:** finish S10a and S7. Left for live days: A4b, B10, B7, C4a, B2,
+  Phase C. S9 needs the trader's yes. #258 Monday 07:00.
 - **Trader actions owed:** set Risk per trade ($) in Settings > General; fill
   `trading_plan.md`; run the permutation backfill before Saturday; confirm setup tags
   (P2 screen); Task Scheduler "run whether logged on or not" on the night task;
