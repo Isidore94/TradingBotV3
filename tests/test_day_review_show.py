@@ -89,6 +89,8 @@ def test_the_model_schema_has_no_stat_value_field():
         (lambda r: r["slides"][1].update(body="SPY closed at 999."), "999"),
         (lambda r: r["slides"][1].update(stat_label="up 7 points"), "7"),
         (lambda r: r["slides"][3].update(body="AAPL ran after you liked it."), "AAPL"),
+        (lambda r: r["slides"][1].update(body="SPY fell nine hundred points."), "spelled-out"),
+        (lambda r: r["slides"][1].update(stat_label="twenty names ran"), "spelled-out"),
         (lambda r: r["slides"][4].update(kind="open"), "repeats kind"),
         (lambda r: r["slides"][2].update(body="You felt calm and won."), "mood"),
         (lambda r: r["slides"][2].update(source_ids=["trade:t1", "mood:m1"]), "mood"),
@@ -106,6 +108,12 @@ def test_one_breach_rejects_the_whole_deck(mutate, why):
     mutate(reply)
     with pytest.raises(show.ShowRejected, match=why):
         show.verify_show(reply, _pack())
+
+
+def test_the_prompt_asks_for_tickers_in_capitals():
+    # The ticker check reads capitals only, so the model must write tickers that way.
+    assert "Do not write in capitals" not in show.INSTRUCTIONS
+    assert "tickers in capitals" in show.INSTRUCTIONS
 
 
 def test_number_and_trade_may_repeat():

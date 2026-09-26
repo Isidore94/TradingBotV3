@@ -108,7 +108,9 @@ INSTRUCTIONS = (
     "character for character from a source that slide cites; to show a number, "
     "set stat_source_id to the source that holds it and write only a short "
     "stat_label - the desk prints the number. Leave stat_source_id empty for no "
-    "stat. Name only tickers the pack names. Do not write in capitals. Never "
+    "stat. Name only tickers the pack names; write tickers in capitals, "
+    "exactly as the pack does, and no other word in capitals. Never spell a "
+    "number out in words. Never "
     "put a feeling next to a result: mood is reported on its own slide or not "
     "at all. You may not grade, rate or measure anything. "
     "previous_story is last night's verified story: context only, never a source."
@@ -136,6 +138,13 @@ RESULT_WORDS = frozenset({
 _RESULT_PARTS = ("trades", "reads", "walkaway")
 
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")
+#: Spelled-out numbers the verbatim-number check cannot see.
+_NUMBER_WORDS = frozenset({
+    "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
+    "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty", "sixty",
+    "seventy", "eighty", "ninety", "hundred", "hundreds", "thousand", "thousands",
+    "million", "millions", "billion", "billions",
+})
 _CAPS = re.compile(r"\b[A-Z][A-Z.]{1,5}\b")
 _WORD = re.compile(r"[a-z&]+")
 _SENTENCE = re.compile(r"[.!?;\n]+")
@@ -382,6 +391,11 @@ def verify_show(reply: Any, pack: Mapping[str, Any]) -> dict[str, Any]:
                     raise ShowRejected(
                         f"{where} writes {number}, which none of its cited sources holds"
                     )
+            spelled = set(_WORD.findall(str(text or "").lower())) & _NUMBER_WORDS
+            if spelled:
+                raise ShowRejected(
+                    f"{where} writes a spelled-out number ({sorted(spelled)[0]})"
+                )
             for word in _CAPS.findall(text):
                 bare = word.strip(".")
                 if bare not in tickers and bare not in DESK_WORDS:
