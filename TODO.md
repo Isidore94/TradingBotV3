@@ -321,10 +321,11 @@ S1 and keep the order. The two 500 MB logs are read with
   1. **A bull window.** Every swing number is 08-14 to 09-24. The April-July run is in the
      permutation backfill the trader owes; run it, and the long cells go from n=26-64 to
      hundreds.
-  2. **A point-in-time "market is working" label on every scan row**: SPY above its 20-day
-     AND the 20-day rising, plus breadth (share of the universe above its own 20-day) and
-     the sector's 5- and 20-day RS rank vs SPY. Deterministic, from daily bars, written
-     the P11 way (no output change). Today only `spy_above_sma20/50` exists on the row.
+  2. **A point-in-time regime label on every scan row** - the trader's structural regime
+     from S16 first, then the machine's checks: SPY vs its 20-day and the 20-day slope,
+     breadth (share of the universe above its own 20-day), the sector's 5- and 20-day RS
+     rank. Deterministic, from daily bars, written the P11 way (no output change). Today
+     only `spy_above_sma20/50` exists on the row.
   3. **Swing path facts**: MFE and MAE in ATR over 5, 10 and 20 sessions per horizon row,
      from the daily bars (the horizons file is close-to-close only). This is what says
      "consistently gives a sellable move" and what S13's exit models need. Add horizon 20.
@@ -343,6 +344,39 @@ S1 and keep the order. The two 500 MB logs are read with
      the trader's wins are measured against the same ruler.
   9. **Fill model**: keep the next-open re-pricing (F18) as a standard column; add an
      intraday-pullback entry variant for the leader-pullback family (S8).
+
+- **S16 The regime is the frame** (the trader 2026-09-26: "the market has different
+  regimes ... what's important is KNOWING the market regime and then having setups you KNOW
+  work in it. It's not working or not working, it just is what it is."). Build order:
+  1. **Regime journal, trader-authored.** A small vocabulary (`bull_run`, `weekly_hh_then
+     _compression`, `bear_channel_lower_highs`, `range`, `capitulation`, `recovery`) plus a
+     free structure note ("weekly HH, daily LH/LL channel"). Append-only segments with a
+     start date; typed by the trader in the Mentor (a weekly regime question, and again
+     whenever they say the regime changed), never inferred and never back-edited silently.
+     Store it beside the journal's `regimes` table (`trade_date`, `mid_term_regime`,
+     `short_term_regime`, `intraday_regime`, `source='auto'` from Auto Market Bias, 99 rows)
+     as `structural_regime` with `source='trader'`; the auto columns stay as the machine's
+     check. The trader types the past once: March-May 2026 bull run; June-July weekly
+     higher highs then compression; August-now bear channel with lower highs.
+  2. **Machine structure labels beside it, never over it**: weekly higher-high / higher-low
+     count, daily lower-high / lower-low channel from pivots (the scan's trendline pivot code,
+     `_find_trendline_pivots`), ATR-percentile compression. Shown next to the trader's label
+     so disagreement is visible.
+  3. **Everything joins on the regime of its date**: session-horizon outcomes, M5 outcomes,
+     journal trades, liked / vetoed / rejected cohorts, Focus outcomes. The Setup Tracker and
+     the Daytrade Tracker show every grade per regime, current regime first, and say
+     "unknown in this regime" rather than pooling. The Saturday search gets a `regime` facet
+     and reports per regime. The points challenger (S12) reads the current regime's cells.
+  4. **The market story is told inside the regime.** The night narration opens with the
+     regime and its day count ("bear channel, day 23, lower high on 09-18"), anchors on the
+     trader's own Mentor notes and observations for that regime (RECALLED / observation rows
+     already in the day pack), and the Weekend Prep card lists "setups that have worked in
+     this regime" and "setups untested in this regime". Trader's words first, facts second,
+     model prose last, verified as today.
+  5. **Regime change alerts are questions, not calls**: when the machine labels disagree with
+     the trader's regime for 3 sessions, the Mentor asks "still a bear channel?" once.
+  This is the frame S4, S12, S14 and S15 hang off; build the journal (1) first so the
+  backfill (S15 item 1) is labelled the day it lands.
 
 ### Phase C - needs live days (trigger named)
 
