@@ -760,6 +760,98 @@ def _trendline(row, ctx, side):
     return f"trendline_break_{direction}" if broke else f"trendline_near_{direction}"
 
 
+# --- S15: sector strength, liquidity, size and the earnings cycle (appended `perm_` columns)
+
+#: The S15 columns: 20-session dollar volume ($M), market cap ($M), the name's sector rank by median
+#: member return over 5 and 20 completed sessions (1 = strongest), how many sectors were ranked, and
+#: the latest earnings gap in ATR, signed (+ up, - down).
+S15_COLUMNS = (
+    "perm_dollar_volume_20d_m",
+    "perm_market_cap_m",
+    "perm_sector_rs_rank_5d",
+    "perm_sector_rs_rank_20d",
+    "perm_sector_rank_count",
+    "perm_earnings_gap_atr_signed",
+)
+_DV, _CAP, _RANK5, _RANK20, _RANK_COUNT, _GAP_SIGNED = S15_COLUMNS
+
+#: Dollar-volume edges ($M, 20-session mean): the live scan universe's quartiles, 2026-09 (~50/125/320).
+DOLLAR_VOLUME_WINDOW = 20
+DOLLAR_VOLUME_EDGES_M = (50.0, 125.0, 300.0)
+#: Market-cap edges ($M): small / mid / large / mega. Live universe 2026-09: 10% under 2B, median 10B, 80th pct ~50B.
+MARKET_CAP_EDGES_M = (2_000.0, 10_000.0, 50_000.0)
+#: A sector is ranked with 5+ current members; a rank needs 6+ ranked sectors. Top / bottom = count // 3 sectors.
+SECTOR_RANK_MIN_MEMBERS = 5
+SECTOR_RANK_MIN_SECTORS = 6
+SECTOR_RANK_WINDOWS = (5, 20)
+#: Earnings cycle: the drift window (0-13 sessions after the gap) splits by the gap's direction at the
+#: scan's own 1-ATR gap floor (`legacy.MIN_GAP_ATR_MULTIPLE`); later sessions are 14-27, 28-60, 61+.
+EARNINGS_DRIFT_LAST_SESSION = 13
+EARNINGS_GAP_MIN_ATR = 1.0
+
+
+def _sector_third(row: Mapping[str, Any], column: str) -> str | None:
+    rank = _num(row.get(column))
+    count = _num(row.get(_RANK_COUNT))
+    if rank is None or count is None or rank != int(rank) or count != int(count):
+        return None
+    if count < SECTOR_RANK_MIN_SECTORS or not 1 <= rank <= count:
+        return None
+    edge = int(count) // 3
+    if rank <= edge:
+        return "top"
+    if rank > count - edge:
+        return "bottom"
+    return "mid"
+
+
+@facet("sector_rs_5d", "strength", in_label=False)
+def _sector_rs_5d(row, ctx, side):
+    third = _sector_third(row, _RANK5)
+    return f"sector_rs5_{third}" if third else UNKNOWN
+
+
+@facet("sector_rs_20d", "strength", in_label=False)
+def _sector_rs_20d(row, ctx, side):
+    third = _sector_third(row, _RANK20)
+    return f"sector_rs20_{third}" if third else UNKNOWN
+
+
+@facet("dollar_volume", "size", in_label=False)
+def _dollar_volume(row, ctx, side):
+    value = _num(row.get(_DV))
+    if value is None or value <= 0:
+        return UNKNOWN
+    return _band(value, DOLLAR_VOLUME_EDGES_M,
+                 ("dollar_vol_below_50m", "dollar_vol_50_125m", "dollar_vol_125_300m", "dollar_vol_300m_plus"))
+
+
+@facet("market_cap", "size", in_label=False)
+def _market_cap(row, ctx, side):
+    value = _num(row.get(_CAP))
+    if value is None or value <= 0:
+        return UNKNOWN
+    return _band(value, MARKET_CAP_EDGES_M, ("cap_below_2b", "cap_2_10b", "cap_10_50b", "cap_50b_plus"))
+
+
+@facet("earnings_cycle", "earnings", in_label=False)
+def _earnings_cycle(row, ctx, side):
+    # Post-earnings drift (split by the gap's direction) is kept apart from the mid-cycle ages.
+    sessions = _num(row.get("latest_release_sessions_since_gap"))
+    if sessions is None or sessions < 0 or sessions != int(sessions):
+        return UNKNOWN
+    if sessions <= EARNINGS_DRIFT_LAST_SESSION:
+        gap = _num(row.get(_GAP_SIGNED))
+        if gap is None:
+            return UNKNOWN
+        if gap >= EARNINGS_GAP_MIN_ATR:
+            return "drift_gap_up_0_13s"
+        if gap <= -EARNINGS_GAP_MIN_ATR:
+            return "drift_gap_down_0_13s"
+        return "drift_small_gap_0_13s"
+    return _band(sessions, (28.0, 61.0), ("mid_cycle_14_27s", "mid_cycle_28_60s", "late_cycle_61s_plus"))
+
+
 # --- stamping (4a): the scan-row columns and the honest input view
 
 #: `perm_dist_<ma>_atr` columns the enrichment step writes: (close - ma) / ATR20. The `perm_`
@@ -785,9 +877,9 @@ TRENDLINE_COLUMNS = (
     "perm_trendline_within_alert_range",
     "perm_trendline_direction",
 )
-#: Every column P1-4 appends to `d1_features_history.csv`, in order (4a, then P11, then P8b, then S6).
+#: Every column P1-4 appends to `d1_features_history.csv`, in order (4a, P11, P8b, S6, then S15).
 SCAN_ROW_COLUMNS = (*MA_DISTANCE_COLUMNS, WEEKLY_STREAK_COLUMN, *STAMP_COLUMNS, *D1_HISTORY_COLUMNS,
-                    SETUP_AGE_COLUMN, *TRENDLINE_COLUMNS)
+                    SETUP_AGE_COLUMN, *TRENDLINE_COLUMNS, *S15_COLUMNS)
 
 _WEEKLY_TOP_PATTERN_FLAGS = (
     "top_pattern_weekly_ema15_hold",
@@ -1051,6 +1143,107 @@ def trendline_columns(priority_row: Any, *, frame_bars: Any, last_close: Any, at
             and atr_value is not None and atr_value > 0:
         out.update({TRENDLINE_COLUMNS[0]: False, TRENDLINE_COLUMNS[1]: False})
     return out
+
+
+# --- S15: the columns (pure; the scan passes completed bars, the release context and a cap cache)
+
+
+def liquidity_columns(completed_bars: Any, *, market_cap_m: Any = None) -> dict[str, Any]:
+    """Dollar volume (mean close x volume over the last 20 completed bars, $M) and market cap ($M).
+
+    ``completed_bars`` are ``{close, volume}`` dicts in date order, completed sessions only. A
+    hole in the window, too few bars or a non-positive cap is None.
+    """
+    out: dict[str, Any] = {_DV: None, _CAP: None}
+    bars = [bar for bar in (completed_bars or ()) if isinstance(bar, Mapping)]
+    if len(bars) >= DOLLAR_VOLUME_WINDOW:
+        values = []
+        for bar in bars[-DOLLAR_VOLUME_WINDOW:]:
+            close, volume = _num(bar.get("close")), _num(bar.get("volume"))
+            if close is None or volume is None or close <= 0 or volume < 0:
+                values = []
+                break
+            values.append(close * volume)
+        if values:
+            out[_DV] = round(sum(values) / len(values) / 1e6, 3)
+    cap = _num(market_cap_m)
+    if cap is not None and cap > 0:
+        out[_CAP] = round(cap, 1)
+    return out
+
+
+def earnings_gap_columns(release_context: Any) -> dict[str, Any]:
+    """The latest earnings gap in ATR, signed by its direction; None without a measured gap."""
+    out: dict[str, Any] = {_GAP_SIGNED: None}
+    if not isinstance(release_context, Mapping) or not _text(release_context.get("gap_date")):
+        return out
+    size = _num(release_context.get("gap_atr_multiple"))
+    gap_open, pre_close = _num(release_context.get("gap_open")), _num(release_context.get("pre_gap_close"))
+    if size is None or size < 0 or gap_open is None or pre_close is None:
+        return out
+    sign = 1.0 if gap_open > pre_close else -1.0 if gap_open < pre_close else 0.0
+    out[_GAP_SIGNED] = round(sign * size, 4)
+    return out
+
+
+def _trailing_return(closes: list[float], sessions: int) -> float | None:
+    if len(closes) <= sessions or closes[-1 - sessions] <= 0:
+        return None
+    return closes[-1] / closes[-1 - sessions] - 1.0
+
+
+def sector_rank_columns(
+    feature_rows: Any,
+    closes_by_symbol: Mapping[str, Any],
+    sector_by_symbol: Mapping[str, Any],
+    *,
+    as_of: Any,
+) -> int:
+    """Write each feature row's sector rank by median member return over 5 and 20 sessions.
+
+    ``closes_by_symbol`` maps a symbol to its completed ``(date, close)`` pairs in date order;
+    a member counts only when its last completed bar is ``as_of`` and it has 21+ closes. Rank 1
+    is the strongest sector; ties break by sector name. Returns the number of rows ranked.
+    """
+    as_of_text = str(as_of or "")[:10]
+    returns: dict[str, list[tuple[float, float]]] = {}
+    for symbol, pairs in (closes_by_symbol or {}).items():
+        sector = _text((sector_by_symbol or {}).get(str(symbol).upper()))
+        pairs = list(pairs or ())
+        if not sector or not as_of_text or not pairs or str(pairs[-1][0])[:10] != as_of_text:
+            continue
+        closes = [_num(close) for _day, close in pairs]
+        if any(close is None for close in closes):
+            continue
+        short, long_ = (_trailing_return(closes, window) for window in SECTOR_RANK_WINDOWS)
+        if short is None or long_ is None:
+            continue
+        returns.setdefault(sector, []).append((short, long_))
+    medians = {
+        sector: tuple(_median([pair[index] for pair in pairs]) for index in range(2))
+        for sector, pairs in returns.items() if len(pairs) >= SECTOR_RANK_MIN_MEMBERS
+    }
+    ranks: dict[str, tuple[int, int]] = {}
+    if len(medians) >= SECTOR_RANK_MIN_SECTORS:
+        by_short = sorted(medians, key=lambda name: (-medians[name][0], name))
+        by_long = sorted(medians, key=lambda name: (-medians[name][1], name))
+        ranks = {name: (by_short.index(name) + 1, by_long.index(name) + 1) for name in medians}
+    ranked = 0
+    for row in feature_rows or ():
+        if not isinstance(row, dict):
+            continue
+        sector = _text((sector_by_symbol or {}).get(str(row.get("symbol") or "").strip().upper()))
+        rank = ranks.get(sector) if sector else None
+        row[_RANK5], row[_RANK20] = rank if rank else (None, None)
+        row[_RANK_COUNT] = len(medians) if rank else None
+        ranked += bool(rank)
+    return ranked
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2.0
 
 
 # --- P11: M5-native facets over one alert's own inputs (group ``m5``)

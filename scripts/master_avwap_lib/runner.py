@@ -14,10 +14,14 @@ from . import legacy as _legacy
 from .d1_zone_arms import build_d1_zone_arms
 from .setup_tagging import apply_setup_tag_payload, canonicalize_priority_setup_tags
 from master_avwap_shared import build_active_bounce_summary, load_master_avwap_events_for_date
+from setup_permutation_context import load_market_caps as load_permutation_market_caps
 from setup_permutation_context import stamp_scan_rows as stamp_permutation_scan_rows
 from setup_permutations import SCAN_ROW_COLUMNS as PERMUTATION_SCAN_ROW_COLUMNS
 from setup_permutations import d1_history_columns as permutation_d1_history_columns
+from setup_permutations import earnings_gap_columns as permutation_earnings_gap_columns
+from setup_permutations import liquidity_columns as permutation_liquidity_columns
 from setup_permutations import ma_distance_columns as permutation_ma_distance_columns
+from setup_permutations import sector_rank_columns as permutation_sector_rank_columns
 from setup_permutations import setup_age_columns as permutation_setup_age_columns
 from setup_permutations import trendline_columns as permutation_trendline_columns
 from tracker_store import record_write_failure as record_setup_tracker_write_failure
@@ -870,6 +874,40 @@ def _permutation_trendline_bars(frame) -> int:
     if not isinstance(frame, pd.DataFrame) or frame.empty or not {"datetime", "close"} <= set(frame.columns):
         return 0
     return int(len(frame.dropna(subset=["datetime", "close"])))
+
+
+def _permutation_completed_through(daily_frames_by_symbol, reference) -> str | None:
+    """ISO date of the last completed daily bar in this scan's frames; a forming last bar is excluded."""
+    latest = None
+    for frame in (daily_frames_by_symbol or {}).values():
+        if not isinstance(frame, pd.DataFrame) or frame.empty or "datetime" not in frame.columns:
+            continue
+        stamp = frame["datetime"].dropna().max()
+        if not pd.isna(stamp) and (latest is None or stamp.date() > latest):
+            latest = stamp.date()
+    if latest is None:
+        return None
+    if daily_bar_status(latest, reference=reference) == "completed":
+        return latest.isoformat()
+    return (latest - timedelta(days=1)).isoformat()
+
+
+def _permutation_completed_bars(frame, completed_through) -> list[dict]:
+    """One symbol's ``{date, close, volume}`` bars up to ``completed_through``; empty when unknown."""
+    if not completed_through or not isinstance(frame, pd.DataFrame) or frame.empty \
+            or not {"datetime", "close"} <= set(frame.columns):
+        return []
+    volumes = frame["volume"] if "volume" in frame.columns else [None] * len(frame)
+    bars = []
+    for stamp, close, volume in zip(frame["datetime"], frame["close"], volumes):
+        if pd.isna(stamp) or stamp.date().isoformat() > completed_through:
+            continue
+        bars.append({
+            "date": stamp.date().isoformat(),
+            "close": None if pd.isna(close) else float(close),
+            "volume": None if volume is None or pd.isna(volume) else float(volume),
+        })
+    return bars
 
 
 def _run_master_impl(
@@ -2298,6 +2336,11 @@ def _run_master_impl(
             ))
         except Exception:
             logging.debug("%s: P11 permutation columns skipped.", sym, exc_info=True)
+        # S15: the latest earnings gap's signed ATR size from the release context; appended, never scored.
+        try:
+            feature_row.update(permutation_earnings_gap_columns(latest_release_context))
+        except Exception:
+            logging.debug("%s: S15 earnings gap column skipped.", sym, exc_info=True)
         symbol_entry["feature_row"] = feature_row
         for preview_row in (priority_summary, symbol_entry, feature_row):
             stamp_daily_bar_status(
@@ -3145,6 +3188,28 @@ def _run_master_impl(
             ))
     except Exception:
         logging.debug("Setup permutation trendline columns skipped for this scan.", exc_info=True)
+
+    # S15: dollar volume, market cap and sector rank from completed bars and the cap cache; appended, never scored.
+    try:
+        completed_through = _permutation_completed_through(daily_frames_by_symbol, scan_reference)
+        completed_bars = {
+            str(symbol).strip().upper(): _permutation_completed_bars(frame, completed_through)
+            for symbol, frame in (daily_frames_by_symbol or {}).items()
+        }
+        market_caps = load_permutation_market_caps()
+        for feature_row in feature_rows:
+            symbol = str(feature_row.get("symbol") or "").strip().upper()
+            feature_row.update(permutation_liquidity_columns(
+                completed_bars.get(symbol), market_cap_m=market_caps.get(symbol)))
+        permutation_sector_rank_columns(
+            feature_rows,
+            {symbol: [(bar["date"], bar["close"]) for bar in bars] for symbol, bars in completed_bars.items()},
+            {str(symbol).strip().upper(): (context or {}).get("sector")
+             for symbol, context in (industry_context_by_symbol or {}).items()},
+            as_of=completed_through,
+        )
+    except Exception:
+        logging.debug("Setup permutation S15 columns skipped for this scan.", exc_info=True)
 
     # P1-4 4a: stamp the shadow permutation key last, after every enricher; never fails the scan.
     try:

@@ -26,7 +26,7 @@ import csv
 import io
 import json
 import logging
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping
 
@@ -377,6 +377,43 @@ def load_d1_environment(session: Any, *, path: Any = None) -> str:
         return d1_environment_store.label_for_session(_session_text(session), path=path)
     except Exception:  # noqa: BLE001 - an unreadable store is "unknown"
         return sp.UNKNOWN
+
+
+# --- S15: market caps (the universe builder's weekly yfinance cache, read-only)
+
+#: A cache older than this at scan time gives no caps (unknown), never a stale bucket.
+MARKET_CAP_MAX_AGE_DAYS = 30
+
+
+def market_cap_cache_path() -> Path:
+    """The same file as `universe_builder.MARKET_CAP_CACHE`."""
+    import project_paths
+
+    return Path(project_paths.CACHE_DIR) / "universe" / "market_caps.json"
+
+
+def load_market_caps(*, path: Path | None = None, now: datetime | None = None) -> dict[str, float]:
+    """Symbol -> market cap ($M) from the cache; empty when it is missing, unreadable or too old."""
+    try:
+        payload = json.loads(Path(path or market_cap_cache_path()).read_text(encoding="utf-8"))
+        fetched = datetime.fromisoformat(str(payload.get("fetched_at")))
+    except Exception:  # noqa: BLE001 - an unreadable cache is "unknown"
+        return {}
+    reference = now or datetime.now()
+    if fetched > reference or reference - fetched > timedelta(days=MARKET_CAP_MAX_AGE_DAYS):
+        return {}
+    caps = payload.get("caps") if isinstance(payload, dict) else None
+    if not isinstance(caps, dict):
+        return {}
+    out: dict[str, float] = {}
+    for symbol, value in caps.items():
+        try:
+            cap = float(value)
+        except (TypeError, ValueError):
+            continue
+        if cap > 0:
+            out[str(symbol).strip().upper()] = cap
+    return out
 
 
 # --- ctx and stamping

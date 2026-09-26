@@ -70,6 +70,12 @@ if DISABLE:
     # S6: the trendline columns are switched off the same way.
     if hasattr(runner, "permutation_trendline_columns"):
         runner.permutation_trendline_columns = lambda *args, **kwargs: {}
+    # S15: the liquidity, market-cap, sector-rank and earnings-gap columns are switched off the same way.
+    if hasattr(runner, "permutation_liquidity_columns"):
+        runner.permutation_liquidity_columns = lambda *args, **kwargs: {}
+        runner.permutation_earnings_gap_columns = lambda *args, **kwargs: {}
+        runner.permutation_sector_rank_columns = lambda *args, **kwargs: 0
+        runner.load_permutation_market_caps = lambda *args, **kwargs: {}
 
 
 def _sessions(count):
