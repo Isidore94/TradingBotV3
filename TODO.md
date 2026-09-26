@@ -58,7 +58,7 @@ Gates #257-#263: none judged yet (first proof tonight and Monday).
 
 Built 2026-09-26 on `claude/p8b-phaseB-2026-09-26` (not merged; needs the trader's
 word): R1, B0, B1b, B3, B8, B9, B11, B12, B13, P4b, A6 steps 2-3, S1-S6, S8, S10b, S10c,
-S11. Left here: items that need a live day, a trader decision or an ask-first yes.
+S11, S12 (SP4 shadow, trial starts the first night it runs), S13. Left here: items that need a live day, a trader decision or an ask-first yes.
 
 - **B10 Young GC** (snappiness): 150 ms/min of young sweeps; skip a sweep when the gen-0
   count is small or lengthen the tick, only with `desk_perf_report` before/after.
@@ -228,38 +228,6 @@ S1 and keep the order. The two 500 MB logs are read with
   rows). It has no default flag and no saved setting. "Kill" can only mean "stop
   recording it": one new constant + one skip in `check_h1_color_setups`, which is wider
   than the trader's "Sure kill it". Trader: stop recording it (yes/no)?
-- **S12 = P13 Points challenger SP4, spec frozen 2026-09-26** (grades ->8; the trader:
-  "let's redo the points system to reflect this - I want those excellent 5 swing setups
-  to be higher than the garbage setups like my longs favourite zone"). Shadow first, no
-  ask-first until promotion:
-  - Nightly deterministic `family_side_evidence.json` (slot after `day_review_facts`, goal
-    setup_quality): per (setup_family, side) over the trailing 40 completed sessions:
-    tape-relative beat rate and Wilson low bound at 5 sessions, mean excess vs SPY, mean
-    and median move in ATR at 5 and 10 sessions, payoff, the tracker's avg_total_r, n and
-    sessions. From `master_avwap_session_horizon_outcomes.csv`, `d1_features_history.csv`
-    (atr20) and the attribute leaderboard. Fixture-tested; refuses to write with under
-    15 sessions of data.
-  - Pure `points_challenger.py`: `sp4_points(row, evidence)` = champion priority score +
-    adjust, adjust = 60 x (beat_low_h5 - 0.50) + 20 x mean_move_atr_h10, clamped to
-    [-40, +40], only when n >= 80 and sessions >= 15, else 0. Frozen numbers; do not tune
-    them after looking. Today that gives `avwap_retest_followthrough` SHORT about +38,
-    `avwap_band_bounce` SHORT about +30, `favorite_zone_watch` LONG about -14,
-    `avwap_breakout` LONG about -22: a bucket-sized swing (bucket edges 32 / 69 / 121).
-  - Desk: a shadow "SP4" column and chip on the Setup Tracker beside the live points;
-    the live sort, buckets and alerts do not change. The Saturday report carries one
-    line per side: champion top quartile vs SP4 top quartile, tape-relative excess and
-    tracker R over the entry sessions so far.
-  - SP4 rules, fixed now: 20 new entry sessions from the first night it runs, then 5
-    sessions to mature. Success = SP4 top quartile beats the champion top quartile by
-    >= 0.5% excess at 5 sessions AND >= 0.10R tracker R. Downside stop = SP4 trails by
-    > 0.5% after 10 entry sessions. Rollback = delete the column. Promotion to live
-    points is ask-first (`legacy.py`), golden fixtures, trader's quoted yes.
-- **S13 Exit review for the short runners** (grades; measurement first): the tracker's
-  target/stop exits book -0.04R on `avwap_retest_followthrough` SHORT and -0.03R on
-  `avwap_band_bounce` SHORT while those names run +1.2 / +0.9 ATR in 10 sessions (F17).
-  Measure, per family x side, R under three exit models (current; stop only, hold 10
-  sessions; trail 1 ATR from the extreme) from the same outcomes, and show the three on
-  the Setup Tracker. No exit rule changes until the trader picks one.
 
 ### Phase C - needs live days (trigger named)
 
