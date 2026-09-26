@@ -319,6 +319,11 @@ class WriterConfig:
     def _write_settings(self, payload: dict) -> None:
         self.settings_file.parent.mkdir(parents=True, exist_ok=True)
         self.settings_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        # An outside edit is seen within project_paths' 1 s re-stat window; the
+        # machine is configured well before it publishes, so skip that wait.
+        import project_paths
+
+        project_paths.invalidate_local_settings_cache()
 
     def _clear_env(self) -> None:
         for key in _ENV_WRITER_KEYS + _ENV_ROLE_KEYS + _ENV_OVERRIDE_KEYS:

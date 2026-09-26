@@ -20,6 +20,7 @@ stdev; see plan.md section 5.
 """
 
 import threading
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -41,8 +42,13 @@ D1_HISTORY_SESSIONS = 1000
 DAILY_BARS_CACHE_MAX_SYMBOLS = 512
 _daily_bars_cache: dict[str, tuple[tuple[str, int], list[dict[str, Any]]]] = {}
 _daily_bars_cache_lock = threading.Lock()
-# (mtime, {symbol: [iso dates...]}) for the earnings-dates cache file.
-_earnings_dates_cache: list = [None, {}]
+# (mtime, {symbol: [iso dates...]}, path, monotonic time of last stat) for the
+# earnings-dates cache file.
+_earnings_dates_cache: list = [None, {}, None, None]
+#: The earnings file is stat'ed at most this often; in between the cached map
+#: is returned without touching the disk (the file changes at most daily).
+EARNINGS_DATES_RESTAT_SECONDS = 30.0
+_earnings_clock = time.monotonic
 
 # Fixed color assignments (user-specified 2026-07-29): the trader reads these
 # lines by color first. SMAs dotted, EMAs solid.
@@ -194,17 +200,31 @@ def anchored_vwap_band_series(
 
 
 def _earnings_dates_map() -> dict[str, list[str]]:
-    """{symbol: [iso earnings dates]} from the cache file, mtime-cached."""
+    """{symbol: [iso earnings dates]} from the cache file, mtime-cached.
+
+    The file is re-stat'ed at most every ``EARNINGS_DATES_RESTAT_SECONDS``;
+    in between the last map is returned, so an edit shows up within 30 s.
+    """
     import json
 
     from project_paths import EARNINGS_DATES_CACHE_FILE
 
     path = Path(EARNINGS_DATES_CACHE_FILE)
+    now = float(_earnings_clock())
+    checked_at = _earnings_dates_cache[3]
+    if (
+        _earnings_dates_cache[0] is not None
+        and _earnings_dates_cache[2] == str(path)
+        and checked_at is not None
+        and 0.0 <= now - checked_at < EARNINGS_DATES_RESTAT_SECONDS
+    ):
+        return _earnings_dates_cache[1]
     try:
         mtime_ns = path.stat().st_mtime_ns
     except OSError:
         return {}
-    if _earnings_dates_cache[0] == mtime_ns:
+    if _earnings_dates_cache[0] == mtime_ns and _earnings_dates_cache[2] == str(path):
+        _earnings_dates_cache[3] = now
         return _earnings_dates_cache[1]
     symbols: dict[str, list[str]] = {}
     try:
@@ -217,8 +237,7 @@ def _earnings_dates_map() -> dict[str, list[str]]:
                 symbols[symbol] = [str(value) for value in dates if value]
     except (OSError, ValueError, TypeError, AttributeError):
         symbols = {}
-    _earnings_dates_cache[0] = mtime_ns
-    _earnings_dates_cache[1] = symbols
+    _earnings_dates_cache[:] = [mtime_ns, symbols, str(path), now]
     return symbols
 
 

@@ -152,14 +152,35 @@ def test_startup_makes_peewee_threads_close_their_own_connections(monkeypatch):
 def test_the_collector_design_is_untouched(monkeypatch):
     """The GUI-thread collector, its cadence and its bounded waits are what
     keep Qt destructors on the owning thread (2026-07-29 crash). This packet
-    only shrinks what they scan."""
+    only shrinks what they scan.
+
+    Packet p8b-a2 (2026-09-25) lets the controller freeze too, but only right
+    after a full sweep - collect, then freeze, the same order as startup."""
     import inspect
 
     from ui import app as app_mod
 
     source = inspect.getsource(app_mod.install_gui_thread_gc)
     assert "gc.disable()" in source, "automatic collection stays off, process-wide"
-    assert "freeze" not in source, "the freeze belongs to startup, not to the controller"
 
-    controller = inspect.getsource(app_mod._GuiGcController)
-    assert "freeze" not in controller
+    calls = []
+
+    class _Idle:
+        def idle_ms(self):
+            return 1e9
+
+    controller = app_mod._GuiGcController(
+        _Idle(),
+        collector=lambda generation=2: calls.append(("collect", generation)),
+        freezer=lambda: calls.append(("freeze", None)),
+        unfreezer=lambda: calls.append(("unfreeze", None)),
+        full_every_ticks=2,
+    )
+    for _ in range(4):
+        controller.sweep()
+    for index, call in enumerate(calls):
+        if call[0] == "freeze":
+            assert calls[index - 1] == ("collect", 2), (
+                "a freeze may only follow a FULL sweep, never a young one or nothing"
+            )
+    assert ("collect", 0) in calls and calls.count(("freeze", None)) == 2
