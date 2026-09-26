@@ -31,6 +31,7 @@ screens SAY.
 
 from __future__ import annotations
 
+import copy
 import csv
 import json
 import logging
@@ -112,18 +113,27 @@ def read_favorable_read() -> Any:
     path = Path(MASTER_AVWAP_TIER_OUTCOMES_FILE)
     if not path.is_file():
         return None
+    policy = swing_evidence.POLICY_SCANROW_V1
+    key = (
+        _file_key(path),
+        swing_evidence.lately_window(None, sessions=int(policy.window_sessions)),
+    )
     try:
-        return swing_evidence.read_eligible_rows(path, swing_evidence.POLICY_SCANROW_V1)
+        return _cached_copy(
+            "favorable_read", key, lambda: swing_evidence.read_eligible_rows(path, policy)
+        )
     except Exception:  # noqa: BLE001 - an unreadable source is absent, not fatal
         logging.debug("Working-lately favorable read failed", exc_info=True)
         return None
 
 
-#: The outcome window streamed ONCE per build and shared by the two readers
-#: that need it (held x ran and the setup grades). Set and cleared by
-#: `build_payload` on the worker; never held between builds - the window is
-#: hundreds of MB of dicts.
+#: The outcome window streamed at most ONCE per build and shared by the readers
+#: that need it (held x ran, the setup grades, the recent M5 results). Loaded
+#: on first use inside `build_payload` and cleared by it; never held between
+#: builds - the window is hundreds of MB of dicts. A build whose derived
+#: results are all cached never reads the log at all.
 _OUTCOME_ROWS_THIS_BUILD: list[dict] | None = None
+_OUTCOME_BUILD_ACTIVE = False
 
 
 def _outcome_rows() -> list[dict]:
@@ -131,20 +141,53 @@ def _outcome_rows() -> list[dict]:
     if _OUTCOME_ROWS_THIS_BUILD is not None:
         return _OUTCOME_ROWS_THIS_BUILD
     import held_run_score
-    from project_paths import INTRADAY_BOUNCE_OUTCOMES_FILE
 
-    return held_run_score.read_outcome_rows(Path(INTRADAY_BOUNCE_OUTCOMES_FILE))
+    rows = held_run_score.read_outcome_rows(_outcome_log_path())
+    if _OUTCOME_BUILD_ACTIVE:
+        _OUTCOME_ROWS_THIS_BUILD = rows
+    return rows
+
+
+def _outcome_inputs_key() -> tuple:
+    """Everything the outcome window's derived results are a function of.
+
+    The log and the scoring snapshot (the D1 dimension) by mtime and size, the
+    machine settings (market timezone for the time buckets), and today's date,
+    which sets every window.
+    """
+    import held_run_score
+    from project_paths import LOCAL_SETTINGS_FILE
+
+    return (
+        _file_key(_outcome_log_path()),
+        _file_key(_scoring_snapshot_path()),
+        _file_key(Path(LOCAL_SETTINGS_FILE)),
+        held_run_score.window_bounds(),
+        date.today().isoformat(),
+    )
+
+
+def _held_run_summaries() -> Any:
+    import held_run_score
+
+    episodes = held_run_score.load_episodes(rows=_outcome_rows())
+    if not episodes:
+        return None
+    return held_run_score.dimension_summaries(episodes)
 
 
 def read_held_run_summaries() -> Any:
-    """`held_run_score.dimension_summaries` over the rolling window, or None."""
-    try:
-        import held_run_score
+    """`held_run_score.dimension_summaries` over the rolling window, or None.
 
-        episodes = held_run_score.load_episodes(rows=_outcome_rows())
-        if not episodes:
-            return None
-        return held_run_score.dimension_summaries(episodes)
+    Cached on `_outcome_inputs_key`; a missing log is never cached.
+    """
+    try:
+        return _cached_copy(
+            "held_run_summaries",
+            _outcome_inputs_key(),
+            _held_run_summaries,
+            keep=_outcome_log_path().is_file(),
+        )
     except Exception:  # noqa: BLE001 - the day-trade half is absent, not fatal
         logging.debug("Working-lately held-run read failed", exc_info=True)
         return None
@@ -161,17 +204,34 @@ def read_setup_grades(recent_rows: Any) -> dict[str, Any] | None:
         import setup_grades
 
         as_of = _last_completed_session().isoformat()
-        try:
-            swing_tape = read_swing_tape(_tracker_reference(recent_rows), as_of=as_of)
-        except Exception:  # noqa: BLE001 - tape and cum R are then unknown
-            logging.warning("Setup grades tape read failed", exc_info=True)
-            swing_tape = None
-        return setup_grades.build_payload(
-            recent_rows=recent_rows or (),
-            outcome_rows=_outcome_rows(),
-            as_of=as_of,
-            swing_tape=swing_tape,
+        reference = _tracker_reference(recent_rows)
+        tape_failed: list[bool] = []
+
+        def build() -> dict[str, Any]:
+            try:
+                swing_tape = read_swing_tape(reference, as_of=as_of)
+            except Exception:  # noqa: BLE001 - tape and cum R are then unknown
+                logging.warning("Setup grades tape read failed", exc_info=True)
+                swing_tape = None
+                tape_failed.append(True)
+            return setup_grades.build_payload(
+                recent_rows=recent_rows or (),
+                outcome_rows=_outcome_rows(),
+                as_of=as_of,
+                swing_tape=swing_tape,
+            )
+
+        key = (
+            _outcome_inputs_key(),
+            _tape_inputs_key(),
+            json.dumps(list(recent_rows or ()), sort_keys=True, default=str),
+            reference,
+            as_of,
         )
+        grades = _cached_copy("setup_grades", key, build, keep=_outcome_log_path().is_file())
+        if tape_failed:  # a failed tape read is retried next build, never kept
+            _LOOKING_BACK_CACHE.pop("setup_grades", None)
+        return grades
     except Exception:  # noqa: BLE001 - grades are presentation, never fatal
         logging.debug("Setup grades build failed", exc_info=True)
         return None
@@ -304,6 +364,11 @@ def _cached(name: str, key: Any, build, *, keep: bool = True) -> Any:
     else:
         _LOOKING_BACK_CACHE.pop(name, None)
     return value
+
+
+def _cached_copy(name: str, key: Any, build, *, keep: bool = True) -> Any:
+    """`_cached`, handing out a deep copy so no caller can edit the kept value."""
+    return copy.deepcopy(_cached(name, key, build, keep=keep))
 
 
 def _file_key(path: Path) -> tuple[str, int, int]:
@@ -491,10 +556,19 @@ def recent_m5_results() -> list[dict[str, Any]]:
     import looking_back
 
     window = looking_back.split_windows()["recent"]
-    return looking_back.m5_alert_results(
-        row
-        for row in (_outcome_rows() or ())
-        if looking_back.in_window(row.get("trade_date"), window)
+
+    def build() -> list[dict[str, Any]]:
+        return looking_back.m5_alert_results(
+            row
+            for row in (_outcome_rows() or ())
+            if looking_back.in_window(row.get("trade_date"), window)
+        )
+
+    return _cached_copy(
+        "recent_m5",
+        (_outcome_inputs_key(), tuple(window)),
+        build,
+        keep=_outcome_log_path().is_file(),
     )
 
 
@@ -751,8 +825,8 @@ class WorkingLatelyService(QObject):
     def build_payload(self) -> dict[str, Any]:
         """THE WORKER SIDE. Reads, builds, publishes, returns the payload.
 
-        The outcome window is streamed once and shared by held x ran and the
-        setup grades. The grades ride on the emitted dict under `setup_grades`
+        The outcome window is streamed at most once, and only when a reader's
+        cache missed; it is shared by held x ran, the grades and the recent M5. The grades ride on the emitted dict under `setup_grades`
         and in their own file; the persisted snapshot is unchanged.
         """
         global _SETUPS_THIS_BUILD
@@ -763,12 +837,11 @@ class WorkingLatelyService(QObject):
             _SETUPS_THIS_BUILD = None
 
     def _build_payload(self) -> dict[str, Any]:
-        global _OUTCOME_ROWS_THIS_BUILD
+        global _OUTCOME_ROWS_THIS_BUILD, _OUTCOME_BUILD_ACTIVE
+        # The log is read on first use by a reader whose cache missed; each
+        # reader reports its own absence.
+        _OUTCOME_BUILD_ACTIVE = True
         try:
-            try:
-                _OUTCOME_ROWS_THIS_BUILD = _outcome_rows()
-            except Exception:  # noqa: BLE001 - each reader reports its own absence
-                _OUTCOME_ROWS_THIS_BUILD = None
             recent_rows = read_recent_rows()
             snapshot = build_snapshot(
                 recent_rows=recent_rows,
@@ -784,6 +857,7 @@ class WorkingLatelyService(QObject):
                 logging.warning("Looking-back recent M5 read failed", exc_info=True)
                 recent_m5 = None
         finally:
+            _OUTCOME_BUILD_ACTIVE = False
             _OUTCOME_ROWS_THIS_BUILD = None
         # After the recent window's rows are freed: the prior stream never
         # holds both windows at once.
