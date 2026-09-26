@@ -9473,10 +9473,13 @@ class AlertCenterPanel(QFrame):
         elif row is None:
             message = f"✕ {symbol} (no longer on the board)"
         else:
-            passes, reason = focus_adoption_gate.passes_focus_adoption_gate(
-                side, row.get("last"), row.get("prev_high"), row.get("prev_low"),
-                row.get("session_vwap"),
+            # The same row gate as the automatic Movers feed (prior session checked).
+            import movers_notify
+
+            state, reason, _levels = movers_notify.row_level_gate(
+                row, side, str(board.get("as_of") or "")[:10]
             )
+            passes = state == focus_adoption_gate.OPEN
             if not passes:
                 message = f"✕ {symbol} ({reason})"
             else:
@@ -9501,9 +9504,104 @@ class AlertCenterPanel(QFrame):
         notice_signal = getattr(service, "moversNotice", None)
         if notice_signal is not None:
             notice_signal.connect(self.announce_movers)
+        adopt_signal = getattr(service, "moversAdopt", None)
+        if adopt_signal is not None:
+            adopt_signal.connect(self.adopt_movers_picks)
         board = service.board()
         if board:
             self.movers_board.update_board(board)
+
+    def adopt_movers_picks(self, payload: dict) -> None:
+        """New Movers names onto the M5 Focus AUTO lane (trader 2026-09-25).
+
+        Only a name whose level gate held on the bar (`passes`) is added: long
+        above the previous session's high and session VWAP, short below both.
+        "Not today" and a name taken off today are refused. Writes go through the
+        store plus an auto-pick marker (never `FocusService.add`, which would log
+        a trader "like"); an existing entry is never re-marked; nothing is removed.
+        Refusals are one log line; the `kind: adopt` rows are written off-thread.
+        """
+        candidates = [dict(c) for c in (payload or {}).get("candidates") or []
+                      if isinstance(c, dict)]
+        if not candidates:
+            return
+        store = getattr(self.focus_service, "store", None)
+        declined_today = getattr(store, "declined_today", None)
+        wanted: dict[str, list[dict]] = {"long": [], "short": []}
+        for cand in candidates:
+            symbol, side = str(cand.get("symbol") or "").upper(), cand.get("side")
+            taken_off = False
+            if callable(declined_today):
+                try:
+                    taken_off = bool(declined_today(symbol, side, "m5"))
+                except Exception:
+                    taken_off = False
+            if not cand.get("passes"):
+                cand["result"] = f"gated: {cand.get('gate_reason') or cand.get('gate')}"
+            elif not SYMBOL_RE.fullmatch(symbol):
+                cand["result"] = "refused: not a ticker"
+            elif store is None:
+                cand["result"] = "refused: no Focus store"
+            elif symbol in self._ignored_symbols:
+                cand["result"] = "refused: you said not today"
+            elif taken_off:
+                cand["result"] = "refused: you took it off today"
+            elif side in wanted and all(c["symbol"] != symbol for c in wanted[side]):
+                wanted[side].append(cand)
+            else:
+                cand["result"] = "refused: duplicate"
+        for side, group in wanted.items():
+            if not group:
+                continue
+            try:
+                added = set(store.add_many([c["symbol"] for c in group], side, "m5"))
+            except Exception:
+                logging.warning("Movers could not add names to M5 Focus.", exc_info=True)
+                for cand in group:
+                    cand["result"] = "refused: add failed"
+                continue
+            marker_writer = getattr(store, "mark_auto_adopted", None)
+            for cand in group:
+                if cand["symbol"] not in added:
+                    cand["result"] = "already in M5 Focus"
+                    continue
+                cand["result"] = "adopted"
+                if callable(marker_writer):
+                    try:
+                        marker_writer(cand["symbol"], side, "m5", staged_at=str(cand.get("bar") or ""),
+                                      reason=f"Movers {cand.get('label')} {side}: {cand.get('gate_reason')}")
+                    except Exception:
+                        logging.warning("Movers could not mark %s auto-adopted.", cand["symbol"],
+                                        exc_info=True)
+        refused = [f"{c['symbol']} {c['side']} ({c['result']})" for c in candidates
+                   if c.get("result") not in ("adopted", "already in M5 Focus")]
+        if refused:
+            logging.info("Movers M5 watch: not added: %s", "; ".join(refused))
+        self._write_movers_adopt_rows(payload, candidates)
+
+    def _write_movers_adopt_rows(self, payload: dict, candidates: list[dict]) -> None:
+        """Append the `kind: adopt` rows on a daemon thread (never the Qt thread)."""
+        import threading
+        from pathlib import Path
+
+        import movers_notify
+        import movers_outcomes
+
+        paths = (payload or {}).get("log_paths") or {}
+        rows = movers_notify.adopt_records(candidates, at=str((payload or {}).get("at") or ""))
+        by_path: dict[str, list[dict]] = {}
+        for row in rows:
+            path = paths.get(movers_notify.LOG_FOR_LIST.get(str(row.get("list")), "dip"))
+            if path:
+                by_path.setdefault(str(path), []).append(row)
+
+        def write() -> None:
+            for path, chunk in by_path.items():
+                movers_outcomes.append_records(Path(path), chunk)
+
+        thread = threading.Thread(target=write, name="movers-adopt-log", daemon=True)
+        self._movers_adopt_log_thread = thread
+        thread.start()
 
     def announce_movers(self, notice: dict) -> None:
         """A DESK Movers notice: the Alert Center's beep (same checkbox and mode

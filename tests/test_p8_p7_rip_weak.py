@@ -342,7 +342,10 @@ def test_plus_focus_on_a_rip_only_row_goes_through_the_gate(tmp_path, app):
     panel = AlertCenterPanel(review_events_path=tmp_path / "events.jsonl")
     panel.focus_service = Focus()
     board = _rally_widget_board()
+    # P8 P8 review: +F uses the auto feed's row gate, so the prior session must be
+    # the previous NY session (09-21 before 09-22).
     board["rip"]["short"][0].update(last=95.0, prev_high=101.0, prev_low=97.0,
+                                    prev_session="2026-09-21",
                                     session_vwap=96.0)
     panel.movers_board.update_board(board)
     panel.movers_board.flush_pending_refresh()
