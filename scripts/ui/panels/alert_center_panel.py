@@ -1387,7 +1387,8 @@ class AlertCenterPanel(
                 symbol=alert.symbol,
                 side=alert.side,
                 tier=extract_alert_tier(alert),
-                is_proven=is_proven_alert(alert),
+                # P14: a bypass-graded row keeps the open-burst escape PROVEN had.
+                is_proven=is_proven_alert(alert) or self._alert_grade_bypass(alert),
                 privileged=privileged,
             )
         except Exception:

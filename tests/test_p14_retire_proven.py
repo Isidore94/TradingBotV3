@@ -180,3 +180,21 @@ def test_no_grades_loaded_means_no_bypass(s_only_panel):
     s_only_panel.add_alert(_alert("BEE", "beetype", "C"))
     s_only_panel.add_alert(_alert("ESS", "beetype", "S"))
     assert _feed_symbols(s_only_panel) == {"ESS"}
+
+
+def test_a_bypass_graded_row_escapes_the_open_burst_digest(s_only_panel, monkeypatch):
+    # Before P14 a PROVEN row got its own row and sound inside the open digest window;
+    # the grade that replaced the stamp must keep that (reviewer blocker, 2026-09-26).
+    seen = {}
+    ledger = s_only_panel._repetition_ledger()
+    original = ledger.consider
+
+    def spy(**kwargs):
+        seen[kwargs["symbol"]] = kwargs["is_proven"]
+        return original(**kwargs)
+
+    monkeypatch.setattr(ledger, "consider", spy)
+    s_only_panel.set_setup_grades(_grades_payload({"beetype": "B", "ceetype": "C"}))
+    s_only_panel._repetition_decision(_alert("BEE", "beetype", "C"), is_focus=False)
+    s_only_panel._repetition_decision(_alert("CEE", "ceetype", "C"), is_focus=False)
+    assert seen == {"BEE": True, "CEE": False}
