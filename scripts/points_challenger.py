@@ -399,6 +399,18 @@ def saturday_lines(trial: Mapping[str, Any] | None) -> list[str]:
     return lines
 
 
+def with_sp4(rows: Iterable[Mapping[str, Any]], evidence: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Copies of ``rows`` in the SAME order with ``sp4_score`` added ("" when unknown).
+
+    The input rows and their order are never changed: the live sort is the caller's.
+    """
+    out = []
+    for row in rows:
+        points = sp4_points(row, evidence)
+        out.append({**row, "sp4_score": "" if points is None else points})
+    return out
+
+
 def chip_text(evidence: Mapping[str, Any] | None) -> str:
     """The Setup Tracker's SP4 chip: what the shadow column is and its biggest moves."""
     evidence = evidence or {}

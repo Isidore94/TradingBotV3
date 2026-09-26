@@ -270,7 +270,7 @@
       }
     ]
   },
-  "intentional_difference": "",
+  "intentional_difference": "APPROVED CHANGE (S12, 2026-09-26, lead brief: a shadow SP4 column on the Setup Tracker). ADDITIVE ONLY: current_table gains one column, 'SP4 (shadow)', directly after Score; with no family evidence file it equals the live score. No other cell, row, column or row order moved. Hand-edited, not regenerated.",
   "numeric_tolerance": 0.0,
   "provider_assumptions": "none - the rows are written to CSVs in tmp_path and read back through the panel's own reader; no network, no live store",
   "raw_input_keys": [
@@ -349,6 +349,7 @@
         "NVDA",
         "LONG",
         "88.40",
+        "88.40",
         "avwap_second_deviation_reclaim_with_volume_expansion_and_earnings_anchor",
         "above_2nd_dev",
         "above_1st_dev",
@@ -360,6 +361,7 @@
         "A",
         "AMD",
         "SHORT",
+        "71.20",
         "71.20",
         "avwap_breakdown",
         "below_1st_dev",
