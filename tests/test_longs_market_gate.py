@@ -238,3 +238,79 @@ def test_hidden_longs_are_still_recorded_with_the_reason(panel, tmp_path):
         if row.get("action") == "hidden_by_show"
     ]
     assert [(row["symbol"], row["detail"]["reason"]) for row in rows] == [("BEE", "longs_off")]
+
+
+# --------------------------------------------------------------------------- swing table
+def _swing_rows():
+    from ui.models.setup import SetupRow
+
+    return [
+        SetupRow(symbol="AAA", side="LONG", score=90.0),
+        SetupRow(symbol="BBB", side="SHORT", score=80.0),
+        SetupRow(symbol="FOC", side="LONG", score=70.0),  # a Focus name
+        SetupRow(symbol="TYPED", side="LONG", score=60.0),  # in longs.txt
+        SetupRow(symbol="HELD", side="LONG", score=50.0),  # an open position
+        SetupRow(symbol="LPB", side="LONG", score=40.0, raw={"setup_family": "leader_pullback"}),
+        SetupRow(symbol="PED", side="LONG", score=30.0, raw={"setup_family": "post_earnings_drift"}),
+    ]
+
+
+def test_the_swing_proxy_hides_only_unexempt_longs():
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    import longs_market_gate as g
+    from ui.models.setup_table_model import SetupFilterProxyModel, SetupTableModel
+
+    model = SetupTableModel()
+    model.set_rows(_swing_rows())
+    proxy = SetupFilterProxyModel()
+    proxy.setSourceModel(model)
+
+    def visible():
+        return [model.row_at(proxy.mapToSource(proxy.index(r, 0)).row()).symbol for r in range(proxy.rowCount())]
+
+    everything = ["AAA", "BBB", "FOC", "TYPED", "HELD", "LPB", "PED"]
+    assert visible() == everything, "the bare proxy hides nothing"
+    proxy.set_filters(longs_gate=_off(opens=("HELD",)),
+                      longs_exempt=lambda row: row.symbol in {"FOC", "TYPED"})
+    assert visible() == ["BBB", "FOC", "TYPED", "HELD", "LPB", "PED"]
+    assert proxy.hidden_longs() == 1
+    proxy.set_filters(min_score=0.0)  # a partial call keeps the gate
+    assert "AAA" not in visible()
+    proxy.set_filters(longs_gate=g.Verdict(day=date.today().isoformat()))  # unknown shows
+    assert visible() == everything
+    proxy.set_filters(longs_gate=None)  # switch off
+    assert visible() == everything
+    assert len(model.rows()) == 7, "hidden, never deleted"
+
+
+def test_the_swing_panel_switch_and_banner(env, tmp_path, monkeypatch):  # noqa: F811
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    import chart_snapshot
+    import longs_market_gate as g
+    from ui.panels.master_avwap_panel import MasterAvwapPanel
+
+    g.clear_cache()
+    monkeypatch.setattr(chart_snapshot, "load_d1_bars", lambda _s: [])
+    panel = MasterAvwapPanel(None, review_events_path=tmp_path / "events.jsonl")
+    try:
+        panel.set_rows(_swing_rows())
+        assert panel.longs_off_toggle.isChecked() is True
+        assert panel.proxy.rowCount() == 7, "no verdict yet = unknown = shows"
+        panel.set_longs_gate(_off(opens=("HELD",)))
+        visible = {panel._row_at_proxy(r).symbol for r in range(panel.proxy.rowCount())}
+        assert visible == {"BBB", "TYPED", "HELD", "LPB", "PED"}  # no Focus service here
+        assert panel.longs_off_banner_text() == "Longs off: SPY is under its 20-day (since 2026-09-14)"
+        assert "(2)" in panel.longs_off_toggle.text()
+        panel.longs_off_toggle.setChecked(False)
+        assert env[g.SETTING] is False
+        assert panel.proxy.rowCount() == 7
+        assert panel.longs_off_banner_text() == ""
+    finally:
+        panel.close()
+        g.clear_cache()
