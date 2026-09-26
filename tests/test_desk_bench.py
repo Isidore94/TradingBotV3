@@ -577,3 +577,111 @@ def test_the_allowlist_no_longer_names_a_settings_file_that_is_never_there():
         "the home-folder root holds no local_settings.json; the real one is "
         "machine-local and is carried by machine_settings_seed"
     )
+
+
+# ---------------------------------------------------------------------------
+# A1 (2026-09-25) - the live-session surfaces: Alert Center, Working lately,
+# the M5 chart and the Movers board
+# ---------------------------------------------------------------------------
+A1_PANELS = ("alert_center", "working_lately", "m5_chart", "movers_board")
+
+
+def test_the_live_session_surfaces_are_registered_and_selectable():
+    assert set(A1_PANELS) <= set(desk_bench.PANEL_NAMES)
+    args = desk_bench.build_parser().parse_args(["--data-dir", "x", "--panels", *A1_PANELS])
+    assert tuple(args.panels) == A1_PANELS
+    assert "data/runtime/master_avwap_tracker_scoring_snapshot.json" in desk_bench.STAGE_ALLOWLIST
+
+
+def test_synthetic_alerts_are_mixed_and_mostly_repeats():
+    specs = desk_bench.synthetic_alert_specs(1000)
+    assert len(specs) == 1000
+    symbols = {spec["symbol"] for spec in specs}
+    assert len(symbols) <= 60
+    assert 1 - len({(s["symbol"], s["side"]) for s in specs}) / 1000 > 0.8
+    tiers = {spec["raw_text"][1] for spec in specs}
+    assert tiers == {"S", "A", "B", "C"}
+    assert any("PROVEN" in spec["raw_text"] for spec in specs)
+    assert {spec["side"] for spec in specs} == {"LONG", "SHORT"}
+    assert desk_bench.synthetic_alert_specs(50) == desk_bench.synthetic_alert_specs(50)
+
+
+def test_synthetic_m5_bars_are_well_formed_and_in_order():
+    bars = desk_bench.synthetic_m5_bars(400)
+    assert len(bars) == 400
+    for bar in bars:
+        assert bar["low"] <= min(bar["open"], bar["close"]) <= max(bar["open"], bar["close"]) <= bar["high"]
+    stamps = [bar["dt"] for bar in bars]
+    assert stamps == sorted(stamps) and len(set(stamps)) == 400
+    assert all(stamp.weekday() < 5 for stamp in stamps)
+
+
+def test_synthetic_movers_board_has_the_row_count():
+    board = desk_bench.synthetic_movers_board(60, variant=3)
+    assert len(board["pop"]["long"]) + len(board["pop"]["short"]) == 60
+
+
+def test_per_item_ops_are_named_by_their_count():
+    assert desk_bench.op_item_count("alert_center.add_alert[1000]") == 1000
+    assert desk_bench.op_item_count("market_journal.entry[3]") == 0
+    reading = desk_bench.OpReading(
+        op="alert_center.add_alert[100]", size="1x1", sync_ms=250.0,
+        settle_ms=300.0, longest_iteration_ms=10.0, settled=True,
+    )
+    row = desk_bench._aggregate([reading])[0]
+    assert row["per_item_ms"]["p50"] == pytest.approx(2.5)
+    assert "per item: alert_center.add_alert[100]" in desk_bench.format_ops_table([row])
+
+
+def _run(panels):
+    return desk_bench.run_bench(
+        sizes=[(1920, 1080)], repeat=1, deadline_s=5.0, panel_names=panels, record_screens=False,
+    )
+
+
+@pytest.mark.qt
+def test_the_chart_and_movers_benches_run_end_to_end(monkeypatch):
+    monkeypatch.setattr(desk_bench, "M5_CHART_BARS", 120)
+    monkeypatch.setattr(desk_bench, "M5_CHART_REDRAWS", 2)
+    monkeypatch.setattr(desk_bench, "MOVERS_BOARD_SETS", 2)
+    payload = _run(("m5_chart", "movers_board"))
+    rows = {row["op"]: row for row in payload["ops"]}
+    assert rows["m5_chart.redraw[120]"]["samples"] == 2
+    assert rows["movers_board.update_board[60]"]["samples"] == 2
+    assert all(not row["errors"] for row in payload["ops"]), payload["ops"]
+    assert payload["fit"] == []  # widgets, not pages
+    assert payload["skipped"] == []
+
+
+@pytest.mark.qt
+def test_the_alert_center_bench_feeds_add_alert_and_folds_repeats(monkeypatch):
+    from ui.panels.alert_center_panel import AlertCenterPanel
+
+    folds: list[str] = []
+    real_fold = AlertCenterPanel._fold_into_existing_row
+
+    def counting_fold(self, alert, decision):
+        folds.append(alert.symbol)
+        return real_fold(self, alert, decision)
+
+    monkeypatch.setattr(AlertCenterPanel, "_fold_into_existing_row", counting_fold)
+    monkeypatch.setattr(AlertCenterPanel, "_alerts_may_sound", lambda self: False)
+    monkeypatch.setattr(desk_bench, "ALERT_BURSTS", (5, 40))
+    payload = _run(("alert_center",))
+    assert payload["skipped"] == []
+    rows = {row["op"]: row for row in payload["ops"]}
+    for op in ("alert_center.construct", "alert_center.show",
+               "alert_center.add_alert[5]", "alert_center.add_alert[40]"):
+        assert op in rows and not rows[op]["errors"], rows.get(op)
+    assert rows["alert_center.add_alert[40]"]["items"] == 40
+    assert folds, "the repeats never reached the fold path"
+
+
+@pytest.mark.qt
+def test_the_working_lately_bench_times_the_build_not_a_widget():
+    payload = _run(("working_lately",))
+    assert payload["skipped"] == []
+    rows = {row["op"]: row for row in payload["ops"]}
+    for op in ("working_lately.build_payload", "working_lately.read_inputs",
+               "working_lately.build_snapshot"):
+        assert op in rows and not rows[op]["errors"], rows.get(op)
