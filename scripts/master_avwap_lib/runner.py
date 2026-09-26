@@ -14,6 +14,7 @@ from . import legacy as _legacy
 from .d1_zone_arms import build_d1_zone_arms
 from .setup_tagging import apply_setup_tag_payload, canonicalize_priority_setup_tags
 from master_avwap_shared import build_active_bounce_summary, load_master_avwap_events_for_date
+from long_setups_store import publish_long_setups
 from setup_permutation_context import load_market_caps as load_permutation_market_caps
 from setup_permutation_context import load_trader_regime as load_permutation_trader_regime
 from setup_permutation_context import stamp_scan_rows as stamp_permutation_scan_rows
@@ -912,6 +913,27 @@ def _permutation_completed_bars(frame, completed_through) -> list[dict]:
     return bars
 
 
+def _long_setup_bars(frame, completed_through) -> list[dict]:
+    """One symbol's completed OHLCV bars up to ``completed_through`` for `long_setups`; empty when unknown."""
+    columns = ("open", "high", "low", "close")
+    if not completed_through or not isinstance(frame, pd.DataFrame) or frame.empty \
+            or not {"datetime", *columns} <= set(frame.columns):
+        return []
+    volumes = frame["volume"] if "volume" in frame.columns else [None] * len(frame)
+    bars = []
+    for stamp, open_, high, low, close, volume in zip(
+            frame["datetime"], *(frame[column] for column in columns), volumes):
+        if pd.isna(stamp) or stamp.date().isoformat() > completed_through:
+            continue
+        bars.append({
+            "date": stamp.date().isoformat(),
+            **{column: None if pd.isna(value) else float(value)
+               for column, value in zip(columns, (open_, high, low, close), strict=True)},
+            "volume": None if volume is None or pd.isna(volume) else float(volume),
+        })
+    return bars
+
+
 def _run_master_impl(
     longs_path: Path | None = None,
     shorts_path: Path | None = None,
@@ -1093,6 +1115,8 @@ def _run_master_impl(
     }
     # Per-symbol D1 band-zone arms (M5 bounce/break rubric) for every scanned name.
     d1_zone_arms: dict[str, dict] = {}
+    # p9 long setups: each name's latest earnings gap, read from its release context.
+    long_setup_earnings: dict[str, dict] = {}
     stdev_range_hits = {"long": [], "short": []}
     stdev_cross_hits = {"long": [], "short": []}
     ai_state = {
@@ -1396,6 +1420,9 @@ def _run_master_impl(
             df,
             latest_release_map.get(sym),
         )
+        long_setup_earnings[sym] = {
+            key: latest_release_context.get(key) for key in ("gap_date", "gap_is_up", "gap_atr_multiple")
+        }
         latest_known_earnings_context = _build_latest_known_earnings_context(
             df,
             latest_release_map.get(sym),
@@ -3223,6 +3250,7 @@ def _run_master_impl(
         logging.debug("Setup permutation S15 columns skipped for this scan.", exc_info=True)
 
     # S15 item 2: the market regime (the trader's label, SPY vs a rising 20-day, breadth); appended, never scored.
+    spy_frame = None
     try:
         spy_frame = fetch_daily_bars(ib, "SPY", D1_ENVIRONMENT_FETCH_DAYS)
         permutation_regime_columns(
@@ -3235,6 +3263,29 @@ def _run_master_impl(
         )
     except Exception:
         logging.debug("Setup permutation regime columns skipped for this scan.", exc_info=True)
+
+    # p9 long setups: leader pullbacks and the post-earnings drift, to their own file; reads, never edits, a row.
+    try:
+        publish_long_setups(
+            bars_by_symbol={
+                str(symbol).strip().upper(): _long_setup_bars(frame, completed_through)
+                for symbol, frame in (daily_frames_by_symbol or {}).items()
+            },
+            spy_bars=_long_setup_bars(spy_frame, completed_through),
+            feature_rows=feature_rows,
+            earnings_by_symbol=long_setup_earnings,
+            atr_by_symbol={
+                str(symbol).strip().upper(): (state or {}).get("atr20")
+                for symbol, state in (ai_state.get("symbols") or {}).items()
+            },
+            sector_by_symbol={
+                str(symbol).strip().upper(): (context or {}).get("sector")
+                for symbol, context in (industry_context_by_symbol or {}).items()
+            },
+            as_of=completed_through,
+        )
+    except Exception:
+        logging.warning("Long setups skipped for this scan.", exc_info=True)
 
     # P1-4 4a: stamp the shadow permutation key last, after every enricher; never fails the scan.
     try:
