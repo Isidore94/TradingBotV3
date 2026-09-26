@@ -26,6 +26,10 @@ SP4 rules, fixed 2026-09-26 (GATES #276):
 * Downside stop: SP4 trails the champion by more than 0.5% excess once 10 entry
   sessions have matured.
 * Rollback: delete the SP4 column (and chip, and Saturday line). Nothing else reads it.
+* S16 (2026-09-26): the evidence also carries each structural regime's own cells
+  (every scan date of that regime up to the night). SP4 reads the current regime's
+  cell when it meets the same n / sessions gates, else the pooled cell, and the
+  chip says how many fell back. Each night's adjust history records what was read.
 * Promotion to the live points is ask-first (`master_avwap_lib/legacy.py`), needs
   golden fixtures and the trader's quoted yes.
 """
@@ -106,10 +110,56 @@ def family_adjust(cell: Mapping[str, Any] | None) -> float:
     return round(max(-ADJUST_CLAMP, min(ADJUST_CLAMP, raw)), 1)
 
 
+#: What an SP4 adjust read from the pooled cell says (S16).
+ALL_REGIMES = "all regimes"
+
+
+def _meets_gates(cell: Mapping[str, Any] | None) -> bool:
+    cell = cell or {}
+    return int(_num(cell.get("n")) or 0) >= MIN_N and int(_num(cell.get("sessions")) or 0) >= MIN_SESSIONS
+
+
+def effective_cell(
+    side: Any, family: Any, evidence: Mapping[str, Any] | None
+) -> tuple[Mapping[str, Any] | None, str]:
+    """``(cell, basis)``: the current regime's cell when it meets the n / sessions
+    gates (S16), else the pooled cell with basis ``all regimes``.
+
+    ``evidence["current_regime"]`` is the trader's regime on the night's as-of
+    date; ``families_by_regime`` holds each regime's own cells. Evidence without
+    them (before S16) reads the pooled cell exactly as before.
+    """
+    evidence = evidence or {}
+    key = family_key(side, family)
+    cells = evidence.get("families") or {}
+    pooled = cells.get(key) if isinstance(cells, Mapping) else None
+    pooled = pooled if isinstance(pooled, Mapping) else None
+    regime = str(evidence.get("current_regime") or "")
+    by_regime = evidence.get("families_by_regime") or {}
+    if regime and isinstance(by_regime, Mapping):
+        regime_cells = by_regime.get(regime) or {}
+        cell = regime_cells.get(key) if isinstance(regime_cells, Mapping) else None
+        if isinstance(cell, Mapping) and _meets_gates(cell):
+            return cell, regime
+    return pooled, ALL_REGIMES
+
+
 def adjust_for(side: Any, family: Any, evidence: Mapping[str, Any] | None) -> float:
-    cells = (evidence or {}).get("families") or {}
-    cell = cells.get(family_key(side, family)) if isinstance(cells, Mapping) else None
-    return family_adjust(cell) if isinstance(cell, Mapping) else 0.0
+    cell, _basis = effective_cell(side, family, evidence)
+    return family_adjust(cell) if cell is not None else 0.0
+
+
+def regime_basis(evidence: Mapping[str, Any] | None) -> dict[str, str]:
+    """``{SIDE|family: basis}`` for every family the evidence has a cell for."""
+    evidence = evidence or {}
+    keys = set((evidence.get("families") or {}).keys())
+    regime = str(evidence.get("current_regime") or "")
+    keys |= set(((evidence.get("families_by_regime") or {}).get(regime) or {}).keys()) if regime else set()
+    out = {}
+    for key in sorted(keys):
+        side, _, family = key.partition("|")
+        out[key] = effective_cell(side, family, evidence)[1]
+    return out
 
 
 def sp4_points(row: Mapping[str, Any], evidence: Mapping[str, Any] | None) -> float | None:
@@ -417,16 +467,29 @@ def chip_text(evidence: Mapping[str, Any] | None) -> str:
     cells = evidence.get("families") or {}
     if not isinstance(cells, Mapping) or not cells:
         return "SP4 (shadow): no family evidence yet - the column shows the live score."
+    basis = regime_basis(evidence)
     moved = sorted(
-        ((family_adjust(cell), key) for key, cell in cells.items()
-         if isinstance(cell, Mapping) and family_adjust(cell)),
+        ((adjust, key) for key in basis
+         if (adjust := adjust_for(*key.split("|", 1), evidence))),
         key=lambda item: (-abs(item[0]), item[1]),
     )
     tops = ", ".join(
         f"{key.split('|', 1)[1]} {key.split('|', 1)[0]} {adjust:+.0f}" for adjust, key in moved[:4]
     ) or "no family past the n >= 80 / 15-session floor"
     window = evidence.get("window") or {}
-    return (
+    text = (
         f"SP4 (shadow, as of {evidence.get('as_of') or '?'}, {window.get('sessions', '?')} sessions): "
         f"live score + family adjust. Biggest: {tops}. The live sort, buckets and alerts are unchanged."
     )
+    regime = str(evidence.get("current_regime") or "")
+    if regime:
+        label = str(evidence.get("current_regime_label") or regime.replace("_", " "))
+        in_regime = sum(1 for value in basis.values() if value == regime)
+        fell_back = len(basis) - in_regime
+        text += (
+            f" Regime {label}: {in_regime} famil{'y' if in_regime == 1 else 'ies'} read this regime's cells; "
+            f"{fell_back} fell back to {ALL_REGIMES} (under n {MIN_N} / {MIN_SESSIONS} sessions in this regime)."
+        )
+    elif "current_regime" in evidence:
+        text += f" No regime typed: every family reads {ALL_REGIMES}."
+    return text

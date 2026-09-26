@@ -343,3 +343,68 @@ def test_the_setup_tracker_has_a_by_regime_tab_that_only_formats(qapp):
     finally:
         panel.shutdown()
         panel.deleteLater()
+
+
+# ---------------------------------------------------------------- SP4 (shadow) per regime
+
+_POOLED = {"n": 200, "sessions": 30, "beat_low_h5": 0.60, "mean_move_atr_h10": 0.5}  # adjust +16
+_BEAR_OK = {"n": 90, "sessions": 16, "beat_low_h5": 0.40, "mean_move_atr_h10": -0.5}  # adjust -16
+_BEAR_THIN = {"n": 40, "sessions": 8, "beat_low_h5": 0.10, "mean_move_atr_h10": -2.0}
+
+
+def _evidence(bear_cell, regime="bear_channel_lower_highs"):
+    return {
+        "families": {"LONG|alpha": _POOLED},
+        "current_regime": regime,
+        "current_regime_label": "bear channel, lower highs",
+        "families_by_regime": {"bear_channel_lower_highs": {"LONG|alpha": bear_cell}},
+    }
+
+
+def test_sp4_reads_the_current_regimes_cell_when_its_gates_are_met():
+    import points_challenger as pc
+
+    cell, basis = pc.effective_cell("LONG", "alpha", _evidence(_BEAR_OK))
+    assert basis == "bear_channel_lower_highs" and cell is _BEAR_OK
+    assert pc.adjust_for("LONG", "alpha", _evidence(_BEAR_OK)) == -16.0
+    assert pc.sp4_points({"priority_score": 50, "side": "LONG", "setup_family": "alpha"},
+                         _evidence(_BEAR_OK)) == 34.0
+
+
+def test_sp4_falls_back_to_all_regimes_and_says_so():
+    import points_challenger as pc
+
+    evidence = _evidence(_BEAR_THIN)
+    cell, basis = pc.effective_cell("LONG", "alpha", evidence)
+    assert basis == pc.ALL_REGIMES and cell is _POOLED
+    assert pc.adjust_for("LONG", "alpha", evidence) == 16.0
+    chip = pc.chip_text(evidence)
+    assert "Regime bear channel, lower highs: 0 families read this regime's cells; " \
+           "1 fell back to all regimes (under n 80 / 15 sessions in this regime)." in chip
+    # A family with no cell in this regime at all falls back too.
+    assert pc.effective_cell("LONG", "alpha", _evidence(_BEAR_OK, regime="range"))[1] == pc.ALL_REGIMES
+    # Evidence written before S16 reads the pooled cell exactly as before.
+    assert pc.adjust_for("LONG", "alpha", {"families": {"LONG|alpha": _POOLED}}) == 16.0
+
+
+def test_the_night_writes_per_regime_cells_and_records_what_sp4_read():
+    from ai_jobs import family_side_evidence as fse
+    from tests.test_s12_points_challenger import AS_OF, ATR, SPY, fixture_rows
+
+    segments = rj.timeline([
+        {"segment_id": 1, "start_date": "2026-07-01", "regime": "range"},
+        {"segment_id": 2, "start_date": "2026-08-02", "regime": "bear_channel_lower_highs"},
+    ])
+    payload = fse.build_payload(fixture_rows(16), SPY, ATR, {}, [], {}, None, as_of=AS_OF, segments=segments)
+    assert payload["current_regime"] == "bear_channel_lower_highs"
+    bear = payload["families_by_regime"]["bear_channel_lower_highs"]["SHORT|alpha"]
+    pooled = payload["families"]["SHORT|alpha"]
+    assert (bear["n"], bear["sessions"]) == (90, 15)  # 08-02..08-16 only, never pooled
+    assert (pooled["n"], pooled["sessions"]) == (96, 16)
+    assert payload["families_by_regime"]["range"]["SHORT|alpha"]["n"] == 6
+    assert payload["regime_basis"]["SHORT|alpha"] == "bear_channel_lower_highs"
+    assert payload["adjust_history"][AS_OF]["SHORT|alpha"] == bear["adjust"]
+    # Without a typed regime the file is what S12 wrote.
+    plain = fse.build_payload(fixture_rows(16), SPY, ATR, {}, [], {}, None, as_of=AS_OF)
+    assert plain["current_regime"] == "" and plain["families_by_regime"] == {}
+    assert plain["adjust_history"][AS_OF] == {k: c["adjust"] for k, c in plain["families"].items()}
