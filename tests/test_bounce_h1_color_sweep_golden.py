@@ -119,8 +119,51 @@ def _run(fixture, monkeypatch) -> dict:
     }
 
 
-def test_h1_color_sweep_golden_fixture(monkeypatch):
+BLUE_AFTER_RED = "h1_blue_after_red"
+
+
+def _is_blue_after_red(record) -> bool:
+    """BLUE's only hit is blue_after_red (pinned below), so its rows are that type's."""
+    return record.get("symbol") == "BLUE" or record.get("event_id", "").startswith("BLUE_")
+
+
+def test_the_frozen_golden_still_carries_every_colour_type():
+    """The fixture was frozen before S10a, so it must hold blue_after_red rows
+    for the drop below to prove anything."""
     fixture = load_fixture_contract(FIXTURE_NAME)
     assert fixture.schema == "h1_color_sweep_v1"
+    expected = fixture["expected"]
+    assert {hit["type"] for hit in expected["hits"]} == {
+        BLUE_AFTER_RED,
+        "h1_ema10_bounce",
+        "h1_green_to_yellow",
+    }
+    assert [r["call"] for r in expected["records"] if _is_blue_after_red(r)] == [
+        "candidate_event",
+        "register_outcome",
+        "alert_tier",
+        "log_symbol",
+    ]
+
+
+def test_blue_after_red_is_no_longer_recorded_and_the_rest_is_unchanged(monkeypatch):
+    """S10a (trader 2026-09-26, "Yes stop recording"): the sweep writes no
+    blue_after_red candidate, outcome or tier row; every other row is identical
+    to the pre-change golden."""
+    fixture = load_fixture_contract(FIXTURE_NAME)
+    expected = fixture["expected"]
     actual = _run(fixture, monkeypatch)
-    assert actual == fixture["expected"]
+
+    assert actual["hits"] == [hit for hit in expected["hits"] if hit["type"] != BLUE_AFTER_RED]
+    assert actual["records"] == [r for r in expected["records"] if not _is_blue_after_red(r)]
+    assert not any(_is_blue_after_red(r) for r in actual["records"])
+
+
+def test_detection_still_emits_blue_after_red(monkeypatch):
+    """Only the sweep skips it; the pure detector is unchanged."""
+    from bounce_bot_lib.legacy import H1_COLOR_TYPES_OFF, detect_h1_color_signals
+
+    assert H1_COLOR_TYPES_OFF == frozenset({BLUE_AFTER_RED})
+    fixture = load_fixture_contract(FIXTURE_NAME)
+    hits = detect_h1_color_signals(_to_ib(fixture["cases"]["BLUE"]), "long")
+    assert [hit["type"] for hit in hits] == [BLUE_AFTER_RED]

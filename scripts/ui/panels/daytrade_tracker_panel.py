@@ -180,6 +180,19 @@ DECISION_PERCENT_KEYS = {"take_rate"}
 DECISION_SIGNED_KEYS = {"taken_r", "passed_r", "gap"}
 
 
+#: Bounce types the desk no longer records, with the day recording stopped. Their
+#: history stays on disk; the family row says why no new rows arrive.
+RECORDING_OFF_SINCE = {"h1_blue_after_red": "2026-09-26"}
+
+
+def recording_off_text(dimension: str, segment: str) -> str:
+    """'off since <day>' for a bounce-type family that is no longer recorded, else ''."""
+    if str(dimension or "").strip() != "bounce_type":
+        return ""
+    since = RECORDING_OFF_SINCE.get(str(segment or "").strip())
+    return f"off since {since}" if since else ""
+
+
 def _probation_types() -> frozenset[str]:
     """The M5 signal engines, which are on probation and not champions.
 
@@ -696,7 +709,8 @@ class DaytradeTrackerPanel(QFrame):
                         "score_delta": entry.get("score_delta"),
                         "stop_rate": entry.get("stop_rate"),
                         "target_1r_rate": entry.get("target_1r_rate"),
-                        "status": "MUTED" if muted else ("PROVEN" if proven else "active"),
+                        "status": recording_off_text(dimension, segment)
+                        or ("MUTED" if muted else ("PROVEN" if proven else "active")),
                     }
                 )
         status_order = {"PROVEN": 0, "MUTED": 1, "active": 2}
@@ -1028,6 +1042,7 @@ def apply_champion_tier(rows, state) -> list[dict]:
             row["champion_tier"] = "PROVEN"
         else:
             row["champion_tier"] = "active"
+        row["champion_tier"] = recording_off_text(dimension, segment) or row["champion_tier"]
         out.append(row)
     return out
 
