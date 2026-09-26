@@ -2497,9 +2497,13 @@ def install_qt_message_rate_limit() -> None:
     than no diagnostic.
     """
     try:
-        from PySide6.QtCore import qInstallMessageHandler
+        from PySide6.QtCore import QtMsgType, qInstallMessageHandler
     except Exception:  # pragma: no cover - PySide6 is a hard dependency
         return
+    import crash_log
+
+    fatal = QtMsgType.QtFatalMsg
+    critical = QtMsgType.QtCriticalMsg
 
     def handler(mode, context, message) -> None:
         try:
@@ -2507,6 +2511,11 @@ def install_qt_message_rate_limit() -> None:
             with _qt_message_lock:
                 seen = _qt_message_counts.get(key, 0)
                 _qt_message_counts[key] = seen + 1
+            # Qt fast-fails the process after a fatal message (no faulthandler
+            # dump on Windows), so the timed line in gui_crash.log is all that's left.
+            if mode == fatal or (mode == critical and seen == 0):
+                kind = "fatal" if mode == fatal else "critical"
+                crash_log.note(f"Qt {kind}: {message}")
             if seen == 0:
                 sys.stderr.write(f"{message}\n")
         except Exception:
