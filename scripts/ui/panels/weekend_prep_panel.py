@@ -2939,6 +2939,13 @@ class WeekAheadPage(_StepPage):
         # the tab drives every page; the button object stays because `reload()`
         # still uses it as its own single-flight guard.
         self._layout.addWidget(self.report, 1)
+        # B11: the night's setup-research narration; the panel's worker fills it.
+        research_label = QLabel("Setup research (night AI narration)")
+        research_label.setObjectName("SectionSubtitle")
+        self.setup_research_view = QTextBrowser()
+        self.setup_research_view.setPlainText("Setup research: press Refresh everything to read it.")
+        self._layout.addWidget(research_label)
+        self._layout.addWidget(self.setup_research_view, 1)
         self._finish_layout()
         service.weekAheadReady.connect(self._render)
 
@@ -3071,12 +3078,7 @@ class WeekendPrepPanel(QFrame):
         self.coverage_note.setWordWrap(True)
         self.tag_week.coverageChanged.connect(self.coverage_note.setText)
         self._verdict_worker = None
-        # B11: the newest setup-research narration, read on its own ReadWorker.
-        self.setup_research_note = QLabel("Setup research: press Refresh to read it.")
-        self.setup_research_note.setObjectName("MutedLabel")
-        self.setup_research_note.setWordWrap(True)
-        self.setup_research_note.setTextFormat(Qt.PlainText)
-        self.setup_research_note.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        # B11: the setup-research narration, shown on Week Ahead, read on a ReadWorker.
         self._setup_research_worker = None
 
         top = QHBoxLayout()
@@ -3092,7 +3094,6 @@ class WeekendPrepPanel(QFrame):
         layout.addLayout(top)
         layout.addWidget(self.verdict_card)
         layout.addWidget(self.coverage_note)
-        layout.addWidget(self.setup_research_note)
         layout.addWidget(self.building_note)
         layout.addLayout(body, 1)
 
@@ -3154,10 +3155,14 @@ class WeekendPrepPanel(QFrame):
     def _on_setup_research_ready(self, payload: object) -> None:
         """Print the text the worker formatted. Formatting only."""
         text = str(payload.get("text") or "") if isinstance(payload, dict) else ""
-        self.setup_research_note.setText(text or "Setup research: no narration yet.")
+        self.week_ahead.setup_research_view.setPlainText(
+            text or "Setup research: no narration yet."
+        )
 
     def _on_setup_research_failed(self, message: str) -> None:
-        self.setup_research_note.setText(f"Setup research: could not be read ({message}).")
+        self.week_ahead.setup_research_view.setPlainText(
+            f"Setup research: could not be read ({message})."
+        )
 
     def _read_verdict(self) -> list:
         """Every store the card reads, and no widget. Runs on the worker.

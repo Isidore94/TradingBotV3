@@ -366,11 +366,11 @@ def test_weekend_prep_prints_the_setup_research_text(qapp, monkeypatch):
     monkeypatch.setattr(slot_narration, "read_setup_research_narration", _boom)
     try:
         panel._on_setup_research_ready({"state": "stale", "text": "Setup research for X - STALE"})
-        assert panel.setup_research_note.text() == "Setup research for X - STALE"
+        assert panel.week_ahead.setup_research_view.toPlainText() == "Setup research for X - STALE"
         panel._on_setup_research_ready(None)
-        assert panel.setup_research_note.text() == "Setup research: no narration yet."
+        assert panel.week_ahead.setup_research_view.toPlainText() == "Setup research: no narration yet."
         panel._on_setup_research_failed("share offline")
-        assert "share offline" in panel.setup_research_note.text()
+        assert "share offline" in panel.week_ahead.setup_research_view.toPlainText()
     finally:
         panel.shutdown()
         panel.deleteLater()
