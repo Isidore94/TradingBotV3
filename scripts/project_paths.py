@@ -217,6 +217,18 @@ def _load_local_settings() -> dict:
     return payload
 
 
+def _load_local_settings_from_disk() -> dict:
+    """The settings as they are ON DISK right now, for every read-modify-write.
+
+    The 1 s re-stat window is fine for reads, but a writer that builds on a
+    cached copy can overwrite a key another process saved inside that second
+    (the single-use Questrade token is exactly such a key). Writers call this
+    under ``_local_settings_write_lock``.
+    """
+    invalidate_local_settings_cache()
+    return _load_local_settings()
+
+
 def invalidate_local_settings_cache() -> None:
     """Drop the parsed copy. Called after every write in this module.
 
@@ -934,24 +946,26 @@ def get_master_avwap_watchlist_details() -> dict[str, str]:
 def save_tracker_storage_dir(path: str) -> Path:
     target = Path(path).expanduser()
     LOCAL_SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
-    payload = _load_local_settings()
-    payload["shared_data_dir"] = str(target)
-    LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    invalidate_local_settings_cache()
+    with _local_settings_write_lock:
+        payload = _load_local_settings_from_disk()
+        payload["shared_data_dir"] = str(target)
+        LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        invalidate_local_settings_cache()
     return target
 
 
 def clear_tracker_storage_dir() -> None:
     if not LOCAL_SETTINGS_FILE.exists():
         return
-    payload = _load_local_settings()
-    payload.pop("shared_data_dir", None)
-    if payload:
-        LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    with _local_settings_write_lock:
+        payload = _load_local_settings_from_disk()
+        payload.pop("shared_data_dir", None)
+        if payload:
+            LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            invalidate_local_settings_cache()
+            return
+        LOCAL_SETTINGS_FILE.unlink(missing_ok=True)
         invalidate_local_settings_cache()
-        return
-    LOCAL_SETTINGS_FILE.unlink(missing_ok=True)
-    invalidate_local_settings_cache()
 
 
 def get_local_setting(key: str, default=None):
@@ -981,7 +995,7 @@ def save_local_settings(values: dict) -> None:
         return
     LOCAL_SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
     with _local_settings_write_lock:
-        payload = _load_local_settings()
+        payload = _load_local_settings_from_disk()
         payload.update(values)
         tmp = LOCAL_SETTINGS_FILE.with_name(LOCAL_SETTINGS_FILE.name + ".tmp")
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -996,8 +1010,7 @@ def blank_local_setting_if_equal(key: str, expected: str) -> bool:
     was taken is never blanked. Returns True when it blanked the field.
     """
     with _local_settings_write_lock:
-        invalidate_local_settings_cache()  # compare against disk, not a cached copy
-        payload = _load_local_settings()
+        payload = _load_local_settings_from_disk()  # compare against disk, not a cached copy
         if str(payload.get(key) or "") != str(expected):
             return False
         payload[key] = ""

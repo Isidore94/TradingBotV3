@@ -156,6 +156,28 @@ def test_another_process_edit_shows_after_the_restat_window(tmp_path, monkeypatc
     assert pp.get_local_setting("probe") == "outside"
 
 
+def test_a_save_never_builds_on_a_cached_copy_another_process_outdated(tmp_path, monkeypatch):
+    """Reviewer blocker 2026-09-25: inside the 1 s window a read-modify-write that
+    trusted the cache overwrote a key another process had just saved (the
+    single-use Questrade token is such a key). Writers must read the disk."""
+    pp, settings, clock = _settings_with_clock(tmp_path, monkeypatch)
+    assert pp.get_local_setting("probe") == "one"  # cached
+
+    settings.write_text('{"probe": "one", "questrade_refresh_token": "NEW"}', encoding="utf-8")
+    clock[0] += 0.2  # still inside the re-stat window
+    pp.save_local_settings({"unrelated": 1})
+    on_disk = json.loads(settings.read_text(encoding="utf-8"))
+    assert on_disk["questrade_refresh_token"] == "NEW"
+    assert on_disk["unrelated"] == 1
+
+    settings.write_text('{"probe": "one", "questrade_refresh_token": "NEWER"}', encoding="utf-8")
+    clock[0] += 0.2
+    pp.save_tracker_storage_dir(str(tmp_path / "shared"))
+    assert json.loads(settings.read_text(encoding="utf-8"))["questrade_refresh_token"] == "NEWER"
+    pp.clear_tracker_storage_dir()
+    assert json.loads(settings.read_text(encoding="utf-8"))["questrade_refresh_token"] == "NEWER"
+
+
 def test_a_missing_settings_file_reads_as_empty(tmp_path, monkeypatch):
     import project_paths as pp
 

@@ -246,6 +246,18 @@ def test_a_pass_that_ran_gets_a_recipe_stats_and_a_place_to_look():
     assert meh["surfaced"]["words"] == "the desk has no record of surfacing it"
 
 
+def test_a_hidden_by_show_row_is_not_evidence_the_trader_saw_it():
+    """P8b B6 writes one `hidden_by_show` row per name the Show filter kept off
+    the feed; an alert the trader never saw must not read as "saw: yes"."""
+    pick = {"symbol": "HID", "side": "LONG", "timeframe": "M5", "pick_at": _et("10:10"), "source": "pass"}
+    hidden = {"symbol": "HID", "trade_date": SESSION, "action": "hidden_by_show", "ts": "2026-09-22T10:06:00"}
+    out = rf.saw_it(pick, {"session": SESSION, "review_events": [hidden]})
+    assert out["saw"] == rf.UNKNOWN and out["review_actions"] == []
+    shown = dict(hidden, action="shown", ts="2026-09-22T10:07:00")
+    out = rf.saw_it(pick, {"session": SESSION, "review_events": [hidden, shown]})
+    assert out["saw"] == "yes" and out["review_actions"] == ["shown"]
+
+
 def test_surfaced_prefers_the_focus_add_that_came_before_the_pick():
     pick = {"symbol": "OLD", "side": "LONG", "timeframe": "D1", "pick_at": _et("11:00")}
     joins = [

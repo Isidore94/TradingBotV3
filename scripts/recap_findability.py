@@ -552,9 +552,12 @@ def saw_it(pick: Mapping[str, Any], inputs: Mapping[str, Any]) -> dict[str, Any]
     tz = _tz(inputs)
     session = _text(inputs.get("session"))[:10]
     symbol = _text(pick.get("symbol")).upper()
+    # A `hidden_by_show` row records an alert the Show filter kept OFF the feed
+    # (P8b B6); it is evidence the trader did not see it, never that they did.
     rows = [
         r for r in inputs.get("review_events") or ()
         if _text(r.get("symbol")).upper() == symbol and _text(r.get("trade_date"))[:10] == session
+        and _text(r.get("action")) != "hidden_by_show"
     ]
     first = _earliest(rows, "ts", tz)
     actions = sorted({_text(r.get("action")) for r in rows if _text(r.get("action"))})
