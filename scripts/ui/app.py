@@ -336,6 +336,7 @@ class MainWindow(QMainWindow):
             lambda _slot_id: self.trading_panel.alert_center.chart_review.hide_mentor_card()
         )
         mentor_card = self.trading_panel.alert_center.chart_review.mentor_card
+        mentor_card.regimeLaneChanged.connect(self._on_regime_lane_changed)
         mentor_card.answered.connect(self.trade_mentor_service.mark_answered)
         mentor_card.skipped.connect(
             lambda record: self.trade_mentor_service.mark_skipped(
@@ -1559,6 +1560,8 @@ class MainWindow(QMainWindow):
             # own, at most three, on EVERY card - the trade section below has
             # its own ride rule and its own early returns.
             self._show_mentor_questions(slot, store=store)
+            # S16: the regime journal is read on a worker for this and the next card.
+            card.refresh_regime_lane(store)
 
             is_check_slot = str(getattr(slot, "kind", "")) == KIND_M5_TRADES
             # EVERY delivered slot of the session hands the card the FRESH
@@ -1667,6 +1670,7 @@ class MainWindow(QMainWindow):
             except Exception:  # noqa: BLE001 - an unreadable day asks nothing
                 logging.debug("Mentor trade lane unreadable for %s.", day, exc_info=True)
         plan_open, plan_closed = self._mentor_plan_lanes(slot.scheduled_at)
+        regime_lane = self._mentor_regime_lane()
         return {
             "session": session,
             "now": slot.scheduled_at,
@@ -1710,6 +1714,8 @@ class MainWindow(QMainWindow):
             "rule_reflections": self._mentor_rule_lane(store, session, trades),
             # P1-7 7b: the night's open challenges to the trading plan.
             "plan_challenges": plan_open,
+            # S16: the regime journal lane, already read on the card's worker.
+            "structural_regime": regime_lane,
             "answered": {
                 **self._mentor_answered(
                     store,
@@ -1717,10 +1723,29 @@ class MainWindow(QMainWindow):
                     trade_ids=[str(row.get("trade_id") or "") for row in trades],
                 ),
                 **plan_closed,
+                **dict((regime_lane or {}).get("answered") or {}),
             },
             "retired": self.trade_mentor_service.retired_subjects(),
             "carried": getattr(self, "_mentor_carried", ()),
         }
+
+    def _mentor_regime_lane(self):
+        """The regime lane the card's worker last read (S16), or ``None``. No read here."""
+        try:
+            return self.trading_panel.alert_center.chart_review.mentor_card.regime_lane()
+        except Exception:  # noqa: BLE001 - a lane never costs the card
+            logging.debug("Mentor regime lane unavailable.", exc_info=True)
+            return None
+
+    def _on_regime_lane_changed(self, first_load: bool) -> None:
+        """The first regime read after a card was shown: put its question on that card."""
+        if not first_load:
+            return
+        card = self.trading_panel.alert_center.chart_review.mentor_card
+        slot, store = card.shown_slot(), card.regime_store()
+        # Only a scheduled card handed a store; a hand-opened card gets no questions.
+        if slot is not None and store is not None:
+            self._show_mentor_questions(slot, store=store)
 
     @staticmethod
     def _mentor_plan_lanes(now) -> tuple[list, dict]:

@@ -197,7 +197,28 @@ NEW_TABLES_V3: dict[str, str] = {
             updated_at TEXT NOT NULL
         )
     """,
+    # S16 item 1: the trader's structural regime, append-only segments. A
+    # correction is a new row (`supersedes` names the row it replaces).
+    "structural_regime": """
+        CREATE TABLE IF NOT EXISTS structural_regime (
+            segment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            start_date TEXT NOT NULL,
+            regime TEXT NOT NULL,
+            structure_note TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT 'trader',
+            entered_at TEXT NOT NULL,
+            supersedes INTEGER
+        )
+    """,
 }
+
+#: Triggers that keep `structural_regime` append-only at the database itself.
+NEW_TRIGGERS_V3 = (
+    "CREATE TRIGGER IF NOT EXISTS structural_regime_no_update BEFORE UPDATE ON structural_regime "
+    "BEGIN SELECT RAISE(ABORT, 'structural_regime is append-only'); END",
+    "CREATE TRIGGER IF NOT EXISTS structural_regime_no_delete BEFORE DELETE ON structural_regime "
+    "BEGIN SELECT RAISE(ABORT, 'structural_regime is append-only'); END",
+)
 
 NEW_INDEXES_V3 = (
     "CREATE INDEX IF NOT EXISTS idx_coverage_day ON import_coverage(day, status)",
@@ -588,6 +609,8 @@ def migrate_to_v3(conn: sqlite3.Connection, *, report: MigrationReport | None = 
     # After the columns exist: one of these indexes is on a column this
     # migration just added.
     for statement in NEW_INDEXES_V3:
+        conn.execute(statement)
+    for statement in NEW_TRIGGERS_V3:
         conn.execute(statement)
 
     _collapse_execution_uids(conn, report)

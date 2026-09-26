@@ -3227,6 +3227,65 @@ class JournalStore:
             },
         )
 
+    def append_structural_regime(
+        self,
+        *,
+        start_date: str | date,
+        regime: str,
+        structure_note: str = "",
+        entered_at: datetime | None = None,
+        supersedes: int | None = None,
+    ) -> dict[str, Any]:
+        """Append one trader-typed regime segment (S16). Never edits a row.
+
+        Raises ValueError for a regime outside the vocabulary, an unreadable
+        start date or a naive ``entered_at``; a failed write raises too.
+        """
+        import structural_regime
+
+        regime_text = str(regime or "").strip()
+        if regime_text not in structural_regime.VOCABULARY:
+            raise ValueError(f"{regime!r} is not a structural regime")
+        start_text = _date_text(start_date)
+        try:
+            date.fromisoformat(start_text)
+        except ValueError as exc:
+            raise ValueError(f"{start_date!r} is not a start date") from exc
+        moment = entered_at or datetime.now(timezone.utc).astimezone()
+        if moment.tzinfo is None:
+            raise ValueError("entered_at must carry a timezone")
+        target = None if supersedes in (None, "") else int(supersedes)
+        with self.connection() as conn:
+            if target is not None and conn.execute(
+                "SELECT 1 FROM structural_regime WHERE segment_id = ?", (target,)
+            ).fetchone() is None:
+                raise ValueError(f"segment {target} does not exist")
+            cursor = conn.execute(
+                """
+                INSERT INTO structural_regime(
+                    start_date, regime, structure_note, source, entered_at, supersedes
+                ) VALUES(?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    start_text,
+                    regime_text,
+                    str(structure_note or "").strip(),
+                    structural_regime.SOURCE_TRADER,
+                    moment.isoformat(),
+                    target,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM structural_regime WHERE segment_id = ?", (cursor.lastrowid,)
+            ).fetchone()
+        return _row_to_dict(row)
+
+    def list_structural_regime(self) -> list[dict[str, Any]]:
+        """Every structural regime row, in the order it was written."""
+        with self.connection() as conn:
+            rows = conn.execute("SELECT * FROM structural_regime ORDER BY segment_id").fetchall()
+        return [_row_to_dict(row) for row in rows]
+
     def list_import_runs(self, limit: int = 25) -> list[dict[str, Any]]:
         with self.connection() as conn:
             rows = conn.execute(
