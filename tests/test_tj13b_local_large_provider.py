@@ -443,6 +443,9 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         # the briefs.
         "econ_brief",
         "market_story_narration",
+        # LEAD AMENDMENT 2026-09-26 (S17.2): the regime read joins the market
+        # story, a stage 2 model slot directly after it.
+        "regime_read",
         # Day Recap coach (2026-09-23): cited answers to the trader's Week
         # Review questions, a stage 2 model slot at the end of that stage.
         "week_questions",

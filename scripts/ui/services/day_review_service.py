@@ -908,6 +908,13 @@ class DayReviewService:
                 stored = None
             lines = [str(line) for line in (payload.get("truth") or {}).get("lines") or ()]
             alerts = lines.pop() if lines and lines[-1].startswith("Alerts") else ""
+            try:
+                import market_regimes
+
+                regime_read = market_regimes.latest_regime_read(session)
+            except Exception:  # noqa: BLE001 - no read is a deck without its regime slide
+                _log.debug("The night's regime read was unreadable.", exc_info=True)
+                regime_read = None
             return day_review_show.desk_deck(
                 stored if isinstance(stored, Mapping) else None,
                 pack,
@@ -915,6 +922,7 @@ class DayReviewService:
                 truth_lines=lines,
                 alerts_line=alerts,
                 spy_bars=payload.get("spy_m5_bars") or (),
+                regime_read=regime_read,
             )
         except Exception:  # noqa: BLE001 - the show never costs the day
             _log.debug("The Day Review show could not be chosen.", exc_info=True)

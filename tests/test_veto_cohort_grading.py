@@ -676,6 +676,9 @@ def test_the_scope_can_be_selected_on_demand():
         # pasted brief, a stage 2 model slot directly after the briefs.
         "econ_brief",
         "market_story_narration",
+        # S17.2 (2026-09-26): the regime read joins the market story, a stage 2
+        # model slot directly after it.
+        "regime_read",
         # Day Recap coach (2026-09-23): cited answers to the trader's Week
         # Review questions, appended at the end of stage 2.
         "week_questions",
