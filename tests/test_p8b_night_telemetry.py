@@ -144,3 +144,84 @@ def test_a_slots_own_richer_tokens_dict_is_merged_not_clobbered(tmp_path, monkey
         "completion_tokens": 4,
         "calls": 2,
     }
+
+
+# ---------------------------------------------------------------------------
+# 2. Goal coverage and tokens in the digest facts (never shown to the narrator)
+# ---------------------------------------------------------------------------
+
+DIGEST_DAY = "2026-08-24"
+DIGEST_NOW = datetime(2026, 8, 25, 2, 0, tzinfo=ET)
+
+
+def _ledger_rows() -> list[dict]:
+    day = DIGEST_DAY
+    return [
+        {"job": "journal_import", "goal": "journal", "status": "failed", "session_date": day},
+        {"job": "journal_import", "goal": "journal", "status": "ok", "session_date": day},
+        {"job": "day_review_narration", "goal": "coaching", "status": "degraded_no_narrative",
+         "session_date": day,
+         "tokens": {"prompt_tokens": 900, "completion_tokens": 90, "calls": 2}},
+        {"job": "econ_brief", "goal": "market_read", "status": "failed", "session_date": day,
+         "tokens": {"prompt_tokens": 300, "completion_tokens": 30, "calls": 1}},
+        {"job": "econ_brief", "goal": "market_read", "status": "failed", "session_date": day,
+         "tokens": {"prompt_tokens": 300, "completion_tokens": 30, "calls": 1}},
+        {"job": "econ_brief", "goal": "market_read", "status": "skipped", "session_date": day,
+         "terminal": True, "tokens": {}},
+        {"job": "ai_summary", "goal": "coaching", "status": "ok", "session_date": day,
+         "tokens": {"duration_seconds": 12.5, "prompt_tokens": 5000, "completion_tokens": 400}},
+        {"job": "ticker_briefs", "goal": "market_read", "status": "skipped",
+         "session_date": day, "tokens": {}},
+        {"job": "setup_research", "goal": "setup_quality", "status": "ok",
+         "session_date": day, "tokens": {"prompt_tokens": 100, "completion_tokens": 10,
+                                          "calls": 1}},
+        # Another night: never counted.
+        {"job": "ai_summary", "goal": "coaching", "status": "failed", "session_date": "2026-08-21",
+         "tokens": {"prompt_tokens": 99999, "completion_tokens": 1, "calls": 1}},
+    ]
+
+
+def test_the_telemetry_lines_are_deterministic_facts_from_tonights_ledger():
+    from ai_jobs import digest
+
+    goal_line, token_line = digest.night_telemetry_lines(_ledger_rows(), DIGEST_DAY)[:2]
+    assert goal_line == (
+        "slots per goal: "
+        "trade_identification: ok 0 / degraded 0 / failed 0 / skipped 0; "
+        "setup_quality: ok 1 / degraded 0 / failed 0 / skipped 0; "
+        "permutations: ok 0 / degraded 0 / failed 0 / skipped 0; "
+        "coaching: ok 1 / degraded 1 / failed 0 / skipped 0; "
+        "market_read: ok 0 / degraded 0 / failed 1 / skipped 1; "
+        "journal: ok 1 / degraded 0 / failed 0 / skipped 0; "
+        "ops: ok 0 / degraded 0 / failed 0 / skipped 0"
+    )
+    assert token_line == (
+        "tokens tonight: 6600/560 over 5 calls; top 3 slots by prompt tokens: "
+        "ai_summary 5000, day_review_narration 900, econ_brief 600"
+    )
+
+
+def test_the_digest_file_carries_the_lines_and_the_narrator_never_sees_them(
+    tmp_path, monkeypatch
+):
+    from ai_jobs import digest
+
+    monkeypatch.setattr(digest, "_read_job_rows", _ledger_rows)
+    handed: list[dict] = []
+
+    def narrator(*, pack, now=None):
+        handed.append(digest.narration_evidence_package(pack))
+        return {"model": "m", "narration": {}}
+
+    monkeypatch.setattr(digest, "_narrate", narrator)
+    digest.run_daily_digest(
+        session_date=DIGEST_DAY, now=DIGEST_NOW, root=tmp_path, is_session=False,
+    )
+    written = json.loads(digest.facts_path(tmp_path, DIGEST_DAY).read_text(encoding="utf-8"))
+    lines = written[digest.NIGHT_TELEMETRY_KEY]["lines"]
+    assert lines[0].startswith("slots per goal: trade_identification: ok 0")
+    assert lines[1].startswith("tokens tonight: 6600/560 over 5 calls")
+    assert handed, "the narrator was not asked"
+    seen = json.dumps(handed[0])
+    assert "slots per goal" not in seen and "tokens tonight" not in seen
+    assert digest.NIGHT_TELEMETRY_KEY not in seen

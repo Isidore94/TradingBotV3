@@ -672,6 +672,78 @@ def _operations_block(job_rows, session_date, as_of) -> dict[str, Any]:
     }
 
 
+#: Fact-file key for the night's telemetry lines. Added to the published file
+#: only, after the narration package is built, so the narrator never sees it.
+NIGHT_TELEMETRY_KEY = "night_telemetry"
+#: The status words a goal line counts, in print order.
+_GOAL_STATUS_WORDS = (
+    ("ok", ("ok",)),
+    ("degraded", ("degraded_no_narrative",)),
+    ("failed", ("failed",)),
+    ("skipped", ("skipped",)),
+)
+
+
+def _int_or_zero(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    return int(value)
+
+
+def night_telemetry_lines(job_rows, session_date: str) -> list[str]:
+    """Deterministic 'slots per goal' and 'tokens tonight' lines from the ledger.
+
+    A slot counts once, by its newest row for the session (the last row wins);
+    attempt-cap markers and corrections are not a slot's outcome. Tokens sum
+    every row, because every attempt spent them.
+    """
+    from ai_jobs.runner import SLOT_GOALS
+
+    rows = [
+        row for row in (job_rows or [])
+        if isinstance(row, Mapping) and str(row.get("session_date") or "") == str(session_date)
+    ]
+    last: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        job = str(row.get("job") or "")
+        if not job or str(row.get("status") or "") == "correction" or row.get("terminal"):
+            continue
+        last[job] = row
+    counts = {goal: {word: 0 for word, _ in _GOAL_STATUS_WORDS} for goal in SLOT_GOALS}
+    for row in last.values():
+        goal = str(row.get("goal") or "")
+        if goal not in counts:
+            continue
+        status = str(row.get("status") or "")
+        for word, statuses in _GOAL_STATUS_WORDS:
+            if status in statuses:
+                counts[goal][word] += 1
+    goal_line = "slots per goal: " + "; ".join(
+        f"{goal}: " + " / ".join(f"{word} {n}" for word, n in counts[goal].items())
+        for goal in SLOT_GOALS
+    )
+
+    prompt = completion = calls = 0
+    by_slot: dict[str, int] = {}
+    for row in rows:
+        tokens = row.get("tokens")
+        if not isinstance(tokens, Mapping):
+            continue
+        slot_prompt = _int_or_zero(tokens.get("prompt_tokens"))
+        prompt += slot_prompt
+        completion += _int_or_zero(tokens.get("completion_tokens"))
+        calls += _int_or_zero(tokens.get("calls"))
+        job = str(row.get("job") or "")
+        if job and slot_prompt:
+            by_slot[job] = by_slot.get(job, 0) + slot_prompt
+    top = sorted(by_slot.items(), key=lambda item: (-item[1], item[0]))[:3]
+    token_line = (
+        f"tokens tonight: {prompt}/{completion} over {calls} calls; top 3 slots by "
+        "prompt tokens: " + (", ".join(f"{job} {n}" for job, n in top) if top else "none")
+    )
+    return [goal_line, token_line]
+
+
 # ---------------------------------------------------------------------------
 # per-name rows (v3, trader 2026-09-23)
 # ---------------------------------------------------------------------------
@@ -1450,7 +1522,15 @@ def run_daily_digest(
         journal_trades=name_sources.get("journal_trades"),
     )
 
-    size = fact_pack_bytes(pack)
+    # The telemetry lines go in the published file only; `pack` (what the
+    # narrator is handed) stays without them.
+    published = dict(pack)
+    try:
+        published[NIGHT_TELEMETRY_KEY] = {"lines": night_telemetry_lines(job_rows, day)}
+    except Exception as exc:  # noqa: BLE001 - telemetry never costs the digest
+        _log.info("Daily digest: night telemetry not built (%s).", exc)
+
+    size = fact_pack_bytes(published)
     if size > FACT_PACK_HARD_CAP_BYTES:
         # D5: over-cap FAILS rather than truncating. A truncated fact pack is
         # the sheared prompt that produced confident output about evidence it
@@ -1466,7 +1546,7 @@ def run_daily_digest(
         }
 
     try:
-        written = _publish(facts_target, render_fact_pack(pack))
+        written = _publish(facts_target, render_fact_pack(published))
     except OSError as exc:
         return {"status": STATUS_FAILED, "model": "",
                 "reason": f"fact pack could not be published: {exc}", "outputs": []}
