@@ -389,3 +389,28 @@ def cached_alert_line(bounce_types: Any, side: Any) -> str:
 def reset_cache_for_tests() -> None:
     with _lock:
         _cache.update(signature=None, cells={}, warmed_at=None, warming=False)
+
+
+def line_for_alert(alert: Any) -> str:
+    """The alert line for an M5 alert object from memory only ("" when unknown)."""
+    payload = getattr(alert, "payload", None)
+    feedback = payload.get("feedback") if isinstance(payload, Mapping) else None
+    bounce_types = str((feedback or {}).get("bounce_types") or "") if isinstance(feedback, Mapping) else ""
+    if not bounce_types:
+        import working_lately
+
+        bounce_types = working_lately.alert_priority_key(alert)[0]
+    return cached_alert_line(bounce_types, getattr(alert, "side", ""))
+
+
+def mentor_quote(cells: Mapping[str, Mapping[str, Any]], setup: Any, side: Any) -> str:
+    """The Trade Mentor's exit-question quote: the setup's family cell, else all M5 alerts on that side."""
+    cell = cell_for_alert(cells, setup, side) if str(setup or "").strip() else None
+    name = str(cell.get("bounce_type")) if cell else "all"
+    cell = cell or cells.get(key_for("all", side))
+    if not cell:
+        return ""
+    return (
+        f"Fact, not a rule: {name} {str(side or '').strip().upper()} M5 alerts - "
+        f"{tracker_text(cell)} (n {int(cell.get('n') or 0)})."
+    )

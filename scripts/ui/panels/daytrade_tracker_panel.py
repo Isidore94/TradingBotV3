@@ -65,6 +65,9 @@ PERFORMANCE_COLUMNS = (
     ("eod_r_median", "EOD med R"),
     ("reach_2r_rate", "Reach 2R"),
     ("grade_n", "Grade n"),
+    # S11: when the family usually peaks and +1R-or-60-min vs holding, from
+    # `exit_windows.json` (facts only, never enforced).
+    ("exit_by", "Exit by"),
     ("sample_count", "N"),
     ("avg_close_r", "Avg R"),
     ("median_close_r", "Med R"),
@@ -313,6 +316,8 @@ class DaytradeTrackerPanel(QFrame):
         self._performance_rows: list[dict[str, Any]] = []
         #: The persisted setup grades payload, read on the held/ran worker.
         self._setup_grades: dict = {}
+        #: S11: the persisted exit-window payload, read on the same worker.
+        self._exit_windows: dict = {}
 
         self.refresh_button = QPushButton("Re-aggregate Outcomes")
         self.refresh_button.setObjectName("PrimaryButton")
@@ -576,7 +581,7 @@ class DaytradeTrackerPanel(QFrame):
         table.sortByColumn(column, _Qt.SortOrder.DescendingOrder)
 
     def _make_table(self, columns) -> tuple[DataTable, TrackerTableModel]:
-        text_keys = {"direction", "segment", "dimension", "recommendation", "status", "example_symbols", "grade_1r", "grade_2r"}
+        text_keys = {"direction", "segment", "dimension", "recommendation", "status", "example_symbols", "grade_1r", "grade_2r", "exit_by"}
         numeric = {key for key, _label in columns if key not in text_keys}
         model = TrackerTableModel(
             columns,
@@ -655,12 +660,15 @@ class DaytradeTrackerPanel(QFrame):
         # the Qt thread, and nothing expensive belongs there.
         state = load_bounce_learning_state() or {}
         self._learning_state = state
-        perf_rows = apply_setup_grades(
-            apply_champion_tier(
-                apply_held_and_ran(self._performance_rows, self._held_run_summaries),
-                state,
+        perf_rows = apply_exit_windows(
+            apply_setup_grades(
+                apply_champion_tier(
+                    apply_held_and_ran(self._performance_rows, self._held_run_summaries),
+                    state,
+                ),
+                self._setup_grades,
             ),
-            self._setup_grades,
+            self._exit_windows,
         )
         by_dimension: dict[str, list[dict]] = {}
         for row in perf_rows:
@@ -769,6 +777,8 @@ class DaytradeTrackerPanel(QFrame):
         if isinstance(summaries, dict) and "summaries" in summaries:
             grades = summaries.get("setup_grades")
             self._setup_grades = grades if isinstance(grades, dict) else {}
+            exits = summaries.get("exit_windows")
+            self._exit_windows = exits if isinstance(exits, dict) else {}
             window_text = held_run_window_text(summaries.get("window"))
             coverage_text = outcome_coverage_text(summaries.get("outcome_coverage"))
             summaries = summaries.get("summaries")
@@ -787,12 +797,15 @@ class DaytradeTrackerPanel(QFrame):
             current = self.status_label.text()
             if text not in current:
                 self.status_label.setText(f"{current} {text}".strip())
-        rows = apply_setup_grades(
-            apply_champion_tier(
-                apply_held_and_ran(self._performance_rows, self._held_run_summaries),
-                getattr(self, "_learning_state", {}) or {},
+        rows = apply_exit_windows(
+            apply_setup_grades(
+                apply_champion_tier(
+                    apply_held_and_ran(self._performance_rows, self._held_run_summaries),
+                    getattr(self, "_learning_state", {}) or {},
+                ),
+                self._setup_grades,
             ),
-            self._setup_grades,
+            getattr(self, "_exit_windows", {}) or {},
         )
         by_dimension: dict[str, list[dict]] = {}
         for row in rows:
@@ -927,6 +940,22 @@ def apply_setup_grades(rows, payload) -> list[dict]:
     return out
 
 
+def apply_exit_windows(rows, payload) -> list[dict]:
+    """S11: the "Exit by" text on Bounce Types rows, keyed (bounce type, side). Formats only."""
+    import exit_windows
+
+    cells = exit_windows.lookup(payload)
+    out: list[dict] = []
+    for raw in rows or ():
+        row = dict(raw)
+        cell = None
+        if str(row.get("dimension") or "").strip() == "bounce_type":
+            cell = cells.get(exit_windows.key_for(row.get("segment"), row.get("direction")))
+        row["exit_by"] = exit_windows.tracker_text(cell)
+        out.append(row)
+    return out
+
+
 def measured_text(cell) -> str:
     """`"35 / 41"` - measured episodes over all episodes - or blank (packet Q1)."""
     if not isinstance(cell, dict):
@@ -1034,9 +1063,23 @@ def load_held_run_report() -> dict:
             # would be the panel's expensive read done twice.
             "outcome_coverage": held_run_score.terminal_coverage(episodes),
             "setup_grades": _read_setup_grades(),
+            "exit_windows": _read_exit_windows(),
         }
     except Exception:
-        return {"summaries": {}, "window": {}, "outcome_coverage": {}, "setup_grades": _read_setup_grades()}
+        return {
+            "summaries": {}, "window": {}, "outcome_coverage": {},
+            "setup_grades": _read_setup_grades(), "exit_windows": _read_exit_windows(),
+        }
+
+
+def _read_exit_windows() -> dict:
+    """S11: the night's exit-window payload, `{}` when absent. NEVER on the Qt thread."""
+    try:
+        import exit_windows
+
+        return exit_windows.read_payload()
+    except Exception:  # noqa: BLE001 - the Exit by column is then blank
+        return {}
 
 
 def _read_setup_grades() -> dict:

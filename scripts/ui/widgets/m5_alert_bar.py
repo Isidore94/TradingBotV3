@@ -94,6 +94,25 @@ def _earnings_line_for(alert: Any) -> str:
         note_swallowed("earnings warning line not built", exc, quiet=True)
         return ""
 
+def _warm_exit_windows() -> None:
+    try:
+        import exit_windows
+
+        exit_windows.request_warm()
+    except Exception as exc:  # noqa: BLE001 - a fact line never costs the bar
+        note_swallowed("exit windows warm not started", exc, quiet=True)
+
+
+def _exit_window_line_for(alert: Any) -> str:
+    """S11: "Exit by: ..." for the alert's family from memory only, "" when unknown."""
+    try:
+        import exit_windows
+
+        return exit_windows.line_for_alert(alert)
+    except Exception as exc:  # noqa: BLE001 - a fact line never costs the row
+        note_swallowed("exit window line not built", exc, quiet=True)
+        return ""
+
 #: Oldest rows fall off past this; a session produced 72 M5 alerts in its
 #: first 46 minutes on 2026-08-27, so this is a whole day with room.
 MAX_ROWS = 400
@@ -222,6 +241,8 @@ class M5AlertBar(QWidget):
         # S10b: load the earnings dates and stat on a background thread now,
         # so the first SHORT row already has its warning.
         _warm_earnings_warning()
+        # S11: the same for the exit-window file (one background read).
+        _warm_exit_windows()
         # ST6.5. `[(bounce_type, SIDE)]`, best first, off the desk's shared
         # Working-lately snapshot. Read AT SORT TIME and only when the switch is
         # ON: this REORDERS and never withholds - every row that was here is
@@ -602,7 +623,11 @@ class M5AlertBar(QWidget):
             "too few to grade). 2R is the same ladder on +2R before -1R.\n\n"
         )
         grade_line = "\n".join(
-            line for line in (self._grade_line_for(alert), _earnings_line_for(alert)) if line
+            line
+            for line in (
+                self._grade_line_for(alert), _exit_window_line_for(alert), _earnings_line_for(alert)
+            )
+            if line
         )
         if grade_line:
             grade_help = f"{grade_line}\n{grade_help}"

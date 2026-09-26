@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #272 Exit-window truth (S11): the first night after merge writes `exit_windows.json` (ledger row `exit_windows` ok with "N finished M5 alerts"), and on the next desk start the Daytrade Tracker's Bounce Types tab shows "Exit by" like "peak <= 60 min 49%; +1R/60m -0.05R vs hold -0.30R" [lead]
 - #271 First-30 Show filter (S2): on the next session no non-exempt M5 alert (not PROVEN, Focus, typed or chart watch) before 10:00 ET shows in the Alert Center, and its status line's hidden count says first30, e.g. "3 hidden by Show filter (0 New, 2 first30)" [trader]
 - #270 Day-trade grades (S1 + S10c): on the next desk start the Daytrade Tracker's Bounce Types tab shows 1:1 bracket, 2R grade, EOD R, EOD med R, Reach 2R and Grade n per row after the working-lately build lands, and an M5 alert's hover reads like "1:1 C · 2R D · EOD +0.04R · n 427" [trader]
 - #269 Short into earnings (S10b): on the next session a SHORT chart within 14 days of earnings shows 'earnings in N d - shorts 3-14 d before earnings: X% vs SPY (60 d)' in the Master AVWAP bucket hover (with an 'ER Nd' chip), the M5 alert row hover, the chart review header (warning sign) and a Movers weak row; longs show nothing and no row is hidden or moved [trader]

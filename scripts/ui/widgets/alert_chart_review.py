@@ -60,6 +60,19 @@ def _earnings_warning_for(alert) -> str:
         note_swallowed("earnings warning line not built", exc, quiet=True)
         return ""
 
+def _exit_window_line_for(alert) -> str:
+    """S11: "Exit by: ..." for an M5 alert from memory only, "" otherwise. Facts, never a rule."""
+    try:
+        if capture_timeframe(getattr(alert, "timeframe", "")) != "M5":
+            return ""
+        import exit_windows
+
+        return exit_windows.line_for_alert(alert)
+    except Exception as exc:  # noqa: BLE001 - a fact line never costs the chart
+        note_swallowed("exit window line not built", exc, quiet=True)
+        return ""
+
+
 _NO_M5_WATCH_REASON = (
     "No cached M5 bars for this symbol yet - arming still works: BounceBot "
     "folds armed names into its M5 scan set, so bars land within a scan "
@@ -250,6 +263,11 @@ class AlertChartReview(QWidget):
         self.title = QLabel("Visual Alert Review")
         _warm_earnings_warning()
         self.title.setObjectName("SectionTitle")
+        # S11: one line under the header - when this M5 family usually peaks.
+        self.exit_window_label = QLabel("")
+        self.exit_window_label.setObjectName("MutedLabel")
+        self.exit_window_label.setWordWrap(True)
+        self.exit_window_label.setVisible(False)
         # The setup line: WHAT exactly fired/is being looked at. Styled large
         # via ReviewSetupText, and red (alertLive property) when a live alert
         # put this chart up - the trader reads it from across the desk.
@@ -555,11 +573,14 @@ class AlertChartReview(QWidget):
         # QLabel defaults to Preferred vertically, which means "I will happily
         # take more" - and more is exactly what it got every time the chart
         # was hidden.
-        for fixed in (self.title, self.alert_text, self.guidance_label, self.arm_bar):
+        for fixed in (
+            self.title, self.exit_window_label, self.alert_text, self.guidance_label, self.arm_bar
+        ):
             fixed.setSizePolicy(
                 fixed.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Maximum
             )
         layout.addWidget(self.title)
+        layout.addWidget(self.exit_window_label)
         layout.addWidget(self.alert_text)
         layout.addWidget(self.guidance_label)
         layout.addWidget(self.snapshot, 1)
@@ -1100,6 +1121,9 @@ class AlertChartReview(QWidget):
         warn = f" · ⚠ {headline}" if earnings else ""
         self.title.setText(f"{alert.symbol}{side}{timeframe}{warn}")
         self.title.setToolTip(earnings)
+        exit_line = _exit_window_line_for(alert)
+        self.exit_window_label.setText(exit_line)
+        self.exit_window_label.setVisible(bool(exit_line) and self.title.isVisibleTo(self))
         self.alert_text.setText(alert.trigger or alert.raw_text)
         # Keep the established live/muted marker for existing callers, then
         # classify the exact reason without changing routing or membership.
@@ -1269,6 +1293,8 @@ class AlertChartReview(QWidget):
         self.alert = None
         self.title.setText("Visual Alert Review")
         self.title.setToolTip("")
+        self.exit_window_label.setText("")
+        self.exit_window_label.setVisible(False)
         self.alert_text.setText("Waiting for the next ticker alert.")
         self._set_setup_text_live(False)
         self._set_alert_reason_tone("muted")
@@ -1299,6 +1325,7 @@ class AlertChartReview(QWidget):
         self.snapshot.setVisible(charted)
         self.empty_state.setVisible(not charted)
         self.title.setVisible(charted)
+        self.exit_window_label.setVisible(charted and bool(self.exit_window_label.text()))
         self.alert_text.setVisible(charted)
 
     def set_queued_count(self, count: int) -> None:
