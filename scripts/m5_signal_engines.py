@@ -916,6 +916,11 @@ def compression_break_events(
     day, _today = _split_session(regular, session)
     if day is None:
         return ()
+    # True range of bar i against bar i-1, computed once (index 0 is unused).
+    true_range = [0.0] + [
+        max(item.high - item.low, abs(item.high - regular[i - 1].close), abs(item.low - regular[i - 1].close))
+        for i, item in enumerate(regular) if i > 0
+    ]
     events: list[ShadowSetupEvent] = []
     last_event: int | None = None
     for k, bar in enumerate(regular):
@@ -926,12 +931,7 @@ def compression_break_events(
         box = regular[k - SQUEEZE_BOX_BARS:k]
         if any(item.day != day for item in box):
             continue
-        before = regular[:k]
-        trs = [
-            max(item.high - item.low, abs(item.high - before[i - 1].close), abs(item.low - before[i - 1].close))
-            for i, item in enumerate(before) if i > 0
-        ]
-        atr = sum(trs[-SQUEEZE_ATR_BARS:]) / SQUEEZE_ATR_BARS
+        atr = sum(true_range[k - SQUEEZE_ATR_BARS:k]) / SQUEEZE_ATR_BARS
         box_high = max(item.high for item in box)
         box_low = min(item.low for item in box)
         if atr <= 0 or (box_high - box_low) / atr > SQUEEZE_RANGE_ATR:

@@ -40,10 +40,11 @@ def _lines(path):
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
-def test_m5_series_reads_the_five_day_key_then_the_plain_one():
+def test_m5_series_reads_only_the_five_minute_key():
+    # The plain symbol key can hold any bar size (the bot setdefaults it), so it is unknown.
     bars = [{"dt": datetime(2026, 8, 21, 6, 30)}]
     cache = {"AAA|5 D|5 mins": bars, "AAA": ["other"], "BBB": bars, "CCC|1 D|1 day": bars, "DDD|5 D|5 mins": []}
-    assert sidecar.m5_series(cache) == {"AAA": bars, "BBB": bars}
+    assert sidecar.m5_series(cache) == {"AAA": bars}
 
 
 def test_a_pass_writes_one_record_per_event_with_what_the_bracket_needs(tmp_path):

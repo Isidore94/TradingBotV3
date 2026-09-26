@@ -62,16 +62,15 @@ def _chart_dict(bar: Any) -> Any:
 
 
 def m5_series(latest_bars: Mapping[Any, Any]) -> dict[str, list]:
-    """{symbol: M5 bars as dicts} from the bot's cache: the ``|5 D|5 mins`` key, else the plain one."""
+    """{symbol: M5 bars as dicts} from the bot's ``|5 D|5 mins`` cache keys only.
+
+    The plain symbol key can hold any bar size, so it is never read as M5.
+    """
     out: dict[str, list] = {}
     for key, bars in dict(latest_bars or {}).items():
         text = str(key)
         if text.endswith(M5_KEY_SUFFIX) and bars:
             out[text[: -len(M5_KEY_SUFFIX)].strip().upper()] = [_chart_dict(bar) for bar in bars]
-    for key, bars in dict(latest_bars or {}).items():
-        text = str(key).strip().upper()
-        if "|" not in text and text and bars and text not in out:
-            out[text] = [_chart_dict(bar) for bar in bars]
     return out
 
 
