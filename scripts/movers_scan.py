@@ -17,6 +17,8 @@ Rules kept here:
 
 The RVOL baseline helpers (`build_rvol_baseline`, `recent_rvol`) are pure and
 importable on their own so other tools can share them.
+They are a named variant of `rvol.session_rvol`, not a copy: 20 sessions, mean of
+per-bar ratios, keyed by time of day, so their numbers differ.
 """
 
 from __future__ import annotations

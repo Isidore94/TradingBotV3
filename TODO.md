@@ -63,11 +63,6 @@ S11, S12 (SP4 shadow, trial starts the first night it runs), S13. Left here: ite
 - **B10 Young GC** (snappiness): 150 ms/min of young sweeps; skip a sweep when the gen-0
   count is small or lengthen the tick, only with `desk_perf_report` before/after.
 
-- **A4b One RVOL, step 2** (ASK-FIRST: `rvol.py` feeds the bounce RVOL alert gate): the
-  golden (`tests/test_rvol_golden.py`) shows `rvol.session_rvol` is byte-identical to
-  `session_rvol_from_baseline(slot_baselines(...))`; collapse it to a two-line call (-20
-  lines) on the trader's yes. Movers' RVOL stays a named variant (20 sessions, mean of
-  ratios, time-of-day keyed: its numbers differ).
 - **C4a weekly-options facet** (permutations): `setup_age` is in Phase A; the
   weekly-options flag needs a theta store that records `option_status` per scan date
   (the theta path runs after the scan row is written). Only if theta stays a goal.
