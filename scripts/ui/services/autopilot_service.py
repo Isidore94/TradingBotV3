@@ -70,6 +70,19 @@ def _working_lately_report_line() -> str:
         return f"{working_lately.snapshot_line(payload)} [{working_lately.snapshot_stamp(payload)}]"
     except Exception:  # noqa: BLE001 - a digest line never costs the digest
         return ""
+
+
+def _long_leaders_report_line() -> str:
+    """p9: the phone digest's Long leaders line from the scan's long-setups file, or ""."""
+    try:
+        import long_setups
+        import long_setups_store
+
+        return long_setups.phone_line(long_setups_store.read_long_setups())
+    except Exception:  # noqa: BLE001 - a digest line never costs the digest
+        return ""
+
+
 # Machine-local kill switch for the swing-picks push, defaulting ON: only the
 # machine actually publishing the Away report should be phoning its picks.
 PUSH_SWINGS_SETTING = "push_away_swings"
@@ -2056,6 +2069,8 @@ class AutopilotService(QObject):
                 # so the phone digest and the strip cannot be two readings. No
                 # new push: this is the existing AWAY-only digest body.
                 "working_lately_line": _working_lately_report_line(),
+                # p9: promoted long leaders, one line, read from the scan's file (no new push).
+                "long_leaders_line": _long_leaders_report_line(),
             }
             try:
                 from operations_audit import build_operations_audit

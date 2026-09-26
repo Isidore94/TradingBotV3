@@ -2433,6 +2433,24 @@ def build_relative_weakness_candidates(
     return {"longs": rows, "shorts": []}
 
 
+def build_long_setup_candidates(*, today: Any = None) -> dict[str, list[dict[str, Any]]]:
+    """p9: the scan's promoted long setups (leader pullback, post-earnings drift) as LONG candidates.
+
+    Read from the scan's own file; the Focus adoption gate and the daily-trend gate still
+    judge each one like any other candidate. Unreadable or stale = none.
+    """
+    try:
+        import long_setups
+        import long_setups_store
+
+        return long_setups.focus_candidates(
+            long_setups_store.read_long_setups(), today=today or datetime.now().date()
+        )
+    except Exception:  # noqa: BLE001 - a missing file never costs the auto-populate pass
+        logging.debug("Long setups unreadable for auto-populate.", exc_info=True)
+        return {"longs": [], "shorts": []}
+
+
 def merge_auto_populate_candidates(
     *candidate_sets: Mapping[str, list[dict[str, Any]]],
 ) -> dict[str, list[dict[str, Any]]]:
@@ -3171,6 +3189,9 @@ def refresh_auto_populated_watchlists(
             log("Auto-populate skipped: universe pool is empty.")
         return None
     moment = now or datetime.now()
+    # p9: the scan's promoted long leaders are measured even when outside the universe pool.
+    long_leaders = build_long_setup_candidates(today=moment.date())
+    pool = [*pool, *(row["symbol"] for row in long_leaders["longs"] if row["symbol"] not in set(pool))]
     daily_context = load_daily_context(pool, reference_date=moment.date())
     # SPY rides along for the RW/RS excess baseline (builders never emit it).
     profile_pool = pool if "SPY" in pool else ["SPY", *pool]
@@ -3199,6 +3220,7 @@ def refresh_auto_populated_watchlists(
         build_adr_breakout_candidates(profiles, daily_context),
         aggressive,
         relative,
+        long_leaders,
     )
     # M5 Focus adoption gate (trader directives 2026-07-31 and 2026-08-14):
     # every auto pick must be beyond yesterday's range AND on the right side of
@@ -4511,6 +4533,10 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     # desk builds it on a desk session, and a phone report that invented a
     # sentence about evidence it had not read would be the worst possible place
     # to guess.
+    # p9: one line when the scan promoted a long leader (leader pullback, post-earnings drift).
+    long_leaders_line = str(payload.get("long_leaders_line") or "").strip()
+    long_leaders_sections = ["== LONG LEADERS ==", long_leaders_line, ""] if long_leaders_line else []
+
     working_lately_sections: list[str] = []
     working_lately_line = str(payload.get("working_lately_line") or "").strip()
     if working_lately_line:
@@ -4525,6 +4551,7 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         "",
         *briefing_sections,
         *working_lately_sections,
+        *long_leaders_sections,
         "== BEST SWING TRADES ==",
         _lines(swing_lines),
         "",
