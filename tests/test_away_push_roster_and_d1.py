@@ -125,6 +125,24 @@ def test_a_roster_with_no_qualifying_picks_still_pushes():
 def test_nothing_at_all_still_sends_nothing():
     assert core.build_swing_push({"swing_picks": [], "bucket_roster": {}}) is None
     assert core.build_swing_push({}) is None
+    assert core.build_swing_push({"swing_picks": [], "long_leaders_line": "  "}) is None
+
+
+def test_the_long_leaders_line_fills_the_long_slot_on_the_push():
+    """Trader 2026-09-26: the favourite zone is SHORT-only; the promoted Long leaders
+    ride the push under the roster, and are worth a push on their own."""
+    line = "Long leaders 2026-09-25: NVDA (leader pullback, limit 120.10, stop 115.20)"
+    payload = {
+        "swing_picks": [],
+        "swing_data_current": True,
+        "bucket_roster": core.build_bucket_roster([_row("SMCI", side="SHORT")]),
+        "long_leaders_line": line,
+    }
+    _title, message = core.build_swing_push(payload)
+    assert message.splitlines()[-2:] == ["FAV S (1): SMCI", line]
+    title, message = core.build_swing_push({"swing_picks": [], "swing_data_current": True, "long_leaders_line": line})
+    assert message == line
+    assert title.encode("ascii", "replace").decode("ascii") == title
 
 
 def test_an_oversized_push_says_it_was_trimmed():

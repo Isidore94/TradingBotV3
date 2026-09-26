@@ -918,10 +918,13 @@ TRENDLINE_COLUMNS = (
     "perm_trendline_within_alert_range",
     "perm_trendline_direction",
 )
-#: Every column P1-4 appends to `d1_features_history.csv`, in order (4a, P11, P8b, S6, S15, then the
-#: S15 item 2 regime).
+#: p9: the strength shadow filter's verdict on a LONG row (`strength_filter_verdict`); its input
+#: distance is the row's own `perm_dist_sma50_atr`.
+STRENGTH_COLUMNS = ("perm_strength_filter",)
+#: Every column P1-4 appends to `d1_features_history.csv`, in order (4a, P11, P8b, S6, S15, the
+#: S15 item 2 regime, then the p9 strength shadow).
 SCAN_ROW_COLUMNS = (*MA_DISTANCE_COLUMNS, WEEKLY_STREAK_COLUMN, *STAMP_COLUMNS, *D1_HISTORY_COLUMNS,
-                    SETUP_AGE_COLUMN, *TRENDLINE_COLUMNS, *S15_COLUMNS, *REGIME_COLUMNS)
+                    SETUP_AGE_COLUMN, *TRENDLINE_COLUMNS, *S15_COLUMNS, *REGIME_COLUMNS, *STRENGTH_COLUMNS)
 
 _WEEKLY_TOP_PATTERN_FLAGS = (
     "top_pattern_weekly_ema15_hold",
@@ -1389,6 +1392,47 @@ def regime_columns(
         if isinstance(row, dict):
             row.update(values)
             written += 1
+    return written
+
+
+# --- p9: the strength shadow filter (an appended `perm_` column; no facet, never scored)
+
+#: The trader, 2026-09-26 ("Yes"): "strength: close >= 2 ATR above the 50-day SMA, only when SPY is
+#: above a rising 20-day". The SMA study (2026-09-26): names >= 2 ATR above their 50-day beat SPY
+#: when SPY rises, and it flips when SPY is not rising. Shadow: it changes nothing live.
+STRENGTH_MIN_SMA50_ATR = 2.0
+STRENGTH_KEPT, STRENGTH_DROPPED = "yes", "no"
+
+
+def strength_filter_verdict(dist_sma50_atr: Any, spy_vs_sma20_pct: Any, spy_sma20_slope_pct: Any) -> str:
+    """``yes`` = kept: (close - SMA50) / ATR >= 2 AND SPY above a rising 20-day (`long_regime_working`'s
+    SPY rule). ``no`` when either is known false; unknown when a needed input is missing."""
+    dist, vs, slope = _num(dist_sma50_atr), _num(spy_vs_sma20_pct), _num(spy_sma20_slope_pct)
+    strong = None if dist is None else dist >= STRENGTH_MIN_SMA50_ATR
+    spy_rising = None if vs is None or slope is None else (vs > 0 and slope > 0)
+    if strong is False or spy_rising is False:
+        return STRENGTH_DROPPED
+    if strong and spy_rising:
+        return STRENGTH_KEPT
+    return UNKNOWN
+
+
+def strength_columns(feature_rows: Any) -> int:
+    """Write `STRENGTH_COLUMNS` on every LONG feature row (blank on a short); returns the LONG rows.
+
+    Reads the row's own `perm_dist_sma50_atr` and the regime columns, so it runs after
+    `regime_columns`.
+    """
+    written = 0
+    for row in feature_rows or ():
+        if not isinstance(row, dict):
+            continue
+        if _side(row.get("side")) != "LONG":
+            row[STRENGTH_COLUMNS[0]] = None
+            continue
+        row[STRENGTH_COLUMNS[0]] = strength_filter_verdict(
+            row.get("perm_dist_sma50_atr"), row.get("perm_spy_vs_sma20_pct"), row.get("perm_spy_sma20_slope_pct"))
+        written += 1
     return written
 
 

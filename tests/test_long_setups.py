@@ -38,7 +38,9 @@ def _bars(closes, volumes=None, *, spread=0.5):
 
 
 def _leader(pullback_sessions=10, step=0.012, pullback_volume=1_200_000, run_bars=290, run_volume=2_000_000):
-    closes = [50.0 + 0.25 * i for i in range(run_bars)]
+    # A slow base, then a steep 60-session run: the pullback stays above the 100- and 200-day.
+    base = run_bars - 60
+    closes = [50.0 + 0.1 * i for i in range(base)] + [50.0 + 0.1 * base + 0.5 * k for k in range(1, 61)]
     peak = closes[-1]
     closes += [peak * (1 - step * k) for k in range(1, pullback_sessions + 1)]
     volumes = [run_volume] * run_bars + [pullback_volume] * pullback_sessions
@@ -97,9 +99,56 @@ def test_leader_pullback_needs_the_200_day():
     assert ls.leader_pullback(crashed, atr=2.0) is None
 
 
+# The trader, 2026-09-26: "Just requires above 100-200" - above BOTH the 100- and 200-day; the 50 is free.
+
+def _sma(bars, length):
+    closes = [bar["close"] for bar in bars]
+    return sum(closes[-length:]) / length
+
+
+def _lift(bars, start, stop, amount):
+    out = [dict(bar) for bar in bars]
+    for bar in out[start:stop]:
+        for key in ("open", "high", "low", "close"):
+            bar[key] += amount
+    return out
+
+
+def test_the_trend_smas_are_the_100_and_200_day():
+    assert ls.TREND_SMAS == (100, 200)
+
+
+def test_above_the_100_and_200_day_fires_even_under_the_50_day():
+    bars = _leader()
+    close = bars[-1]["close"]
+    assert _sma(bars, 100) < close and _sma(bars, 200) < close
+    assert close < _sma(bars, 50)  # a pullback to (through) the 50 is allowed
+    row = ls.leader_pullback(bars, atr=2.0)
+    assert row is not None and "above the 100-day and the 200-day" in row["reasons"]
+
+
+def test_under_the_100_day_is_no_setup():
+    bars = _lift(_leader(), -100, -60, 30.0)
+    close = bars[-1]["close"]
+    assert _sma(bars, 200) < close < _sma(bars, 100)
+    assert ls.leader_pullback(bars, atr=2.0) is None
+
+
+def test_under_the_200_day_is_no_setup():
+    bars = _lift(_leader(), -200, -100, 40.0)
+    close = bars[-1]["close"]
+    assert _sma(bars, 100) < close < _sma(bars, 200)
+    assert ls.leader_pullback(bars, atr=2.0) is None
+
+
+def test_too_few_bars_for_the_200_day_is_no_setup():
+    bars = _leader()[-199:]
+    assert ls.leader_pullback(bars, atr=2.0, rs_percentile=0.99) is None
+
+
 def test_strong_by_rs_alone_when_the_52_week_high_is_unknown():
-    # 210 slow bars: no 252-session window (52w unknown) and no 30% run.
-    closes = [100.0 * (1.002 ** i) for i in range(200)]
+    # 210 bars: no 252-session window (52w unknown), no 30% run, above the 100- and 200-day.
+    closes = [100.0 * (1.004 ** i) for i in range(200)]
     peak = closes[-1]
     closes += [peak * (1 - 0.011 * k) for k in range(1, 11)]
     bars = _bars(closes, [1_000_000] * 200 + [500_000] * 10, spread=0.2)

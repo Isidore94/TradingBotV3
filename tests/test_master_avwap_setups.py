@@ -531,6 +531,16 @@ def _build_avwape_retest_daily_rows() -> list[dict]:
 
 
 class MasterAvwapSetupTests(unittest.TestCase):
+    def assertLongRetired(self, row, bucket, feature_row=None):
+        """The classifier chose `bucket` for this LONG row; the favourite zone is SHORT-only
+        (trader 2026-09-26), so the row keeps no bucket and records the retired one."""
+        self.assertEqual(row["priority_bucket"], "")
+        self.assertEqual(row[master_avwap.FAVZONE_LONG_RETIRED], bucket)
+        self.assertFalse(row["is_favorite_setup"])
+        self.assertFalse(row["is_near_favorite_zone"])
+        if feature_row is not None:
+            self.assertEqual(feature_row["priority_bucket"], "")
+
     def test_avwap_retest_followthrough_rejects_overextended_long(self):
         rows = [
             {"date": "2026-05-18", "open": 99.0, "high": 102.0, "low": 98.0, "close": 100.0},
@@ -1718,8 +1728,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
 
         apply_final_priority_buckets([row], ai_state, [], {})
 
-        self.assertEqual(row["priority_bucket"], "favorite_setup")
-        self.assertTrue(row["is_favorite_setup"])
+        self.assertLongRetired(row, "favorite_setup")
 
     def test_side_opposite_day_downgrades_and_caps_long_favorite(self):
         row = {
@@ -1744,8 +1753,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         apply_final_priority_buckets([row], ai_state, [], {"RED": feature_row})
         apply_priority_rejection_score_caps([row], ai_state, {"RED": feature_row})
 
-        self.assertEqual(row["priority_bucket"], "near_favorite_zone")
-        self.assertFalse(row["is_favorite_setup"])
+        self.assertLongRetired(row, "near_favorite_zone", feature_row)
         self.assertEqual(row["score"], 120)
         self.assertIn("down on day", row["rejection_score_cap_note"])
 
@@ -1769,8 +1777,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
 
         apply_final_priority_buckets([row], ai_state, [], {})
 
-        self.assertEqual(row["priority_bucket"], "near_favorite_zone")
-        self.assertFalse(row["is_favorite_setup"])
+        self.assertLongRetired(row, "near_favorite_zone")
 
     def test_first_dev_play_with_strength_can_be_favorite(self):
         row = {
@@ -1793,8 +1800,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
 
         apply_final_priority_buckets([row], ai_state, [], {})
 
-        self.assertEqual(row["priority_bucket"], "favorite_setup")
-        self.assertTrue(row["is_favorite_setup"])
+        self.assertLongRetired(row, "favorite_setup")
 
     def test_final_priority_buckets_marks_avwape_retest_as_preferred_swing_focus(self):
         row = {
@@ -1818,8 +1824,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
 
         apply_final_priority_buckets([row], ai_state, [], {"AVWP": feature_row})
 
-        self.assertEqual(row["priority_bucket"], "favorite_setup")
-        self.assertTrue(row["is_favorite_setup"])
+        self.assertLongRetired(row, "favorite_setup", feature_row)
         self.assertTrue(row["preferred_swing_focus"])
         self.assertTrue(ai_state["symbols"]["AVWP"]["preferred_swing_focus"])
         self.assertTrue(feature_row["preferred_swing_focus"])
@@ -2049,7 +2054,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         }
 
         apply_final_priority_buckets([row], ai_state, [], {})
-        self.assertEqual(row["priority_bucket"], "favorite_setup")
+        self.assertLongRetired(row, "favorite_setup")
 
     def test_market_prep_payload_builds_requested_copy_sections(self):
         payload = build_market_prep_payload(
@@ -5083,9 +5088,10 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertTrue(priority_rows[0]["ranking_blocked"])
         self.assertTrue(priority_rows[0]["pre_earnings_setup_blocked"])
         self.assertEqual(priority_rows[0]["priority_bucket"], "")
+        self.assertNotIn(master_avwap.FAVZONE_LONG_RETIRED, priority_rows[0])
         self.assertIn("non-theta setup blocked", priority_rows[0]["candidate_rejection_reasons"][0])
         self.assertFalse(priority_rows[1]["pre_earnings_setup_blocked"])
-        self.assertEqual(priority_rows[1]["priority_bucket"], "favorite_setup")
+        self.assertLongRetired(priority_rows[1], "favorite_setup")
 
     def test_final_priority_bucket_demotes_low_score_favorite_signal(self):
         priority_rows = [
@@ -5109,11 +5115,8 @@ class MasterAvwapSetupTests(unittest.TestCase):
             feature_rows_by_symbol,
         )
 
-        self.assertEqual(priority_rows[0]["priority_bucket"], "near_favorite_zone")
-        self.assertFalse(priority_rows[0]["is_favorite_setup"])
-        self.assertTrue(priority_rows[0]["is_near_favorite_zone"])
+        self.assertLongRetired(priority_rows[0], "near_favorite_zone", feature_rows_by_symbol["SEDG"])
         self.assertIn("demoted from favorite", priority_rows[0]["favorite_score_gate_note"])
-        self.assertEqual(feature_rows_by_symbol["SEDG"]["priority_bucket"], "near_favorite_zone")
 
     def test_final_priority_bucket_keeps_only_main_swing_setups_as_favorites(self):
         priority_rows = [
@@ -5147,11 +5150,9 @@ class MasterAvwapSetupTests(unittest.TestCase):
             feature_rows_by_symbol,
         )
 
-        self.assertEqual(priority_rows[0]["priority_bucket"], "favorite_setup")
-        self.assertEqual(priority_rows[1]["priority_bucket"], "near_favorite_zone")
+        self.assertLongRetired(priority_rows[0], "favorite_setup", feature_rows_by_symbol["NOK"])
+        self.assertLongRetired(priority_rows[1], "near_favorite_zone", feature_rows_by_symbol["CHOP"])
         self.assertIn("tracker-only", priority_rows[1]["favorite_score_gate_note"])
-        self.assertEqual(feature_rows_by_symbol["NOK"]["priority_bucket"], "favorite_setup")
-        self.assertEqual(feature_rows_by_symbol["CHOP"]["priority_bucket"], "near_favorite_zone")
 
     def test_post_earnings_hard_rule_blocks_non_post_earnings_setups_inside_10_sessions(self):
         priority_rows = [
@@ -5226,13 +5227,15 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertTrue(priority_rows[0]["post_earnings_hard_rule_blocked"])
         self.assertTrue(priority_rows[0]["ranking_blocked"])
         self.assertEqual(priority_rows[0]["priority_bucket"], "")
+        self.assertNotIn(master_avwap.FAVZONE_LONG_RETIRED, priority_rows[0])
         self.assertIn("post-earnings hard rule", priority_rows[0]["ranking_block_reason"])
         self.assertTrue(priority_rows[1]["post_earnings_hard_rule_blocked"])
         self.assertEqual(priority_rows[1]["priority_bucket"], "")
+        self.assertNotIn(master_avwap.FAVZONE_LONG_RETIRED, priority_rows[1])
         self.assertFalse(priority_rows[2]["post_earnings_hard_rule_blocked"])
-        self.assertEqual(priority_rows[2]["priority_bucket"], "near_favorite_zone")
+        self.assertLongRetired(priority_rows[2], "near_favorite_zone")
         self.assertFalse(priority_rows[3]["post_earnings_hard_rule_blocked"])
-        self.assertEqual(priority_rows[3]["priority_bucket"], "near_favorite_zone")
+        self.assertLongRetired(priority_rows[3], "near_favorite_zone")
 
     def test_post_earnings_hard_rule_blocks_stale_gap_context_with_fresh_known_earnings(self):
         priority_rows = [

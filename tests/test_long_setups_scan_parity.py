@@ -28,11 +28,14 @@ for entry in (SCRIPTS_DIR, TESTS_DIR):
 
 import test_setup_permutation_scan_parity as base  # noqa: E402
 
-#: A rise to a 52-week high, then a 10-session pullback on light volume (a leader pullback).
+#: A rise to a 52-week high (steeper over its last 60 sessions, so the pullback stays above the
+#: 100- and 200-day), then a 10-session pullback on light volume (a leader pullback).
 _SHAPE = r'''
 if BARS_SHAPE == "leader_pullback":
     frame["volume"] = 2_000_000  # over the trader's 1M 20-session share-volume floor
     peak_index = SESSION_COUNT - 11
+    for index in range(peak_index - 59, peak_index + 1):
+        frame.loc[index, ["open", "high", "low", "close"]] += 0.3 * (index - (peak_index - 60))
     for index in range(peak_index + 1, SESSION_COUNT):
         step = index - peak_index
         close = float(frame.at[peak_index, "close"]) * (1.0 - 0.012 * step)

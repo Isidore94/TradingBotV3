@@ -571,6 +571,56 @@ def study_family_line(cell: Mapping[str, Any] | None) -> str:
     return f"{head}: " + " · ".join(part(basis) for basis in order) + dates
 
 
+def strength_filter_cell(
+    horizon_rows: Any,
+    spy_closes: Mapping[str, float] | None,
+    *,
+    as_of: str = "",
+) -> dict[str, Any]:
+    """p9: the strength shadow (`setup_permutations.strength_filter_verdict`) over the horizon file.
+
+    Every decided 5-session LONG row with a ``strength_filter`` of yes (kept) or no (the
+    rest): how many were kept, and how often each group beat SPY (`tape_result`). An
+    unknown verdict, SPY or outcome is left out, never a loss. Display only.
+    """
+    import setup_permutations
+
+    index = horizon_rows if isinstance(horizon_rows, Mapping) else horizon_index(horizon_rows)
+    cell: dict[str, Any] = {"kept_n": 0, "kept_wins": 0, "rest_n": 0, "rest_wins": 0, "first": "", "last": ""}
+    days: set[str] = set()
+    for (_symbol, side, scan_day), row in index.items():
+        verdict = str(row.get("strength_filter") or "").strip().lower()
+        if side != "LONG" or verdict not in (setup_permutations.STRENGTH_KEPT, setup_permutations.STRENGTH_DROPPED):
+            continue
+        outcome = tape_result({"side": side}, row, spy_closes, as_of=as_of)
+        if outcome == UNKNOWN:
+            continue
+        group = "kept" if verdict == setup_permutations.STRENGTH_KEPT else "rest"
+        cell[f"{group}_n"] += 1
+        cell[f"{group}_wins"] += 1 if outcome == WIN else 0
+        days.add(scan_day)
+    if days:
+        cell["first"], cell["last"] = min(days), max(days)
+    return cell
+
+
+def strength_filter_line(cell: Mapping[str, Any] | None) -> str:
+    """``strength filter (shadow): kept 30% of longs; kept rows beat SPY 60% vs 45% for the rest, n 40``."""
+    cell = cell or {}
+    kept_n, rest_n = int(cell.get("kept_n") or 0), int(cell.get("rest_n") or 0)
+    n = kept_n + rest_n
+    head = "strength filter (shadow)"
+    if not n:
+        return f"{head}: no graded longs yet."
+
+    def rate(group: str, count: int) -> str:
+        return _pct(int(cell.get(f"{group}_wins") or 0) / count) if count else "unknown"
+
+    dates = f" (scan dates {cell.get('first')} to {cell.get('last')})" if cell.get("first") else ""
+    return (f"{head}: kept {_pct(kept_n / n)} of longs; kept rows beat SPY {rate('kept', kept_n)}"
+            f" vs {rate('rest', rest_n)} for the rest, n {n} (kept {kept_n}, rest {rest_n}){dates}")
+
+
 def long_setup_cells(history_rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """One graded cell per p9 long setup (`long_setups.SETUPS`), over the settled history.
 

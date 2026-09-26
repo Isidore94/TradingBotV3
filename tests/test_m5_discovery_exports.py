@@ -168,7 +168,8 @@ def test_the_control_export_carries_the_cohorts_and_the_families(tmp_path, monke
 
     rows = _all_history(_read_rows(legacy.CONTROL_DISCOVERY_STATS_FILE))
     cohorts = {str(row["cohort"]) for row in rows if row["row_kind"] == "cohort"}
-    assert cohorts == {"promoted", "near_miss", "random"}
+    # p9 phase 3: retired favourite-zone longs are their own cohort, never pooled.
+    assert cohorts == {"promoted", "near_miss", "random", "favzone_long_retired"}
 
     families = _family_rows(rows)
     assert len(families) == 1
@@ -365,7 +366,7 @@ def test_an_empty_tracker_writes_a_header_and_no_invented_numbers(tmp_path, monk
     # "promoted: nothing graded" is a fact, and an absent row would leave a
     # reader to guess whether the cohort exists. Every cell is BLANK, never 0.
     rows = _read_rows(legacy.CONTROL_DISCOVERY_STATS_FILE)
-    assert {row["cohort"] for row in rows} == {"promoted", "near_miss", "random"}
+    assert {row["cohort"] for row in rows} == {"promoted", "near_miss", "random", "favzone_long_retired"}
     assert all(row["row_kind"] == "cohort" for row in rows)
     for row in rows:
         assert int(row["n"]) == 0
