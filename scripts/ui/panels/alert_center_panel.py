@@ -9298,10 +9298,13 @@ class AlertCenterPanel(QFrame):
         elif row is None:
             message = f"✕ {symbol} (no longer on the board)"
         else:
-            passes, reason = focus_adoption_gate.passes_focus_adoption_gate(
-                side, row.get("last"), row.get("prev_high"), row.get("prev_low"),
-                row.get("session_vwap"),
+            # The same row gate as the automatic Movers feed (prior session checked).
+            import movers_notify
+
+            state, reason, _levels = movers_notify.row_level_gate(
+                row, side, str(board.get("as_of") or "")[:10]
             )
+            passes = state == focus_adoption_gate.OPEN
             if not passes:
                 message = f"✕ {symbol} ({reason})"
             else:
@@ -9360,6 +9363,8 @@ class AlertCenterPanel(QFrame):
                     taken_off = False
             if not cand.get("passes"):
                 cand["result"] = f"gated: {cand.get('gate_reason') or cand.get('gate')}"
+            elif not SYMBOL_RE.fullmatch(symbol):
+                cand["result"] = "refused: not a ticker"
             elif store is None:
                 cand["result"] = "refused: no Focus store"
             elif symbol in self._ignored_symbols:

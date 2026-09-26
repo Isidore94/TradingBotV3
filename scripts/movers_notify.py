@@ -15,9 +15,11 @@ Alert Center's sound path, and logs every notice with `notice_records`.
   switch, the board's Hide for today) never count and never take a slot.
 - M5 watch (trader 2026-09-25): the same names, in DESK/AWAY/EVENING, become
   `adoption_candidates` for the M5 Focus AUTO lane, but only when
-  `focus_adoption_gate` holds on the bar: long above the previous session's
-  high (durable daily bars) and above session VWAP, short below both. Unknown
-  levels never pass. `adopt_records` are the `kind: adopt` log rows.
+  `row_level_gate` holds on the bar: long above the previous session's high
+  and above session VWAP, short below both, from the board row's own M5 levels.
+  The row's prior session must BE the previous NY trading session, else
+  UNKNOWN; unknown never passes. The +F click uses the same `row_level_gate`.
+  `adopt_records` are the `kind: adopt` log rows.
 """
 
 from __future__ import annotations
@@ -209,7 +211,9 @@ class MoversNotifier:
             picked = tuple(
                 {"symbol": str(r.get("symbol") or "").upper(), "side": r.get("_side") or "long",
                  "score": _score(r, list_key), "rvol": r.get("rvol"),
-                 "last": r.get("last"), "session_vwap": r.get("session_vwap")}
+                 "last": r.get("last"), "session_vwap": r.get("session_vwap"),
+                 "prev_high": r.get("prev_high"), "prev_low": r.get("prev_low"),
+                 "prev_session": r.get("prev_session") or ""}
                 for r in fresh
             )
             out.append(MoversNotice(
@@ -244,15 +248,39 @@ def notice_records(notice: MoversNotice, *, pushed_at: datetime, result: str = "
     ]
 
 
-def adoption_candidates(
-    notices: Iterable[MoversNotice],
-    levels: Mapping[str, Mapping[str, Any]],
-) -> list[dict[str, Any]]:
-    """Each noticed name with its level gate verdict for the M5 Focus AUTO lane.
+def expected_prior_session(session: str) -> str:
+    """The previous NY trading session before `session` (ISO), '' when unknown."""
+    try:
+        from datetime import date
 
-    `levels` is {symbol: {"prev_high", "prev_low"}} from the durable daily bars;
-    a missing symbol or level is UNKNOWN and never passes. Only DESK, AWAY and
-    EVENING notices count (OFF makes no notices at all)."""
+        from market_calendar import previous_session
+
+        return previous_session(date.fromisoformat(str(session)[:10])).isoformat()
+    except Exception:
+        return ""
+
+
+def row_level_gate(row: Mapping[str, Any], side: str, session: str) -> tuple[str, str, dict]:
+    """(state, reason, levels) for one board row: `focus_adoption_gate` on the row's
+    own last, session VWAP and M5 prior-session high/low. UNKNOWN unless that prior
+    session is the previous NY trading session before `session`."""
+    gate = {"prev_high": row.get("prev_high"), "prev_low": row.get("prev_low"),
+            "prev_session": str(row.get("prev_session") or ""),
+            "vwap": row.get("session_vwap"), "last": row.get("last")}
+    expected = expected_prior_session(session)
+    if not expected or gate["prev_session"] != expected:
+        seen = gate["prev_session"] or "missing"
+        return (focus_adoption_gate.UNKNOWN,
+                f"prior-day bars are {seen}, not the previous session {expected or '?'}", gate)
+    state, reason = focus_adoption_gate.focus_adoption_gate_state(
+        side, gate["last"], gate["prev_high"], gate["prev_low"], gate["vwap"]
+    )
+    return state, reason, gate
+
+
+def adoption_candidates(notices: Iterable[MoversNotice]) -> list[dict[str, Any]]:
+    """Each noticed name with its `row_level_gate` verdict for the M5 Focus AUTO lane.
+    Only DESK, AWAY and EVENING notices count (OFF makes no notices at all)."""
     out: list[dict[str, Any]] = []
     for notice in notices:
         if notice.mode not in ADOPT_MODES:
@@ -260,12 +288,7 @@ def adoption_candidates(
         for row in notice.rows:
             symbol = str(row.get("symbol") or "").upper()
             side = "short" if row.get("side") == "short" else "long"
-            level = levels.get(symbol) or {}
-            gate = {"prev_high": level.get("prev_high"), "prev_low": level.get("prev_low"),
-                    "vwap": row.get("session_vwap"), "last": row.get("last")}
-            state, reason = focus_adoption_gate.focus_adoption_gate_state(
-                side, gate["last"], gate["prev_high"], gate["prev_low"], gate["vwap"]
-            )
+            state, reason, gate = row_level_gate(row, side, notice.bar[:10])
             out.append({"symbol": symbol, "side": side, "list": notice.list_key,
                         "label": notice.label, "state": notice.state, "mode": notice.mode,
                         "bar": notice.bar, "level_gate": gate, "gate": state,

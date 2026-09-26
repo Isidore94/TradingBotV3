@@ -382,6 +382,7 @@ class MoverRow:
     session_vwap: float | None = None
     prev_high: float | None = None
     prev_low: float | None = None
+    prev_session: str = ""  # NY date (ISO) of the M5 bars prev_high/prev_low come from
     from_hod_atr: float | None = None  # <= 0: ATRs below the session high
     from_lod_atr: float | None = None  # >= 0: ATRs above the session low
     from_vwap_atr: float | None = None
@@ -497,6 +498,7 @@ def _levels(prior: Sequence[Mapping[str, Any]], today: Sequence[Mapping[str, Any
         "hod": hod, "lod": lod, "session_vwap": vwap,
         "prev_high": max(bar["high"] for bar in prev_session) if prev_session else None,
         "prev_low": min(bar["low"] for bar in prev_session) if prev_session else None,
+        "prev_session": prev_session[0]["dt"].date().isoformat() if prev_session else "",
         "hod_break": hod_break, "lod_break": lod_break,
     }
     if atr and atr > 0:
