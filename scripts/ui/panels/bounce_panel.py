@@ -281,6 +281,9 @@ class BouncePanel(QFrame):
             "a session-only user override and logs the bot's simultaneous Auto read for later review."
         )
 
+        from ui.widgets.regime_strip import RegimeStrip
+
+        self.regime_strip = RegimeStrip(self)
         self._build_layout()
         self._wire_service()
         self._sync_scanning_buttons(False)
@@ -331,6 +334,7 @@ class BouncePanel(QFrame):
         rows.setSpacing(4)
         rows.addLayout(strip)
         rows.addLayout(assist_row)
+        rows.addWidget(self.regime_strip)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
 
     def _wire_service(self) -> None:
@@ -343,6 +347,7 @@ class BouncePanel(QFrame):
         self.service.statusChanged.connect(self._set_status)
         self.service.connectionChanged.connect(self._set_connection)
         self.service.autoRegimeChanged.connect(self._set_auto_regime)
+        self.service.regimeStripChanged.connect(self.regime_strip.set_readings)
         self.service.technicalIntegrityChanged.connect(self._set_technical_integrity)
         self.service.entryAssistChanged.connect(self._set_entry_assist)
         for command, button in self.entry_assist_buttons.items():

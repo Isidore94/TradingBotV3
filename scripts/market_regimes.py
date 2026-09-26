@@ -172,6 +172,80 @@ def session_row(
     }
 
 
+# ----------------------------------------------------------- desk strip --
+
+
+def live_m5_rows(symbol: str, chart_bars: Iterable[Mapping[str, Any]], *, now: datetime, tz=None) -> list[dict]:
+    """The bot's cached M5 chart dicts as bar rows, completed bars only.
+
+    `dt` is naive market-local time (`market_session.get_market_local_timezone`);
+    a bar still forming at `now` is dropped.
+    """
+    if tz is None:
+        from market_session import get_market_local_timezone
+
+        tz = get_market_local_timezone()[0]
+    rows = []
+    for bar in chart_bars or ():
+        stamp = bar.get("dt")
+        if not isinstance(stamp, datetime):
+            continue
+        start = stamp if stamp.tzinfo else stamp.replace(tzinfo=tz)
+        end = start + timedelta(minutes=5)
+        if end > now:
+            continue
+        rows.append(
+            {
+                "symbol": symbol, "interval_start": start, "interval_end": end,
+                **{key: bar.get(key) for key in ("open", "high", "low", "close", "volume")},
+                "is_complete": True,
+            }
+        )
+    return rows
+
+
+def merge_m5(history: Sequence[Mapping[str, Any]], live: Sequence[Mapping[str, Any]]) -> list:
+    """Stored history up to the first live bar, then the live bars."""
+    if not live:
+        return list(history)
+    first = min(row["interval_start"] for row in live)
+    return [row for row in history if isinstance(row.get("interval_start"), datetime) and row["interval_start"] < first] + list(live)
+
+
+def strip_moment(now: datetime) -> datetime | None:
+    """`now` inside a session; otherwise the last session's close."""
+    from research_warehouse import exchange_calendar as xcal
+
+    session = xcal.session_for(now)
+    if session is not None and now >= session.rth_open_at:
+        return min(now, session.rth_close_at)
+    day = now.astimezone(MARKET_TZ).date()
+    for back in range(1, 15):
+        earlier = xcal.trading_session(day - timedelta(days=back))
+        if earlier is not None:
+            return earlier.rth_close_at
+    return None
+
+
+def strip_readings(
+    now: datetime,
+    d1_by_symbol: Mapping[str, Sequence[Mapping[str, Any]]],
+    m5_by_symbol: Mapping[str, Sequence[Mapping[str, Any]]],
+    symbols: Sequence[str] = INDEXES,
+) -> dict[str, Any]:
+    """`{"as_of", "symbols": {symbol: {M5..W: env_key}}}` for the desk strip, at `now`."""
+    moment = strip_moment(now)
+    if moment is None:
+        return {"as_of": "", "symbols": {}}
+    day = moment.astimezone(MARKET_TZ).date()
+    readings: dict[str, dict[str, str]] = {}
+    for symbol in symbols:
+        completed = completed_before(d1_by_symbol.get(symbol) or (), day)
+        keys, _note = intraday_env_keys(moment, m5_by_symbol.get(symbol) or (), completed)
+        readings[symbol] = {**keys, "D1": d1_env_key(completed, D1_WINDOW), "W": weekly_env_key(completed, day)}
+    return {"as_of": moment.astimezone(MARKET_TZ).strftime("%Y-%m-%d %H:%M ET"), "symbols": readings}
+
+
 # ---------------------------------------------------------------- table --
 
 
