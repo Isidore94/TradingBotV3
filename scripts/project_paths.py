@@ -374,6 +374,8 @@ FORENSICS_BASELINE_CSV = REPORTS_DIR / "move_forensics_baseline.csv"
 FORENSICS_PATTERNS_CSV = REPORTS_DIR / "move_forensics_patterns.csv"
 FORENSICS_REPORT_TXT = REPORTS_DIR / "move_forensics_report.txt"
 FORENSICS_AI_DIGEST_JSON = REPORTS_DIR / "move_forensics_ai_digest.json"
+# Long lab (shadow replay of long-candidate rules); sole writer research_warehouse.long_lab.
+LONG_LAB_REPORT_FILE = REPORTS_DIR / "long_lab_report.json"
 PERSISTENT_RUNTIME_DATA_DIR = RUNTIME_DATA_DIR
 
 LONGS_FILE = PERSISTENT_DATA_DIR / "longs.txt"

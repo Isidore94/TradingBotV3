@@ -95,6 +95,8 @@ EXISTING_TABS = (
     "warehouse_readout_panel",
     # P1-4 4c (2026-09-25): Research -> Setup keys, appended last.
     "setup_keys_panel",
+    # Long lab (2026-09-26): shadow long-rule replay, just before Retest entry.
+    "long_lab_panel",
     # S8 (2026-09-26): Research -> Retest entry, appended last.
     "retest_study_panel",
 )

@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QFrame, QLabel, QTabWidget, QVBoxLayout
 
 from ui.panels.daytrade_tracker_panel import DaytradeTrackerPanel
+from ui.panels.long_lab_panel import LongLabPanel
 from ui.panels.master_market_prep_panel import MasterMarketPrepPanel
 from ui.panels.move_forensics_panel import MoveForensicsPanel
 from ui.panels.price_alerts_panel import PriceAlertsPanel
@@ -41,6 +42,7 @@ class ResearchPanel(QFrame):
         self.warehouse_readout_panel = WarehouseReadoutPanel()
         self.setup_keys_panel = SetupKeysPanel()
         self.retest_study_panel = RetestStudyPanel()
+        self.long_lab_panel = LongLabPanel()
         self.price_alerts_panel = PriceAlertsPanel(
             price_alert_service,
             read_only=price_alert_read_only,
@@ -55,6 +57,8 @@ class ResearchPanel(QFrame):
         tabs.addTab(self.price_alerts_panel, "Price Alerts")
         tabs.addTab(self.warehouse_readout_panel, "Research Warehouse")
         tabs.addTab(self.setup_keys_panel, "Setup keys")
+        # Shadow long-rule replay; placed before Retest entry, which stays last.
+        tabs.addTab(self.long_lab_panel, "Long lab")
         # S8 (2026-09-26): the shadow retest-entry study, appended last.
         tabs.addTab(self.retest_study_panel, "Retest entry")
         # Held so the Working-lately strip's click-through can raise the one
@@ -118,3 +122,4 @@ class ResearchPanel(QFrame):
         # exact failure the comment above already describes, one panel later.
         self.setup_tracker_panel.shutdown()
         self.retest_study_panel.shutdown()
+        self.long_lab_panel.shutdown()
