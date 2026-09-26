@@ -109,8 +109,11 @@ SESSION_HORIZON_OUTCOME_COLUMNS = [
     # the session has ONE row and it says how many looks stand behind it.
     "collapsed_same_session",
     # S14: the long study families the row is in (`long_study_families`), ";"-joined.
-    # Appended last; blank = none, or an input unknown. Research only, never scored.
+    # Appended; blank = none, or an input unknown. Research only, never scored.
     "study_families",
+    # p9: the scan row's strength shadow verdict (`perm_strength_filter`: yes / no / unknown;
+    # blank on a short or an older row). Appended last. Shadow only, never scored.
+    "strength_filter",
 ]
 
 #: Why a row could not be measured. Every unmeasured row carries exactly one.
@@ -415,6 +418,7 @@ def build_session_horizon_observation_rows(
                 "setup_family": _scan_factor_text(entry.get("setup_family")),
                 "favorite_zone": _scan_factor_text(entry.get("favorite_zone")),
                 "study_families": study,
+                "strength_filter": _text(entry.get("perm_strength_filter")),
             }
             if target_day is None:
                 row["unmeasured_reason"] = REASON_TARGET_OUT_OF_RANGE

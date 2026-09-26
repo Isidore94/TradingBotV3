@@ -127,7 +127,10 @@ def test_regime_columns_blank_what_is_unknown():
 
 
 def test_the_regime_columns_are_appended_last_and_off_the_key():
-    assert sp.SCAN_ROW_COLUMNS[-len(sp.REGIME_COLUMNS):] == sp.REGIME_COLUMNS
+    # The p9 strength shadow column appends after the regime columns.
+    tail = len(sp.STRENGTH_COLUMNS)
+    assert sp.SCAN_ROW_COLUMNS[-len(sp.REGIME_COLUMNS) - tail:-tail] == sp.REGIME_COLUMNS
+    assert sp.SCAN_ROW_COLUMNS[-tail:] == sp.STRENGTH_COLUMNS
     assert all(column.startswith("perm_") for column in sp.REGIME_COLUMNS)
     key = sp.facets_for_row({"side": "LONG", "setup_family": "f", WORKING: "yes", TRADER: "bull_run"})
     assert "regime" not in key.compact_key.split("|", 3)[-1]
@@ -182,7 +185,8 @@ def scan_runs(tmp_path_factory):
 def test_the_scan_writes_the_regime_columns(scan_runs):
     _parity, stamped, _plain = scan_runs
     row = stamped["history"][-1]
-    assert list(row)[-len(sp.REGIME_COLUMNS):] == list(sp.REGIME_COLUMNS)
+    tail = len(sp.STRENGTH_COLUMNS)  # the p9 strength shadow appends after the regime
+    assert list(row)[-len(sp.REGIME_COLUMNS) - tail:-tail] == list(sp.REGIME_COLUMNS)
     # The child's SPY is its one rising series (the fetch stub serves every symbol); no trader regime.
     assert row[TRADER] == ""
     assert float(row[SPY_VS]) > 0 and float(row[SPY_SLOPE]) > 0

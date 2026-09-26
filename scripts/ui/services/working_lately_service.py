@@ -252,7 +252,7 @@ def _spy_bars_path() -> Path:
 #: The horizon-file columns the tape join reads; the rest are dropped on read.
 _HORIZON_COLUMNS = (
     "symbol", "side", "scan_date", "target_session", "horizon_sessions",
-    "side_return_pct", "measured", "maturity", "outcome_kind", "study_families",
+    "side_return_pct", "measured", "maturity", "outcome_kind", "study_families", "strength_filter",
 )
 
 
@@ -372,6 +372,21 @@ def read_study_family_lines(as_of: str = "") -> list[str]:
 
     key = (_file_key(path), _file_key(_spy_bars_path()), day)
     return list(_cached("study_family_lines", key, build, keep=path.is_file()))
+
+
+def read_strength_filter_line(as_of: str = "") -> str:
+    """p9: the strength shadow's kept-vs-dropped line over the horizon file. THE WORKER SIDE."""
+    import setup_grades
+
+    day = str(as_of or "")[:10] or _last_completed_session().isoformat()
+    path = _horizon_outcomes_path()
+
+    def build() -> str:
+        cell = setup_grades.strength_filter_cell(_horizon_index(), read_spy_closes(), as_of=day)
+        return setup_grades.strength_filter_line(cell)
+
+    key = (_file_key(path), _file_key(_spy_bars_path()), day)
+    return str(_cached("strength_filter_line", key, build, keep=path.is_file()))
 
 
 def _features_history_path() -> Path:

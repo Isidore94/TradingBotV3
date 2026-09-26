@@ -98,7 +98,7 @@ def test_the_known_bar_floor_is_the_scans_trendline_lookback():
 
 def test_the_columns_append_after_the_setup_age():
     # S15 appends its columns after the trendline set, then the regime columns.
-    newest = (*sp.S15_COLUMNS, *sp.REGIME_COLUMNS)
+    newest = (*sp.S15_COLUMNS, *sp.REGIME_COLUMNS, *sp.STRENGTH_COLUMNS)
     columns = sp.SCAN_ROW_COLUMNS[:-len(newest)]
     assert sp.SCAN_ROW_COLUMNS[-len(newest):] == newest
     assert columns[-len(sp.TRENDLINE_COLUMNS):] == sp.TRENDLINE_COLUMNS
@@ -180,7 +180,8 @@ def test_the_scan_found_the_break_it_carries(scan_runs):
 def test_the_scan_writes_the_trendline_columns(scan_runs):
     _parity, stamped, _plain = scan_runs
     row = stamped["history"][-1]
-    tail = len(sp.S15_COLUMNS) + len(sp.REGIME_COLUMNS)  # S15, then the regime, append after the trendline set
+    # S15, then the regime, then the p9 strength shadow append after the trendline set
+    tail = len(sp.S15_COLUMNS) + len(sp.REGIME_COLUMNS) + len(sp.STRENGTH_COLUMNS)
     assert list(row)[-len(sp.TRENDLINE_COLUMNS) - tail:-tail] == list(sp.TRENDLINE_COLUMNS)
     assert (row[BREAK], row[NEAR], row[DIRECTION]) == ("True", "False", "up")
     key = dict(part.split("=", 1) for part in row["permutation_key"].split("|")[3].split(";"))

@@ -38,7 +38,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from indicators.atr import wilder_atr
 from research_warehouse.retest_entry import RETEST_ATR_FRACTION, limit_fill
-from setup_permutations import UNKNOWN, _sector_third, long_regime_working
+from setup_permutations import UNKNOWN, _sector_third, long_regime_working, spy_trend, strength_filter_verdict
 from universe_builder import DEFAULT_MIN_AVG_VOLUME as MIN_AVG_VOLUME
 from universe_builder import DEFAULT_MIN_MARKET_CAP_M as MIN_MARKET_CAP_M
 
@@ -440,6 +440,25 @@ def post_earnings_drift(
     }
 
 
+# --- the strength shadow (p9; changes nothing live)
+
+#: The strength shadow's SMA (`setup_permutations.strength_filter_verdict` holds the rule).
+STRENGTH_SMA = 50
+
+
+def strength_shadow(bars: Sequence[Mapping[str, Any]], atr: Any, spy_vs_sma20_pct: Any,
+                    spy_sma20_slope_pct: Any) -> dict[str, Any]:
+    """``{strength_sma50_atr, strength_filter}`` for one row: (close - SMA50) / ATR on the completed
+    bars and the shadow verdict (yes / no / unknown). Never read by the gate, the rank or promotion."""
+    closes = [bar["close"] for bar in bars]
+    atr_value = _num(atr)
+    distance = None
+    if len(closes) >= STRENGTH_SMA and atr_value is not None and atr_value > 0:
+        distance = round((closes[-1] - sum(closes[-STRENGTH_SMA:]) / STRENGTH_SMA) / atr_value, 4)
+    return {"strength_sma50_atr": distance,
+            "strength_filter": strength_filter_verdict(distance, spy_vs_sma20_pct, spy_sma20_slope_pct)}
+
+
 # --- one scan
 
 def market_gate(feature_rows: Iterable[Mapping[str, Any]]) -> tuple[str, str]:
@@ -513,6 +532,9 @@ def build_rows(
         return {"as_of": "", "market_working": working, "market_rule": rule, "rows": []}
     spy = _clean_bars(spy_bars) or []
     spy_closes = {bar["date"]: bar["close"] for bar in spy}
+    # SPY vs a rising 20-day for the strength shadow; a stale SPY is unknown.
+    spy_vs, spy_slope = (spy_trend([bar["close"] for bar in spy])
+                         if spy and spy[-1]["date"] == as_of_text else (None, None))
     rows_by_symbol: dict[str, list[Mapping[str, Any]]] = {}
     for row in feature_rows:
         rows_by_symbol.setdefault(_text(row.get("symbol")).upper(), []).append(row)
@@ -550,7 +572,8 @@ def build_rows(
             if row is not None:
                 # `setup_family` names the setup so `longs_market_gate.row_is_exempt` knows the row waits on its own.
                 out.append({"symbol": symbol, "as_of": as_of_text, "sector": sector,
-                            "setup_family": row["setup"], **row})
+                            "setup_family": row["setup"], **row,
+                            **strength_shadow(bars, row["atr"], spy_vs, spy_slope)})
     return {"as_of": as_of_text, "market_working": working, "market_rule": rule,
             "rows": apply_market_gate(rank(out), working, rule)}
 
