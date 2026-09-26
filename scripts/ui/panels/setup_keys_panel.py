@@ -60,6 +60,10 @@ CAVEAT_TEXT = (
 _VERDICT_TEXT = {"no_key_found": "no key found", "too_little_data": "too little data"}
 
 
+#: Combo text for the M5 horizons (held30 = key "0"); swing keys read as session counts.
+HORIZON_LABELS = {"0": "first 30 minutes", "bracket_1r": "+1R before -1R"}
+
+
 def _pct(value: Any) -> str:
     return "-" if value is None else f"{float(value) * 100:.0f}%"
 
@@ -70,7 +74,8 @@ def _num(value: Any, fmt: str) -> str:
 
 def horizons_in(report: Mapping[str, Any] | None, population: str) -> list[str]:
     pops = (report or {}).get("populations") or {}
-    return sorted(((pops.get(population) or {}).get("horizons") or {}), key=lambda text: int(text))
+    return sorted(((pops.get(population) or {}).get("horizons") or {}),
+                  key=lambda text: (0, int(text), "") if str(text).isdigit() else (1, 0, str(text)))
 
 
 def _verdict_cells(verdict: Mapping[str, Any] | None) -> dict[str, str]:
@@ -278,7 +283,7 @@ class SetupKeysPanel(QFrame):
         self.horizon_input.blockSignals(True)
         self.horizon_input.clear()
         for horizon in horizons_in(self._report, population):
-            label = "first 30 minutes" if horizon == "0" else f"{horizon} session(s)"
+            label = HORIZON_LABELS.get(horizon) or f"{horizon} session(s)"
             self.horizon_input.addItem(label, horizon)
         index = self.horizon_input.findData(current)
         self.horizon_input.setCurrentIndex(index if index >= 0 else 0)

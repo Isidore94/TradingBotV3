@@ -27,11 +27,12 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 import project_paths
+import setup_permutation_search
 from ai_jobs import ledger
 
 _log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "setup_keys_narration_v1"
+PROMPT_VERSION = "setup_keys_narration_v2"
 SCHEMA = "setup_keys_narration_v1"
 SCHEMA_NAME = "tradingbot_setup_keys_narration"
 MAX_SENTENCES_PER_FAMILY = 3
@@ -51,8 +52,9 @@ INSTRUCTIONS = (
     "which facet key held up on the hold-out, how its win rate compares with the family baseline, "
     "and how many episodes and sessions stand behind it - or that no key was found. Every sentence "
     "must cite at least one fact id copied exactly from that family's facts. Do not calculate a new "
-    "statistic, do not recommend a trade, and do not name a symbol. Say nothing rather than saying "
-    "something the facts do not carry."
+    "statistic, do not recommend a trade, and do not name a symbol. Every sentence names the family's "
+    "horizon exactly as its facts write it (for example held30, bracket_1r or 5_sessions). Say nothing "
+    "rather than saying something the facts do not carry."
 )
 
 NARRATION_JSON_SCHEMA: dict[str, Any] = {
@@ -118,27 +120,32 @@ def build_inputs(report: Mapping[str, Any] | None) -> dict[str, Any]:
     """Facts per family, each with an id. Keys found first, then the largest baselines."""
     families = []
     for population, pop in sorted(((report or {}).get("populations") or {}).items()):
-        for horizon, block in sorted((pop.get("horizons") or {}).items(), key=lambda item: int(item[0])):
+        for horizon, block in sorted((pop.get("horizons") or {}).items(),
+                                     key=lambda item: setup_permutation_search.horizon_sort_key(item[0])):
+            hname = _text(block.get("horizon_name")) or setup_permutation_search.horizon_name(population, horizon)
             for name, family in sorted((block.get("families") or {}).items()):
                 family_id = f"{population}|h{horizon}|{name}"
                 verdict = _text(family.get("verdict"))
+                where = f"{population} {hname}"
                 facts = [
-                    {"id": f"{family_id}|verdict", "text": f"verdict: {verdict.replace('_', ' ')}"},
+                    {"id": f"{family_id}|verdict", "text": f"{where} verdict: {verdict.replace('_', ' ')}"},
                     {"id": f"{family_id}|baseline",
-                     "text": f"baseline before the hold-out: {_stats(family.get('baseline'))}"},
+                     "text": f"{where} baseline before the hold-out: {_stats(family.get('baseline'))}"},
                     {"id": f"{family_id}|holdout_baseline",
-                     "text": f"baseline on the last 20 sessions: {_stats(family.get('holdout_baseline'))}"},
+                     "text": f"{where} baseline on the last 20 sessions: {_stats(family.get('holdout_baseline'))}"},
                 ]
+                if family.get("refused_reason"):
+                    facts.append({"id": f"{family_id}|refused", "text": _text(family.get("refused_reason"))})
                 for key in list(family.get("keys") or ())[:MAX_KEYS_PER_FAMILY]:
                     rank = key.get("rank")
                     facts.append({
                         "id": f"{family_id}|key{rank}",
-                        "text": (f"key #{rank} ({key.get('label')}): {_stats(key.get('selection'))}, "
+                        "text": (f"{where} key #{rank} ({key.get('label')}): {_stats(key.get('selection'))}, "
                                  f"lift {key.get('lift_pp')} points; hold-out {_stats(key.get('holdout'))}"),
                     })
                 families.append({
                     "family_id": family_id, "population": population, "horizon": horizon,
-                    "family": name, "verdict": verdict, "facts": facts,
+                    "horizon_name": hname, "family": name, "verdict": verdict, "facts": facts,
                     "_order": (0 if family.get("keys") else 1,
                                -int((family.get("baseline") or {}).get("n") or 0)),
                 })
@@ -154,6 +161,15 @@ def build_inputs(report: Mapping[str, Any] | None) -> dict[str, Any]:
         "allowed_family_ids": [family["family_id"] for family in kept],
         "inputs_hash": digest,
     }
+
+
+def _named(sentences: list[dict[str, Any]], horizon_name: str) -> list[dict[str, Any]]:
+    """Each stored sentence names its horizon: prefixed when the model left it out."""
+    out = []
+    for sentence in sentences:
+        text = _text(sentence.get("text"))
+        out.append({**sentence, "text": text if horizon_name in text else f"{horizon_name}: {text}"})
+    return out
 
 
 def build_evidence(inputs: Mapping[str, Any]) -> dict[str, Any]:
@@ -268,8 +284,9 @@ def run_setup_keys_narration(
         "inputs_hash": inputs["inputs_hash"],
         "report_generated_at": inputs["report_generated_at"],
         "families": [
-            {"family_id": family["family_id"], "verdict": family["verdict"],
-             "sentences": sentences.get(family["family_id"], []), "facts": family["facts"]}
+            {"family_id": family["family_id"], "horizon_name": family["horizon_name"], "verdict": family["verdict"],
+             "sentences": _named(sentences.get(family["family_id"], []), family["horizon_name"]),
+             "facts": family["facts"]}
             for family in inputs["families"]
         ],
         "families_left_out": inputs["families_left_out"],

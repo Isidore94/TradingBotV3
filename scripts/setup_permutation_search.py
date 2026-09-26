@@ -21,6 +21,12 @@ side: a baseline, then single facets, pairs and triples, never deeper.
   facet; a deeper key must beat its best parent on hold-out or it is not
   reported.
 - "no key found" is a first-class answer.
+- Horizons: swing 1/3/5/10 sessions; m5 ``0`` (``held30``, the level held 30
+  minutes) and ``bracket_1r`` (+1R before -1R, S3). Every horizon block,
+  family and key carries ``horizon_name``.
+- A population x horizon whose selection window has under
+  MIN_SELECTION_SESSIONS sessions is not searched: the block says
+  ``refused`` and why (S4; F11 was a 5-session window).
 - Each run also keeps a dated copy in `permutation_report_history/` and writes
   `permutation_verdicts.json` (P12, `setup_permutation_verdicts.py`), both beside --out.
 
@@ -57,6 +63,11 @@ MIN_N = 30
 MIN_SESSIONS = 10
 HOLDOUT_SESSIONS = 20
 HOLDOUT_MIN_N = 10
+#: Fewer selection sessions than this and the population x horizon is not published (S4).
+MIN_SELECTION_SESSIONS = 20
+#: Horizon names that are their own report key; every other horizon is keyed by its session count.
+NAMED_HORIZONS = ("bracket_1r",)
+M5_HELD30_NAME = "held30"
 MAX_DEPTH = 3
 BEAM_WIDTH = 10
 #: Above this many cells a grid must clear the 99% bound and the grid median (the k > 10 rule).
@@ -74,6 +85,31 @@ HISTORY_DIR_NAME = "permutation_report_history"
 VERDICTS_FILE_NAME = "permutation_verdicts.json"
 
 Cell = tuple[tuple[str, str], ...]
+
+
+def horizon_key(row: Mapping[str, Any]) -> str:
+    """The report key of a row's horizon: a named one (``bracket_1r``), else its session count."""
+    name = str(row.get("horizon_name") or "").strip()
+    return name if name in NAMED_HORIZONS else str(int(row.get("horizon") or 0))
+
+
+def horizon_name(population: str, key: str) -> str:
+    """What a horizon key means in words: ``held30``, ``bracket_1r`` or ``<n>_sessions``."""
+    text = str(key)
+    if text in NAMED_HORIZONS:
+        return text
+    if population == "m5" and text == "0":
+        return M5_HELD30_NAME
+    return f"{text}_sessions"
+
+
+def horizon_sort_key(key: Any) -> tuple[int, int, str]:
+    """Session counts first, in order; named horizons after them."""
+    text = str(key)
+    try:
+        return (0, int(text), "")
+    except ValueError:
+        return (1, 0, text)
 
 
 def wilson_lower_bound(wins: int, n: int, z: float = Z95) -> float | None:
@@ -202,7 +238,7 @@ def floored(cells: Sequence[Cell], index: Index) -> list[Cell]:
 
 
 def grid_trial(
-    *, population: str, horizon: int, family: str, side: str, depth: int, cells: Sequence[Cell],
+    *, population: str, horizon: int | str, family: str, side: str, depth: int, cells: Sequence[Cell],
     selection_window: tuple[str, str], holdout_window: tuple[str, str],
 ) -> dict[str, Any]:
     payload = json.dumps([list(map(list, cell)) for cell in cells], sort_keys=True)
@@ -213,7 +249,8 @@ def grid_trial(
         "trial_id": f"{SEARCH_VERSION}:{population}:{family}:{side}:h{horizon}:d{depth}:{digest}",
         "family": f"{family}:{side}",
         "question": (
-            f"Which depth-{depth} facet key of {family} {side} ({population}, horizon {horizon}) beats the "
+            f"Which depth-{depth} facet key of {family} {side} ({population}, horizon "
+            f"{horizon_name(population, str(horizon))}) beats the "
             "family baseline win rate, measured on sessions before the hold-out and confirmed on it?"
         ),
         "failure_mode": "A lucky facet that wins in selection and not on the last 20 sessions.",
@@ -388,9 +425,9 @@ def embargoed_sessions(rows: Sequence[Mapping[str, Any]], holdout: set[str], hor
 
 
 def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source: str = "") -> dict[str, Any]:
-    by_population: dict[str, dict[int, list]] = defaultdict(lambda: defaultdict(list))
+    by_population: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
     for row in rows:
-        by_population[str(row.get("population") or "")][int(row.get("horizon") or 0)].append(row)
+        by_population[str(row.get("population") or "")][horizon_key(row)].append(row)
     names = facet_names(rows)
     report: dict[str, Any] = {
         "schema": REPORT_SCHEMA,
@@ -400,25 +437,55 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source
         "source": source,
         "floors": {"min_n": MIN_N, "min_sessions": MIN_SESSIONS, "holdout_sessions": HOLDOUT_SESSIONS,
                    "holdout_min_n": HOLDOUT_MIN_N, "max_depth": MAX_DEPTH, "beam_width": BEAM_WIDTH,
-                   "k_rule": K_RULE},
+                   "k_rule": K_RULE, "min_selection_sessions": MIN_SELECTION_SESSIONS},
         "note": "Shadow only. Populations are never pooled. Nothing ranks, filters or alerts on this.",
         "populations": {},
     }
     for population in sorted(by_population):
         horizons_out: dict[str, Any] = {}
-        for horizon in sorted(by_population[population]):
+        for horizon in sorted(by_population[population], key=horizon_sort_key):
             population_rows = by_population[population][horizon]
+            name = horizon_name(population, horizon)
             holdout_days, sel_window, hold_window = split_sessions(population_rows)
             # Embargo: a selection row whose outcome is measured inside the hold-out leaks it.
-            embargo = embargoed_sessions(population_rows, holdout_days, horizon)
+            embargo = embargoed_sessions(population_rows, holdout_days, int(population_rows[0].get("horizon") or 0))
+            selection_days = {str(row.get("session") or "") for row in population_rows if row.get("session")}
+            selection_days -= holdout_days | embargo
+            block: dict[str, Any] = {
+                "horizon_name": name,
+                "embargoed_sessions": sorted(embargo),
+                "selection_window": list(sel_window),
+                "selection_sessions": len(selection_days),
+                "holdout_window": list(hold_window),
+                "families": {},
+            }
+            horizons_out[str(horizon)] = block
             groups: dict[tuple[str, str], list] = defaultdict(list)
             for row in population_rows:
                 groups[(str(row.get("family") or sp.UNKNOWN), str(row.get("side") or sp.UNKNOWN))].append(row)
+            refused = len(selection_days) < MIN_SELECTION_SESSIONS
+            if refused:
+                # S4: a short selection window proves nothing; no grid is registered and no outcome is read.
+                block["refused"] = True
+                block["refused_reason"] = (
+                    f"{population} {name}: selection window has {len(selection_days)} sessions "
+                    f"({sel_window[0] or '-'} to {sel_window[1] or '-'}), under {MIN_SELECTION_SESSIONS}; "
+                    "not searched, not published"
+                )
             families: dict[str, Any] = {}
             for (family, side), members in sorted(groups.items()):
                 selection = [row for row in members
                              if row.get("session") not in holdout_days and row.get("session") not in embargo]
                 holdout = [row for row in members if row.get("session") in holdout_days]
+                if refused:
+                    families[f"{family} {side}"] = {
+                        "family": family, "side": side, "horizon_name": name, "verdict": VERDICT_THIN,
+                        "refused_reason": block["refused_reason"],
+                        "baseline": {"n": len(selection), "sessions": len({r.get("session") for r in selection})},
+                        "holdout_baseline": {"n": len(holdout), "sessions": len({r.get("session") for r in holdout})},
+                        "trial_ids": [], "cells_tested": 0, "keys": [], "rejected": 0, "top_rejected": [],
+                    }
+                    continue
 
                 def register(depth, cells, *, _family=family, _side=side, _population=population,
                              _horizon=horizon, _sel_window=sel_window, _hold_window=hold_window):
@@ -428,13 +495,10 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source
                     ))
 
                 result = search_group(selection, holdout, names=names, register=register)
-                families[f"{family} {side}"] = {"family": family, "side": side, **result}
-            horizons_out[str(horizon)] = {
-                "embargoed_sessions": sorted(embargo),
-                "selection_window": list(sel_window),
-                "holdout_window": list(hold_window),
-                "families": families,
-            }
+                for key in result["keys"]:
+                    key["horizon_name"] = name
+                families[f"{family} {side}"] = {"family": family, "side": side, "horizon_name": name, **result}
+            block["families"] = families
         report["populations"][population] = {"horizons": horizons_out}
     data_day = report_data_date(report)
     report["data_date"] = data_day.isoformat() if data_day else ""
