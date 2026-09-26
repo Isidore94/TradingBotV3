@@ -158,7 +158,9 @@ def _contents(db):
 
     conn = sqlite3.connect(db)
     try:
-        return sorted(conn.iterdump())
+        # The store's normal open re-stamps `meta.last_migration_at`; every
+        # other row must be untouched by a read.
+        return sorted(line for line in conn.iterdump() if "last_migration_at" not in line)
     finally:
         conn.close()
 

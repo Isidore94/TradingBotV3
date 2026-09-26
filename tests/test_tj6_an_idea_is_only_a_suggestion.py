@@ -49,6 +49,9 @@ ALLOWED = {
     "ui/widgets/ideas_card.py",
     # The per-day archive for later review; it copies ideas and their keep/dismiss state, never acts on them.
     "day_session_record.py",
+    # Read-stamp registry (P8b B1): it names the improvement_ideas slot so the digest
+    # can say its output went unread; it never reads, shows or acts on an idea.
+    "slot_output_reads.py",
 }
 
 #: The seams that MUST exist once TJ-6 lands, so this file cannot pass by the
