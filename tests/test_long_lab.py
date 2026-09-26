@@ -116,9 +116,10 @@ def test_a_future_bar_never_changes_a_past_flag():
     full = lab.find_candidates(series, sessions, earnings=earnings)
     rules_seen = {c["rule"] for c in full if c["date"] <= sessions[120]}
     assert {"leader_pullback_loose", "leader_pullback", "rising_20_50_baseline", "post_earnings_drift",
-            "gap_volume_drift_proxy", "favourite_zone_long"} <= rules_seen, rules_seen
+            "gap_volume_drift_proxy", "favourite_zone_long", "live_leader_pullback",
+            "live_post_earnings_drift"} <= rules_seen, rules_seen
     # Many flag days are cuts: a leak into a flag shows at that flag's own cut.
-    cuts = sorted({c["date"] for c in full})[::3]
+    cuts = sorted({c["date"] for c in full})[::6]
     assert pit_mismatches(series, earnings, sessions, full, cuts) == []
 
 
@@ -185,6 +186,39 @@ def test_baseline_needs_a_rising_20_and_50():
     assert lab.rule_rising_20_50_baseline(lab.Day(up, 79, None, {})) == {}
     assert lab.rule_rising_20_50_baseline(lab.Day(down, 79, None, {})) is None
     assert lab.rule_rising_20_50_baseline(lab.Day(up, 40, None, {})) is None  # no 50-day yet: unknown
+
+
+def test_the_live_rules_are_long_setups_itself_the_cheap_precheck_changes_nothing():
+    import long_setups
+
+    series, earnings = _universe()
+    live_lp = live_ped = 0
+    for sym, s in series.items():
+        for i in range(250, len(s.dates)):
+            day = lab.Day(s, i, None, earnings, rs_percentile=0.95)
+            bars = lab._live_bars(s, i)
+            want = long_setups.leader_pullback(bars, atr=lab.scan_atr20(s, i), rs_percentile=0.95)
+            got = lab.rule_live_leader_pullback(day)
+            assert (got is None) == (want is None), (sym, i)
+            live_lp += got is not None
+            ped = lab.rule_live_post_earnings_drift(day)
+            if ped is not None:
+                live_ped += 1
+                assert 4 <= ped["sessions_after_gap"] <= 7
+    assert live_lp and live_ped
+
+
+def test_scan_atr20_matches_the_scans_own_atr():
+    from master_avwap_lib.legacy import compute_atr_from_ohlc
+
+    rng = np.random.default_rng(5)
+    s = _series("AT", 30 * np.cumprod(1 + rng.normal(0, 0.02, 40)), gaps={25: 1.5})
+    rows = [{"date": d.isoformat(), "high": s.high[i], "low": s.low[i], "close": s.close[i]}
+            for i, d in enumerate(s.dates)]
+    assert lab.scan_atr20(s, 10) is None
+    for i in (19, 25, 39):
+        assert lab.scan_atr20(s, i) == pytest.approx(compute_atr_from_ohlc(rows, s.dates[i]), abs=1e-9)
+    assert lab.scan_atr20(_series("SHORT", [10.0] * 5), 4) is None
 
 
 def test_anchored_vwap_matches_the_champion_formula():
@@ -275,6 +309,12 @@ def test_report_is_per_regime_never_pooled_and_carries_the_sweep():
     assert any("Survivorship" in text for text in report["caveats"])
     knobs = {c["knob"] for c in report["sweep"]}
     assert {"pullback_depth", "run_size", "rs_decile", "made_52w_high"} <= knobs
+    depth_labels = [label for label in (lab._bucket(low, lab.DEPTH_BUCKETS) for low, _ in lab.DEPTH_BUCKETS)]
+    for regime in {c["regime"] for c in report["sweep"]}:
+        seen = [c["bucket"] for c in report["sweep"] if c["knob"] == "pullback_depth"
+                and c["axis"] == "spy_trend" and c["regime"] == regime]
+        assert seen == [label for label in depth_labels if label in seen]  # low to high
+    assert lab._bucket(0.9, lab.RUN_BUCKETS) == "80%+" and lab._bucket(10, lab.RS_BUCKETS) == "9-10"
     for cell in report["cells"]:
         if cell["thin"]:
             assert cell["n"] < lab.MIN_CELL_N

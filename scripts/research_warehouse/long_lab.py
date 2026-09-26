@@ -184,12 +184,13 @@ def _volume_ratio(s: Series, k: int, lookback: int = 20, min_bars: int = 10) -> 
 # ---------------------------------------------------------------- rules
 @dataclass
 class Day:
-    """What a rule may read for (series, i): bars <= i, and the day's RS decile."""
+    """What a rule may read for (series, i): bars <= i, and the day's RS rank."""
 
     s: Series
     i: int
     rs_decile: int | None
     earnings: Mapping[str, Sequence[date]]
+    rs_percentile: float | None = None
     memo: dict[str, Any] = field(default_factory=dict)
 
 
@@ -318,6 +319,81 @@ def rule_rising_20_50_baseline(day: Day) -> dict[str, Any] | None:
     return None
 
 
+# --- the live definitions (`long_setups.py`), replayed through the same walk
+#: Bars handed to a live rule: enough for the 252-session high inside its 120-session lookback.
+LIVE_WINDOW_BARS = 400
+
+
+def _live_bars(s: Series, i: int) -> list[dict[str, Any]]:
+    if "live_bars" not in s.cache:
+        s.cache["live_bars"] = [
+            {"date": s.dates[j].isoformat(), "open": float(s.open[j]), "high": float(s.high[j]),
+             "low": float(s.low[j]), "close": float(s.close[j]), "volume": float(s.volume[j])}
+            for j in range(len(s.dates))]
+    return s.cache["live_bars"][max(0, i - LIVE_WINDOW_BARS + 1):i + 1]
+
+
+def scan_atr20(s: Series, i: int) -> float | None:
+    """The scan's ``atr20`` (`compute_atr_from_ohlc`): the mean true range of the last 20
+    bars, the first of them counted high - low. None under 20 bars."""
+    if "atr20" not in s.cache:
+        hl = s.high - s.low
+        prev = np.concatenate(([np.nan], s.close[:-1]))
+        tr = np.where(np.isnan(prev), hl, np.maximum(hl, np.maximum(np.abs(s.high - prev), np.abs(s.low - prev))))
+        out = _rolling(tr, 20, np.mean)
+        if len(hl) >= 20:
+            out[19:] += (hl[: len(hl) - 19] - tr[: len(tr) - 19]) / 20.0
+        s.cache["atr20"] = out
+    value = float(s.cache["atr20"][i])
+    return value if math.isfinite(value) and value > 0 else None
+
+
+def _live_features(row: Mapping[str, Any] | None, keys: Sequence[str]) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return {key: row.get(key) for key in keys if row.get(key) is not None}
+
+
+def rule_live_leader_pullback(day: Day) -> dict[str, Any] | None:
+    """The live `long_setups.leader_pullback` on bars up to this close (last 400), with the
+    day's 63-session RS percentile; no sector / top-pattern facts (not in the bar cache)."""
+    import long_setups
+
+    s, i = day.s, day.i
+    close, sma200 = float(s.close[i]), float(s.sma200[i])
+    if "peak60" not in s.cache:
+        s.cache["peak60"] = _rolling(s.high, long_setups.SWING_HIGH_LOOKBACK, np.max)
+    peak = float(s.cache["peak60"][i])
+    # Its own first two exits, checked cheaply first (same numbers, so the same answer).
+    if not _ok(sma200, peak) or close <= sma200:
+        return None
+    low_pct, high_pct = long_setups.OFF_HIGH_PCT
+    if not low_pct <= (peak - close) / peak * 100.0 <= high_pct:
+        return None
+    row = long_setups.leader_pullback(_live_bars(s, i), atr=scan_atr20(s, i), rs_percentile=day.rs_percentile)
+    return _live_features(row, ("pct_off_high", "pct_under_avwap", "strength"))
+
+
+def rule_live_post_earnings_drift(day: Day) -> dict[str, Any] | None:
+    """The live `long_setups.post_earnings_drift`, the gap facts taken from the earnings
+    reaction day (as the scan takes them from the latest release context)."""
+    import long_setups
+
+    s, i = day.s, day.i
+    for g in _earnings_reactions(s, day.earnings):
+        if not long_setups.PED_SESSIONS[0] <= i - g <= long_setups.PED_SESSIONS[1]:
+            continue
+        size = gap_atr(s, g)
+        if size is None:
+            continue
+        row = long_setups.post_earnings_drift(
+            _live_bars(s, i), gap_date=s.dates[g].isoformat(), gap_is_up=bool(s.open[g] > s.close[g - 1]),
+            gap_atr_multiple=size, atr=scan_atr20(s, i))
+        if row is not None:
+            return _live_features(row, ("gap_atr", "sessions_after_gap", "strength"))
+    return None
+
+
 @dataclass(frozen=True)
 class Rule:
     key: str
@@ -335,6 +411,10 @@ DEFAULT_RULES: tuple[Rule, ...] = (
     Rule("favourite_zone_long", "(c) Favourite zone long (old)", rule_favourite_zone_long,
          "AVWAP anchored before the latest earnings reaction; approximates the scanner's anchor"),
     Rule("rising_20_50_baseline", "(d) Above rising 20 and 50 (baseline)", rule_rising_20_50_baseline),
+    Rule("live_leader_pullback", "(live) long_setups leader pullback", rule_live_leader_pullback,
+         "the live scan's definition; no sector / top-pattern bonus facts in the bar cache"),
+    Rule("live_post_earnings_drift", "(live) long_setups post-earnings drift", rule_live_post_earnings_drift,
+         "the live scan's definition; gap facts from the earnings reaction day"),
 )
 
 
@@ -354,21 +434,27 @@ def spy_trend_labels(spy: Series) -> dict[date, str]:
     return out
 
 
-def rs_deciles(series: Mapping[str, Series], sessions: Iterable[date]) -> dict[tuple[str, date], int]:
-    """Per session, each name's 63-session return decile (10 = strongest) among names with
-    a bar that day. Ranking a name's own return equals ranking its return vs SPY."""
+RS_MIN_NAMES = 20
+
+
+def rs_ranks(series: Mapping[str, Series], sessions: Iterable[date]
+             ) -> dict[tuple[str, date], tuple[int, float | None]]:
+    """Per session, each name's 63-session return (decile 1-10, share of names it beats)
+    among names with a bar that day; the share is None under `RS_MIN_NAMES` names.
+    Ranking a name's own return equals ranking its return vs SPY."""
     wanted = set(sessions)
     by_day: dict[date, list[tuple[float, str]]] = {}
     for symbol, s in series.items():
         for i, day in enumerate(s.dates):
             if day in wanted and math.isfinite(s.ret63[i]):
                 by_day.setdefault(day, []).append((float(s.ret63[i]), symbol))
-    out: dict[tuple[str, date], int] = {}
+    out: dict[tuple[str, date], tuple[int, float | None]] = {}
     for day, values in by_day.items():
         values.sort()
         count = len(values)
         for rank, (_value, symbol) in enumerate(values):
-            out[(symbol, day)] = min(10, int(rank * 10 / count) + 1)
+            share = rank / (count - 1) if count >= RS_MIN_NAMES else None
+            out[(symbol, day)] = (min(10, int(rank * 10 / count) + 1), share)
     return out
 
 
@@ -461,7 +547,7 @@ def find_candidates(
     (rule ``leader_pullback_loose``) for the threshold sweep."""
     earnings = earnings or {}
     wanted = set(sessions)
-    deciles = rs_deciles(series, sessions)
+    ranks = rs_ranks(series, sessions)
     out: list[dict[str, Any]] = []
     for symbol in sorted(series):
         if symbol == BENCHMARK:
@@ -471,7 +557,8 @@ def find_candidates(
         for i, day in enumerate(s.dates):
             if day not in wanted or s.close[i] < MIN_PRICE:
                 continue
-            ctx = Day(s, i, deciles.get((symbol, day)), earnings)
+            decile, share = ranks.get((symbol, day), (None, None))
+            ctx = Day(s, i, decile, earnings, rs_percentile=share)
             checks = [(rule.key, rule.fn) for rule in rules]
             if extra_loose:
                 checks.append(("leader_pullback_loose", leader_pullback_features))
@@ -557,8 +644,9 @@ def _bucket(value, buckets) -> str | None:
             if low <= value <= high:
                 return f"{low}-{high}"
         elif low <= value < high or (high == buckets[-1][1] and value == high):
-            top = "+" if math.isinf(high) else f"{high * 100:.0f}%"
-            return f"{low * 100:.0f}%-{top}"
+            if math.isinf(high):
+                return f"{low * 100:.0f}%+"
+            return f"{low * 100:.0f}%-{high * 100:.0f}%"
     return None
 
 
@@ -616,7 +704,13 @@ def build_report(
             for axis in ("spy_trend", "structural"):
                 sweep_groups.setdefault((knob, bucket, axis, row["regimes"][axis]), []).append(row)
     sweep = []
-    for (knob, bucket, axis, regime), rows in sorted(sweep_groups.items()):
+    # Rows read knob by knob, regime by regime, buckets low to high (first-seen order is not).
+    order = {label: rank for rank, label in enumerate(
+        [_bucket(low, DEPTH_BUCKETS) for low, _ in DEPTH_BUCKETS]
+        + [_bucket(low, RUN_BUCKETS) for low, _ in RUN_BUCKETS]
+        + [_bucket(low, RS_BUCKETS) for low, _ in RS_BUCKETS] + ["no", "yes"])}
+    for (knob, bucket, axis, regime), rows in sorted(
+            sweep_groups.items(), key=lambda item: (item[0][0], item[0][2], item[0][3], order.get(item[0][1], 99))):
         cell = _horizon_cell(rows, SWEEP_HORIZON)
         sweep.append({"knob": knob, "bucket": bucket, "axis": axis, "regime": regime,
                       "horizon": SWEEP_HORIZON, "n": cell["n"], "win_raw": cell["win_raw"],
