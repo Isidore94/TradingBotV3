@@ -58,6 +58,20 @@ SPLIT = {
             "_poll_any_bounce_watches",
         ),
     ),
+    "ui.panels.alert_center.h1": (
+        "H1RetesterMixin",
+        (
+            "H1_WATCH_M5_SESSIONS",
+            "_h1_history_cache",
+            "_h1_bars_for_watch",
+            "_h1_warmup_bars",
+            "_h1_watch_note",
+            "_h1_refresh_failed",
+            "_h1_warmup_counts",
+            "_h1_warmup_note",
+            "_h1_watches_due",
+        ),
+    ),
 }
 
 
