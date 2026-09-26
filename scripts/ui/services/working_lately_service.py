@@ -340,6 +340,44 @@ def read_side_by_tape(as_of: str = "") -> dict[str, Any]:
     return _cached("side_by_tape", key, build, keep=path.is_file())
 
 
+def _features_history_path() -> Path:
+    from project_paths import D1_FEATURES_HISTORY_FILE
+
+    return Path(D1_FEATURES_HISTORY_FILE)
+
+
+def read_exit_model_review() -> dict[str, Any]:
+    """S13: three exit models per family x side. THE WORKER SIDE; cached on its inputs.
+
+    Missing inputs give empty cells (unknown), never an error.
+    """
+    import exit_model_review
+
+    horizon_path = _horizon_outcomes_path()
+    features_path = _features_history_path()
+
+    def build() -> dict[str, Any]:
+        try:
+            with horizon_path.open("r", newline="", encoding="utf-8-sig") as handle:
+                horizon_rows = list(csv.DictReader(handle))
+        except OSError:
+            return exit_model_review.review((), {}, {})
+        try:
+            import pandas as pd
+
+            frame = pd.read_csv(
+                features_path, usecols=["run_date", "symbol", "atr20"], dtype=str
+            )
+            atrs = exit_model_review.atr_index(frame.to_dict("records"))
+        except Exception:  # noqa: BLE001 - no ATR is unknown, never a guess
+            atrs = {}
+        currents = exit_model_review.current_r_index(_scoring_setups())
+        return exit_model_review.review(horizon_rows, atrs, currents)
+
+    key = (_file_key(horizon_path), _file_key(features_path), _file_key(_scoring_snapshot_path()))
+    return _cached("exit_model_review", key, build, keep=horizon_path.is_file())
+
+
 def _tape_inputs_key() -> tuple:
     return (
         _file_key(_scoring_snapshot_path()),
