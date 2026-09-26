@@ -510,10 +510,13 @@ def _prior_m5(prior: tuple[str, str]) -> dict[str, Any]:
                 )
         except Exception:  # noqa: BLE001 - the held x ran column is absent, not fatal
             logging.warning("Looking-back prior held-run read failed", exc_info=True)
+        bracket = setup_grades.bracket_results(rows)
         return {
             "results": looking_back.m5_alert_results(rows),
-            "grades": setup_grades.daytrade_cells(setup_grades.bracket_results(rows)),
+            "grades": setup_grades.daytrade_cells(bracket),
             "held": held,
+            # S16: the same results, joined per regime by `read_regime_grades`.
+            "bracket": bracket,
         }
 
     path = _outcome_log_path()
@@ -689,6 +692,123 @@ def read_looking_back(
     except Exception:  # noqa: BLE001 - a display reading, never fatal
         logging.warning("Looking-back build failed", exc_info=True)
         return None
+
+
+#: S16 item 3: every grade per the trader's structural regime. Its own file, so
+#: `setup_grades_latest.json` (what badges and sorting read) stays byte-identical.
+REGIME_GRADES_FILE_NAME = "setup_grades_by_regime_latest.json"
+
+#: The Focus and cohort outcome files the per-regime cohort rows read.
+_COHORT_OUTCOME_FILES = (
+    "HUMAN_FOCUS_OUTCOMES_FILE",
+    "VETO_COHORT_OUTCOMES_FILE",
+    "LIKE_COHORT_OUTCOMES_FILE",
+    "PASS_COHORT_OUTCOMES_FILE",
+    "REJECTION_COHORT_OUTCOMES_FILE",
+)
+_COHORT_COLUMNS = ("trade_date", "side", "source", "entry_date", "h5_date", "h5_return")
+
+
+def _journal_db_path() -> Path:
+    from project_paths import JOURNAL_DB_FILE
+
+    return Path(JOURNAL_DB_FILE)
+
+
+def _cohort_paths() -> list[Path]:
+    import project_paths
+
+    return [Path(getattr(project_paths, name)) for name in _COHORT_OUTCOME_FILES]
+
+
+def _read_cohort_rows(paths: list[Path]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for path in paths:
+        try:
+            with path.open("r", newline="", encoding="utf-8-sig") as handle:
+                rows.extend({name: row.get(name) for name in _COHORT_COLUMNS} for row in csv.DictReader(handle))
+        except OSError:
+            continue
+    return rows
+
+
+def recent_bracket_results() -> list[dict[str, Any]]:
+    """This build's recent-window bracket results, taken while its rows are held."""
+    import setup_grades
+
+    return _cached(
+        "recent_bracket",
+        _outcome_inputs_key(),
+        lambda: setup_grades.bracket_results(_outcome_rows() or ()),
+        keep=_outcome_log_path().is_file(),
+    )
+
+
+def read_regime_grades(
+    grades: Mapping[str, Any] | None,
+    *,
+    recent_rows: Any = (),
+    recent_bracket: Any = None,
+) -> dict[str, Any] | None:
+    """`regime_grades.build_payload` over the tracker's picks, the M5 alerts of the
+    recent + prior windows, the journal and the cohort files. THE WORKER SIDE.
+
+    Cached on every input's file key, the pooled grades and today; None on failure
+    (the surfaces keep the last published file).
+    """
+    try:
+        import looking_back
+        import regime_grades
+        import regime_join
+
+        windows = looking_back.split_windows()
+        db_path = _journal_db_path()
+        cohort_paths = _cohort_paths()
+        today = _last_completed_session().isoformat()
+        reference = _tracker_reference(recent_rows)
+        key = (
+            _file_key(db_path),
+            tuple(_file_key(path) for path in cohort_paths),
+            _tape_inputs_key(),
+            _outcome_inputs_key(),
+            tuple(windows["prior"]),
+            json.dumps(grades or {}, sort_keys=True, default=str),
+            reference,
+            today,
+            date.today().isoformat(),
+        )
+
+        def build() -> dict[str, Any]:
+            prior = _prior_m5(windows["prior"])
+            bracket = list(prior.get("bracket") or []) + list(recent_bracket or [])
+            return regime_grades.build_payload(
+                segments=regime_join.read_segments(db_path),
+                today=date.today().isoformat(),
+                swing_picks=_swing(reference)["picks"],
+                horizon_index=_horizon_index(),
+                spy_closes=read_spy_closes(),
+                bracket=bracket,
+                trades=regime_join.read_trades(db_path),
+                cohort_rows=_read_cohort_rows(cohort_paths),
+                grades=grades,
+                as_of=today,
+                m5_window=(windows["prior"][0], windows["recent"][1]),
+            )
+
+        return _cached_copy("regime_grades", key, build, keep=recent_bracket is not None)
+    except Exception:  # noqa: BLE001 - a display reading, never fatal
+        logging.warning("Grades by regime build failed", exc_info=True)
+        return None
+
+
+def read_persisted_regime_grades(store_dir: Any = None) -> dict[str, Any]:
+    """The last published grades by regime, `{}` when absent. Worker threads only."""
+    path = Path(store_dir) if store_dir is not None else default_store_dir()
+    try:
+        payload = json.loads((path / REGIME_GRADES_FILE_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def read_persisted_looking_back(store_dir: Any = None) -> dict[str, Any]:
@@ -912,6 +1032,11 @@ class WorkingLatelyService(QObject):
             except Exception:  # noqa: BLE001 - read_looking_back reports its own failure
                 logging.warning("Looking-back recent M5 read failed", exc_info=True)
                 recent_m5 = None
+            try:
+                recent_bracket = recent_bracket_results()
+            except Exception:  # noqa: BLE001 - the by-regime reading keeps its last file
+                logging.warning("Grades by regime recent M5 read failed", exc_info=True)
+                recent_bracket = None
         finally:
             _OUTCOME_BUILD_ACTIVE = False
             _OUTCOME_ROWS_THIS_BUILD = None
@@ -938,6 +1063,22 @@ class WorkingLatelyService(QObject):
             looking = read_persisted_looking_back(self._dir) or None
         if looking:
             payload["looking_back"] = looking
+        # S16: after the prior window is cached, so its bracket results are reused.
+        by_regime = (
+            read_regime_grades(
+                grades if isinstance(grades, Mapping) else None,
+                recent_rows=recent_rows,
+                recent_bracket=recent_bracket,
+            )
+            if recent_bracket is not None
+            else None
+        )
+        if by_regime is not None:
+            self._write_json(REGIME_GRADES_FILE_NAME, by_regime)
+        else:
+            by_regime = read_persisted_regime_grades(self._dir) or None
+        if by_regime:
+            payload["setup_grades_by_regime"] = by_regime
         return payload
 
     def _write_json(self, name: str, value: Mapping[str, Any]) -> None:
