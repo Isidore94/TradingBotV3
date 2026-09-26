@@ -769,6 +769,8 @@ def night_telemetry_lines(
             continue
         last[job] = row
     counts = {goal: {word: 0 for word, _ in _GOAL_STATUS_WORDS} for goal in SLOT_GOALS}
+    # Rows written before slots declared a goal are unknown, never counted as 0.
+    no_goal = sum(1 for row in last.values() if not str(row.get("goal") or ""))
     for row in last.values():
         goal = str(row.get("goal") or "")
         if goal not in counts:
@@ -777,11 +779,23 @@ def night_telemetry_lines(
         for word, statuses in _GOAL_STATUS_WORDS:
             if status in statuses:
                 counts[goal][word] += 1
-    goal_line = f"slots per goal (night of {night}): " + "; ".join(
-        f"{goal}: " + " / ".join(f"{word} {n}" for word, n in counts[goal].items())
-        for goal in SLOT_GOALS
-    )
+    if last and no_goal == len(last):
+        goal_line = f"slots per goal (night of {night}): unknown (rows carry no goal)"
+    else:
+        goal_line = f"slots per goal (night of {night}): " + "; ".join(
+            f"{goal}: " + " / ".join(f"{word} {n}" for word, n in counts[goal].items())
+            for goal in SLOT_GOALS
+        )
+        if no_goal:
+            goal_line += f"; unknown goal: {no_goal} slot" + ("s" if no_goal != 1 else "")
 
+    # Rows written before slots summed their tokens carry `{}`: unknown, never 0.
+    if not any(
+        isinstance(row.get("tokens"), Mapping)
+        and any(key in row["tokens"] for key in ("prompt_tokens", "completion_tokens", "calls"))
+        for row in rows
+    ):
+        return [goal_line, f"tokens (night of {night}): unknown (rows carry no tokens)"]
     prompt = completion = calls = 0
     by_slot: dict[str, int] = {}
     for row in rows:
