@@ -148,10 +148,14 @@ LOCAL_SETTINGS_DIR = _default_local_settings_dir()
 LOCAL_SETTINGS_FILE = LOCAL_SETTINGS_DIR / "local_settings.json"
 
 
-#: (mtime_ns, size, payload) for the settings file as last read. Keyed on the
-#: file's own stamp rather than a timeout, so an edit is picked up on the very
-#: next call and an unchanged file is never parsed twice.
-_local_settings_cache: tuple[int, int, dict] | None = None
+#: (path, mtime_ns, size, payload, monotonic time of last stat) for the settings
+#: file as last read. Parsed again only when the stamp moves; stat'ed at most
+#: once per ``LOCAL_SETTINGS_RESTAT_SECONDS``.
+_local_settings_cache: tuple[str, int, int, dict, float] | None = None
+LOCAL_SETTINGS_RESTAT_SECONDS = 1.0
+_local_settings_clock = time.monotonic
+#: Bumped by every invalidation, so an in-flight read cannot re-cache stale data.
+_local_settings_generation = 0
 _local_settings_lock = threading.Lock()
 #: Serialises in-process read-modify-write of the settings file (P2-11d).
 _local_settings_write_lock = threading.Lock()
@@ -170,10 +174,25 @@ def _load_local_settings() -> dict:
     ``save_local_setting`` mutate what they get back, and handing out the cache
     itself would let one caller's edit appear in every later read without ever
     reaching disk.
+
+    The file is stat'ed at most once per ``LOCAL_SETTINGS_RESTAT_SECONDS``; writes
+    in this process invalidate at once, another process's edit shows within 1 s.
     """
     global _local_settings_cache
+    path = LOCAL_SETTINGS_FILE
+    key = str(path)
+    now = float(_local_settings_clock())
+    with _local_settings_lock:
+        generation = _local_settings_generation
+        cached = _local_settings_cache
+        if (
+            cached is not None
+            and cached[0] == key
+            and 0.0 <= now - cached[4] < LOCAL_SETTINGS_RESTAT_SECONDS
+        ):
+            return dict(cached[3])
     try:
-        stat = LOCAL_SETTINGS_FILE.stat()
+        stat = path.stat()
         stamp = (stat.st_mtime_ns, stat.st_size)
     except OSError:
         with _local_settings_lock:
@@ -181,16 +200,20 @@ def _load_local_settings() -> dict:
         return {}
     with _local_settings_lock:
         cached = _local_settings_cache
-        if cached is not None and (cached[0], cached[1]) == stamp:
-            return dict(cached[2])
+        if cached is not None and cached[0] == key and (cached[1], cached[2]) == stamp:
+            _local_settings_cache = (key, stamp[0], stamp[1], cached[3], now)
+            return dict(cached[3])
     try:
-        payload = json.loads(LOCAL_SETTINGS_FILE.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
     if not isinstance(payload, dict):
         return {}
     with _local_settings_lock:
-        _local_settings_cache = (stamp[0], stamp[1], dict(payload))
+        # A write that invalidated while this read was in flight wins: never
+        # cache what may be the pre-write file.
+        if _local_settings_generation == generation:
+            _local_settings_cache = (key, stamp[0], stamp[1], dict(payload), now)
     return payload
 
 
@@ -200,9 +223,10 @@ def invalidate_local_settings_cache() -> None:
     A same-millisecond write can land on an unchanged mtime on some filesystems,
     so writers say so explicitly rather than trusting the stamp to move.
     """
-    global _local_settings_cache
+    global _local_settings_cache, _local_settings_generation
     with _local_settings_lock:
         _local_settings_cache = None
+        _local_settings_generation += 1
 
 
 def _resolve_persistent_data_dir() -> tuple[Path, str]:
