@@ -128,3 +128,47 @@ def load(
         for trade in trades
     }
     return missing_inputs(trades, annotations, since_days=since_days, today=day)
+
+
+def question_for(store: Any, row: Mapping[str, Any] | None) -> Any:
+    """The Mentor's own `TradeQuestion` for one listed trade, or ``None``.
+
+    Built by `questions_for_session` on the trade's session, so the card gets
+    the same gaps, setup guess and exit ask it would draw at 09:00; a trade that
+    session does not list is asked from its row with the same field rule.
+    """
+    if not row:
+        return None
+    trade_id = str(row.get("trade_id") or "")
+    if not trade_id:
+        return None
+    days: list[str] = []
+    for text in (row.get("trade_date"), row.get("opened_at")):
+        day = str(text or "")[:10]
+        if len(day) == 10 and day not in days:
+            days.append(day)
+    for day in days:
+        for question in check.questions_for_session(store, day) or ():
+            if str(question.trade_id) == trade_id:
+                return question
+    trade = store.get_trade(trade_id) or {}
+    if not trade:
+        return None
+    return check.TradeQuestion(
+        trade_id=trade_id,
+        symbol=str(trade.get("symbol") or ""),
+        direction=str(trade.get("direction") or ""),
+        missing=check.missing_fields(trade, check.answered_fields(store, trade_id)),
+        opened_at=str(trade.get("opened_at") or ""),
+        trade_date=str(trade.get("trade_date") or ""),
+    )
+
+
+def load_chip(
+    store: Any, *, since_days: int = SINCE_DAYS_DEFAULT, today: date | None = None
+) -> dict[str, Any]:
+    """What the status-bar chip needs, read on its worker: the counts and the
+    Mentor question for the oldest trade missing a stop or setup."""
+    result = load(store, since_days=since_days, today=today)
+    result["question"] = question_for(store, oldest_chip_row(result))
+    return result

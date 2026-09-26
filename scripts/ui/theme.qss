@@ -68,6 +68,15 @@ QLabel#RuleChip {
     padding: 0px 6px;
 }
 
+/* P8 B4: "Inputs: N trades missing stop/setup" - one click opens the Mentor. */
+QPushButton#MissingInputsChip {
+    color: @caution@;
+    font-weight: 600;
+    padding: 0px 6px;
+    border: none;
+    background: transparent;
+}
+
 QLabel#RuleBanner {
     color: @caution@;
     font-weight: 600;
