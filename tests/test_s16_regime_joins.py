@@ -266,3 +266,80 @@ def test_the_service_writes_the_regime_file_and_leaves_the_grades_file_alone(tmp
     on_disk = json.loads((tmp_path / "b" / svc.REGIME_GRADES_FILE_NAME).read_text(encoding="utf-8"))
     assert on_disk == json.loads(json.dumps(by_regime, default=str))
     assert first["setup_grades_by_regime"]["current"] is None
+
+
+# ---------------------------------------------------------------- the two trackers
+
+
+def _regime_payload():
+    results = [_bracket("2026-07-10", sg.WIN)] * 3 + [_bracket("2026-07-11", sg.LOSS, bounce="ema_15")]
+    grades = {"daytrade": [{"key": sg.daytrade_key("vwap", "LONG"), "grade": sg.C, "n": 90}]}
+    bull, _bear = _bull_and_bear_picks()
+    return rg.build_payload(segments=TIMELINE, today="2026-09-26", swing_picks=bull,
+                            bracket=results, grades=grades, m5_window=("2026-07-01", "2026-09-25"))
+
+
+def test_the_daytrade_tracker_shows_this_regime_and_every_regime():
+    from ui.panels.daytrade_tracker_panel import PERFORMANCE_COLUMNS, apply_regime_grades
+
+    keys = [key for key, _label in PERFORMANCE_COLUMNS]
+    assert keys.index("regime_now") == keys.index("grade_n") + 1
+    assert dict(PERFORMANCE_COLUMNS)["regime_now"] == "This regime"
+    rows = apply_regime_grades(
+        [{"dimension": "bounce_type", "direction": "long", "segment": "vwap"},
+         {"dimension": "time_bucket", "direction": "long", "segment": "vwap"}],
+        _regime_payload(),
+    )
+    assert rows[0]["regime_now"] == rg.UNTESTED  # bear channel now; the alerts were in June-July
+    assert rows[0]["regime_all"] == (
+        "bear channel, lower highs (now): untested in this regime · "
+        "weekly higher highs then compression: NEW · win 100% · n 3 · all regimes: C n 90"
+    )
+    assert rows[1]["regime_now"] == rows[1]["regime_all"] == ""
+    # No published file: blanks, never a guess.
+    assert apply_regime_grades(rows[:1], {})[0]["regime_now"] == ""
+
+
+def test_the_setup_tracker_worker_builds_the_by_regime_rows(monkeypatch):
+    from ui.panels import setup_tracker_panel as module
+    from ui.services import working_lately_service
+
+    payload = _regime_payload()
+    monkeypatch.setattr(working_lately_service, "read_persisted_regime_grades", lambda *_a: payload)
+    data = module._read_tracker_exports(1)
+    rows = data["ranked"]["regime_grades"]
+    assert rows == rg.table_rows(payload)
+    assert [row["kind"] for row in rows] == ["swing", "day trade", "day trade"]
+    assert rows[0]["this_regime"] == rg.UNTESTED
+    assert data["regime_sentence"].startswith("Regime now: bear channel, lower highs since 2026-08-01 (day 57).")
+    plan = {name: memo for name, _m, _rows, memo in module._table_render_plan(
+        data["ranked"], data["signatures"], 1, "")}
+    assert data["signatures"]["regime_grades"] in plan["regime_table"]
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
+@pytest.mark.qt
+def test_the_setup_tracker_has_a_by_regime_tab_that_only_formats(qapp):
+    from ui.panels import setup_tracker_panel as module
+
+    panel = module.SetupTrackerPanel()
+    try:
+        titles = [panel.tabs.tabText(index) for index in range(panel.tabs.count())]
+        assert titles[:2] == ["Current Picks", "By regime"]
+        payload = _regime_payload()
+        panel._on_exports_loaded({
+            "signatures": {"regime_grades": "x"}, "raw": {}, "min_closed": 1,
+            "ranked": {"regime_grades": rg.table_rows(payload)},
+            "regime_sentence": rg.status_sentence(payload),
+        })
+        assert panel.regime_model.rows()[0]["this_regime"] == rg.UNTESTED
+        assert panel.regime_status_label.text() == rg.status_sentence(payload)
+    finally:
+        panel.shutdown()
+        panel.deleteLater()
