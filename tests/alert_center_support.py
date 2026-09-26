@@ -12,7 +12,9 @@ import importlib
 
 PANEL_MODULE = "ui.panels.alert_center_panel"
 #: The mixin modules holding moved `AlertCenterPanel` methods that read module globals.
-MIXIN_MODULES: tuple[str, ...] = ()
+MIXIN_MODULES: tuple[str, ...] = (
+    "ui.panels.alert_center.wall",
+)
 
 
 def patch_alert_center_global(monkeypatch, name: str, value) -> None:
