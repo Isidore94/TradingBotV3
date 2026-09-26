@@ -132,6 +132,37 @@ S1 and keep the order. The two 500 MB logs are read with
   `vwap` short +0.03R) while holding them to the close loses 0.03R to 0.30R. Nothing on
   the desk shows this: grades use the 1:1 bracket, tiers blend EOD entry quality with
   a 60-minute "quick" R, and no surface says when a family's move usually peaks.
+- **F15 Nothing on M5 moves a lot right away.** Across all alerts 15% print +1R inside
+  30 min and 21% inside 60; 21% are stopped inside 30 min; mean MFE at 30 min 0.61R.
+  Fastest: `regime_pause_rs` long (21% / 30%, but 24% stopped fast; MFE 1.02R by 60 min,
+  1.86R by the close), `impulse_retest_vwap_eod` long, `vwap` long, `eod_vwap` long (20% /
+  32%). Slowest: `h1_blue_after_red` 7%, `h1_green_to_yellow` 5%, `h1_ema_15` 10%.
+- **F16 Swings that move on their own (ATR units, 08-14 to 09-24).** At 10 sessions the
+  SHORT families run: `avwap_retest_followthrough` median +1.23 ATR, 56% reach +1 ATR vs
+  8% go -1 ATR, payoff 2.1; `avwap_breakout` +1.19 (2.1); `mid_earnings_above_2nd_stdev`
+  +1.03 (2.3); `avwap_band_bounce` +0.92 (2.1); `previous_avwape_bounce` +1.00 (1.8);
+  `favorite_zone_watch` +0.96 (1.5). The favourite zone LOWER_1 -> AVWAPE short: +0.64
+  ATR at 5 sessions, 36% vs 10%, payoff 1.35, win 72%. Every LONG family is negative
+  except `top_pattern_tracking` (+0.09 ATR, payoff 1.16); `avwap_breakout` long -0.90 ATR
+  with 48% going -1 ATR; AVWAPE -> UPPER_1 long -0.20 ATR, payoff 1.02, win 43%.
+- **F17 Beating SPY is not the same as making R.** The tracker's own exit model (target
+  then stop, `setup_attribute_leaderboard`): `avwape_to_1stdev` SHORT +0.47R avg, +0.43R
+  median, 76% target hit, 56% stop (n=1,137); `avwape_to_1stdev` LONG -0.41R / -0.42R
+  (n=1,041 / 1,269), 48-57% hit, 85-89% stop. Side baselines: SHORT +0.11R, LONG -0.18R
+  to -0.26R. But `avwap_retest_followthrough` SHORT, which beats SPY 73% and runs +1.2
+  ATR, books -0.04R under the tracker's exits, and `avwap_band_bounce` SHORT -0.03R: the
+  exits cut those runners. Points today predict R backwards for longs: LONG rows scoring
+  69-121 points average -0.32R to -0.37R, rows under 32 points -0.04R; for SHORTS the
+  top score bucket is the best (+0.21R, 83% hit, 38% stop).
+- **F18 The short edge survives a next-open fill.** Re-pricing every 5-session outcome
+  from the NEXT session's open instead of the scan day's close (17,348 rows, all priced):
+  SHORT +1.38% -> +1.51%, `avwap_retest_followthrough` short 2.38 -> 2.32, the favourite
+  zone short 2.17 -> 2.14. LONG -0.09% -> -0.40%; `general` LONG +0.18 -> -0.61 because a
+  +0.88% overnight gap sat in the measured number. So the short numbers are tradable
+  numbers, the long numbers were flattered. What is still unproven: all of this is ONE
+  six-week bearish-rotation window (08-14 to 09-24); the April-June bull window is in
+  the backfill the trader still owes, and S4's tape-relative search with `spy_trend` /
+  `side_aligned_day` is the test that turns "shorts work now" into "shorts work when".
 
 **Findings, swings (D1):**
 - **F9 Short families carried the last six weeks.** Session-horizon outcomes 08-14 to
@@ -197,6 +228,38 @@ S1 and keep the order. The two 500 MB logs are read with
   rows). It has no default flag and no saved setting. "Kill" can only mean "stop
   recording it": one new constant + one skip in `check_h1_color_setups`, which is wider
   than the trader's "Sure kill it". Trader: stop recording it (yes/no)?
+- **S12 = P13 Points challenger SP4, spec frozen 2026-09-26** (grades ->8; the trader:
+  "let's redo the points system to reflect this - I want those excellent 5 swing setups
+  to be higher than the garbage setups like my longs favourite zone"). Shadow first, no
+  ask-first until promotion:
+  - Nightly deterministic `family_side_evidence.json` (slot after `day_review_facts`, goal
+    setup_quality): per (setup_family, side) over the trailing 40 completed sessions:
+    tape-relative beat rate and Wilson low bound at 5 sessions, mean excess vs SPY, mean
+    and median move in ATR at 5 and 10 sessions, payoff, the tracker's avg_total_r, n and
+    sessions. From `master_avwap_session_horizon_outcomes.csv`, `d1_features_history.csv`
+    (atr20) and the attribute leaderboard. Fixture-tested; refuses to write with under
+    15 sessions of data.
+  - Pure `points_challenger.py`: `sp4_points(row, evidence)` = champion priority score +
+    adjust, adjust = 60 x (beat_low_h5 - 0.50) + 20 x mean_move_atr_h10, clamped to
+    [-40, +40], only when n >= 80 and sessions >= 15, else 0. Frozen numbers; do not tune
+    them after looking. Today that gives `avwap_retest_followthrough` SHORT about +38,
+    `avwap_band_bounce` SHORT about +30, `favorite_zone_watch` LONG about -14,
+    `avwap_breakout` LONG about -22: a bucket-sized swing (bucket edges 32 / 69 / 121).
+  - Desk: a shadow "SP4" column and chip on the Setup Tracker beside the live points;
+    the live sort, buckets and alerts do not change. The Saturday report carries one
+    line per side: champion top quartile vs SP4 top quartile, tape-relative excess and
+    tracker R over the entry sessions so far.
+  - SP4 rules, fixed now: 20 new entry sessions from the first night it runs, then 5
+    sessions to mature. Success = SP4 top quartile beats the champion top quartile by
+    >= 0.5% excess at 5 sessions AND >= 0.10R tracker R. Downside stop = SP4 trails by
+    > 0.5% after 10 entry sessions. Rollback = delete the column. Promotion to live
+    points is ask-first (`legacy.py`), golden fixtures, trader's quoted yes.
+- **S13 Exit review for the short runners** (grades; measurement first): the tracker's
+  target/stop exits book -0.04R on `avwap_retest_followthrough` SHORT and -0.03R on
+  `avwap_band_bounce` SHORT while those names run +1.2 / +0.9 ATR in 10 sessions (F17).
+  Measure, per family x side, R under three exit models (current; stop only, hold 10
+  sessions; trail 1 ATR from the extreme) from the same outcomes, and show the three on
+  the Setup Tracker. No exit rule changes until the trader picks one.
 
 ### Phase C - needs live days (trigger named)
 
@@ -204,9 +267,8 @@ S1 and keep the order. The two 500 MB logs are read with
 - **C1 Intraday grading** (intraday ->8): after 5 sessions (2026-10-02) grade Pop, Dip,
   Rip and the options chase; "did the phone line pay" line on Day Review (builds now,
   shows "no data yet"); rip/dip hysteresis only if the board flaps live.
-- **P13 Points challenger** (grades ->8, after 09-30): SP4 frozen before looking, 20
-  entry sessions plus 5, limits fixed in advance; then the bounded "my trades" nudge at
-  10 confirmed trades per family.
+- **P13 Points challenger**: specified as S12 (Phase S) on 2026-09-26; the bounded
+  "my trades" nudge follows once a family has 10 confirmed trades.
 - **C3 Second Saturday report** (2026-10-03): first verdicts; promotion to a named
   sub-family (P1-4 4e, ask-first, one at a time).
 - **P14 Retire PROVEN, raise the M5 bar** (noise ->8; ask-first, golden fixtures):
