@@ -173,6 +173,18 @@ S1 and keep the order. The two 500 MB logs are read with
   `favorite_zone_watch` +1.0% (n=163); `avwap_breakout` short lost -0.8%. A rotation tape:
   the index floats, the names the scan flags short keep breaking down, and the names it
   flags long lag the index. The setup is the signal; the index is not.
+- **F20 Which longs did beat SPY** (5 sessions, LONG rows, n=10,356, baseline 42% beat,
+  -0.19% excess). No long slice clears a 0.55 low bound. The best: post-earnings names 4-7
+  sessions after the gap 59% beat, +2.4% excess (n=158); `top_pattern_tracking` 50% /
+  +0.35% (n=1,089), 53% / +0.57% when SPY is above its 20-day SMA; any long with SPY above
+  its 20-day 49% vs 42%; Technology 51% (n=2,072); leadership industries Semiconductors
+  55% / +1.6% (n=222), Computer Hardware 56% / +1.1%, Diagnostics & Research 57% / +2.7%
+  (n=274), Oil & Gas Refining 68% / +1.7% (n=145). Extended runners at UPPER_3 pay by
+  skew, not hit rate: previous level UPPER_3 48% beat but +7.9% excess (n=452). The
+  trader's favourite long (`favorite_zone_watch` LONG) is 44% / -0.15% overall and 52% /
+  +0.53% when SPY is above its 20-day (n=412); `avwap_breakout` and `avwap_band_bounce`
+  long stay negative even then (-0.8%, -0.7%). Facets already carry `spy_trend` and
+  `earnings_gap_age`; S4 should confirm both on the backfilled window.
 
 **Findings, swings (D1):**
 - **F9 Short families carried the last six weeks.** Session-horizon outcomes 08-14 to
