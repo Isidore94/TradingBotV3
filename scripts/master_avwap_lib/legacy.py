@@ -629,6 +629,10 @@ PRIORITY_RETEST_LOOKBACK_BARS = 5
 PRIORITY_RETEST_TOUCH_TOL_ATR = 0.25
 PRIORITY_RETEST_CONFIRM_PUSH_ATR = 0.10
 PRIORITY_FAVORITE_ZONE_SCORE_BONUS = 18
+# The favourite zone is SHORT-only (trader 2026-09-26): a LONG row that would get a favourite
+# bucket gets none and is recorded as a tracker control with this reason; longs come from Long leaders.
+FAVZONE_LONG_RETIRED = "favzone_long_retired"
+FAVZONE_LONG_RETIRED_BUCKETS = frozenset({"favorite_setup", "near_favorite_zone"})
 PRIORITY_HIGH_CONVICTION_MIN_SCORE = 0
 PRIORITY_SECOND_BAND_TEST_LOOKBACK_DAYS = 8
 PRIORITY_SECOND_BAND_FIRST_TEST_SCORE_PENALTY = 10
@@ -14512,8 +14516,15 @@ def select_tracker_control_rows(
     of the rest — surfaces edges in configurations the bot ignores). Rows are
     flagged in place with ``is_control`` and ``control_reason``."""
 
+    retired = [
+        row for row in priority_rows or []
+        if row.get(FAVZONE_LONG_RETIRED) and str(row.get("symbol") or "").strip()
+    ]
+    for row in retired:
+        row["is_control"] = True
+        row["control_reason"] = FAVZONE_LONG_RETIRED
     if not TRACKER_CONTROL_SAMPLING_ENABLED or max_rows <= 0:
-        return []
+        return retired
 
     tracked_keys = {
         (str(row.get("symbol") or "").strip().upper(), normalize_side(row.get("side")))
@@ -14528,6 +14539,8 @@ def select_tracker_control_rows(
             continue
         if str(row.get("priority_bucket") or "") in {"favorite_setup", "near_favorite_zone"}:
             continue
+        if row.get(FAVZONE_LONG_RETIRED):
+            continue
         if row.get("ranking_blocked") or _is_priority_recommendation_blocked(row):
             continue
         # Only track genuine setups that simply weren't promoted, not non-setups.
@@ -14536,7 +14549,7 @@ def select_tracker_control_rows(
         candidates.append(row)
 
     if not candidates:
-        return []
+        return retired
 
     gate = float(PRIORITY_FAVORITE_SETUP_MIN_SCORE)
     near_miss = [row for row in candidates if _priority_row_score(row) >= gate - CONTROL_NEAR_MISS_SCORE_BAND]
@@ -14560,7 +14573,7 @@ def select_tracker_control_rows(
         row["is_control"] = True
         row["control_reason"] = "random"
         selected.append(row)
-    return selected
+    return retired + selected
 
 
 def _prune_main_setups(tracker: dict, *, reference_scan_date: str | None = None) -> None:
@@ -25390,41 +25403,8 @@ def _build_d1_watchlist_trigger_levels(
     favorite_zone = str(row.get("favorite_zone") or state.get("favorite_zone") or "").strip()
     current_band_zone = str(row.get("current_band_zone") or state.get("current_band_zone") or "").strip()
     if side == "LONG" and favorite_zone == "AVWAPE to UPPER_1":
-        _append_d1_trigger_level(
-            trigger_levels,
-            seen,
-            side=side,
-            label="UPPER_1",
-            level=_anchor_level_value(current_anchor, "UPPER_1"),
-            event_type="first_dev_break",
-            alert_label="1st-dev break",
-            reason="Armed from AVWAPE-to-UPPER_1 zone; alert on UPPER_1 break.",
-            source="favorite_zone",
-            today_iso=today_iso,
-            armed_price=last_close,
-            anchor_type="CURRENT",
-            anchor_date=current_anchor_date,
-            priority_bucket=priority_bucket,
-            setup_family=setup_family,
-        )
-        _append_d1_trigger_level(
-            trigger_levels,
-            seen,
-            side=side,
-            label="AVWAPE",
-            level=_anchor_level_value(current_anchor, "AVWAPE"),
-            event_type="avwape_retest_watch",
-            alert_label="AVWAPE retest",
-            reason="Armed from AVWAPE-to-UPPER_1 zone; alert on pullback into AVWAPE support.",
-            source="favorite_zone",
-            today_iso=today_iso,
-            armed_price=last_close,
-            anchor_type="CURRENT",
-            anchor_date=current_anchor_date,
-            priority_bucket=priority_bucket,
-            setup_family=setup_family,
-            action="break_below",
-        )
+        # FAVZONE_LONG_RETIRED: the LONG favourite zone arms no D1 alert, nor the band-zone pair below.
+        pass
     elif side == "SHORT" and favorite_zone == "LOWER_1 to AVWAPE":
         _append_d1_trigger_level(
             trigger_levels,
@@ -32489,13 +32469,15 @@ def build_priority_setup_summary(
         or (side == "SHORT" and trend_label == "DOWN")
     )
 
-    if favorite_zone:
+    # The favourite zone scores on the SHORT side only (FAVZONE_LONG_RETIRED).
+    zone_scores = bool(favorite_zone) and side != "LONG"
+    if zone_scores:
         score += PRIORITY_FAVORITE_ZONE_SCORE_BONUS
 
     if retest_followthrough:
         score += PRIORITY_RETEST_FOLLOWTHROUGH_SCORE_BONUS
         score += PRIORITY_RETEST_LEVEL_SCORE_BONUS.get(retest_reference_level or "", 0)
-        if favorite_zone:
+        if zone_scores:
             score += PRIORITY_RETEST_ZONE_CONFLUENCE_SCORE_BONUS
         if trend_is_aligned:
             score += PRIORITY_RETEST_TREND_ALIGNMENT_SCORE_BONUS
@@ -34924,6 +34906,17 @@ def apply_final_priority_buckets(
             return "near_favorite_zone", False, True
         return "", False, False
 
+    def _classify_retiring_long_favorites(row: dict | None) -> tuple[str, bool, bool]:
+        # A LONG favourite / near row keeps no bucket; the bucket it would have had is recorded.
+        bucket, is_favorite, is_near = _classify_priority_bucket(row)
+        if not row:
+            return bucket, is_favorite, is_near
+        row.pop(FAVZONE_LONG_RETIRED, None)
+        if bucket in FAVZONE_LONG_RETIRED_BUCKETS and normalize_side(row.get("side")) == "LONG":
+            row[FAVZONE_LONG_RETIRED] = bucket
+            return "", False, False
+        return bucket, is_favorite, is_near
+
     priority_map = {row["symbol"]: row for row in priority_rows}
     symbol_map = ai_state.setdefault("symbols", {})
 
@@ -34931,9 +34924,13 @@ def apply_final_priority_buckets(
         row = priority_map.get(symbol)
         if row:
             _enrich_priority_bucket_context(row, symbol_entry)
-        priority_bucket, is_favorite_setup, is_near_favorite_zone = _classify_priority_bucket(row)
+        priority_bucket, is_favorite_setup, is_near_favorite_zone = _classify_retiring_long_favorites(row)
         preferred_swing_focus = bool(row and _priority_is_preferred_swing_focus(row))
 
+        if row and row.get(FAVZONE_LONG_RETIRED):
+            symbol_entry[FAVZONE_LONG_RETIRED] = row[FAVZONE_LONG_RETIRED]
+        else:
+            symbol_entry.pop(FAVZONE_LONG_RETIRED, None)
         symbol_entry["priority_bucket"] = priority_bucket
         symbol_entry["is_favorite_setup"] = is_favorite_setup
         symbol_entry["is_near_favorite_zone"] = is_near_favorite_zone
@@ -34954,7 +34951,7 @@ def apply_final_priority_buckets(
 
     for record in csv_rows:
         row = priority_map.get(record.get("symbol"))
-        priority_bucket, is_favorite_setup, is_near_favorite_zone = _classify_priority_bucket(row)
+        priority_bucket, is_favorite_setup, is_near_favorite_zone = _classify_retiring_long_favorites(row)
         record["priority_bucket"] = priority_bucket
         record["is_favorite_setup"] = is_favorite_setup
         record["is_near_favorite_zone"] = is_near_favorite_zone
