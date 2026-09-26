@@ -37,6 +37,29 @@ from ui.widgets.empty_state import EmptyState
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
 from swallowed import note_swallowed
 
+
+def _warm_earnings_warning() -> None:
+    """S10b: start the earnings-warning cache load on its background thread."""
+    try:
+        import earnings_warning
+
+        earnings_warning.request_warm()
+    except Exception as exc:  # noqa: BLE001 - a warning never costs the chart
+        note_swallowed("earnings warning warm not started", exc, quiet=True)
+
+
+def _earnings_warning_for(alert) -> str:
+    """S10b: the short-into-earnings line for a SHORT alert, "" otherwise. Memory only."""
+    try:
+        import earnings_warning
+
+        return earnings_warning.warning_for_symbol(
+            getattr(alert, "symbol", ""), getattr(alert, "side", "")
+        )
+    except Exception as exc:  # noqa: BLE001
+        note_swallowed("earnings warning line not built", exc, quiet=True)
+        return ""
+
 _NO_M5_WATCH_REASON = (
     "No cached M5 bars for this symbol yet - arming still works: BounceBot "
     "folds armed names into its M5 scan set, so bars land within a scan "
@@ -225,6 +248,7 @@ class AlertChartReview(QWidget):
         self._any_bounce_armed = False
 
         self.title = QLabel("Visual Alert Review")
+        _warm_earnings_warning()
         self.title.setObjectName("SectionTitle")
         # The setup line: WHAT exactly fired/is being looked at. Styled large
         # via ReviewSetupText, and red (alertLive property) when a live alert
@@ -1070,7 +1094,12 @@ class AlertChartReview(QWidget):
         self.guidance_label.setVisible(bool(guidance_text))
         side = f" · {alert.side}" if alert.side else ""
         timeframe = f" · {alert.timeframe}" if alert.timeframe else ""
-        self.title.setText(f"{alert.symbol}{side}{timeframe}")
+        # S10b: a SHORT 0-14 days before earnings says so in the header. Display only.
+        earnings = _earnings_warning_for(alert)
+        headline = earnings.split(" - ", 1)[0]
+        warn = f" · ⚠ {headline}" if earnings else ""
+        self.title.setText(f"{alert.symbol}{side}{timeframe}{warn}")
+        self.title.setToolTip(earnings)
         self.alert_text.setText(alert.trigger or alert.raw_text)
         # Keep the established live/muted marker for existing callers, then
         # classify the exact reason without changing routing or membership.
@@ -1239,6 +1268,7 @@ class AlertChartReview(QWidget):
     def clear(self) -> None:
         self.alert = None
         self.title.setText("Visual Alert Review")
+        self.title.setToolTip("")
         self.alert_text.setText("Waiting for the next ticker alert.")
         self._set_setup_text_live(False)
         self._set_alert_reason_tone("muted")

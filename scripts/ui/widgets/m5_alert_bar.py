@@ -72,6 +72,28 @@ from ui import theme
 from ui.models.bounce import REGIME_PAUSE_TRIGGER_PREFIX
 from swallowed import note_swallowed
 
+
+def _warm_earnings_warning() -> None:
+    try:
+        import earnings_warning
+
+        earnings_warning.request_warm()
+    except Exception as exc:  # noqa: BLE001 - a warning never costs the bar
+        note_swallowed("earnings warning warm not started", exc, quiet=True)
+
+
+def _earnings_line_for(alert: Any) -> str:
+    """S10b: the short-into-earnings warning for a SHORT alert, "" otherwise. Memory only."""
+    try:
+        import earnings_warning
+
+        return earnings_warning.warning_for_symbol(
+            getattr(alert, "symbol", ""), getattr(alert, "side", "")
+        )
+    except Exception as exc:  # noqa: BLE001 - a warning never costs the row
+        note_swallowed("earnings warning line not built", exc, quiet=True)
+        return ""
+
 #: Oldest rows fall off past this; a session produced 72 M5 alerts in its
 #: first 46 minutes on 2026-08-27, so this is a whole day with room.
 MAX_ROWS = 400
@@ -197,6 +219,9 @@ class M5AlertBar(QWidget):
         # stream, which is what the desk passes; the seam exists so a test can
         # exercise the real handler without touching the trader's file.
         self._annotations_path = annotations_path
+        # S10b: load the earnings dates and stat on a background thread now,
+        # so the first SHORT row already has its warning.
+        _warm_earnings_warning()
         # ST6.5. `[(bounce_type, SIDE)]`, best first, off the desk's shared
         # Working-lately snapshot. Read AT SORT TIME and only when the switch is
         # ON: this REORDERS and never withholds - every row that was here is
@@ -576,7 +601,9 @@ class M5AlertBar(QWidget):
             "+1R before -1R over the last 20 sessions (PROVEN, A, B, C, D; NEW = "
             "too few to grade).\n\n"
         )
-        grade_line = self._grade_line_for(alert)
+        grade_line = "\n".join(
+            line for line in (self._grade_line_for(alert), _earnings_line_for(alert)) if line
+        )
         if grade_line:
             grade_help = f"{grade_line}\n{grade_help}"
         if repeats > 1:

@@ -386,6 +386,13 @@ class _AiStateCompressionWorker(QThread):
             changed = bool(setup_key_labels.warm_cache()) or changed
         except Exception as exc:  # noqa: BLE001 - a label never costs the table
             note_swallowed("setup key label warm failed", exc, quiet=True)
+        try:
+            # S10b: the short-into-earnings stat rides the same off-thread warm.
+            import earnings_warning
+
+            changed = bool(earnings_warning.warm_cache()) or changed
+        except Exception as exc:  # noqa: BLE001 - a warning never costs the table
+            note_swallowed("earnings warning warm failed", exc, quiet=True)
         self.done.emit(changed)
 
 
