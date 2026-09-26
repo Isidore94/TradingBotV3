@@ -218,6 +218,15 @@ S1 and keep the order. The two 500 MB logs are read with
   exits cut those runners. Points today predict R backwards for longs: LONG rows scoring
   69-121 points average -0.32R to -0.37R, rows under 32 points -0.04R; for SHORTS the
   top score bucket is the best (+0.21R, 83% hit, 38% stop).
+- **F18 The short edge survives a next-open fill.** Re-pricing every 5-session outcome
+  from the NEXT session's open instead of the scan day's close (17,348 rows, all priced):
+  SHORT +1.38% -> +1.51%, `avwap_retest_followthrough` short 2.38 -> 2.32, the favourite
+  zone short 2.17 -> 2.14. LONG -0.09% -> -0.40%; `general` LONG +0.18 -> -0.61 because a
+  +0.88% overnight gap sat in the measured number. So the short numbers are tradable
+  numbers, the long numbers were flattered. What is still unproven: all of this is ONE
+  six-week bearish-rotation window (08-14 to 09-24); the April-June bull window is in
+  the backfill the trader still owes, and S4's tape-relative search with `spy_trend` /
+  `side_aligned_day` is the test that turns "shorts work now" into "shorts work when".
 
 **Findings, swings (D1):**
 - **F9 Short families carried the last six weeks.** Session-horizon outcomes 08-14 to
