@@ -225,3 +225,95 @@ def test_the_digest_file_carries_the_lines_and_the_narrator_never_sees_them(
     seen = json.dumps(handed[0])
     assert "slots per goal" not in seen and "tokens tonight" not in seen
     assert digest.NIGHT_TELEMETRY_KEY not in seen
+
+
+# ---------------------------------------------------------------------------
+# 3. Health rows: Night AI timing and Broker import
+# ---------------------------------------------------------------------------
+
+FLEX = "failed: IBKR Flex: IBKR Flex request failed: Statement could not be generated at this time."
+MAX_RETRIES = (
+    "failed: IBKR Flex: HTTPSConnectionPool(host='gdcdyn.interactivebrokers.com', "
+    "port=443): Max retries exceeded"
+)
+
+
+def _fixture_ledger(tmp_path: Path) -> Path:
+    rows = [
+        {"job": "ollama_probe", "status": "ok", "session_date": "2026-09-23",
+         "started_at": "2026-09-23T22:06:10-07:00",
+         "reason": "gemma3:12b-tbv3ctx-64k answered one token in 21.4 s"},
+        {"job": "day_review_narration", "status": "degraded_no_narrative",
+         "session_date": "2026-09-24", "started_at": "2026-09-24T22:21:42-07:00",
+         "duration_seconds": 729.056},
+        {"job": "ollama_probe", "status": "ok", "session_date": "2026-09-24",
+         "started_at": "2026-09-24T23:30:19-07:00",
+         "reason": "gemma3:12b-tbv3ctx-64k answered one token in 16.3 s"},
+        {"job": "day_review_narration", "status": "ok", "session_date": "2026-09-24",
+         "started_at": "2026-09-24T23:30:19-07:00", "duration_seconds": 400.576},
+        # A later window skip has no run time and does not replace the run.
+        {"job": "day_review_narration", "status": "skipped", "session_date": "2026-09-24",
+         "duration_seconds": 0.0},
+    ]
+    # Sixteen import nights: the two oldest fall out of the 14-night window.
+    for day in range(1, 17):
+        session = f"2026-09-{day:02d}"
+        if day in (1, 2, 5, 9):
+            rows.append({"job": "journal_import", "status": "failed",
+                         "session_date": session, "reason": FLEX})
+            rows.append({"job": "journal_import", "status": "failed",
+                         "session_date": session, "reason": MAX_RETRIES})
+            rows.append({"job": "journal_import", "status": "skipped", "terminal": True,
+                         "session_date": session, "reason": "3 attempt(s) already made"})
+        elif day == 12:
+            rows.append({"job": "journal_import", "status": "failed",
+                         "session_date": session, "reason": FLEX})
+            # The 07:00 morning retry keeps the previous session_date and saves it.
+            rows.append({"job": "journal_import", "status": "ok", "session_date": session,
+                         "morning_retry": True, "reason": "morning retry: imported 3"})
+        else:
+            rows.append({"job": "journal_import", "status": "ok",
+                         "session_date": session, "reason": "imported 400"})
+    path = tmp_path / "ai_job_ledger.jsonl"
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    return path
+
+
+def test_health_night_ai_and_broker_import_lines_from_a_fixture_ledger(tmp_path):
+    import operations_audit
+
+    lines = operations_audit.ai_telemetry_lines(_fixture_ledger(tmp_path))
+    assert lines == [
+        "Night AI: first token 16.3 s (probe 2026-09-24 23:30); day story 6:41 (ok)",
+        "Broker import: ok 12 of last 14 nights; last failure 2026-09-09: "
+        + MAX_RETRIES[:57] + "...",
+    ]
+
+
+def test_health_night_ai_line_says_failed_probe_and_degraded_story(tmp_path):
+    import operations_audit
+
+    rows = [
+        {"job": "day_review_narration", "status": "degraded_no_narrative",
+         "duration_seconds": 729.056},
+        {"job": "ollama_probe", "status": "failed", "started_at": "2026-09-24T22:00:05-07:00",
+         "error": "did not answer within 30 s"},
+    ]
+    assert operations_audit.night_ai_timing_line(rows) == (
+        "Night AI: first token none, probe failed (probe 2026-09-24 22:00); "
+        "day story 12:09 (degraded)"
+    )
+    assert operations_audit.ai_telemetry_lines(tmp_path / "missing.jsonl") == []
+
+
+def test_the_health_worker_payload_carries_the_telemetry_lines(tmp_path, monkeypatch):
+    import operations_audit
+    from ui.panels import health_panel
+
+    store = tmp_path / "store"
+    (store / "logs").mkdir(parents=True)
+    _fixture_ledger(tmp_path).replace(store / "logs" / operations_audit.AI_JOB_LEDGER_NAME)
+    monkeypatch.setenv(operations_audit.AI_STORE_DIR_ENV, str(store))
+    lines = health_panel._with_ai_night_lines({})["ai_night_lines"]
+    assert any(line.startswith("Night AI: first token 16.3 s") for line in lines)
+    assert any(line.startswith("Broker import: ok 12 of last 14 nights") for line in lines)
