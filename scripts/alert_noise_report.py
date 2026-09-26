@@ -2,7 +2,9 @@
 
 `python scripts/alert_noise_report.py --day YYYY-MM-DD [--days N]` prints, per
 session, from the review events: shown (chart impressions and distinct names),
-hidden_by_show (the Show filter's held-back M5 alerts), skip, remove_today,
+hidden_by_show (NAMES the Show filter held back: the panel writes one row per
+symbol/side/day on the first hide, so this counts hidden names, never hidden
+alerts), skip, remove_today,
 acted on (the trader's take actions - `review_learning.TAKE_ACTIONS` plus a
 Focus/favourite toggle turned on; claims are `like_advance`), watch_fired and
 acted share = acted / shown; plus the Best-right-now hit rate
@@ -54,7 +56,10 @@ def day_counts(rows: Iterable[Mapping[str, Any]], day: str, *, hidden_since: str
         "events": len(todays),
         "shown": len(shown),
         "shown_names": len({str(r.get("symbol") or "") for r in shown}),
-        "hidden_by_show": len(hidden) if measured_hidden else None,
+        "hidden_by_show": (
+            len({(str(r.get("symbol") or ""), str(r.get("side") or "")) for r in hidden})
+            if measured_hidden else None
+        ),
         "hidden_names": len({str(r.get("symbol") or "") for r in hidden}) if measured_hidden else None,
         "acted": len(acted),
         "acted_names": len({str(r.get("symbol") or "") for r in acted}),
@@ -84,7 +89,7 @@ def day_line(counts: Mapping[str, Any], best: Mapping[str, Any] | None) -> str:
     if not counts.get("events"):
         return NO_EVENTS
     hidden = counts.get("hidden_by_show")
-    hidden_text = "hidden by Show unmeasured" if hidden is None else f"{hidden} hidden by Show"
+    hidden_text = "hidden names unmeasured" if hidden is None else f"{hidden} names hidden by Show"
     return (
         f"Alerts: {counts['shown']} shown, {hidden_text}, {counts['acted']} acted on "
         f"({_pct(counts.get('acted_share'))}), {best_now_text(best)}"
@@ -137,7 +142,7 @@ def _lines(row: Mapping[str, Any]) -> list[str]:
     return [
         f"{row['day']}:",
         f"  shown {row['shown']} ({row['shown_names']} names), "
-        f"hidden_by_show {'unmeasured' if hidden is None else hidden}, "
+        f"hidden_by_show {'unmeasured' if hidden is None else f'{hidden} names'}, "
         f"skip {row['skip']}, remove_today {row['remove_today']}",
         f"  acted on {row['acted']} ({row['acted_names']} names), acted share "
         f"{_pct(row.get('acted_share'))}, watch_fired {row['watch_fired']}",

@@ -206,7 +206,7 @@ def test_the_report_counts_shown_hidden_and_acted_on_per_day():
     assert (row["acted"], row["acted_names"]) == (3, 2)
     assert row["acted_share"] == pytest.approx(0.75)
     assert row["line"] == (
-        "Alerts: 4 shown, 2 hidden by Show, 3 acted on (75%), Best-right-now: no data yet"
+        "Alerts: 4 shown, 2 names hidden by Show, 3 acted on (75%), Best-right-now: no data yet"
     )
 
 
@@ -215,7 +215,7 @@ def test_a_day_before_hidden_by_show_existed_is_unmeasured_never_zero():
 
     row = alert_noise_report.report(["2026-09-23"], EVENTS, [], bars_reader=lambda _s: None)[0]
     assert row["hidden_by_show"] is None
-    assert row["line"].startswith("Alerts: 1 shown, hidden by Show unmeasured, 0 acted on (0%)")
+    assert row["line"].startswith("Alerts: 1 shown, hidden names unmeasured, 0 acted on (0%)")
 
 
 def test_a_day_with_no_events_says_so():
@@ -246,7 +246,7 @@ def test_the_cli_prints_the_day_read_only(monkeypatch, capsys):
     assert alert_noise_report.main(["--day", DAY, "--days", "2"]) == 0
     out = capsys.readouterr().out
     assert "2026-09-23:" in out and f"{DAY}:" in out
-    assert "shown 4 (3 names), hidden_by_show 2, skip 1, remove_today 1" in out
+    assert "shown 4 (3 names), hidden_by_show 2 names, skip 1, remove_today 1" in out
     assert "acted on 3 (2 names), acted share 75%, watch_fired 1" in out
 
 
@@ -286,5 +286,5 @@ def test_the_alerts_line_is_built_on_the_worker_from_the_real_stores(monkeypatch
     monkeypatch.setattr(review_events, "load_review_events", lambda *a, **k: list(EVENTS))
     monkeypatch.setattr(best_now_outcomes, "load_records", lambda *a, **k: [])
     assert alert_noise_report.build_day_line(DAY) == (
-        "Alerts: 4 shown, 2 hidden by Show, 3 acted on (75%), Best-right-now: no data yet"
+        "Alerts: 4 shown, 2 names hidden by Show, 3 acted on (75%), Best-right-now: no data yet"
     )

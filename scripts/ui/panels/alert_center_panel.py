@@ -585,6 +585,12 @@ class AlertCenterPanel(QFrame):
         # review rows are deferred to the queue's worker and use the click's context.
         self._arm_queue_obj = None
         self._force_async_arms = False
+        # B6: one hidden_by_show row per (day, symbol, side); the write and the
+        # store read of today's keys run on one evidence worker, never here.
+        self._show_hidden_seen: set[tuple[str, str, str]] = set()
+        self._show_hidden_executor = None
+        self._show_hidden_last = None
+        self._show_hidden_store_keys: dict[str, set[tuple[str, str]]] = {}
         self._deferred_review_events: list | None = None
         self._arm_review_override: tuple | None = None
         self._alerts: list[BounceAlert] = []
@@ -2036,16 +2042,68 @@ class AlertCenterPanel(QFrame):
         return self.show_filter_verdict(alert)[0]
 
     def _record_show_hidden(self, alert: BounceAlert) -> None:
-        """B6: one `hidden_by_show` evidence row per hidden alert. Best-effort."""
+        """B6: the first hide per (day, symbol, side) queues one `hidden_by_show` row.
+
+        The Qt thread only checks an in-memory set; the store read and the append
+        run on the evidence worker. Best-effort: a failure loses the row, never the alert.
+        """
+        path = self._review_events_path
+        if path is None:
+            return
+        symbol = str(alert.symbol or "").strip().upper()
+        side = str(alert.side or "").strip().upper()
+        key = (self._ignored_market_date or date.today().isoformat(), symbol, side)
+        if key in self._show_hidden_seen:
+            return
+        self._show_hidden_seen.add(key)
         try:
             grade = self.show_filter_grade(alert)
         except Exception:  # noqa: BLE001 - evidence never costs the alert
             grade = None
-        self._record_review_event(
-            "hidden_by_show",
-            alert=alert,
-            detail={"grade": grade or "", "show_mode": self.show_filter_mode()},
-        )
+        detail = {"grade": grade or "", "show_mode": self.show_filter_mode()}
+        try:
+            if self._show_hidden_executor is None:
+                from concurrent.futures import ThreadPoolExecutor
+
+                self._show_hidden_executor = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="show-hidden-evidence"
+                )
+            self._show_hidden_last = self._show_hidden_executor.submit(
+                self._write_show_hidden, alert, symbol, side, detail, path
+            )
+        except Exception as exc:  # noqa: BLE001
+            note_swallowed("hidden_by_show evidence not queued", exc, quiet=True)
+
+    def _write_show_hidden(self, alert, symbol: str, side: str, detail: dict, path) -> None:
+        """Evidence worker: skip a key already in today's store, else append the row."""
+        try:
+            import review_events
+
+            day = review_events._trade_date_text()
+            keys = self._show_hidden_store_keys.get(day)
+            if keys is None:
+                keys = {
+                    (str(row.get("symbol") or "").upper(), str(row.get("side") or "").upper())
+                    for row in review_events.load_review_events(path)
+                    if row.get("action") == "hidden_by_show"
+                    and str(row.get("trade_date") or "") == day
+                }
+                self._show_hidden_store_keys = {day: keys}
+            if (symbol, side) in keys:
+                return
+            keys.add((symbol, side))
+            record_review_event("hidden_by_show", alert=alert, detail=detail, path=path)
+        except Exception as exc:  # noqa: BLE001 - a failed evidence write loses the event
+            note_swallowed("hidden_by_show review event write failed", exc, quiet=True)
+
+    def flush_show_hidden_writes(self, timeout: float = 10.0) -> None:
+        """Wait for queued hidden_by_show writes (tests, shutdown)."""
+        last = self._show_hidden_last
+        if last is not None:
+            try:
+                last.result(timeout=timeout)
+            except Exception as exc:  # noqa: BLE001
+                note_swallowed("hidden_by_show flush failed", exc, quiet=True)
 
     def show_filter_hidden_counts(self) -> tuple[int, int]:
         """`(rows, new)` the Show filter holds back from the feed, one per name+side."""
@@ -6441,6 +6499,10 @@ class AlertCenterPanel(QFrame):
 
     def shutdown(self) -> None:
         """Drain queued arms (bounded); anything not armed is logged loudly."""
+        executor = self._show_hidden_executor
+        if executor is not None:
+            self.flush_show_hidden_writes(timeout=2.0)
+            executor.shutdown(wait=False)
         queue = self._arm_queue_obj
         if queue is None:
             return

@@ -446,18 +446,52 @@ def _hidden_rows(tmp_path) -> list[dict]:
     ]
 
 
-def test_a_hidden_row_writes_one_hidden_by_show_review_event_with_its_grade(panel, tmp_path):
-    """B6: every alert the Show filter hides leaves one `hidden_by_show` evidence row."""
+def test_a_hidden_name_writes_one_hidden_by_show_review_event_with_its_grade(panel, tmp_path):
+    """B6: the first alert the Show filter hides per name/side/day leaves one evidence row."""
     _post_feed(panel)
+    panel.flush_show_hidden_writes()
     rows = _hidden_rows(tmp_path)
     assert sorted((row["symbol"], row["detail"]["grade"]) for row in rows) == [
         ("CEE", "C"),
         ("NEW", "New"),
     ]
     assert all(row["detail"]["show_mode"] == "grade_b_up" for row in rows)
-    # A second alert on a hidden name is a second hidden alert: one more row.
+
+
+def test_a_second_hidden_alert_for_the_same_name_side_and_day_writes_no_row(panel, tmp_path, monkeypatch):
+    _post_feed(panel)
     panel.add_alert(_m5("CEE", "ceetype"))
+    panel.add_alert(_m5("CEE", "ceetype"))
+    panel.flush_show_hidden_writes()
+    assert sorted(row["symbol"] for row in _hidden_rows(tmp_path)) == ["CEE", "NEW"]
+    # The other side is its own key.
+    panel.add_alert(_m5("CEE", "ceetype", side="SHORT"))
+    panel.flush_show_hidden_writes()
     assert len(_hidden_rows(tmp_path)) == 3
+    # A restarted panel reads today's keys back from the store: no second row.
+    again = _make_panel(tmp_path, monkeypatch)
+    again.set_setup_grades(_grades_payload())
+    try:
+        again.add_alert(_m5("CEE", "ceetype"))
+        again.flush_show_hidden_writes()
+        assert len(_hidden_rows(tmp_path)) == 3
+    finally:
+        again.deleteLater()
+
+
+def test_the_hidden_by_show_write_runs_off_the_qt_thread(panel, monkeypatch):
+    import threading
+
+    from ui.panels import alert_center_panel as panel_mod
+
+    seen: list[bool] = []
+    monkeypatch.setattr(
+        panel_mod, "record_review_event",
+        lambda *a, **k: seen.append(threading.current_thread() is threading.main_thread()),
+    )
+    _post_feed(panel)
+    panel.flush_show_hidden_writes()
+    assert seen == [False, False]
 
 
 def test_a_failed_hidden_by_show_write_never_costs_the_alert(panel, monkeypatch):
