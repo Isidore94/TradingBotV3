@@ -45,6 +45,19 @@ SPLIT = {
             "_decline_wall_d1_event",
         ),
     ),
+    "ui.panels.alert_center.any_bounce": (
+        "AnyBounceWatchMixin",
+        (
+            "any_bounce_armed_for",
+            "_save_any_bounce_watches",
+            "_toggle_any_bounce_watch",
+            "arm_any_bounce_watch",
+            "disarm_any_bounce_watch",
+            "_zone_arms_unknown",
+            "_any_bounce_levels_for",
+            "_poll_any_bounce_watches",
+        ),
+    ),
 }
 
 

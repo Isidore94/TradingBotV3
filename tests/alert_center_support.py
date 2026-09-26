@@ -14,6 +14,7 @@ PANEL_MODULE = "ui.panels.alert_center_panel"
 #: The mixin modules holding moved `AlertCenterPanel` methods that read module globals.
 MIXIN_MODULES: tuple[str, ...] = (
     "ui.panels.alert_center.wall",
+    "ui.panels.alert_center.any_bounce",
 )
 
 
