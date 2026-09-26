@@ -243,6 +243,10 @@ class TradingDeskPanel(QWidget):
         self.best_now_strip.set_results_provider(self.live_results_strip.results)
         self.best_now_strip.symbolActivated.connect(self.alert_center.chart_symbol)
         self.alert_center.m5AlertsDayRolled.connect(self.best_now_strip.clear_day)
+        # P9: the Alert Center's Show filter hides rows on the bar (display only).
+        self.best_now_strip.entriesChanged.connect(self.alert_center.set_best_now_entries)
+        self.alert_center.showFilterChanged.connect(self.m5_alert_bar.refresh_show_filter)
+        self.m5_alert_bar.set_show_filter(self.alert_center.show_filter_verdict)
         self._push_swing_context()
 
         # Trader, 2026-08-31: "at the end of the day I have a list of my top
@@ -625,6 +629,7 @@ class TradingDeskPanel(QWidget):
         if grades and grades is not getattr(self, "_pushed_setup_grades", None):
             self._pushed_setup_grades = grades
             self.m5_alert_bar.set_setup_grades(grades)
+            self.alert_center.set_setup_grades(grades)
             self.live_results_strip.set_setup_grades(grades)
             self.master_panel.set_setup_grades(grades)
 

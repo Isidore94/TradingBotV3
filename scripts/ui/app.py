@@ -54,6 +54,7 @@ from ui.panels.universe_panel import UniversePanel
 from ui import theme
 from ui.services.strength_board_service import StrengthBoardService
 from ui.services.movers_service import MoversService
+from ui.services.options_chase_service import OptionsChaseService
 from ui.services.working_lately_service import WorkingLatelyService
 from ui.state import VALID_UI_SCALES, UiState, normalize_desk_layout
 from ui.theme import apply_theme
@@ -203,6 +204,10 @@ class MainWindow(QMainWindow):
         self.trading_panel.alert_center.d1EventRecorded.connect(
             self.autopilot_panel.service.record_d1_event
         )
+        # P9: the phone report drops (and counts) M5 lines the Show filter hides.
+        self.autopilot_panel.service.set_show_filter(
+            self.trading_panel.alert_center.show_filter_verdict
+        )
         self.autopilot_panel.service.enabledChanged.connect(self._sync_scan_scheduler_owner)
         self._sync_scan_scheduler_owner(self.autopilot_panel.service.enabled)
         # Every auto-mode flip says so in the Auto Pilot log, and nowhere else
@@ -273,6 +278,8 @@ class MainWindow(QMainWindow):
             focus_provider=(
                 focus_service.all_focus_by_category if focus_service is not None else None
             ),
+            # P10: the Pop table's Opt column (own IB client id, snapshot quotes only).
+            options_chase=OptionsChaseService(),
         )
         self.trading_panel.alert_center.attach_movers_service(self.movers_service)
         self.trading_panel.attach_movers_service(self.movers_service)

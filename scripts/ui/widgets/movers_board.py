@@ -2,7 +2,8 @@
 
 Sits at the top of the Alert Center's lower-right column (trader, 2026-09-23).
 Two modes. Pop stacks three tables (trader, 2026-09-24): Pop (longs and shorts
-together), then Dip-strong and Dip-weak, lit by a SPY pullback or bounce. My
+together), then the strong and weak tables for the live SPY turn: Dip-* in a
+pullback, Bounce-* in a bounce, Rip-* in a rally. My
 names is one table with a Long/Short toggle. A SPY state banner tops both.
 Names new to a list get a tinted Sym cell. Header clicks sort (third click = board order); the trader can hide a
 row for the day (right-click or Delete) and bring hidden rows back. The "Review" menu holds the Focus pick and
@@ -26,6 +27,7 @@ _NO_PARENT = QModelIndex()
 from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QButtonGroup,
     QHBoxLayout,
     QHeaderView,
@@ -39,6 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 import movers_scan
+import options_chase
 from ui import theme
 from ui.timer_utils import SignalCoalescer
 from swallowed import note_swallowed
@@ -52,6 +55,8 @@ DIP_VISIBLE_ROWS = 4
 COLUMN_MIN_PX = 48
 SYMBOL_COLUMN_PX = 88
 LVL_COLUMN_PX = 70
+#: The Opt (options chase) cell: elided here, the full text is in its hover.
+OPT_COLUMN_PX = 96
 
 MODES = ("pop", "mine")
 MODE_LABELS = {"pop": "Pop + Dip", "mine": "My names"}
@@ -68,11 +73,11 @@ SORT_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 _TEXT_SORT_KEYS = {"symbol", "group"}
 
 #: (key, header) per mode. Priority order: Sym, main score, RVOL, Lvl, then the
-#: rest; narrow widths drop columns from the end.
+#: rest (Pop: the options chase Opt cell next); narrow widths drop columns from the end.
 COLUMNS = {
     "pop": (("symbol", "Sym"), ("move15_pct", "15m"), ("rvol", "RVOL"), ("lvl", "Lvl"),
-            ("vs_spy15_pct", "vSPY"), ("move30_pct", "30m"), ("day_pct", "Day"),
-            ("group", "Grp")),
+            ("opt", "Opt"), ("vs_spy15_pct", "vSPY"), ("move30_pct", "30m"),
+            ("day_pct", "Day"), ("group", "Grp")),
     "dip": (("symbol", "Sym"), ("dip_score", "xSPY"), ("rvol", "RVOL"), ("lvl", "Lvl"),
             ("since_start_pct", "Since"), ("day_pct", "Day"), ("move15_pct", "15m"),
             ("group", "Grp")),
@@ -149,9 +154,11 @@ def banner_text(state: dict[str, Any] | None) -> str:
         return f"SPY {off:+.2f}% from {when} high · up day · PULLBACK"
     if state.get("bounce") and off is not None:
         return f"SPY {off:+.2f}% from {when} low · down day · BOUNCE"
+    label = {"up_day": "up day", "down_day": "down day", "flat": "flat"}.get(kind, kind)
+    if state.get("rally") and off is not None:
+        return f"SPY {off:+.2f}% from {when} low · {label} · RALLY"
     day = state.get("spy_day_pct")
     day_text = f" · SPY {day:+.2f}% on the day" if day is not None else ""
-    label = {"up_day": "up day", "down_day": "down day", "flat": "flat"}.get(kind, kind)
     return f"{label} · no pullback{day_text}" if kind == "up_day" else (
         f"{label} · no bounce{day_text}" if kind == "down_day" else f"{label}{day_text}"
     )
@@ -159,11 +166,13 @@ def banner_text(state: dict[str, Any] | None) -> str:
 
 def rows_for(board: dict[str, Any] | None, mode: str, side: str) -> list[dict[str, Any]]:
     """Rows for one list, each tagged `_side`. Pop shows both sides, biggest move first;
-    "strong"/"weak" are the dip lists (beating / lagging SPY since the turn)."""
+    "strong"/"weak" are the live turn's lists (beating / lagging SPY since the turn):
+    the rip lists in a rally, else the dip lists."""
     board = board or {}
     if mode in ("strong", "weak"):
         side = "long" if mode == "strong" else "short"
-        return [dict(row, _side=side) for row in (((board.get("dip") or {}).get(side)) or [])]
+        key = "rip" if (board.get("state") or {}).get("rally") else "dip"
+        return [dict(row, _side=side) for row in (((board.get(key) or {}).get(side)) or [])]
     if mode == "pop":
         both = [dict(row, _side=s) for s in ("long", "short")
                 for row in (((board.get(mode) or {}).get(s)) or [])]
@@ -183,6 +192,13 @@ def sort_value(row: dict[str, Any], key: str) -> Any:
     """What a column sorts by; None sorts last either way."""
     if key in _TEXT_SORT_KEYS:
         return str(row.get(key) or "").upper() or None
+    if key == "opt":
+        # Candidates first (tightest spread first), then refusals and no data, then unchecked.
+        result = row.get("opt") or {}
+        if result.get("status") == options_chase.STATUS_CANDIDATE:
+            return 100.0 - float(result.get("spread_pct") or 0.0)
+        return {options_chase.STATUS_REFUSED: -1.0, options_chase.STATUS_NO_DATA: -2.0}.get(
+            result.get("status"))
     if key == "lvl":
         long_side = row.get("_side") != "short"
         brk = row.get("hod_break") if long_side else row.get("lod_break")
@@ -272,6 +288,8 @@ class MoversTableModel(QAbstractTableModel):
                 return symbol_text(row)
             if key == "lvl":
                 return level_text(row, side)
+            if key == "opt":
+                return options_chase.cell_text(value)
             return format_cell(key, value)
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if key == "symbol":
@@ -286,6 +304,8 @@ class MoversTableModel(QAbstractTableModel):
                 return QColor(theme.color("long" if float(value) >= 0 else "short"))
             if key == "rvol" and value is None:
                 return QColor(theme.color("text_secondary"))
+            if key == "opt" and (value or {}).get("status") != options_chase.STATUS_CANDIDATE:
+                return QColor(theme.color("text_secondary"))
         if role == Qt.ItemDataRole.BackgroundRole and key == "symbol" and is_new(row):
             color = QColor(theme.color("accent"))
             color.setAlphaF(0.35)
@@ -298,6 +318,8 @@ class MoversTableModel(QAbstractTableModel):
                 color.setAlphaF(0.12 + 0.45 * strength)
                 return color
         if role == Qt.ItemDataRole.ToolTipRole:
+            if key == "opt":
+                return options_chase.detail_text(value)
             return _row_tooltip(row)
         return None
 
@@ -441,7 +463,7 @@ class MoversSection(QWidget):
             hidden = column >= count
             if self.table.isColumnHidden(column) != hidden:
                 self.table.setColumnHidden(column, hidden)
-            if key in ("symbol", "lvl") and column < self.model.columnCount():
+            if key in ("symbol", "lvl", "opt") and column < self.model.columnCount():
                 if header.sectionResizeMode(column) != QHeaderView.ResizeMode.Fixed:
                     header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
                 if header.sectionSize(column) != column_px(key):
@@ -449,7 +471,7 @@ class MoversSection(QWidget):
 
 
 class MoversBoard(QWidget):
-    """Header, banner, and the Pop / Dip-strong / Dip-weak tables. The Alert Center wires its signals."""
+    """Header, banner, and the Pop / strong / weak tables. The Alert Center wires its signals."""
 
     symbolActivated = Signal(str, str)
     reviewAllRequested = Signal()
@@ -703,6 +725,8 @@ class MoversBoard(QWidget):
             return theme.px(SYMBOL_COLUMN_PX)
         if key == "lvl":
             return theme.px(LVL_COLUMN_PX)
+        if key == "opt":
+            return theme.px(OPT_COLUMN_PX)
         return theme.px(COLUMN_MIN_PX)
 
     def visible_column_count(self, mode: str | None = None) -> int:
@@ -803,8 +827,9 @@ class MoversBoard(QWidget):
         return dict(self._board.get("state") or {})
 
     def _dip_live(self) -> bool:
+        """A SPY turn is live (pullback, bounce or rally): the strong/weak tables show."""
         state = self._state()
-        return bool(state.get("pullback") or state.get("bounce"))
+        return bool(state.get("pullback") or state.get("bounce") or state.get("rally"))
 
     def _day_key(self) -> str:
         state = self._state().get("state")
@@ -822,7 +847,7 @@ class MoversBoard(QWidget):
         self._sync_controls()
 
     def _maybe_auto_switch(self) -> None:
-        """Jump to Pop + Dip once per pullback/bounce episode; never fight the trader."""
+        """Jump to Pop + Dip once per pullback/bounce episode (not a rally); never fight the trader."""
         state = self._state()
         if not (state.get("pullback") or state.get("bounce")):
             return
@@ -903,12 +928,12 @@ class MoversBoard(QWidget):
         pullback = bool(state.get("pullback"))
         when = _local_clock(state.get("start_dt")) or state.get("extreme_time") or ""
         turn = f"since the {when} {'high' if pullback else 'low'}" if when else "since the turn"
-        word = "Dip" if pullback else "Bounce"
+        word = "Rip" if state.get("rally") else "Dip" if pullback else "Bounce"
         self.strong.title_label.setText(f"{word}-strong ● · beating SPY {turn}")
         self.weak.title_label.setText(f"{word}-weak ● · lagging SPY {turn}")
         hint = ""
         if pop_mode and not dip_live and self._board:
-            hint = ("Dip-strong / Dip-weak: no SPY pullback or bounce now. "
+            hint = ("Strong / weak: no SPY pullback or bounce, and no rally, now. "
                     f"They light at {movers_scan.PULLBACK_MIN_PCT:.2f}% off the high or low.")
         if self.dip_hint.text() != hint:
             self.dip_hint.setText(hint)
@@ -1009,9 +1034,28 @@ class MoversBoard(QWidget):
             return "Every popping name is hidden. Tap Unhide to see them."
         return "Nothing is popping."
 
+    def copy_opt_text(self, row: dict[str, Any]) -> str:
+        """The Opt cell's only action: its text goes to the clipboard."""
+        text = options_chase.cell_text(row.get("opt"))
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(text)
+        self.show_status(f"Copied: {row.get('symbol') or ''} {text}".strip())
+        return text
+
+    def _column_key(self, index) -> str:
+        for section in self.sections:
+            if section.owns(index):
+                columns = section.columns()
+                return columns[index.column()][0] if 0 <= index.column() < len(columns) else ""
+        return ""
+
     def _on_clicked(self, index) -> None:
         row = self._source_row(index)
         if not row:
+            return
+        if self._column_key(index) == "opt":
+            self.copy_opt_text(row)
             return
         symbol = str(row.get("symbol") or "").strip().upper()
         if symbol:

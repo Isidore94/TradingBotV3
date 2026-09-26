@@ -496,6 +496,12 @@ CLAIMED_PICKS_FILE = PERSISTENT_DATA_DIR / "claimed_picks.jsonl"
 # Movers board Dip-strong outcome log (2026-09-23): append-only evidence of the
 # names flagged in a SPY pullback/bounce and their +3/+6 bar moves vs SPY.
 MOVERS_DIP_OUTCOMES_FILE = PERSISTENT_DATA_DIR / "movers_dip_outcomes.jsonl"
+# Movers board Pop outcome log (P8 P7, 2026-09-25): append-only evidence of each
+# name's entry on the Pop list and its +15/+30/+60 minute move, MFE and MAE in ATRs.
+MOVERS_POP_OUTCOMES_FILE = PERSISTENT_DATA_DIR / "movers_pop_outcomes.jsonl"
+# Options chase log (P10, 2026-09-25): append-only evidence of each OTM option
+# the Movers Pop table showed (or refused) and its +30/+60/close outcomes.
+OPTIONS_CHASE_LOG_FILE = PERSISTENT_DATA_DIR / "options_chase_log.jsonl"
 # Packet WS-TH (2026-09-12, WISHLIST item 6). Append-only JSONL of the theta
 # picks the D1 scan already printed to `master_avwap_theta_puts.txt`: one row per
 # (symbol, scan_date, play_type), written from the RUNNER right after the report,

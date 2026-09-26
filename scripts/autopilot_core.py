@@ -37,6 +37,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 
+import alert_show_filter
 import avwape_side
 import focus_adoption_gate
 import opening_regime_history
@@ -4196,6 +4197,40 @@ def visible_sector_events(
     return [event for event in events if not hidden(str(event.get("symbol") or "").strip().upper())]
 
 
+def hide_show_filtered_alerts(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop alert lines the Alert Center's Show filter hides (P9, display only).
+
+    ``alert_show_flags`` is ``[(hidden, is_new)]`` in step with ``alerts`` and
+    ``alert_symbols``; out of step (or absent) leaves the lines alone. Sets
+    ``show_hidden_count`` / ``show_hidden_new`` = distinct names removed.
+    """
+    out = dict(payload)
+    flags = out.pop("alert_show_flags", None)
+    alerts = out.get("alerts")
+    symbols = out.get("alert_symbols")
+    if not (
+        isinstance(flags, (list, tuple))
+        and isinstance(alerts, (list, tuple))
+        and isinstance(symbols, (list, tuple))
+        and len(flags) == len(alerts) == len(symbols)
+    ):
+        return out
+    kept: list[tuple[Any, Any]] = []
+    removed: dict[str, bool] = {}
+    for line, symbol, flag in zip(alerts, symbols, flags, strict=True):
+        hidden, is_new = (tuple(flag) + (False, False))[:2] if isinstance(flag, (list, tuple)) else (False, False)
+        if hidden:
+            key = str(symbol or "").strip().upper()
+            removed[key] = removed.get(key, False) or bool(is_new)
+        else:
+            kept.append((line, symbol))
+    out["alerts"] = [line for line, _symbol in kept]
+    out["alert_symbols"] = [symbol for _line, symbol in kept]
+    out["show_hidden_count"] = len(removed)
+    out["show_hidden_new"] = sum(1 for is_new in removed.values() if is_new)
+    return out
+
+
 def hide_sector_names(
     payload: Mapping[str, Any],
     *,
@@ -4377,6 +4412,11 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     if swing_data_line:
         swing_lines = [*swing_lines, swing_data_line]
     sector_line = sector_exclusion.hidden_line(int(payload.get("sector_hidden_count") or 0))
+    show_text = alert_show_filter.hidden_text(
+        int(payload.get("show_hidden_count") or 0), int(payload.get("show_hidden_new") or 0)
+    )
+    if show_text:
+        sector_line = f"{sector_line}; {show_text}" if sector_line else f"Hidden: {show_text}"
     if sector_line:
         swing_lines = [*swing_lines, sector_line]
     # WS-PT4: the same line NAMES the order it used, so a phone reader can tell
