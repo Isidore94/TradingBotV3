@@ -68,7 +68,7 @@ def test_spy_trend_needs_25_whole_closes():
     (None, 1.0, 0.5, ("yes", sp.WORKING_RULE_SPY)),
     (None, 1.0, -0.5, ("no", sp.WORKING_RULE_SPY)),  # above a falling 20-day is not working
     (None, -1.0, 0.5, ("no", sp.WORKING_RULE_SPY)),
-    ("not_a_regime", 1.0, 0.5, ("yes", sp.WORKING_RULE_SPY)),  # an unknown label is no label
+    ("  ", 1.0, 0.5, ("yes", sp.WORKING_RULE_SPY)),  # a blank label is no label
     (None, None, 0.5, (sp.UNKNOWN, sp.UNKNOWN)),
     ("", 1.0, None, (sp.UNKNOWN, sp.UNKNOWN)),
 ])

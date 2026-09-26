@@ -1301,12 +1301,11 @@ def long_regime_working(trader_regime: Any, spy_vs_sma20_pct: Any, spy_sma20_slo
     The trader's structural regime decides first: ``bull_run`` or ``recovery`` = yes, any other of
     their labels = no (rule ``trader``). Only when their label is unknown: SPY above a rising
     20-day (close > SMA20 and the SMA20 up over 5 sessions) = yes, else no (rule
-    ``spy_above_rising_sma20``). SPY unknown too = unknown, never a guess.
+    ``spy_above_rising_sma20``). SPY unknown too = unknown, never a guess. The journal only
+    stores labels from `structural_regime.VOCABULARY`, so any label here is the trader's.
     """
-    import structural_regime
-
     label = str(trader_regime or "").strip()
-    if label in structural_regime.VOCABULARY:
+    if label:
         return ("yes" if label in LONG_WORKING_TRADER_REGIMES else "no"), WORKING_RULE_TRADER
     vs, slope = _num(spy_vs_sma20_pct), _num(spy_sma20_slope_pct)
     if vs is None or slope is None:
