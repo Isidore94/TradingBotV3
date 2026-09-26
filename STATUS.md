@@ -24,9 +24,9 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
 - **Night window:** the night AI starts 22:00 PT. No builders, merges or test runs
   22:00-02:00 PT.
 - **Last full suite:** 2026-09-25 Phase A tip: 12,404 passed, 2 order-dependent Qt
-  flakes (`test_ws_10a_scan_freshness`, `test_ws_wl_watchlist_tab`; both pass alone twice;
-  the earlier run had neither). Ruff clean, smoke 7/7, selftest 104/104 source and frozen
-  (frozen built at `37efbeff`; later commits touch no packaging trigger).
+  flakes (`test_ws_10a_scan_freshness`, `test_ws_wl_watchlist_tab`;
+  both pass alone twice). Ruff clean, smoke 7/7, selftest 104/104 source and frozen
+  (frozen built at `37efbeff`; no packaging trigger since).
 - **Owed:** TLT/USO/HYG daily bars (scan-side, ask first); halted-name refetch; movers
   summary into the night AI; phone-brief rule line; pre-Aug entry_at (outcome code, ask
   first); review of the per-trade Mentor Save (`182f3e08`); weekly-options facet needs a
