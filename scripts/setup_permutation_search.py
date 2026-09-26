@@ -27,6 +27,11 @@ side: a baseline, then single facets, pairs and triples, never deeper.
 - A population x horizon whose selection window has under
   MIN_SELECTION_SESSIONS sessions is not searched: the block says
   ``refused`` and why (S4; F11 was a 5-session window).
+- S14 study families (`long_study_families.STUDY_FAMILIES`, rows the backfill
+  copies under the study name) are searched FIRST, on their own small grid of
+  `STUDY_SEARCH_FACETS` (spy_trend, trend20, htf_trend_4h), and reported in
+  each horizon's ``study_families`` block, never in ``families`` (so no
+  verdict, chip or narration reads them). Promotion is ask-first.
 - Each run also keeps a dated copy in `permutation_report_history/` and writes
   `permutation_verdicts.json` (P12, `setup_permutation_verdicts.py`), both beside --out.
 
@@ -55,6 +60,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import long_study_families as lsf  # noqa: E402
 import setup_permutations as sp  # noqa: E402
 
 REPORT_SCHEMA = "setup_permutation_report_v1"
@@ -458,6 +464,7 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source
                 "selection_sessions": len(selection_days),
                 "holdout_window": list(hold_window),
                 "families": {},
+                "study_families": {},
             }
             horizons_out[str(horizon)] = block
             groups: dict[tuple[str, str], list] = defaultdict(list)
@@ -473,12 +480,18 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source
                     "not searched, not published"
                 )
             families: dict[str, Any] = {}
-            for (family, side), members in sorted(groups.items()):
+            study: dict[str, Any] = {}
+            study_names = [name for name in lsf.STUDY_SEARCH_FACETS if name in names]
+            # S14: the study keys first, each on its own three-facet grid.
+            ordered = sorted(groups.items(), key=lambda item: (item[0][0] not in lsf.STUDY_FAMILIES, item[0]))
+            for (family, side), members in ordered:
+                is_study = family in lsf.STUDY_FAMILIES
+                target = study if is_study else families
                 selection = [row for row in members
                              if row.get("session") not in holdout_days and row.get("session") not in embargo]
                 holdout = [row for row in members if row.get("session") in holdout_days]
                 if refused:
-                    families[f"{family} {side}"] = {
+                    target[f"{family} {side}"] = {
                         "family": family, "side": side, "horizon_name": name, "verdict": VERDICT_THIN,
                         "refused_reason": block["refused_reason"],
                         "baseline": {"n": len(selection), "sessions": len({r.get("session") for r in selection})},
@@ -494,11 +507,15 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, ledger_root: Path, source
                         cells=cells, selection_window=_sel_window, holdout_window=_hold_window,
                     ))
 
-                result = search_group(selection, holdout, names=names, register=register)
+                result = search_group(selection, holdout, names=study_names if is_study else names,
+                                      register=register)
                 for key in result["keys"]:
                     key["horizon_name"] = name
-                families[f"{family} {side}"] = {"family": family, "side": side, "horizon_name": name, **result}
+                target[f"{family} {side}"] = {"family": family, "side": side, "horizon_name": name, **result}
+                if is_study:
+                    target[f"{family} {side}"]["facets_searched"] = list(study_names)
             block["families"] = families
+            block["study_families"] = study
         report["populations"][population] = {"horizons": horizons_out}
     data_day = report_data_date(report)
     report["data_date"] = data_day.isoformat() if data_day else ""
@@ -621,7 +638,7 @@ def main(argv: list[str] | None = None) -> int:
         len(fam["keys"])
         for pop in report["populations"].values()
         for hz in pop["horizons"].values()
-        for fam in hz["families"].values()
+        for fam in (*hz["families"].values(), *hz.get("study_families", {}).values())
     )
     print(json.dumps({"out": str(args.out), "keys": found}))
     return 0

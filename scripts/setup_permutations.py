@@ -850,6 +850,19 @@ def _earnings_cycle(row, ctx, side):
             return "drift_gap_down_0_13s"
         return "drift_small_gap_0_13s"
     return _band(sessions, (28.0, 61.0), ("mid_cycle_14_27s", "mid_cycle_28_60s", "late_cycle_61s_plus"))
+# --- S14: the study search's own trend facets (the scan row's `trend_20d` and `htf_trend_4h`)
+
+
+@facet("trend20", "trend", in_label=False)
+def _trend20(row, ctx, side):
+    value = (_text(row.get("trend_20d")) or "").upper()
+    return f"trend20_{value.lower()}" if value in {"UP", "DOWN", "SIDEWAYS"} else UNKNOWN
+
+
+@facet("htf_trend_4h", "htf", in_label=False)
+def _htf_trend_4h(row, ctx, side):
+    value = (_text(row.get("htf_trend_4h")) or "").upper()
+    return f"h4_{value.lower()}" if value in {"UP", "DOWN", "NEUTRAL"} else UNKNOWN
 
 
 # --- stamping (4a): the scan-row columns and the honest input view

@@ -613,6 +613,10 @@ class SetupTrackerPanel(QFrame):
         self.tape_side_label = QLabel("")
         self.tape_side_label.setObjectName("MutedLabel")
         self.tape_side_label.setWordWrap(True)
+        # S14: the long study families, raw then vs SPY, formatted on the worker.
+        self.study_family_label = QLabel("")
+        self.study_family_label.setObjectName("MutedLabel")
+        self.study_family_label.setWordWrap(True)
         # S12: what the shadow SP4 column is; the live sort never reads it.
         self.sp4_chip_label = QLabel("")
         self.sp4_chip_label.setObjectName("MutedLabel")
@@ -1101,6 +1105,7 @@ class SetupTrackerPanel(QFrame):
         layout.addWidget(header)
         layout.addLayout(kpi_row)
         layout.addWidget(self.tape_side_label)
+        layout.addWidget(self.study_family_label)
         layout.addWidget(self.sp4_chip_label)
         layout.addWidget(self.summary_view, 1)
         layout.addWidget(self.next_test_card)
@@ -1591,6 +1596,7 @@ class SetupTrackerPanel(QFrame):
         self.tape_side_label.setText(
             setup_grades.side_by_tape_line(tape if isinstance(tape, dict) else None)
         )
+        self.study_family_label.setText("\n".join(str(line) for line in data.get("study_family_lines") or ()))
 
         rendered: dict[str, tuple] = {}
         for table_name, model_name, rows, memo in _table_render_plan(
@@ -2005,6 +2011,14 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 - one line, never the tracker
         logging.debug("Setup Tracker tape line could not be built", exc_info=True)
         side_by_tape = {}
+    # S14: the long study families' raw and tape-relative lines. Display only.
+    try:
+        from ui.services import working_lately_service
+
+        study_family_lines = working_lately_service.read_study_family_lines()
+    except Exception:  # noqa: BLE001 - one line, never the tracker
+        logging.debug("Setup Tracker study family lines could not be built", exc_info=True)
+        study_family_lines = []
     # S13: three exit models per family. Display only; unknown on failure.
     try:
         from ui.services import working_lately_service
@@ -2028,6 +2042,7 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
         "raw": raw,
         "ranked": ranked,
         "side_by_tape": side_by_tape,
+        "study_family_lines": study_family_lines,
         "exit_model_sentence": exit_model_review.review_sentence(exit_models),
         "sp4_chip": points_challenger.chip_text(evidence),
         "theta_population_sentence": theta.population_sentence(),
