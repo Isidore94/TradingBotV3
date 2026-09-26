@@ -20,8 +20,9 @@ Recreates the TC2000 "weekly options + quality" watchlist locally:
 
 API-limit scaling: ``--max-symbols`` caps how many names are priced per run
 (ranked by dollar volume, so the most liquid survive first), history and market
-caps are cached per machine, and everything comes from yfinance -- zero IBKR
-pacing budget is spent building the universe.
+caps are cached per machine, and prices come from yfinance -- zero IBKR historical
+pacing budget is spent building the universe. The one IB call is the once-a-day
+scanner pull of the `momentum_scanner` source (`momentum_universe.py`).
 
 Run:
     .venv/Scripts/python.exe scripts/universe_builder.py
@@ -48,6 +49,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 from swallowed import note_swallowed  # noqa: E402
+
+import momentum_universe  # noqa: E402
 
 from project_paths import (  # noqa: E402
     CACHE_DIR,
@@ -646,6 +649,7 @@ def _record_universe_rebuild(
     forced: bool = False,
     stages: dict[str, int] | None = None,
     yfinance: dict | None = None,
+    momentum: dict | None = None,
 ) -> None:
     """Append a ``universe_rebuild`` audit row to the job ledger, always.
 
@@ -680,6 +684,8 @@ def _record_universe_rebuild(
             row["stages"] = stages
         if yfinance is not None:
             row["yfinance"] = yfinance
+        if momentum is not None:
+            row[MOMENTUM_SOURCE] = momentum
         if reason:
             row["reason"] = reason
         with path.open("a", encoding="utf-8") as handle:
@@ -808,6 +814,33 @@ def journal_traded_symbols(
     return out
 
 
+MOMENTUM_SOURCE = momentum_universe.MOMENTUM_SOURCE
+
+
+def _momentum_metrics_lookup(metrics: pd.DataFrame) -> dict[str, tuple[float | None, float | None]]:
+    """Symbol -> (last price, 20-session dollar volume) from the rebuild's own metrics; NaN is None."""
+    out: dict[str, tuple[float | None, float | None]] = {}
+    if metrics is None or metrics.empty:
+        return out
+    for symbol, price, dollar_volume in zip(
+        metrics["symbol"], metrics["last_price"], metrics["dollar_volume_20d"], strict=False
+    ):
+        out[str(symbol).upper()] = (
+            None if pd.isna(price) else float(price),
+            None if pd.isna(dollar_volume) else float(dollar_volume),
+        )
+    return out
+
+
+def _momentum_stage(metrics: dict, *, write: bool) -> dict:
+    """The momentum_scanner members for this rebuild; any failure is no names, never a failed rebuild."""
+    try:
+        return momentum_universe.refresh_membership(metrics, write=write)
+    except Exception as exc:
+        logging.warning("Momentum universe source skipped for this rebuild.", exc_info=True)
+        return {"refreshed": False, "sighted": 0, "error": str(exc) or type(exc).__name__, "members": []}
+
+
 def build_universe(
     *,
     max_symbols: int = DEFAULT_MAX_SYMBOLS,
@@ -848,6 +881,7 @@ def build_universe(
     metrics = compute_universe_metrics(history)
     logging.info("Priced %s symbols.", len(metrics))
     stages["priced"] = len(metrics)
+    momentum_metrics = _momentum_metrics_lookup(metrics)
 
     # Scale to the API budget: most-liquid first, cap the priced universe.
     metrics = metrics.sort_values("dollar_volume_20d", ascending=False)
@@ -903,6 +937,18 @@ def build_universe(
     stages[JOURNAL_TRADED_SOURCE] = len(journal_added)
     if journal_added:
         logging.info("Universe %s source: %s", JOURNAL_TRADED_SOURCE, ", ".join(journal_added))
+    # The momentum_scanner source joins the LONG list only (the D1 scan reads the side lists) and
+    # stays out of universe_all.txt, so the Strength Board, breadth and open-scan pool do not grow.
+    # A name already on a side list, typed in an include file or added from the journal never moves.
+    momentum = _momentum_stage(momentum_metrics, write=write_outputs)
+    held = set(longs) | set(shorts) | set(journal) | set(include_all)
+    momentum_added = [symbol for symbol in momentum["members"] if symbol not in held]
+    longs = sorted(set(longs) | set(momentum_added))
+    stages[MOMENTUM_SOURCE] = len(momentum_added)
+    momentum_row = {key: value for key, value in momentum.items() if key != "members"}
+    momentum_row.update(members=len(momentum["members"]), added=len(momentum_added))
+    if momentum_added:
+        logging.info("Universe %s source: %s", MOMENTUM_SOURCE, ", ".join(sorted(momentum_added)))
 
     if write_outputs:
         # plan.md sec 5: a failed publish never destroys the last verified
@@ -939,6 +985,7 @@ def build_universe(
             forced=bool(force),
             stages=stages,
             yfinance=yf_stats,
+            momentum=momentum_row,
         )
         if reason:
             raise UniverseWriteRefused(reason, produced=refused_count, floor=floor, kept=before.get("all"))
@@ -963,6 +1010,7 @@ def build_universe(
         "options_filter": options_filter,
         "options_filter_applied": bool(option_symbols),
         JOURNAL_TRADED_SOURCE: journal_added,
+        MOMENTUM_SOURCE: sorted(momentum_added),
     }
 
 
