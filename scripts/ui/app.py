@@ -2304,6 +2304,10 @@ class _GuiGcController(QObject):
     wins and the pause stays off the trader's clicks; at it, the sweep runs
     regardless, because a bounded pause now is strictly better than an
     unbounded heap and a five-minute pause later.
+
+    After every full sweep the survivors are frozen, so later sweeps skip them;
+    every ``unfreeze_every_full_sweeps``-th full sweep unfreezes first so
+    garbage that formed among frozen objects is still reclaimed.
     """
 
     def __init__(
@@ -2311,7 +2315,10 @@ class _GuiGcController(QObject):
         activity: UiActivityMonitor,
         *,
         collector=gc.collect,
+        freezer=gc.freeze,
+        unfreezer=gc.unfreeze,
         full_every_ticks: int = 30,
+        unfreeze_every_full_sweeps: int = 30,
         young_idle_ms: float = 250.0,
         full_idle_ms: float = 2_000.0,
         young_deadline_ticks: int = 5,
@@ -2321,7 +2328,13 @@ class _GuiGcController(QObject):
         super().__init__(parent)
         self.activity = activity
         self.collector = collector
+        self.freezer = freezer
+        self.unfreezer = unfreezer
         self.full_every_ticks = max(1, int(full_every_ticks))
+        # At the production cadence (a full sweep about once a minute) this
+        # releases and rescans the frozen heap about once every 30 minutes.
+        self.unfreeze_every_full_sweeps = max(1, int(unfreeze_every_full_sweeps))
+        self.full_sweeps = 0
         self.young_idle_ms = max(0.0, float(young_idle_ms))
         self.full_idle_ms = max(self.young_idle_ms, float(full_idle_ms))
         # At the production 2s tick: a young sweep waits at most 10 seconds for
@@ -2345,7 +2358,11 @@ class _GuiGcController(QObject):
             idle_ms >= self.full_idle_ms
             or self.tick - self.full_due_at_tick >= self.full_deadline_ticks
         ):
+            self.full_sweeps += 1
+            if self.full_sweeps % self.unfreeze_every_full_sweeps == 0:
+                self.unfreezer()
             self.collector(2)
+            self.freezer()
             self.full_due = False
             self.young_skipped = 0
             return
@@ -2362,6 +2379,8 @@ def install_gui_thread_gc(
     *,
     activity_monitor: UiActivityMonitor | None = None,
     collector=None,
+    freezer=None,
+    unfreezer=None,
     **controller_options,
 ) -> QTimer:
     """Run all cyclic garbage collection on the GUI thread.
@@ -2385,8 +2404,19 @@ def install_gui_thread_gc(
     disabled here, so this timer is the process's only collector; an unbounded
     "wait for quiet" is indistinguishable from "never collect" while the desk
     is being used, which is exactly how it failed on 2026-08-21.
+
+    With no collector passed, the real ``gc`` freeze/unfreeze run after full
+    sweeps; a caller passing a fake collector gets no-op freezes unless it
+    passes its own, so a test never freezes the test process's heap.
     """
     gc.disable()
+    if collector is None:
+        collector = gc.collect
+        freezer = freezer if freezer is not None else gc.freeze
+        unfreezer = unfreezer if unfreezer is not None else gc.unfreeze
+    else:
+        freezer = freezer if freezer is not None else (lambda: None)
+        unfreezer = unfreezer if unfreezer is not None else (lambda: None)
     activity = activity_monitor or UiActivityMonitor(app)
     if activity_monitor is None:
         app.installEventFilter(activity)
@@ -2394,7 +2424,9 @@ def install_gui_thread_gc(
     timer.setInterval(interval_ms)
     controller = _GuiGcController(
         activity,
-        collector=collector if collector is not None else gc.collect,
+        collector=collector,
+        freezer=freezer,
+        unfreezer=unfreezer,
         parent=timer,
         # Cadence/deadline knobs exist so a test can drive them deterministically;
         # production passes none of them and takes the documented defaults.
