@@ -610,6 +610,8 @@ class AlertCenterPanel(StrengthBoardAdoptionMixin, QFrame):
         #: (date, symbol, side, action, wall) already written to the decision log.
         self._wall_logged: set[tuple] = set()
         self._focus_break_open_at: dict[str, datetime] = {}
+        #: Break-state map last sent on `focusBreakStatesChanged`; None = never sent.
+        self._focus_break_emitted: dict[str, str] | None = None
         self._focus_gate_held = 0
         # Phase 2 guidance: scoreboard + AI policy -> queue ordering and
         # chart annotations (review_guidance.py). Advisory only; with no
@@ -5429,8 +5431,11 @@ class AlertCenterPanel(StrengthBoardAdoptionMixin, QFrame):
         self._focus_gate_held = held
         # Every Focus name has just been re-measured against yesterday's range.
         # Surfaces that show the "moving" flag repaint from here rather than
-        # owning a timer of their own (trader rule 2026-08-19).
-        self.focusBreakStatesChanged.emit()
+        # owning a timer of their own (trader rule 2026-08-19). Emit only when
+        # a state changed: each emit repaints the whole Focus board.
+        if self._focus_break_state != self._focus_break_emitted:
+            self._focus_break_emitted = dict(self._focus_break_state)
+            self.focusBreakStatesChanged.emit()
         if not hits:
             self._emit_feed_status()
             return
@@ -9169,6 +9174,7 @@ class AlertCenterPanel(StrengthBoardAdoptionMixin, QFrame):
         # first poll of a new session replay the whole morning.
         self._focus_break_state.clear()
         self._focus_break_open_at.clear()
+        self._focus_break_emitted = None
         self._focus_gate_held = 0
         # The movers-only filter is day-scoped for the same reason: a reveal is
         # "show me the chop for the rest of today", not a preference change.
