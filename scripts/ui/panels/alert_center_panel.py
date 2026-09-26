@@ -1568,6 +1568,7 @@ class AlertCenterPanel(QFrame):
                 self._enqueue_review_alert(alert)
             if self.show_filter_hides(alert):
                 # P9: posted to the M5 bar's backing list above; no row, no sound.
+                self._record_show_hidden(alert)
                 self._emit_feed_status()
                 return
             decision = self._repetition_decision(alert, is_focus=is_focus)
@@ -2033,6 +2034,18 @@ class AlertCenterPanel(QFrame):
 
     def show_filter_hides(self, alert: BounceAlert) -> bool:
         return self.show_filter_verdict(alert)[0]
+
+    def _record_show_hidden(self, alert: BounceAlert) -> None:
+        """B6: one `hidden_by_show` evidence row per hidden alert. Best-effort."""
+        try:
+            grade = self.show_filter_grade(alert)
+        except Exception:  # noqa: BLE001 - evidence never costs the alert
+            grade = None
+        self._record_review_event(
+            "hidden_by_show",
+            alert=alert,
+            detail={"grade": grade or "", "show_mode": self.show_filter_mode()},
+        )
 
     def show_filter_hidden_counts(self) -> tuple[int, int]:
         """`(rows, new)` the Show filter holds back from the feed, one per name+side."""

@@ -434,3 +434,39 @@ def test_a_focus_burst_is_one_coalesced_diff_never_a_rebuild(env, tmp_path, monk
     finally:
         bar.deleteLater()
         panel.deleteLater()
+
+
+def _hidden_rows(tmp_path) -> list[dict]:
+    import review_events
+
+    return [
+        row
+        for row in review_events.load_review_events(tmp_path / "alert_review_events.jsonl")
+        if row.get("action") == "hidden_by_show"
+    ]
+
+
+def test_a_hidden_row_writes_one_hidden_by_show_review_event_with_its_grade(panel, tmp_path):
+    """B6: every alert the Show filter hides leaves one `hidden_by_show` evidence row."""
+    _post_feed(panel)
+    rows = _hidden_rows(tmp_path)
+    assert sorted((row["symbol"], row["detail"]["grade"]) for row in rows) == [
+        ("CEE", "C"),
+        ("NEW", "New"),
+    ]
+    assert all(row["detail"]["show_mode"] == "grade_b_up" for row in rows)
+    # A second alert on a hidden name is a second hidden alert: one more row.
+    panel.add_alert(_m5("CEE", "ceetype"))
+    assert len(_hidden_rows(tmp_path)) == 3
+
+
+def test_a_failed_hidden_by_show_write_never_costs_the_alert(panel, monkeypatch):
+    from ui.panels import alert_center_panel as panel_mod
+
+    def boom(*_args, **_kwargs):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(panel_mod, "record_review_event", boom)
+    _post_feed(panel)
+    assert [a.symbol for a in panel._alerts][::-1] == [s for s, _k in FEED]
+    assert _feed_symbols(panel) == {"PRV", "BEE", "TYPED", "FOC"}
