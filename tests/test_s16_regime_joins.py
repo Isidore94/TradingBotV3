@@ -408,3 +408,45 @@ def test_the_night_writes_per_regime_cells_and_records_what_sp4_read():
     plain = fse.build_payload(fixture_rows(16), SPY, ATR, {}, [], {}, None, as_of=AS_OF)
     assert plain["current_regime"] == "" and plain["families_by_regime"] == {}
     assert plain["adjust_history"][AS_OF] == {k: c["adjust"] for k, c in plain["families"].items()}
+
+
+# ---------------------------------------------------------------- the Saturday search
+
+
+SEARCH_SEGMENTS = rj.timeline([
+    {"segment_id": 1, "start_date": "2026-01-01", "regime": "bull_run"},
+    {"segment_id": 2, "start_date": "2026-02-10", "regime": "bear_channel_lower_highs"},
+])
+
+
+def test_the_saturday_search_gets_a_regime_facet(tmp_path):
+    import setup_permutation_search as search
+    from research_warehouse import trial_ledger
+    from tests.test_setup_permutation_search import _population
+
+    search.build_report(_population(), ledger_root=tmp_path, segments=SEARCH_SEGMENTS)
+    declared = [cell for trial in trial_ledger.load(tmp_path) for cell in trial.get("declared_cells") or []]
+    assert "regime=bull_run" in declared
+    # Before 02-10 the bear channel has 3 selection sessions: under the floor, never searched.
+    assert "regime=bear_channel_lower_highs" not in declared
+
+
+def test_the_saturday_search_reports_per_regime_never_pooled(tmp_path):
+    import setup_permutation_search as search
+    from tests.test_setup_permutation_search import _population
+
+    rows = _population()
+    report = search.build_report(rows, ledger_root=tmp_path, segments=SEARCH_SEGMENTS)
+    block = report["by_regime"]
+    assert block["current"] == "bear_channel_lower_highs"
+    assert block["order"] == ["bear_channel_lower_highs", "bull_run"]
+    cells = block["populations"]["swing"]["1"]["avwap_band_bounce LONG"]
+    assert cells["bull_run"]["n"] == 36 * 20 and cells["bull_run"]["sessions"] == 36
+    assert cells["bear_channel_lower_highs"]["n"] == 24 * 20
+    bull_wins = sum(1 for row in rows if row["session"] < "2026-02-10" and row["win"])
+    assert cells["bull_run"]["wins"] == bull_wins
+    # No timeline given: the report is what it was (no facet, no block).
+    plain = search.build_report(rows, ledger_root=tmp_path / "plain")
+    assert "by_regime" not in plain
+    assert not any("regime" in str(key.get("facets")) for fam in plain["populations"]["swing"]["horizons"]["1"][
+        "families"].values() for key in fam["keys"])
