@@ -220,7 +220,9 @@ class TestSmaWall:
         def _boom(*a, **k):
             raise OSError("disk full")
 
-        monkeypatch.setattr(desk.module, "save_d1_event_watches", _boom)
+        from alert_center_support import patch_alert_center_global
+
+        patch_alert_center_global(monkeypatch, "save_d1_event_watches", _boom)
         desk.name("HHH", STEP_DOWN)
         desk.panel.add_alert(_d1_alert("HHH"))
         assert desk.charted() == ["HHH"]
