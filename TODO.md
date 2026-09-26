@@ -33,7 +33,7 @@ Monday; `journal_import` no ok row on 7 of the last 14 nights; Ollama first toke
 theta 6,462 picks, 0 measured, 566 pending; permutation report 1 (2 populations, 37 keys).
 Gates #257-#263: none judged yet (first proof tonight and Monday).
 
-### Phase A - measure and un-stall (built 2026-09-25 on `claude/p8b-phaseA-2026-09-25`, awaiting the trader's merge)
+### Phase A - measure and un-stall (live on `main` since `81272d42`, 2026-09-25 20:45 PT)
 
 - **A1 Perf infra** (all goals): `desk_perf_report.py --day` from the stall and gauge
   logs; bench ops `alert_center.add_alert[1000]`, `working_lately`, `m5_chart`,
@@ -54,7 +54,11 @@ Gates #257-#263: none judged yet (first proof tonight and Monday).
 
 ### Phase B - simpler code, truer numbers (no live data needed)
 
-Order (trader 2026-09-25 evening): R1 first, then B0, then the rest.
+Order for the morning session (trader 2026-09-25 night): R1 first, then B0, then
+Phase S from S1, then the rest of B. Each packet names goal, files, tests and
+ask-first status; a builder that finds the code disagreeing with a line here reports
+it instead of forcing it. The desk is DOWN (closed 21:51 PT on the trader's word);
+restart only on the trader's word.
 
 - **R1 Day Review Show** (recap ->8; the trader: "day recap is boring and hard to parse;
   mix the fonts, a presentation mode, the local AI cooks it up each night, fun but
@@ -119,6 +123,134 @@ Order (trader 2026-09-25 evening): R1 first, then B0, then the rest.
   night in 5 without an import after five nights: statement-readiness probe and a later
   first attempt.
 
+### Phase S - setups: what the data says and what to build (study 2026-09-25 night)
+
+Read-only study of the live stores, 2026-08-01 to 2026-09-25. Numbers are in the
+findings; every packet names its files, tests and ask-first status. Builder: start at
+S1 and keep the order. The two 500 MB logs are read with
+`pandas.read_csv(usecols=..., chunksize=250_000)`; never load them whole.
+
+**Findings, day trades (M5):**
+- **F1 Why never A.** The day-trade grade (`setup_grades.daytrade_cells`) scores a fixed
+  1R-target / 1R-stop bracket per (bounce type, side); A needs a Wilson low bound >= 0.55
+  over 10+ sessions. Since 08-01: 13,682 decided alerts, 46.3% win (Sept 50.0%, Aug
+  40.4%), low bound 0.454. No cell has a low bound over 0.50; the best are
+  `regime_pause_rs` long 0.539 (low 0.491, EOD +0.76R, n=427) and `lrsi_cross_50` short
+  0.521 (low 0.490). Mean MFE 1.65R, 59% touch +1R, 27% reach 2R, mean EOD close +0.04R.
+  A 1:1 bracket on M5 bounces does not clear 55% with confidence: "never A" is the
+  ladder, not the desk failing.
+- **F2 Why so many C/D tiers.** The tier (`bounce_bot_lib/learning.py`) is an n-shrunk
+  weighted mean of segment production R. The biggest segments sit at zero
+  (`long|h1_riding_15ema` n=3110 -0.02R, `long|h1_ema10_bounce` n=2961 -0.03R,
+  `internals_breadth long|neutral` n=2849 0.0R) and, because weight grows with n, the
+  broadest and least informative dimensions decide the composite. A (>= +0.15R) needs
+  membership in the few positive segments: `short|neutral_chop` +0.34R (n=376),
+  `long|bullish_strong` +0.14R (n=1488), `long|regime_pause_rs` +0.32R (n=300, PROVEN),
+  `short|avwap_retest_followthrough` +0.41R (n=70, PROVEN). 11 PROVEN segments exist,
+  1 mute.
+- **F3 Volume.** 670-1,147 confirmed alerts a day; H1 + LRSI engines are 75% of the
+  components (`h1_ema10_bounce` 6,731; `lrsi_cross_20` 5,338; `lrsi_cross_50` 2,609;
+  `h1_blue_after_red` 2,214; `h1_green_to_yellow` 1,470). `h1_blue_after_red` long wins
+  34.1% (n=994, EOD -0.41R); `h1_ema10_bounce` long 43.1% (n=4,142). ORB fired 118
+  times, prev-day high/low 22, `ema_8` 3, 8-EMA grind 3, `m5_confluence` 0.
+- **F4 Shorts beat longs.** 49.7% vs 44.2%; EOD +0.34R vs -0.07R. By tape:
+  `short|bearish_strong` and `short|neutral_chop` 51.7%; `long|neutral_chop` 41.2%,
+  `long|bearish_weak` 41.8%; `long|bullish_strong` 48.4% (+0.37R). Longs pay only in a
+  strong-up tape.
+- **F5 First 30 minutes.** 09:30-10:00 ET alerts win 36.3% (n=1,464, EOD -0.31R), the
+  worst slice by far; 10:00-13:00 ET 47-48%; the last hour 48.5% but MFE only 1.24R.
+- **F6 Score and Focus carry a little.** Floor score 10 (7,560 alerts) 44.1%; any
+  score above 10: 48-50%. Focus names 48.8% vs 44.1%.
+- **F7 The Saturday M5 search measures the wrong thing.** Its m5 population's win is
+  "the level held 30 minutes" (78-90% "wins") with r = MFE, on only the alerts that
+  matched a tracker key row (n=262 for `h1_ema10_bounce` vs 4,142 decided). Verdicts:
+  101 too little data, 28 no key, 6 key found - all about holding, none about paying.
+- **F8 Entry timing beats detection.** Movers Dip: 59 graded, 52.5% beat SPY, longs
+  30.8% (n=13); the best-possible entry from the pullback low averages +0.58% vs -0.07%
+  from the flag close.
+
+**Findings, swings (D1):**
+- **F9 Short families carried the last six weeks.** Session-horizon outcomes 08-14 to
+  09-24 (71k measured rows), tape-relative: SHORT families beat SPY 69-79% at 5 and 10
+  sessions with +1.6% to +5% excess; LONG families 30-50% with -1% to -2.4% excess. SPY
+  itself was flat over those windows. `favorite_setup` bucket: 44% beat SPY, -0.53%
+  excess (n=1,018); `near_favorite_zone` 57.6%, +0.79%. One bearish window proves
+  nothing structural; it proves side-by-tape matters.
+- **F10 Factor leaderboard (60 d, h5, SPY-relative).** LONG `is_favorite_setup=true`
+  31% win, -2.2% edge (n=443). LONG deep pullback (`pct_from_current_vwap < -10`) +10.8%
+  edge (n=353). SHORT 3-14 days before earnings -3.6% to -5.7% edge (n=525); SHORT
+  `mid_earnings_zone_streak_days >= 10` -5.9%.
+- **F11 The swing search found nothing because it could not.** Selection window was 5
+  sessions (08-14 to 08-20); the 20-session hold-out ate the rest; all 28 families
+  "too little data". Its win is absolute `favorable`, not tape-relative.
+- **F12 The trader's ledger agrees.** Since 08-01: 25 longs -$583, 24 shorts +$1,303;
+  options +$571 on 7 trades, stock +$148 on 42.
+- **F13 What we already combine.** D1 facets cover EMAs (`trend_ma_alignment`,
+  `price_vs_ema21`, `ma_order`), horizontal levels (`hv_level`, `cloud_level`,
+  `prev_day_range_break`, `closes_vs_level`, `level_respect`), compression (with break
+  direction), weekly, earnings, HTF, strength, `setup_age`. Missing: trendlines (the
+  scan computes `trendline_break_recent` / `trendline_within_alert_range` for priority
+  rows, `legacy.py` ~6625 and ~21181, and never writes them to
+  `d1_features_history.csv`), and every M5 structure facet (M5 has five facets: time,
+  RVOL, VWAP distance, SPY state, bounce type).
+
+**Packets (order):**
+- **S1 Tell the truth on the Daytrade Tracker** (grades ->7; no ask-first):
+  `setup_scoreboard.py` / `ui/panels/setup_tracker_panel.py` cells show, beside the
+  bracket grade, "EOD close R" mean, "reach 2R" share and n; the grade line says "1:1
+  bracket". `setup_grades.cell_line` gains the two numbers; golden tests updated with
+  the reason. Read the outcome log the way `bracket_results` does.
+- **S2 First-30 Show filter** (noise ->7; presentation only, like P9): `alert_show_filter.py`
+  gains a "hide the first 30 minutes" switch, default on, that never hides PROVEN,
+  Focus, typed names or chart-watch hits; `hidden_by_show` detail says `first30`.
+  Everything is still recorded. One test per exemption.
+- **S3 Bracket outcome in the permutation search** (permutations ->7; no ask-first):
+  `setup_permutation_backfill.m5_rows` adds horizon `bracket_1r` (win = +1R before -1R
+  by first decisive row, r = final close R) beside `held30`, built from EVERY decided
+  alert (join `intraday_bounce_candidates.csv` confirmed rows to the outcome log by
+  event_id, not only tracker-keyed rows); `setup_permutation_search` runs both
+  horizons; the report and `setup_keys_narration` name the horizon in every line.
+  Fixture test with 6 events; refuse live paths as today.
+- **S4 Tape-relative swing search** (permutations ->7; no ask-first): swing `win` =
+  side return beats SPY over the horizon (reuse `setup_grades.tape_result`); the search
+  refuses to publish a population whose selection window has under 20 sessions and
+  writes that reason into the report. Needs the April-August backfill (trader's owed
+  run) to have anything to say.
+- **S5 Side-by-tape line** (grades, recap; display only): Setup Tracker and Day Review
+  get one line "last 20 sessions, tape-relative: longs beat SPY X% (excess Y%), shorts
+  Z% (W%)", from the session-horizon outcomes on a worker. No gating.
+- **S6 Trendline facet + M5 structure facets** (permutations; scan edit with NO output
+  change, trader 2026-09-24; the sidecar is shadow): write `trendline_break_recent`,
+  `trendline_within_alert_range` and the direction onto the scan row (P11 mechanism,
+  golden parity test) and register `@facet("trendline")`. In `m5_setup_key_stamp.py`
+  add pure `@m5_facet`s over the alert's cached bars: `m5_ema_stack` (8/21 order and
+  price side), `m5_pdh_pdl` (above / inside / below yesterday's range),
+  `m5_open_range` (vs the first-30-minute range, only after 10:00 ET),
+  `m5_compression` (12-bar range vs 20-bar ATR, squeeze then expansion),
+  `m5_side_vs_d1_env` (side aligned with the D1 environment). Fixture test per facet.
+- **S7 Shadow engines for the missing setups** (intraday ->8; `m5_signal_engines.py`
+  is shadow by design, so no ask-first until graduation): (a) prev-day high/low
+  break-and-hold with RVOL >= 1.5 after 10:00 ET (the P8b adoption gate already trusts
+  PDH/PDL + VWAP); (b) VWAP reclaim after a first-30 flush, longs only in
+  `bullish_strong`; (c) M5 compression break; (d) intraday trendline break from pivots.
+  Events go to the sidecar and are measured by the S3 bracket; graduation only through
+  the `docs/SETUPS_TEST.md` ladder.
+- **S8 Retest-entry study** (intraday; shadow research in `scripts/research_warehouse/`):
+  measure "enter at the retest" (fill only if price returns within 0.25 ATR of the
+  level within 6 bars, else no trade) against "enter at the flag close" for M5 alerts
+  and Movers, from cached bars; report the two EVs per family on Research.
+- **S9 Tier composite redesign** (grades/noise; ASK-FIRST `bounce_bot_lib/learning.py`,
+  golden fixtures, trader's quoted yes): weight segments by information (distance from
+  zero x confidence) or by the four most specific dimensions (bounce_type,
+  bounce_combo, setup_family, time_bucket) instead of by n; cap the weight of
+  `internals_breadth`, `rrs_*_alignment` and `market_environment`. Propose, with the
+  F2 numbers, before touching anything. Ties into P14.
+- **S10 Decisions from the data** (trader): disable or mute `h1_blue_after_red` long
+  (34%, n=994); no shorts 3-14 days before earnings as a scan filter (ask-first, it
+  changes output); whether the day-trade grade should score a 2R target or EOD R
+  instead of the 1:1 bracket (a ladder change, golden fixtures). Each is one sentence
+  of the trader's, then a packet.
+
 ### Phase C - needs live days (trigger named)
 
 - Gates #257/#258: tonight's ledger and Monday morning. #259-#263: Monday's session.
@@ -145,6 +277,9 @@ Order (trader 2026-09-25 evening): R1 first, then B0, then the rest.
 - Dead-script review: yes or no.
 - B11: surface the two unread slot outputs, or kill the slots.
 - Risk per trade ($) in Settings, `trading_plan.md`, the 139 setup tags waiting.
+- From the setup study (Phase S, S10): disable or mute `h1_blue_after_red` long;
+  a no-shorts-within-14-days-of-earnings scan filter (changes output); grade the
+  day-trade cells on a 2R target or EOD R instead of the 1:1 bracket.
 
 ## Carried over
 

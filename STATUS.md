@@ -2,7 +2,7 @@
 
 Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `git log`.
 
-**Updated:** 2026-09-25 20:55 PT
+**Updated:** 2026-09-25 23:30 PT
 
 - **Live on `main`:** round 1 (`7d160b4b`, gates #257-#263) and round 2 Phase A
   (`81272d42`, merged 20:45 PT on the trader's word, gates #264-#266): perf tooling
@@ -11,10 +11,9 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
   path, night telemetry, one R, Alert Center split step 1, noise report + Best-right-now
   log, missing-inputs chip, `setup_age` facet. Reviewer's one blocker (settings writers
   could build on the 1 s cache) fixed in `5d10ddaf`.
-- **Desk:** restarted 2026-09-25 20:50 PT on `81272d42` by the lead on the trader's word;
-  IB disconnected (TWS logged out). Startup shows a pre-existing swallowed warning
-  (`DayReviewPanel.eventFilter` before `entry_text` exists, from `8f82213a`); one-line
-  fix in Phase B.
+- **Desk:** DOWN. Restarted 20:50 PT on `81272d42`, then closed cleanly 21:51 PT on the
+  trader's word; restart only on the trader's word. Startup shows a pre-existing
+  swallowed warning (`DayReviewPanel.eventFilter` before `entry_text`, `8f82213a`; B12).
 - **Perf baseline (09-24 market hours):** GUI blocked 1305 s, 3276 stalls, p90 743 ms;
   full GC 306 ms/min, young 156 ms/min; add_alert 7.3 ms/alert at 1,000; Working-lately
   build 16-28 s (worker). First live delta: `desk_perf_report.py --day <next session>
@@ -29,9 +28,11 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
   summary into the night AI; phone-brief rule line; pre-Aug entry_at (outcome code, ask
   first); review of the per-trade Mentor Save (`182f3e08`); weekly-options facet needs a
   theta store (only 43 of 6,462 theta picks ever got an option quote: IB option data).
-- **Next action:** Saturday 06:37 PT: read gates #257/#264 from tonight's ledger, perf
-  report for the 20:50 restart; then Phase B builders per `TODO.md`. #258 Monday 07:00;
-  #259-#263, #265, #266 on Monday's session.
+- **Next action:** morning session (Opus 5.5): R1 Day Review Show, B0 abort look, then
+  Phase S (the 2026-09-25 setup study in `TODO.md`: why M5 is never A, shorts vs longs,
+  first-30 filter, bracket outcome and tape-relative wins in the permutation search).
+  Gates #257/#264 from tonight's ledger; #258 Monday 07:00; #259-#263, #265, #266 on
+  Monday's session.
 - **Trader actions owed:** set Risk per trade ($) in Settings > General; fill
   `trading_plan.md`; run the permutation backfill before Saturday; confirm setup tags
   (P2 screen); Task Scheduler "run whether logged on or not" on the night task;
