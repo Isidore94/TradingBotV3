@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shiboken6
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtWidgets import QLayout
 
@@ -38,14 +39,23 @@ class FlowLayout(QLayout):
         self._items.insert(position, item)
         self.invalidate()
 
+    def _live_items(self) -> list:
+        """Drop items whose C++ object Qt already deleted; return the rest."""
+        live = [item for item in self._items if shiboken6.isValid(item)]
+        if len(live) != len(self._items):
+            self._items[:] = live
+        return self._items
+
     def count(self) -> int:
-        return len(self._items)
+        return len(self._live_items())
 
     def itemAt(self, index):  # noqa: N802
-        return self._items[index] if 0 <= index < len(self._items) else None
+        items = self._live_items()
+        return items[index] if 0 <= index < len(items) else None
 
     def takeAt(self, index):  # noqa: N802
-        return self._items.pop(index) if 0 <= index < len(self._items) else None
+        items = self._live_items()
+        return items.pop(index) if 0 <= index < len(items) else None
 
     def expandingDirections(self):  # noqa: N802
         if self._fill:
@@ -67,7 +77,7 @@ class FlowLayout(QLayout):
 
     def minimumSize(self) -> QSize:  # noqa: N802
         size = QSize()
-        for item in self._items:
+        for item in self._live_items():
             size = size.expandedTo(item.minimumSize())
         margins = self.contentsMargins()
         size += QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
@@ -80,6 +90,7 @@ class FlowLayout(QLayout):
         y = effective.y()
         line_height = 0
         spacing = self.spacing()
+        self._live_items()
 
         if self._fill and not test_only and self._fits_one_line(effective, spacing):
             return self._fill_one_line(effective, spacing, rect, margins)

@@ -1,9 +1,11 @@
-"""Provider API-key storage for the optional A.I. Summary workspace.
+"""The one OS credential-store path (ctypes; no third-party package).
 
-Environment variables always win. Saved keys use the OS credential store —
-Credential Manager (generic credentials) on Windows, the login Keychain on
-macOS — and never enter local_settings.json, logs, evidence packages,
-prompts, or exports.
+Provider API keys for the optional A.I. Summary workspace live here, and
+`secret_store` (market-prep OpenAI key, ntfy token) stores through
+`KeyringLayoutStore` on the same backends. Environment variables always win
+for provider keys. Saved keys use Credential Manager (generic credentials) on
+Windows, the login Keychain on macOS, and never enter local_settings.json,
+logs, evidence packages, prompts, or exports.
 """
 
 from __future__ import annotations
@@ -21,6 +23,10 @@ PROVIDER_ENV_KEYS = {
     "anthropic": "ANTHROPIC_API_KEY",
 }
 _TARGET_PREFIX = "TradingBotV3/ai-summary/"
+#: The UserName written on a generic credential when the caller names none.
+DEFAULT_USERNAME = "TradingBotV3"
+#: Set to "memory" to keep every credential in this process (the test suite).
+BACKEND_ENV = "TRADINGBOT_CREDENTIAL_BACKEND"
 
 
 class CredentialBackend(Protocol):
@@ -36,15 +42,24 @@ class MemoryCredentialBackend:
 
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
+        self.usernames: dict[str, str] = {}
+
+    def read_entry(self, target: str) -> tuple[str, str] | None:
+        if target not in self.values:
+            return None
+        return self.values[target], self.usernames.get(target, DEFAULT_USERNAME)
 
     def read(self, target: str) -> str:
         return self.values.get(target, "")
 
-    def write(self, target: str, secret: str) -> None:
+    def write(self, target: str, secret: str, *, username: str = DEFAULT_USERNAME,
+              comment: str = "", persist: int | None = None) -> None:
         self.values[target] = str(secret)
+        self.usernames[target] = str(username)
 
     def delete(self, target: str) -> None:
         self.values.pop(target, None)
+        self.usernames.pop(target, None)
 
 
 if sys.platform == "win32":
@@ -89,21 +104,28 @@ class WindowsCredentialBackend:
         self._api.CredDeleteW.restype = wintypes.BOOL
         self._api.CredFree.argtypes = [ctypes.c_void_p]
 
-    def read(self, target: str) -> str:
+    def read_entry(self, target: str) -> tuple[str, str] | None:
+        """``(secret, username)`` of a generic credential, or None when absent."""
         pointer = ctypes.POINTER(_CREDENTIALW)()
         if not self._api.CredReadW(target, self.CRED_TYPE_GENERIC, 0, ctypes.byref(pointer)):
             error = ctypes.get_last_error()
             if error == self.ERROR_NOT_FOUND:
-                return ""
+                return None
             raise OSError(error, "CredReadW failed")
         try:
             credential = pointer.contents
             raw = ctypes.string_at(credential.CredentialBlob, credential.CredentialBlobSize)
-            return raw.decode("utf-16-le")
+            return raw.decode("utf-16-le"), str(credential.UserName or "")
         finally:
             self._api.CredFree(pointer)
 
-    def write(self, target: str, secret: str) -> None:
+    def read(self, target: str) -> str:
+        entry = self.read_entry(target)
+        return entry[0] if entry else ""
+
+    def write(self, target: str, secret: str, *, username: str = DEFAULT_USERNAME,
+              comment: str = "TradingBotV3 optional A.I. Summary provider key",
+              persist: int | None = None) -> None:
         raw = str(secret).encode("utf-16-le")
         if not raw:
             self.delete(target)
@@ -114,9 +136,9 @@ class WindowsCredentialBackend:
         credential.TargetName = target
         credential.CredentialBlobSize = len(raw)
         credential.CredentialBlob = ctypes.cast(blob, ctypes.POINTER(ctypes.c_ubyte))
-        credential.Persist = self.CRED_PERSIST_LOCAL_MACHINE
-        credential.UserName = "TradingBotV3"
-        credential.Comment = "TradingBotV3 optional A.I. Summary provider key"
+        credential.Persist = self.CRED_PERSIST_LOCAL_MACHINE if persist is None else int(persist)
+        credential.UserName = str(username)
+        credential.Comment = str(comment)
         if not self._api.CredWriteW(ctypes.byref(credential), 0):
             error = ctypes.get_last_error()
             raise OSError(error, "CredWriteW failed")
@@ -200,6 +222,72 @@ class MacKeychainCredentialBackend:
             raise OSError(result.returncode, "security delete-generic-password failed")
 
 
+_PROCESS_MEMORY_BACKEND = MemoryCredentialBackend()
+_FORCE_MEMORY = False
+
+
+def force_memory_backend() -> None:
+    """Keep every credential in this process from now on (the test suite).
+
+    Unlike `BACKEND_ENV`, this survives a test that clears ``os.environ``.
+    """
+    global _FORCE_MEMORY
+    _FORCE_MEMORY = True
+
+
+def default_backend():
+    """This machine's credential backend, or None when the platform has none."""
+    if _FORCE_MEMORY or str(os.environ.get(BACKEND_ENV) or "").strip().lower() == "memory":
+        return _PROCESS_MEMORY_BACKEND
+    if sys.platform == "win32":
+        return WindowsCredentialBackend()
+    if sys.platform == "darwin":
+        return MacKeychainCredentialBackend()
+    return None
+
+
+class KeyringLayoutStore:
+    """``keyring``-style get/set/delete_password over a backend, in WinVault's layout.
+
+    keyring's Windows backend keeps a secret under target ``service``
+    (UserName = its name) and moves an older one to ``{name}@{service}`` on a
+    collision. The same targets are read and written here, so secrets saved
+    through keyring before the switch still read.
+    """
+
+    #: keyring's WinVault persistence (CRED_PERSIST_ENTERPRISE).
+    PERSIST = 3
+    COMMENT = "Stored using python-keyring"
+
+    def __init__(self, backend) -> None:
+        self.backend = backend
+
+    @staticmethod
+    def _compound(service: str, username: str) -> str:
+        return f"{username}@{service}"
+
+    def get_password(self, service: str, username: str) -> str | None:
+        entry = self.backend.read_entry(service)
+        if not entry or (username and entry[1] != username):
+            entry = self.backend.read_entry(self._compound(service, username))
+        return entry[0] if entry else None
+
+    def set_password(self, service: str, username: str, password: str) -> None:
+        existing = self.backend.read_entry(service)
+        if existing:
+            self._write(self._compound(service, existing[1]), existing[0], existing[1])
+        self._write(service, str(password), username)
+
+    def delete_password(self, service: str, username: str) -> None:
+        for target in (service, self._compound(service, username)):
+            entry = self.backend.read_entry(target)
+            if entry and entry[1] == username:
+                self.backend.delete(target)
+
+    def _write(self, target: str, secret: str, username: str) -> None:
+        self.backend.write(target, secret, username=username, comment=self.COMMENT, persist=self.PERSIST)
+
+
 class AiCredentialVault:
     def __init__(
         self,
@@ -208,14 +296,7 @@ class AiCredentialVault:
         environ: Mapping[str, str] | None = None,
     ) -> None:
         self.environ = environ if environ is not None else os.environ
-        if backend is not None:
-            self.backend = backend
-        elif sys.platform == "win32":
-            self.backend = WindowsCredentialBackend()
-        elif sys.platform == "darwin":
-            self.backend = MacKeychainCredentialBackend()
-        else:
-            self.backend = None
+        self.backend = backend if backend is not None else default_backend()
 
     @staticmethod
     def _provider(provider: str) -> str:

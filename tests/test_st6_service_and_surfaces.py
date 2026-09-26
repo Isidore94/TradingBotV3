@@ -290,12 +290,15 @@ def test_the_strip_prints_the_observational_caveat_and_never_the_word_proven(tmp
 
 def test_an_empty_snapshot_says_so_rather_than_showing_a_blank_line():
     """No snapshot is a sentence, not an empty strip."""
+    import working_lately
     from ui.widgets.working_lately_strip import WorkingLatelyStrip
 
     strip = WorkingLatelyStrip()
     try:
         assert "no snapshot yet" in strip.line_text().lower()
-        assert strip.prioritise_box.isChecked() is False, "the switch defaults OFF"
+        # The box mirrors the persisted switch; its default (ON since 0cff2e3e,
+        # trader 2026-09-22) is pinned by test_setup_grades.
+        assert strip.prioritise_box.isChecked() is working_lately.prioritise_enabled()
     finally:
         strip.deleteLater()
 
