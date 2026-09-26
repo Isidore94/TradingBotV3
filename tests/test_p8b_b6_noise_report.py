@@ -248,3 +248,43 @@ def test_the_cli_prints_the_day_read_only(monkeypatch, capsys):
     assert "2026-09-23:" in out and f"{DAY}:" in out
     assert "shown 4 (3 names), hidden_by_show 2, skip 1, remove_today 1" in out
     assert "acted on 3 (2 names), acted share 75%, watch_fired 1" in out
+
+
+# --- the Day Review truth line -------------------------------------------------------
+
+
+def test_day_review_truth_ends_with_the_alerts_line(monkeypatch):
+    import alert_noise_report
+    from ui.services.day_review_service import DayReviewService
+
+    monkeypatch.setattr(
+        alert_noise_report, "build_day_line",
+        lambda day, **_k: f"Alerts: line for {day}",
+    )
+    truth = DayReviewService._truth_with_alerts(DAY, None, [])
+    assert truth["lines"][-1] == f"Alerts: line for {DAY}"
+
+
+def test_an_alerts_line_failure_is_said_and_never_costs_the_truth_lines(monkeypatch):
+    import alert_noise_report
+    from ui.services.day_review_service import DayReviewService
+
+    def boom(*_a, **_k):
+        raise OSError("store gone")
+
+    monkeypatch.setattr(alert_noise_report, "build_day_line", boom)
+    truth = DayReviewService._truth_with_alerts(DAY, None, [])
+    assert truth["lines"][0] == "The journal was not read, so the 20-session lines are unknown."
+    assert truth["lines"][-1] == "Alerts: unknown (store gone)"
+
+
+def test_the_alerts_line_is_built_on_the_worker_from_the_real_stores(monkeypatch, tmp_path):
+    import alert_noise_report
+    import best_now_outcomes
+    import review_events
+
+    monkeypatch.setattr(review_events, "load_review_events", lambda *a, **k: list(EVENTS))
+    monkeypatch.setattr(best_now_outcomes, "load_records", lambda *a, **k: [])
+    assert alert_noise_report.build_day_line(DAY) == (
+        "Alerts: 4 shown, 2 hidden by Show, 3 acted on (75%), Best-right-now: no data yet"
+    )
