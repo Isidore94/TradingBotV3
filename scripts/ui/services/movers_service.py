@@ -134,6 +134,9 @@ BASELINE_RETRY_MINUTES = 15
 RPC_GAP_SECONDS = 0.01
 #: A worker running longer than this is called stuck in the status line.
 HUNG_WORKER_MINUTES = 4
+#: A tick slower than this logs one WARNING, at most once per SLOW_TICK_WARN_SECONDS.
+SLOW_TICK_SECONDS = 10.0
+SLOW_TICK_WARN_SECONDS = 600.0
 #: board["candidate_source"] values.
 SOURCE_SCANNER = "ib_scanner"
 SOURCE_SCANNER_STALE = "ib_scanner_stale"
@@ -355,6 +358,11 @@ class MoversService(QObject):
         self._baseline_day: date | None = None
         self._baseline_tried: dict[str, datetime] = {}
         self.bot_universe_size: int | None = None
+        # Wall time of the last tick and of its options chase (None = chase off).
+        self._perf_clock: Callable[[], float] = time.perf_counter
+        self.last_tick_s: float | None = None
+        self.last_chase_s: float | None = None
+        self._slow_warned_at: float | None = None
         self._stopped = False
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -404,7 +412,15 @@ class MoversService(QObject):
         source = f" · {self._candidate_source}" if self._candidate_source else ""
         if self._scanner_error and self._candidate_source != SOURCE_SCANNER:
             source += f" (scanner: {self._scanner_error})"
-        return f"Movers {self._last_success.strftime('%H:%M:%S')}{source}{suffix}"
+        return f"Movers {self._last_success.strftime('%H:%M:%S')}{source}{self._timing_text()}{suffix}"
+
+    def _timing_text(self) -> str:
+        """` · tick 4.2 s (chase 1.1 s)` for the last tick, or nothing before one."""
+        tick = self.last_tick_s
+        if tick is None:
+            return ""
+        chase = self.last_chase_s
+        return f" · tick {tick:.1f} s" + (f" (chase {chase:.1f} s)" if chase is not None else "")
 
     # ------------------------------------------------------------ control
     def refresh_now(self) -> bool:
@@ -492,6 +508,30 @@ class MoversService(QObject):
             self.statusChanged.emit(self.status_text())
 
     def _run_once(self, focus: dict[str, list[str]]) -> None:
+        """One tick, timed: `last_tick_s` (whole tick) and `last_chase_s` (options chase)."""
+        started = self._perf_clock()
+        self.last_chase_s = None
+        try:
+            self._refresh_board(focus)
+        finally:
+            self._note_tick_time(self._perf_clock() - started)
+
+    def _note_tick_time(self, seconds: float) -> None:
+        self.last_tick_s = seconds
+        if seconds <= SLOW_TICK_SECONDS:
+            return
+        now = self._perf_clock()
+        warned = self._slow_warned_at
+        if warned is not None and now - warned < SLOW_TICK_WARN_SECONDS:
+            return
+        self._slow_warned_at = now
+        chase = self.last_chase_s
+        logging.warning(
+            "Movers tick took %.1f s (chase %s), over %.0f s",
+            seconds, "off" if chase is None else f"{chase:.1f} s", SLOW_TICK_SECONDS,
+        )
+
+    def _refresh_board(self, focus: dict[str, list[str]]) -> None:
         self._tick_no += 1
         now = self._clock()
         if now.tzinfo is None:
@@ -568,6 +608,7 @@ class MoversService(QObject):
         chase = self._options_chase
         if chase is None:
             return
+        started = self._perf_clock()
         try:
             prices = {s: float(bars[-1]["close"]) for s, bars in series.items()
                       if bars and bars[-1].get("close") is not None}
@@ -576,6 +617,8 @@ class MoversService(QObject):
         except Exception:
             logging.warning("Movers: options chase failed", exc_info=True)
             return
+        finally:
+            self.last_chase_s = self._perf_clock() - started
         self._board = board
         self.moversChanged.emit(dict(board))
 

@@ -188,6 +188,9 @@ STAGE_ALLOWLIST: tuple[str, ...] = (
     "alert_review_events/*.jsonl",
     # -- the trade journal, as a COPY -----------------------------------
     "data/runtime/trade_journal.sqlite3",
+    # -- the Working-lately build (A1, 2026-09-25); its other reads are above
+    "data/runtime/master_avwap_tracker_scoring_snapshot.json",
+    "data/daily_bars/SPY.parquet",
     # NO settings file here on purpose. `local_settings.json` was listed once
     # against the home-folder root, where it does not live: the real file is at
     # `%LOCALAPPDATA%\TradingBotV3\local_settings.json`, so the entry reported
@@ -428,6 +431,123 @@ def stage(
             result.copied.append((rel, copied))
             result.total_bytes += copied
     return result
+
+
+#: Workload sizes for the widget benches (A1). Module constants so a test can shrink them.
+ALERT_BURSTS: tuple[int, ...] = (100, 1000)
+M5_CHART_BARS = 400
+M5_CHART_REDRAWS = 20
+MOVERS_BOARD_ROWS = 60
+MOVERS_BOARD_SETS = 20
+
+_ALERT_TIERS = ("S", "A", "B", "B", "C", "C", "C")
+_ALERT_TRIGGERS = ("Bounce confirmed", "VWAP reclaim", "Band touch", "Pause hold")
+
+
+def synthetic_alert_specs(count: int, *, seed: int = 7, symbols: int = 60) -> list[dict[str, Any]]:
+    """`count` deterministic M5 alert specs over a small symbol pool, so most are repeats.
+
+    Mixed tiers (S/A/B/C), ~5% PROVEN, both sides, a few grades. A pool of 60
+    names over 1,000 alerts means the fold path runs on most of them.
+    """
+    import random
+
+    rng = random.Random(seed)
+    pool = [f"Z{index:03d}" for index in range(max(1, int(symbols)))]
+    specs = []
+    for _ in range(int(count)):
+        # Skewed toward the front of the pool: a few names repeat a lot.
+        symbol = pool[min(len(pool) - 1, int(rng.expovariate(1.0 / (len(pool) / 4))))]
+        tier = rng.choice(_ALERT_TIERS)
+        proven = rng.random() < 0.05
+        trigger = rng.choice(_ALERT_TRIGGERS)
+        text = f"[{tier}-TIER] {symbol}: {trigger}" + (" PROVEN" if proven else "")
+        specs.append(
+            {
+                "symbol": symbol,
+                "side": "LONG" if rng.random() < 0.6 else "SHORT",
+                "trigger": trigger,
+                "raw_text": text,
+                "context": f"grade {rng.choice('ABCD')}",
+            }
+        )
+    return specs
+
+
+def synthetic_alerts(count: int, *, seed: int = 7) -> list[Any]:
+    """`synthetic_alert_specs` as real `BounceAlert` objects (imported lazily)."""
+    from ui.models.bounce import BounceAlert
+
+    stamp = datetime.now().strftime("%H:%M:%S")
+    return [
+        BounceAlert(time_text=stamp, timeframe="M5", tag="green", **spec)
+        for spec in synthetic_alert_specs(count, seed=seed)
+    ]
+
+
+def synthetic_m5_bars(count: int, *, shift: float = 0.0) -> list[dict[str, Any]]:
+    """`count` well-formed M5 bars, naive market-local, 78 per session from 06:30."""
+    from datetime import timedelta
+
+    bars = []
+    day = datetime(2026, 9, 14, 6, 30)
+    price = 100.0 + shift
+    for index in range(int(count)):
+        slot = index % 78
+        if index and slot == 0:
+            day =day + timedelta(days=1 if day.weekday() < 4 else 3)
+        stamp = day + timedelta(minutes=5 * slot)
+        step = ((index * 37) % 11 - 5) * 0.05
+        open_ = price
+        close = max(1.0, price + step)
+        bars.append(
+            {
+                "dt": stamp,
+                "open": open_,
+                "high": max(open_, close) + 0.1,
+                "low": min(open_, close) - 0.1,
+                "close": close,
+                "volume": 1000.0 + (index % 13) * 50.0,
+            }
+        )
+        price = close
+    return bars
+
+
+def synthetic_movers_board(rows: int, *, variant: int = 0) -> dict[str, Any]:
+    """A Movers board with `rows` Pop rows (half long, half short), values varied by `variant`."""
+    half = max(1, int(rows) // 2)
+
+    def row(symbol: str, sign: float, rank: int) -> dict[str, Any]:
+        wobble = ((rank + variant) % 7) * 0.1
+        return {
+            "symbol": symbol,
+            "move15_pct": sign * (1.0 + wobble),
+            "move30_pct": sign * (1.5 + wobble),
+            "day_pct": sign * (2.0 + wobble),
+            "rvol": 1.0 + wobble,
+            "vs_spy15_pct": sign * (0.5 + wobble),
+            "pop_score": 3.0 - rank * 0.01 + wobble,
+            "dip_score": None,
+            "since_start_pct": None,
+            "note": "",
+            "stale": False,
+        }
+
+    state = {
+        "state": "up_day", "pullback": False, "bounce": False, "extreme_time": "10:15",
+        "start_dt": "", "spy_from_extreme_pct": -0.05, "spy_day_pct": 0.6,
+    }
+    return {
+        "as_of": "2026-09-22T10:40:00-04:00",
+        "state": state,
+        "pop": {
+            "long": [row(f"L{i:03d}", 1.0, i) for i in range(half)],
+            "short": [row(f"S{i:03d}", -1.0, i) for i in range(int(rows) - half)],
+        },
+        "dip": {"long": [], "short": []},
+        "mine": {"long": [], "short": []},
+    }
 
 
 def format_bytes(count: int) -> str:
@@ -825,6 +945,28 @@ def build_panel(name: str):
         from ui.panels.journal_panel import JournalPanel
 
         return JournalPanel()
+    if name == "alert_center":
+        from ui.panels.alert_center_panel import AlertCenterPanel
+
+        return AlertCenterPanel()
+    if name == "working_lately":
+        # Not a widget: a host page holding the service whose worker-side build is timed.
+        from PySide6.QtWidgets import QWidget
+
+        from ui.services.working_lately_service import WorkingLatelyService
+
+        host = QWidget()
+        host.service = WorkingLatelyService(parent=host)
+        host.inputs = {}
+        return host
+    if name == "m5_chart":
+        from ui.widgets.candle_chart import CandleChart
+
+        return CandleChart()
+    if name == "movers_board":
+        from ui.widgets.movers_board import MoversBoard
+
+        return MoversBoard(persist=False)
     raise KeyError(name)
 
 
@@ -840,7 +982,35 @@ PANEL_NAMES: tuple[str, ...] = (
     "research",
     "away_recap",
     "journal",
+    # A1 (2026-09-25): the live-session surfaces.
+    "alert_center",
+    "working_lately",
+    "m5_chart",
+    "movers_board",
 )
+
+#: Widgets and builds, not pages: no layout-fit row, and shown at the size they
+#: have on the desk rather than the whole window.
+WIDGET_BENCH_PANELS: tuple[str, ...] = ("working_lately", "m5_chart", "movers_board")
+WIDGET_VIEW_SIZES: dict[str, tuple[int, int]] = {
+    "working_lately": (400, 300),
+    "m5_chart": (1600, 900),
+    "movers_board": (700, 900),
+}
+
+#: Ops whose call covers many items (`[N]` = N items); the table also prints sync ms per item.
+PER_ITEM_OP_PREFIXES: tuple[str, ...] = ("alert_center.add_alert[",)
+
+
+def op_item_count(op: str) -> int:
+    """N for a per-item op like `alert_center.add_alert[1000]`, else 0."""
+    for prefix in PER_ITEM_OP_PREFIXES:
+        if op.startswith(prefix) and op.endswith("]"):
+            try:
+                return max(0, int(op[len(prefix):-1]))
+            except ValueError:
+                return 0
+    return 0
 
 SMOKE_PANEL_NAMES: tuple[str, ...] = ("away_recap", "market_journal")
 
@@ -908,7 +1078,65 @@ def workload_ops(name: str, panel) -> list[tuple[str, Callable[[], Any]]]:
         ops.append(("away_recap.reload", panel.reload))
     elif name == "journal":
         ops.extend(_tab_ops(panel.tabs, "journal.tab"))
+    elif name == "alert_center":
+        # Alerts are built before the timed call; the op is the add_alert loop only.
+        for count in ALERT_BURSTS:
+            alerts = synthetic_alerts(count, seed=count)
+
+            def _feed(alerts=alerts):
+                for alert in alerts:
+                    panel.add_alert(alert)
+
+            ops.append((f"alert_center.add_alert[{count}]", _feed))
+    elif name == "working_lately":
+        ops.extend(_working_lately_ops(panel))
+    elif name == "m5_chart":
+        variants = [synthetic_m5_bars(M5_CHART_BARS, shift=float(k)) for k in range(2)]
+        for index in range(M5_CHART_REDRAWS):
+            bars = variants[index % 2]
+            ops.append(
+                (f"m5_chart.redraw[{M5_CHART_BARS}]", lambda b=bars: panel.set_data(b, timeframe="m5"))
+            )
+    elif name == "movers_board":
+        for index in range(MOVERS_BOARD_SETS):
+            board = synthetic_movers_board(MOVERS_BOARD_ROWS, variant=index)
+
+            def _set(board=board):
+                panel.update_board(board)
+                panel.flush_pending_refresh()
+
+            ops.append((f"movers_board.update_board[{MOVERS_BOARD_ROWS}]", _set))
     return ops
+
+
+def _working_lately_ops(host) -> list[tuple[str, Callable[[], Any]]]:
+    """The Working-lately build, timed on the Qt thread here (on the desk it is a worker).
+
+    `build_payload` is the whole worker build (reads, snapshot, grades, looking
+    back, scratch writes). `read_inputs` + `build_snapshot` split out the pure
+    leaderboard build from its three reads.
+    """
+    from ui.services import working_lately_service as service_module
+
+    service = host.service
+
+    def _read_inputs() -> None:
+        host.inputs = {
+            "recent_rows": service_module.read_recent_rows(),
+            "favorable_read": service_module.read_favorable_read(),
+            "held_run_summaries": service_module.read_held_run_summaries(),
+            "last_completed_session": service_module._last_completed_session(),
+            "previous_verdicts": service.previous_verdicts(),
+        }
+
+    def _build_snapshot() -> None:
+        service_module.build_snapshot(**host.inputs)
+
+    return [
+        ("working_lately.build_payload", service.build_payload),
+        ("working_lately.read_inputs", _read_inputs),
+        ("working_lately.build_snapshot", _build_snapshot),
+    ]
 
 
 def fit_targets(name: str, panel) -> list[tuple[str, Any]]:
@@ -1011,8 +1239,10 @@ def run_bench(
                     )
                 )
 
-                def _show(panel=panel, width=width, available=available):
-                    panel.resize(width, available)
+                view = WIDGET_VIEW_SIZES.get(name, (width, available))
+
+                def _show(panel=panel, view=view):
+                    panel.resize(*view)
                     panel.show()
 
                 readings.append(
@@ -1024,7 +1254,7 @@ def run_bench(
                         time_op(app, panel, op_name, size_label, call, deadline_s=deadline_s)
                     )
 
-                if attempt == 0:
+                if attempt == 0 and name not in WIDGET_BENCH_PANELS:
                     for page_name, widget in fit_targets(name, panel):
                         fits.append(
                             measure_fit(
@@ -1109,8 +1339,14 @@ def _aggregate(readings: Sequence[OpReading]) -> list[dict[str, Any]]:
     for op, size in order:
         group = grouped[(op, size)]
         errors = sorted({r.error for r in group if r.error})
+        items = op_item_count(op)
         rows.append(
             {
+                **(
+                    {"items": items, "per_item_ms": summarize([r.sync_ms / items for r in group])}
+                    if items
+                    else {}
+                ),
                 "op": op,
                 "size": size,
                 "samples": len(group),
@@ -1163,6 +1399,13 @@ def format_ops_table(rows: Sequence[dict[str, Any]]) -> str:
             f"bench poll cost (inside settle): worst {max(costs):,.1f} ms over "
             f"{len(costs)} op(s)."
         )
+    for row in rows:
+        per_item = row.get("per_item_ms")
+        if per_item:
+            lines.append(
+                f"per item: {row['op']} @ {row['size']}: sync p50 {_ms(per_item['p50'])} ms, "
+                f"p95 {_ms(per_item['p95'])} ms, max {_ms(per_item['max'])} ms per item"
+            )
     return "\n".join(lines)
 
 
