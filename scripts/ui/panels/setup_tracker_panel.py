@@ -36,6 +36,7 @@ from project_paths import (
     MASTER_AVWAP_TIER_PERFORMANCE_FILE,
 )
 import claimed_pick_evidence
+import exit_model_review
 import setup_grades
 from research_explanations import build_plain_english_whats_working
 from theta_pick_tracker import THETA_NO_EXPORT_SENTENCE, theta_readout
@@ -309,6 +310,17 @@ THETA_COLUMNS = (
     ("n_expiry_graded", "Expiry n"),
 )
 
+#: S13. Three exit models per family x side, from `exit_model_review.review`.
+EXIT_MODEL_COLUMNS = (
+    ("side", "Side"),
+    ("family", "Family"),
+    ("n", "n"),
+    ("current_r", "Tracker R (target/stop)"),
+    ("current_n", "Tracker n"),
+    ("stop_only_r", "Stop only, 10d (ATR R)"),
+    ("trail_r", "Trail 1 ATR (ATR R)"),
+)
+
 #: Packet M5.3. `framework_family` and `experimental` lead, because the first
 #: question about a row here is which framework it belongs to and whether it
 #: ever happened.
@@ -501,6 +513,10 @@ SIGNED_KEYS = {
     "success_score",
     "score_delta",
     "avg_side_return_delta_pct",
+    # S13 exit models.
+    "current_r",
+    "stop_only_r",
+    "trail_r",
 }
 TOOLTIP_KEYS = {
     "sample_setups",
@@ -654,6 +670,10 @@ class SetupTrackerPanel(QFrame):
         self.theta_grade_label = QLabel("")
         self.theta_grade_label.setObjectName("MutedLabel")
         self.theta_grade_label.setWordWrap(True)
+        # S13: the Exit models tab's status line, from the worker's summary.
+        self.exit_model_status_label = QLabel(exit_model_review.NO_DATA_SENTENCE)
+        self.exit_model_status_label.setObjectName("MutedLabel")
+        self.exit_model_status_label.setWordWrap(True)
         # D1C-B: the My claims tab's three lines. The LEADER sentence sits above
         # the tables (it is the verdict the trader came for, and it names no
         # setup below the reportable floor); the caption separates the two
@@ -740,6 +760,9 @@ class SetupTrackerPanel(QFrame):
         # identifier here and the rates must never take it.
         self.theta_table, self.theta_model = self._make_table(
             THETA_COLUMNS, text_key="support_combo", elide_keys=("play_type",)
+        )
+        self.exit_model_table, self.exit_model_model = self._make_table(
+            EXIT_MODEL_COLUMNS, text_key="family"
         )
         # D1C-B: `Note` takes the slack on the populations block - it carries the
         # HC unmeasured sentence, and a rate column must never take it.
@@ -897,6 +920,19 @@ class SetupTrackerPanel(QFrame):
                 footer=self.theta_grade_label,
             ),
             "Theta",
+        )
+        self.tabs.addTab(
+            self._make_explained_tab(
+                "S13, DISPLAY ONLY. What three exits would book on the same setups: the "
+                "tracker's own target/stop R; a 1 ATR stop held 10 sessions; a stop 1 ATR "
+                "behind the best close. The two ATR models use 1R = 1 ATR20 on the scan "
+                "date and check the closes at sessions 1, 3, 5 and 10. Tracker R counts "
+                "open setups marked to market. No exit rule changes until the trader "
+                "picks one.",
+                self.exit_model_table,
+                status=self.exit_model_status_label,
+            ),
+            "Exit models",
         )
         self.tabs.addTab(
             self._make_explained_tab(
@@ -1534,6 +1570,9 @@ class SetupTrackerPanel(QFrame):
             str(data.get("claim_leader") or CLAIM_NO_DATA_SENTENCE)
         )
         self.claim_footnote_label.setText(str(data.get("claim_footnote") or ""))
+        self.exit_model_status_label.setText(
+            str(data.get("exit_model_sentence") or exit_model_review.NO_DATA_SENTENCE)
+        )
         tape = data.get("side_by_tape")
         self.tape_side_label.setText(
             setup_grades.side_by_tape_line(tape if isinstance(tape, dict) else None)
@@ -1948,6 +1987,18 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 - one line, never the tracker
         logging.debug("Setup Tracker tape line could not be built", exc_info=True)
         side_by_tape = {}
+    # S13: three exit models per family. Display only; unknown on failure.
+    try:
+        from ui.services import working_lately_service
+
+        exit_models = working_lately_service.read_exit_model_review()
+    except Exception:  # noqa: BLE001 - one tab, never the tracker
+        logging.debug("Setup Tracker exit models could not be built", exc_info=True)
+        exit_models = {}
+    ranked["exit_models"] = list(exit_models.get("cells") or [])
+    signatures["exit_models"] = hashlib.sha1(
+        repr(ranked["exit_models"]).encode("utf-8", "replace")
+    ).hexdigest()
     ranked["claim_population"] = claims["populations"]
     ranked["claim_setup"] = claims["setups"]
     return {
@@ -1959,6 +2010,7 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
         "raw": raw,
         "ranked": ranked,
         "side_by_tape": side_by_tape,
+        "exit_model_sentence": exit_model_review.review_sentence(exit_models),
         "theta_population_sentence": theta.population_sentence(),
         "theta_grade_sentence": theta.grade_sentence(),
         "scan_factor_mtime_text": _latest_mtime_text(
@@ -2010,6 +2062,8 @@ def _table_render_plan(
          (signatures.get("study_discovery"),)),
         ("theta_table", "theta_model", (ranked.get("theta") or [])[:300],
          (signatures.get("theta"),)),
+        ("exit_model_table", "exit_model_model", ranked.get("exit_models") or [],
+         (signatures.get("exit_models"),)),
         # D1C-B: both blocks come off ONE build, so both memo on the same
         # four-store signature - a rewrite of any of them re-fits both.
         ("claim_population_table", "claim_population_model",
