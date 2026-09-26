@@ -19,6 +19,7 @@ from setup_permutations import SCAN_ROW_COLUMNS as PERMUTATION_SCAN_ROW_COLUMNS
 from setup_permutations import d1_history_columns as permutation_d1_history_columns
 from setup_permutations import ma_distance_columns as permutation_ma_distance_columns
 from setup_permutations import setup_age_columns as permutation_setup_age_columns
+from setup_permutations import trendline_columns as permutation_trendline_columns
 from tracker_store import record_write_failure as record_setup_tracker_write_failure
 from tracker_store import record_write_success as record_setup_tracker_write_success
 from swallowed import note_swallowed
@@ -862,6 +863,13 @@ def _permutation_bar_dates(frame) -> list[str]:
     if frame is None or "datetime" not in getattr(frame, "columns", ()):
         return []
     return [stamp.date().isoformat() for stamp in frame["datetime"] if not pd.isna(stamp)]
+
+
+def _permutation_trendline_bars(frame) -> int:
+    """Cached daily bars the directional refine counts (dated, with a close); 0 when unknown."""
+    if not isinstance(frame, pd.DataFrame) or frame.empty or not {"datetime", "close"} <= set(frame.columns):
+        return 0
+    return int(len(frame.dropna(subset=["datetime", "close"])))
 
 
 def _run_master_impl(
@@ -3116,6 +3124,27 @@ def _run_master_impl(
         )
     except Exception:
         logging.debug("Setup permutation setup age skipped for this scan.", exc_info=True)
+
+    # S6: shadow trendline read from the priority rows the directional refine filled; appended, never scored.
+    try:
+        permutation_symbols = ai_state.get("symbols") or {}
+        for row in priority_rows:
+            symbol = str(row.get("symbol") or "").strip().upper()
+            feature_row = feature_rows_by_symbol.get(symbol)
+            symbol_state = permutation_symbols.get(symbol) or {}
+            row_side = str(row.get("side") or symbol_state.get("side") or "LONG").upper()
+            if not isinstance(feature_row, dict) or row_side != str(feature_row.get("side") or "").upper():
+                continue
+            if "trendline_break_recent" not in row:
+                continue  # never refined: its columns stay unknown, and never blank a refined twin
+            feature_row.update(permutation_trendline_columns(
+                row,
+                frame_bars=_permutation_trendline_bars(daily_frames_by_symbol.get(symbol)),
+                last_close=symbol_state.get("last_close"),
+                atr=symbol_state.get("atr20"),
+            ))
+    except Exception:
+        logging.debug("Setup permutation trendline columns skipped for this scan.", exc_info=True)
 
     # P1-4 4a: stamp the shadow permutation key last, after every enricher; never fails the scan.
     try:

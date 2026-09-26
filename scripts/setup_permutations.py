@@ -742,6 +742,24 @@ def _setup_age(row, ctx, side):
     return _band(value, (3.0, 6.0, 11.0), ("setup_age_1_2", "setup_age_3_5", "setup_age_6_10", "setup_age_11_plus"))
 
 
+# --- S6: the scan's own D1 trendline read (appended `perm_trendline_*` columns)
+
+
+@facet("trendline", "trendline", quiet=("no_trendline",))
+def _trendline(row, ctx, side):
+    # A recent break wins over a nearby line; the direction is the way a break of the line goes.
+    broke = _flag(row.get("perm_trendline_break_recent"))
+    near = _flag(row.get("perm_trendline_within_alert_range"))
+    if broke is None or near is None:
+        return UNKNOWN
+    if not broke and not near:
+        return "no_trendline"
+    direction = (_text(row.get("perm_trendline_direction")) or "").lower()
+    if direction not in {"up", "down"}:
+        return UNKNOWN
+    return f"trendline_break_{direction}" if broke else f"trendline_near_{direction}"
+
+
 # --- stamping (4a): the scan-row columns and the honest input view
 
 #: `perm_dist_<ma>_atr` columns the enrichment step writes: (close - ma) / ATR20. The `perm_`
@@ -761,9 +779,15 @@ D1_HISTORY_COLUMNS = (
 )
 #: P8b: completed sessions since the setup tracker first saw this symbol/side/family.
 SETUP_AGE_COLUMN = "perm_setup_age_sessions"
-#: Every column P1-4 appends to `d1_features_history.csv`, in order (4a, then P11, then P8b).
+#: S6: the scan's own trendline read for priority rows (break, nearby line, break direction).
+TRENDLINE_COLUMNS = (
+    "perm_trendline_break_recent",
+    "perm_trendline_within_alert_range",
+    "perm_trendline_direction",
+)
+#: Every column P1-4 appends to `d1_features_history.csv`, in order (4a, then P11, then P8b, then S6).
 SCAN_ROW_COLUMNS = (*MA_DISTANCE_COLUMNS, WEEKLY_STREAK_COLUMN, *STAMP_COLUMNS, *D1_HISTORY_COLUMNS,
-                    SETUP_AGE_COLUMN)
+                    SETUP_AGE_COLUMN, *TRENDLINE_COLUMNS)
 
 _WEEKLY_TOP_PATTERN_FLAGS = (
     "top_pattern_weekly_ema15_hold",
@@ -991,6 +1015,42 @@ def setup_age_columns(feature_rows: Any, tracker_payload: Any, session_dates: An
         row[SETUP_AGE_COLUMN] = age
         aged += age is not None
     return aged
+
+
+# --- S6: the trendline columns (pure; the scan passes the priority row it already refined)
+
+#: The scan's trendline lookback (`legacy.PRIORITY_TRENDLINE_LOOKBACK_BARS`): with fewer cached bars
+#: the scan fetched its own, so "no line found" cannot be told from "too few bars".
+TRENDLINE_MIN_KNOWN_BARS = 200
+_TRENDLINE_DIRECTIONS = {"H-": "up", "H-break": "up", "L+": "down", "L-break": "down"}
+
+
+def trendline_columns(priority_row: Any, *, frame_bars: Any, last_close: Any, atr: Any) -> dict[str, Any]:
+    """The S6 ``perm_trendline_*`` columns for one refined priority row; None where the scan cannot say.
+
+    ``priority_row`` holds the scan's `find_directional_trendline_candidate` fields (a row the
+    directional refine never looked at has none: unknown). ``frame_bars`` is the cached daily bar
+    count the refine saw; "no line" is only claimed when it had the full lookback and an ATR.
+    """
+    out: dict[str, Any] = dict.fromkeys(TRENDLINE_COLUMNS)
+    if not isinstance(priority_row, Mapping) or "trendline_break_recent" not in priority_row:
+        return out
+    broke = bool(priority_row.get("trendline_break_recent"))
+    near = bool(priority_row.get("trendline_within_alert_range"))
+    if broke or near:
+        candidate = priority_row.get("trendline_break_candidate" if broke else "trendline_candidate")
+        line_type = candidate.get("type") if isinstance(candidate, Mapping) else None
+        direction = _TRENDLINE_DIRECTIONS.get(str(line_type or ""))
+        if direction is None:
+            return out
+        out.update({TRENDLINE_COLUMNS[0]: broke, TRENDLINE_COLUMNS[1]: near, TRENDLINE_COLUMNS[2]: direction})
+        return out
+    bars = _num(frame_bars)
+    atr_value = _num(atr)
+    if bars is not None and bars >= TRENDLINE_MIN_KNOWN_BARS and _num(last_close) is not None \
+            and atr_value is not None and atr_value > 0:
+        out.update({TRENDLINE_COLUMNS[0]: False, TRENDLINE_COLUMNS[1]: False})
+    return out
 
 
 # --- P11: M5-native facets over one alert's own inputs (group ``m5``)
