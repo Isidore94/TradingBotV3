@@ -18,6 +18,7 @@ from setup_permutation_context import stamp_scan_rows as stamp_permutation_scan_
 from setup_permutations import SCAN_ROW_COLUMNS as PERMUTATION_SCAN_ROW_COLUMNS
 from setup_permutations import d1_history_columns as permutation_d1_history_columns
 from setup_permutations import ma_distance_columns as permutation_ma_distance_columns
+from setup_permutations import setup_age_columns as permutation_setup_age_columns
 from tracker_store import record_write_failure as record_setup_tracker_write_failure
 from tracker_store import record_write_success as record_setup_tracker_write_success
 from swallowed import note_swallowed
@@ -855,6 +856,13 @@ def _schedule_deferred_theta_enrichment(
 # ============================================================================
 # CACHE HELPERS
 # ============================================================================
+
+def _permutation_bar_dates(frame) -> list[str]:
+    """ISO dates of one symbol's daily bars (the setup-age calendar); empty when unknown."""
+    if frame is None or "datetime" not in getattr(frame, "columns", ()):
+        return []
+    return [stamp.date().isoformat() for stamp in frame["datetime"] if not pd.isna(stamp)]
+
 
 def _run_master_impl(
     longs_path: Path | None = None,
@@ -3098,6 +3106,16 @@ def _run_master_impl(
         feature_row = feature_rows_by_symbol.get(symbol)
         if isinstance(feature_row, dict) and row.get(ASSIGNED_TIER_FIELD):
             feature_row[ASSIGNED_TIER_FIELD] = row.get(ASSIGNED_TIER_FIELD)
+
+    # P8b: shadow setup age from the tracker view this scan already loaded; appended, never scored.
+    try:
+        permutation_setup_age_columns(
+            feature_rows,
+            tracker_scoring_payload,
+            lambda symbol: _permutation_bar_dates(daily_frames_by_symbol.get(symbol)),
+        )
+    except Exception:
+        logging.debug("Setup permutation setup age skipped for this scan.", exc_info=True)
 
     # P1-4 4a: stamp the shadow permutation key last, after every enricher; never fails the scan.
     try:

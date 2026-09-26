@@ -39,6 +39,7 @@ SCRATCH = Path(sys.argv[1])
 SCRIPTS_DIR = sys.argv[2]
 DISABLE = sys.argv[3] == "off"
 SESSION_COUNT = int(sys.argv[4]) if len(sys.argv) > 4 else 260
+TRACKER_SEED = sys.argv[5] if len(sys.argv) > 5 else ""
 SYMBOL = "PKEY"
 os.environ["TRADINGBOTV3_DATA_DIR"] = str(SCRATCH / "home")
 os.environ["LOCALAPPDATA"] = str(SCRATCH / "localappdata")
@@ -62,6 +63,9 @@ if DISABLE:
     # P11: the appended D1 history columns are switched off the same way.
     if hasattr(runner, "permutation_d1_history_columns"):
         runner.permutation_d1_history_columns = lambda *args, **kwargs: {}
+    # P8b: the setup-age column is switched off the same way.
+    if hasattr(runner, "permutation_setup_age_columns"):
+        runner.permutation_setup_age_columns = lambda *args, **kwargs: 0
 
 
 def _sessions(count):
@@ -81,6 +85,15 @@ for index, stamp in enumerate(stamps):
 frame = pd.DataFrame(rows, columns=["datetime", "open", "high", "low", "close"])
 frame["volume"] = 1_000_000
 anchor_iso = stamps[230].date().isoformat()
+
+if TRACKER_SEED:
+    # P8b: a tracker scoring view whose one setup was first seen `first_seen_offset` sessions back.
+    seed = json.loads(Path(TRACKER_SEED).read_text(encoding="utf-8"))
+    first_seen = stamps[-1 - int(seed["first_seen_offset"])].date().isoformat()
+    seeded = {"schema_version": 1, "setups": {"seed": {
+        "setup_id": "seed", "symbol": seed["symbol"], "side": seed["side"], "scan_date": first_seen,
+        "setup_family": seed["setup_family"], "setup_status": "OPEN"}}}
+    runner.load_setup_tracker_scoring_payload = lambda *a, **k: seeded
 
 runner.resolve_master_scan_watchlist_paths = lambda **kwargs: (
     [SCRATCH / "longs.txt"], [SCRATCH / "shorts.txt"], "test watchlist")
@@ -115,8 +128,8 @@ VOLATILE_KEYS = {
 }
 
 
-def _run(tmp_path: Path, mode: str, sessions: int = 260) -> dict:
-    scratch = tmp_path / f"{mode}-{sessions}"
+def _run(tmp_path: Path, mode: str, sessions: int = 260, seed: Path | None = None) -> dict:
+    scratch = tmp_path / f"{mode}-{sessions}{'-seeded' if seed else ''}"
     for name in ("home", "localappdata", "diag"):
         (scratch / name).mkdir(parents=True, exist_ok=True)
     child = scratch / "child.py"
@@ -124,7 +137,8 @@ def _run(tmp_path: Path, mode: str, sessions: int = 260) -> dict:
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
     completed = subprocess.run(
-        [sys.executable, str(child), str(scratch), str(SCRIPTS_DIR), mode, str(sessions)],
+        [sys.executable, str(child), str(scratch), str(SCRIPTS_DIR), mode, str(sessions),
+         *([str(seed)] if seed else [])],
         capture_output=True, text=True, timeout=900, env=environment, cwd=str(SCRIPTS_DIR),
     )
     assert completed.returncode == 0, completed.stderr[-4000:]
