@@ -74,7 +74,19 @@ os.environ["TRADINGBOT_DISABLE_BACKGROUND_MAINTENANCE"] = "1"
 # process gets an in-memory keyring; child processes get keyring's null backend.
 os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
 # secret_store and ai_credentials share one ctypes path; keep it in memory here.
+# The env var reaches child processes; the module switch survives a test that
+# clears os.environ (patch.dict(..., clear=True) once read the live key).
 os.environ["TRADINGBOT_CREDENTIAL_BACKEND"] = "memory"
+_SCRIPTS_FOR_CREDENTIALS = str(Path(__file__).resolve().parents[1] / "scripts")
+_path_added = _SCRIPTS_FOR_CREDENTIALS not in sys.path
+if _path_added:
+    sys.path.insert(0, _SCRIPTS_FOR_CREDENTIALS)
+try:
+    import ai_credentials as _ai_credentials
+finally:
+    if _path_added:
+        sys.path.remove(_SCRIPTS_FOR_CREDENTIALS)
+_ai_credentials.force_memory_backend()
 try:
     import keyring as _keyring
     from keyring.backend import KeyringBackend as _KeyringBackend

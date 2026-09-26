@@ -68,3 +68,13 @@ def test_the_store_is_the_ctypes_path_not_the_keyring_package(backend):
     store = secret_store._keyring()
     assert isinstance(store, ai_credentials.KeyringLayoutStore)
     assert store.backend is backend
+
+
+def test_a_test_that_clears_the_environment_still_gets_the_memory_store():
+    # A cleared os.environ once let a test read the live market-prep key.
+    import os
+    from unittest.mock import patch
+
+    with patch.dict(os.environ, {}, clear=True):
+        backend = ai_credentials.default_backend()
+    assert isinstance(backend, ai_credentials.MemoryCredentialBackend)

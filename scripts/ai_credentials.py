@@ -223,11 +223,21 @@ class MacKeychainCredentialBackend:
 
 
 _PROCESS_MEMORY_BACKEND = MemoryCredentialBackend()
+_FORCE_MEMORY = False
+
+
+def force_memory_backend() -> None:
+    """Keep every credential in this process from now on (the test suite).
+
+    Unlike `BACKEND_ENV`, this survives a test that clears ``os.environ``.
+    """
+    global _FORCE_MEMORY
+    _FORCE_MEMORY = True
 
 
 def default_backend():
     """This machine's credential backend, or None when the platform has none."""
-    if str(os.environ.get(BACKEND_ENV) or "").strip().lower() == "memory":
+    if _FORCE_MEMORY or str(os.environ.get(BACKEND_ENV) or "").strip().lower() == "memory":
         return _PROCESS_MEMORY_BACKEND
     if sys.platform == "win32":
         return WindowsCredentialBackend()
