@@ -314,3 +314,79 @@ def test_the_swing_panel_switch_and_banner(env, tmp_path, monkeypatch):  # noqa:
     finally:
         panel.close()
         g.clear_cache()
+
+
+# --------------------------------------------------------------------------- phone report
+def _report_payload():
+    return {
+        "generated_at": "2026-09-28 10:00:00",
+        "swing_picks": [
+            {"symbol": "AAA", "side": "LONG", "bucket": "favorite_setup", "raw": {}},
+            {"symbol": "BBB", "side": "SHORT", "bucket": "favorite_setup", "raw": {}},
+            {"symbol": "TYPED", "side": "LONG", "bucket": "favorite_setup", "raw": {}},
+            {"symbol": "HELD", "side": "LONG", "bucket": "favorite_setup", "raw": {}},
+            {"symbol": "LPB", "side": "LONG", "bucket": "favorite_setup",
+             "raw": {"setup_family": "leader_pullback"}},
+        ],
+        "swing_data_current": True,
+        "longs": ["TYPED"],
+        "shorts": [],
+        "bucket_roster": {"favorite_setup": {"LONG": ["AAA", "TYPED", "HELD"], "SHORT": ["BBB"]}},
+    }
+
+
+def test_the_report_drops_hidden_longs_for_one_longs_off_line():
+    import autopilot_core as core
+
+    out = core.hide_longs_off(_report_payload(), verdict=_off(opens=("HELD",)), exempt_symbols=["TYPED"])
+    assert [p["symbol"] for p in out["swing_picks"]] == ["BBB", "TYPED", "HELD", "LPB"]
+    assert out["bucket_roster"] == {"favorite_setup": {"LONG": ["TYPED", "HELD"], "SHORT": ["BBB"]}}
+    assert out["longs_off_hidden_count"] == 1
+    line = "Longs off: SPY is under its 20-day (since 2026-09-14) - 1 long name(s) hidden"
+    assert out["longs_off_line"] == line
+    text = core.render_away_report(out)
+    assert text.count("Longs off:") == 1
+    assert "AAA (LONG)" not in text
+    title, message = core.build_swing_push(out)
+    assert message.splitlines()[0] == line and "AAA" not in message
+
+
+def test_the_report_is_untouched_in_a_good_or_unknown_market():
+    import autopilot_core as core
+    import longs_market_gate as g
+
+    for verdict in (None, g.Verdict(day="2026-09-28"), g.Verdict(day="2026-09-28", verdict="yes")):
+        out = core.hide_longs_off(_report_payload(), verdict=verdict)
+        assert out == _report_payload()
+        assert "Longs off" not in core.render_away_report(out)
+
+
+def test_the_report_filter_reads_the_switch(env, monkeypatch):  # noqa: F811
+    import longs_market_gate as g
+    from ui.services.autopilot_service import AutopilotService
+
+    monkeypatch.setattr(g, "current", lambda: _off())
+    out = AutopilotService._hide_longs_off(_report_payload(), ["TYPED"])
+    assert "AAA" not in [p["symbol"] for p in out["swing_picks"]]
+    g.set_enabled(False)
+    assert AutopilotService._hide_longs_off(_report_payload(), ["TYPED"]) == _report_payload()
+
+
+def test_the_phone_push_says_longs_off_once_per_day(monkeypatch):
+    from datetime import datetime
+
+    import autopilot_core as core
+    import push_notify
+    from test_away_push_gating import _Sent, _service
+
+    monkeypatch.setattr(push_notify, "push_configured", lambda: True)
+    monkeypatch.setattr(core, "swing_push_due", lambda *_a, **_k: True)
+    sent = _Sent()
+    monkeypatch.setattr(push_notify, "send_push", sent)
+    service = _service()
+    payload = core.hide_longs_off(_report_payload(), verdict=_off(opens=("HELD",)), exempt_symbols=["TYPED"])
+    for hour in (10, 11):
+        service._push_swing_picks(payload, now=datetime(2026, 9, 28, hour, 5))
+    service._push_swing_picks(payload, now=datetime(2026, 9, 29, 10, 5))
+    firsts = [message.splitlines()[0].startswith("Longs off:") for _title, message in sent.calls]
+    assert firsts == [True, False, True]
