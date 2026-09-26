@@ -68,6 +68,7 @@ from ai_jobs import window
 from ui import theme
 from ui.panels import desk_layout
 from ui.widgets.data_table import MEASURE_PRECISION_ROWS
+from slot_output_reads import note_slot_output_read
 from swallowed import note_swallowed
 
 #: How often the page asks whether its automatic read is due (the Daily Recap's
@@ -2240,6 +2241,8 @@ class DayReviewPanel(QFrame):
         body = "\n".join(_without_citations(line) for line in lines)
         self.story_body.setText(body)
         self.story_body.setVisible(bool(body))
+        if headline or body:
+            note_slot_output_read("day_review_narration")
 
     def _render_d1_view(self, view: Any) -> None:
         """The rolling D1 view, above the open theses. Formatting only."""

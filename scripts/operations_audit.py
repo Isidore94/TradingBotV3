@@ -581,6 +581,103 @@ def ai_night_lines(path: Path | None = None) -> list[str]:
     return [line for line in lines if line]
 
 
+_FIRST_TOKEN_RE = re.compile(r"answered one token in (\d+(?:\.\d+)?) s")
+#: Statuses that mean a slot actually ran (a skip row has no run time).
+_RAN_STATUSES = ("ok", "degraded_no_narrative", "failed", "manual_test")
+_SHORT_STATUS = {"degraded_no_narrative": "degraded", "manual_test": "manual"}
+#: How many import nights the Broker import line looks back over.
+BROKER_IMPORT_NIGHTS = 14
+
+
+def _minutes_seconds(value: Any) -> str:
+    try:
+        total = int(round(float(value)))
+    except (TypeError, ValueError):
+        return "unknown"
+    return f"{total // 60}:{total % 60:02d}"
+
+
+def night_ai_timing_line(rows: list[dict[str, Any]]) -> str:
+    """"Night AI: first token <s> (probe <time>); day story <m:ss> (<status>)", or ""."""
+    probe = next(
+        (row for row in reversed(rows) if str(row.get("job") or "") == AI_PROBE_JOB), None
+    )
+    story = next(
+        (
+            row for row in reversed(rows)
+            if str(row.get("job") or "") == "day_review_narration"
+            and str(row.get("status") or "") in _RAN_STATUSES
+        ),
+        None,
+    )
+    if probe is None and story is None:
+        return ""
+    if probe is None:
+        probe_text = "first token unknown (no probe yet)"
+    else:
+        stamp = _short_ai_stamp(probe.get("started_at"))
+        seconds = _FIRST_TOKEN_RE.search(str(probe.get("reason") or ""))
+        if str(probe.get("status") or "") != "ok":
+            probe_text = f"first token none, probe failed (probe {stamp})"
+        elif seconds:
+            probe_text = f"first token {seconds.group(1)} s (probe {stamp})"
+        else:
+            probe_text = f"first token unknown (probe {stamp})"
+    if story is None:
+        story_text = "day story unknown (no run yet)"
+    else:
+        status = str(story.get("status") or "")
+        story_text = (
+            f"day story {_minutes_seconds(story.get('duration_seconds'))} "
+            f"({_SHORT_STATUS.get(status, status)})"
+        )
+    return f"Night AI: {probe_text}; {story_text}"
+
+
+def broker_import_line(rows: list[dict[str, Any]]) -> str:
+    """"Broker import: ok N of last 14 nights; last failure <date>: <reason>", or "".
+
+    A night is one `session_date` with a real `journal_import` run; it is ok when
+    any of its rows is ok, the 07:00 morning retry included.
+    """
+    nights: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        if str(row.get("job") or "") != "journal_import":
+            continue
+        if str(row.get("status") or "") not in _RAN_STATUSES:
+            continue
+        session = str(row.get("session_date") or "")
+        if session:
+            nights.setdefault(session, []).append(row)
+    if not nights:
+        return ""
+    recent = sorted(nights)[-BROKER_IMPORT_NIGHTS:]
+
+    def _ok(session: str) -> bool:
+        return any(
+            str(row.get("status") or "") in ("ok", "manual_test") for row in nights[session]
+        )
+
+    ok_count = sum(1 for session in recent if _ok(session))
+    failed_nights = [session for session in recent if not _ok(session)]
+    if failed_nights:
+        day = failed_nights[-1]
+        last = nights[day][-1]
+        failure = f"{day}: {_one_line(last.get('error') or last.get('reason'), 60)}"
+    else:
+        failure = "none"
+    return (
+        f"Broker import: ok {ok_count} of last {len(recent)} nights; last failure {failure}"
+    )
+
+
+def ai_telemetry_lines(path: Path | None = None) -> list[str]:
+    """The Health page's Night AI timing and Broker import lines, from the AI job ledger."""
+    rows = _ai_ledger_rows(path)
+    lines = (night_ai_timing_line(rows), broker_import_line(rows))
+    return [line for line in lines if line]
+
+
 def ai_night_digest_line(
     path: Path | None = None, *, now: datetime | None = None, max_age_hours: float = 20.0
 ) -> str:

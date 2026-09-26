@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import threading
 from collections import deque
 from datetime import date, datetime
 from pathlib import Path
@@ -3197,6 +3198,39 @@ def usage_from_body(body: Mapping[str, Any]) -> dict[str, int]:
     return recorded
 
 
+#: Token usage of every local model call since the runner last reset it, so the
+#: night ledger can say what each slot cost. One slot runs at a time.
+_SLOT_USAGE_LOCK = threading.Lock()
+_SLOT_USAGE: dict[str, int] = {}
+
+
+def reset_slot_usage() -> None:
+    """Start a new slot's usage tally (the runner calls this before each slot)."""
+    with _SLOT_USAGE_LOCK:
+        _SLOT_USAGE.clear()
+
+
+def note_model_call(body: Mapping[str, Any]) -> None:
+    """Add one answered local model call, and its reported usage, to the tally."""
+    usage = usage_from_body(body)
+    with _SLOT_USAGE_LOCK:
+        _SLOT_USAGE["calls"] = _SLOT_USAGE.get("calls", 0) + 1
+        for key in ("prompt_tokens", "completion_tokens"):
+            _SLOT_USAGE[key] = _SLOT_USAGE.get(key, 0) + int(usage.get(key) or 0)
+
+
+def slot_usage() -> dict[str, int]:
+    """``{prompt_tokens, completion_tokens, calls}`` since the reset; {} when no call."""
+    with _SLOT_USAGE_LOCK:
+        if not _SLOT_USAGE.get("calls"):
+            return {}
+        return {
+            "prompt_tokens": _SLOT_USAGE.get("prompt_tokens", 0),
+            "completion_tokens": _SLOT_USAGE.get("completion_tokens", 0),
+            "calls": _SLOT_USAGE["calls"],
+        }
+
+
 def _prompt_truncation_error(payload: Mapping[str, Any], body: Mapping[str, Any]) -> str:
     """Non-empty when the server saw materially less prompt than was sent.
 
@@ -3986,6 +4020,7 @@ def _request_local_summary(
         body = response.json() if hasattr(response, "json") else {}
         if not isinstance(body, Mapping):
             body = {}
+        note_model_call(body)
         status_code = int(getattr(response, "status_code", 0) or 0)
         if status_code >= 400:
             detail = str(getattr(response, "text", "") or body)[:1000]
