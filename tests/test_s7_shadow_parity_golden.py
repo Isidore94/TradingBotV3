@@ -114,6 +114,26 @@ def test_live_sweep_and_existing_engines_are_byte_identical_to_the_frozen_golden
     _assert_byte_identical(actual_outputs())
 
 
+def test_byte_identical_with_the_shadow_engines_on(tmp_path):
+    """Run the S7 sidecar pass over every tape first, then re-check the frozen bytes."""
+    from zoneinfo import ZoneInfo
+
+    import m5_shadow_setups
+
+    local = ZoneInfo("America/Los_Angeles")
+    written = 0
+    by_clock: dict[datetime, dict] = {}
+    for group, name, bars, now in all_tapes():
+        by_clock.setdefault(now, {})[f"{group}_{name}|5 D|5 mins"] = bars
+    for now, cache in by_clock.items():
+        capture = m5_shadow_setups.ShadowSetupsCapture(
+            path=tmp_path / "m5_shadow_setups.jsonl", tz=local, clock=lambda _zone, now=now: now.replace(tzinfo=local)
+        )
+        written += capture.run_pass(cache)
+    assert written > 0, "the shadow engines must actually run on these tapes"
+    _assert_byte_identical(actual_outputs())
+
+
 def test_the_golden_is_not_empty():
     # A frozen golden of nothing proves nothing: the tapes must make the engines and sweep speak.
     outputs = load_fixture_contract(FIXTURE_NAME)["expected"]["outputs"]
