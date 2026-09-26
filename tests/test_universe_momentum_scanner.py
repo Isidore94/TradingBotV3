@@ -341,3 +341,14 @@ def test_a_momentum_name_under_one_billion_or_with_no_cap_is_not_admitted():
     assert mu.sighted_symbols(results, metrics, market_caps=lookup) == {"BIG": ["HIGH_VS_52W_HL"]}
     assert asked == [["BIG", "NOCAP", "SMALL"]]  # caps asked once, only for names past price/volume
     assert mu.sighted_symbols(results, metrics) == {}  # no cap lookup = every cap unknown
+
+
+def test_members_are_rechecked_against_this_rebuilds_floors(tmp_path):
+    """Review 2026-09-26: a member that now trades under 1M shares sits out this rebuild."""
+    store = tmp_path / "momentum.json"
+    days = _sessions(2)
+    mu.refresh_membership({"NVDA": GOOD, "THIN": GOOD}, market_caps=_big_caps, today=days[0], path=store,
+                          fetch=lambda: {"HIGH_VS_52W_HL": ["NVDA", "THIN"]})
+    report = mu.refresh_membership({"NVDA": GOOD, "THIN": (50.0, 4e5)}, market_caps=_big_caps, today=days[1],
+                                   path=store, fetch=lambda: {})
+    assert report["members"] == ["NVDA"]

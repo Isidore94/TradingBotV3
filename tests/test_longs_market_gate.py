@@ -390,3 +390,12 @@ def test_the_phone_push_says_longs_off_once_per_day(monkeypatch):
     service._push_swing_picks(payload, now=datetime(2026, 9, 29, 10, 5))
     firsts = [message.splitlines()[0].startswith("Longs off:") for _title, message in sent.calls]
     assert firsts == [True, False, True]
+
+
+def test_an_equal_verdict_never_redraws_the_feed(panel, monkeypatch):
+    """Review 2026-09-26: the 5-minute poll hands a new but equal Verdict; compare by value."""
+    panel.set_longs_gate(_off())
+    calls = []
+    monkeypatch.setattr(panel, "_sync_feed", lambda *a, **k: calls.append(1))
+    panel.set_longs_gate(_off())
+    assert calls == []

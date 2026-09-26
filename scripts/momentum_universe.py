@@ -200,6 +200,9 @@ def refresh_membership(
 
             atomic_write_json(target, membership)
             report.update(refreshed=True, sighted=len(sighted), scans={k: len(v) for k, v in results.items()})
-    report["members"] = active_members(membership)
+    # Members pass this rebuild's price / volume / cap floors again, or sit out this rebuild.
+    active = active_members(membership)
+    passing = sighted_symbols({"member": active}, metrics, market_caps=market_caps) if active else {}
+    report["members"] = [symbol for symbol in active if symbol in passing]
     report["elapsed_s"] = round(time.monotonic() - started, 1)
     return report

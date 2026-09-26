@@ -594,10 +594,12 @@ def settle(history: Iterable[Mapping[str, Any]], bars_by_symbol: Mapping[str, An
 
 
 def upsert_history(history: Iterable[Mapping[str, Any]], rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """The history with this scan's rows; a later scan of the same session replaces that session's rows."""
-    rows = [dict(row) for row in rows]
-    days = {_text(row.get("as_of")) for row in rows}
-    kept = [dict(row) for row in history or () if _text(row.get("as_of")) not in days]
+    """The history plus this scan's NEW rows: the first write of (session, symbol, setup) wins,
+    so a later scan never rewrites a recorded or settled row with other numbers."""
+    kept = [dict(row) for row in history or ()]
+    seen = {(_text(row.get("as_of")), _text(row.get("symbol")), _text(row.get("setup"))) for row in kept}
+    rows = [dict(row) for row in rows
+            if (_text(row.get("as_of")), _text(row.get("symbol")), _text(row.get("setup"))) not in seen]
     keep_keys = ("symbol", "as_of", "setup", "close", "atr", "entry_limit", "stop", "rs_percentile",
                  "strength", "leader", "promoted", "market_working")
     return kept + [{key: row.get(key) for key in keep_keys} for row in rows]

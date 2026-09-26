@@ -575,7 +575,7 @@ def long_setup_cells(history_rows: Iterable[Mapping[str, Any]]) -> list[dict[str
     """One graded cell per p9 long setup (`long_setups.SETUPS`), over the settled history.
 
     The same two bases as a study family, raw first (a long): ``raw`` = the filled
-    limit's 5-session return > 0, only in windows where SPY rose more than
+    limit's 10-session return (`long_setups.GRADE_SESSIONS`, the time stop) > 0, only in windows where SPY rose more than
     `long_setups.GRADE_SPY_UP_MIN_PCT`; ``tape`` = the return beat SPY's, every filled
     row. A limit that never filled is counted apart (``no_fill``), never a loss; an
     unsettled row or an unknown SPY is left out.

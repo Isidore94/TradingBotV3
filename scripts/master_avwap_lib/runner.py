@@ -892,7 +892,16 @@ def _permutation_completed_through(daily_frames_by_symbol, reference) -> str | N
         return None
     if daily_bar_status(latest, reference=reference) == "completed":
         return latest.isoformat()
-    return (latest - timedelta(days=1)).isoformat()
+    # The forming bar's previous MARKET session (a Monday's is Friday, never Sunday).
+    try:
+        import market_calendar
+
+        return market_calendar.previous_session(latest).isoformat()
+    except Exception:  # noqa: BLE001 - outside the calendar's range: the previous weekday
+        cursor = latest - timedelta(days=1)
+        while cursor.weekday() >= 5:
+            cursor -= timedelta(days=1)
+        return cursor.isoformat()
 
 
 def _permutation_completed_bars(frame, completed_through) -> list[dict]:
@@ -932,6 +941,21 @@ def _long_setup_bars(frame, completed_through) -> list[dict]:
             "volume": None if volume is None or pd.isna(volume) else float(volume),
         })
     return bars
+
+
+def _long_setup_scan_atrs(feature_rows, completed_through) -> dict:
+    """The scan's ``atr20`` per symbol, only where the row's last bar IS the completed session.
+
+    A row whose last bar is a forming bar carries an ATR that includes it; that name gets no
+    scan ATR, so `long_setups` computes one from the completed bars.
+    """
+    if not completed_through:
+        return {}
+    return {
+        str(row.get("symbol") or "").strip().upper(): row.get("atr20")
+        for row in feature_rows or ()
+        if str(row.get("last_trade_date") or "")[:10] == completed_through
+    }
 
 
 def _run_master_impl(
@@ -3274,10 +3298,7 @@ def _run_master_impl(
             spy_bars=_long_setup_bars(spy_frame, completed_through),
             feature_rows=feature_rows,
             earnings_by_symbol=long_setup_earnings,
-            atr_by_symbol={
-                str(symbol).strip().upper(): (state or {}).get("atr20")
-                for symbol, state in (ai_state.get("symbols") or {}).items()
-            },
+            atr_by_symbol=_long_setup_scan_atrs(feature_rows, completed_through),
             sector_by_symbol={
                 str(symbol).strip().upper(): (context or {}).get("sector")
                 for symbol, context in (industry_context_by_symbol or {}).items()

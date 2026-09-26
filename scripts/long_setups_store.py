@@ -76,6 +76,16 @@ def publish_long_setups(
     if not payload["as_of"]:
         logging.info("Long setups: no completed scan session; nothing published.")
         return payload
+    has_current_bar = any(
+        isinstance(bars, (list, tuple)) and bars and isinstance(bars[-1], Mapping)
+        and str(bars[-1].get("date") or "")[:10] == payload["as_of"]
+        for bars in (bars_by_symbol or {}).values()
+    )
+    previous = read_long_setups(target)
+    if not payload["rows"] and not has_current_bar and previous and previous.get("rows"):
+        logging.warning("Long setups: no name has a bar for %s; the last good file (%s) is kept.",
+                        payload["as_of"], previous.get("as_of"))
+        return previous
     payload = {"schema_version": SCHEMA_VERSION,
                "generated_at": (now or datetime.now()).isoformat(timespec="seconds"), **payload}
     atomic_write_json(target, payload)

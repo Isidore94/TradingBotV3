@@ -1794,7 +1794,7 @@ class AlertCenterPanel(
 
     def set_longs_gate(self, verdict) -> None:
         """A new cached market verdict: redraw by diff when it changes what hides."""
-        if verdict is self._longs_gate:
+        if verdict == self._longs_gate:  # by value: an unchanged verdict never redraws the feed
             return
         self._longs_gate = verdict
         self._refresh_longs_off_banner()

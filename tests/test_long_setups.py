@@ -338,11 +338,16 @@ def test_settle_uses_the_limit_fill_and_waits_for_the_time_stop():
     assert no_fill[0]["outcome"] == "no_fill" and "return_pct" not in no_fill[0]
 
 
-def test_upsert_replaces_the_same_session():
-    old = [{"symbol": "A", "as_of": "2026-09-24"}, {"symbol": "B", "as_of": "2026-09-25"}]
-    new = [{"symbol": "C", "as_of": "2026-09-25", "setup": ls.LEADER_PULLBACK}]
+def test_upsert_first_write_wins_for_a_session():
+    old = [{"symbol": "A", "as_of": "2026-09-24", "setup": ls.LEADER_PULLBACK},
+           {"symbol": "B", "as_of": "2026-09-25", "setup": ls.LEADER_PULLBACK, "entry_limit": 10.0,
+            "outcome": "filled", "return_pct": 2.0}]
+    new = [{"symbol": "B", "as_of": "2026-09-25", "setup": ls.LEADER_PULLBACK, "entry_limit": 11.0},
+           {"symbol": "C", "as_of": "2026-09-25", "setup": ls.LEADER_PULLBACK}]
     merged = ls.upsert_history(old, new)
-    assert [row["symbol"] for row in merged] == ["A", "C"]
+    assert [row["symbol"] for row in merged] == ["A", "B", "C"]
+    # A later scan of the same session never rewrites the recorded (or settled) row.
+    assert merged[1]["entry_limit"] == 10.0 and merged[1]["return_pct"] == 2.0
 
 
 # --- the words and the Focus candidates
@@ -408,3 +413,60 @@ def test_both_setups_carry_the_exempt_family():
     assert set(gate.EXEMPT_ROW_KEYS) == set(ls.SETUPS)
     for setup in ls.SETUPS:
         assert gate.row_is_exempt({"setup_family": setup, "side": "LONG"}) is True
+
+
+# --- review fixes (2026-09-26): Monday / holiday cutoff, the last good file, the scan ATR
+
+def _frames(days):
+    return {"A": pd.DataFrame({"datetime": pd.to_datetime(days), "close": [10.0] * len(days)})}
+
+
+def test_a_monday_forming_bar_cuts_at_friday_not_sunday():
+    from datetime import datetime
+
+    from master_avwap_lib import runner
+
+    frames = _frames(["2026-09-24", "2026-09-25", "2026-09-28"])
+    assert runner._permutation_completed_through(frames, datetime(2026, 9, 28, 10, 0)) == "2026-09-25"
+
+
+def test_a_forming_bar_after_a_holiday_cuts_at_the_last_session():
+    from datetime import datetime
+
+    from master_avwap_lib import runner
+
+    # 2026-09-07 is Labor Day: Tuesday's forming bar cuts at Friday 09-04.
+    frames = _frames(["2026-09-03", "2026-09-04", "2026-09-08"])
+    assert runner._permutation_completed_through(frames, datetime(2026, 9, 8, 10, 0)) == "2026-09-04"
+
+
+def test_an_empty_publish_with_no_current_bar_keeps_the_last_good_file(tmp_path):
+    import json
+
+    import long_setups_store
+
+    bars = _leader()
+    target, history = tmp_path / "long.json", tmp_path / "hist.json"
+    feature = {"symbol": "LEAD", "perm_regime_working": "yes", "perm_market_cap_m": 5000.0,
+               "setup_family": "top_pattern_tracking"}
+    kwargs = dict(spy_bars=bars, feature_rows=[feature], atr_by_symbol={"LEAD": 2.0},
+                  path=target, history_path=history)
+    long_setups_store.publish_long_setups(bars_by_symbol={"LEAD": bars}, as_of=bars[-1]["date"], **kwargs)
+    good = target.read_bytes()
+    assert json.loads(good)["rows"]
+    # A cutoff no name has a bar for (the old Monday bug: as_of a Sunday) never wipes it.
+    got = long_setups_store.publish_long_setups(bars_by_symbol={"LEAD": bars}, as_of="2099-01-04", **kwargs)
+    assert target.read_bytes() == good and got["rows"]
+    # A real empty session (names current, none qualify) still publishes.
+    flat = _bars([100.0] * 260, [2_000_000] * 260)
+    long_setups_store.publish_long_setups(bars_by_symbol={"LEAD": flat}, as_of=flat[-1]["date"], **kwargs)
+    assert json.loads(target.read_text(encoding="utf-8"))["rows"] == []
+
+
+def test_the_scan_atr_is_used_only_for_a_completed_last_bar():
+    from master_avwap_lib import runner
+
+    rows = [{"symbol": "done", "last_trade_date": "2026-09-25", "atr20": 2.0},
+            {"symbol": "FORM", "last_trade_date": "2026-09-28", "atr20": 9.0}]
+    assert runner._long_setup_scan_atrs(rows, "2026-09-25") == {"DONE": 2.0}
+    assert runner._long_setup_scan_atrs(rows, None) == {}
