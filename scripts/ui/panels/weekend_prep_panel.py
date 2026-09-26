@@ -2357,6 +2357,12 @@ class TagWeekPage(_StepPage):
         risk_buttons.addWidget(self.open_trade_button)
         risk_buttons.addStretch(1)
 
+        # B3: the Sunday ritual card - tags waiting, the plan, exits per family.
+        from ui.widgets.sunday_ritual_card import SundayRitualCard
+
+        self.ritual_card = SundayRitualCard(self)
+        self.ritual_card.tagsConfirmed.connect(lambda _result: self.reload())
+        self._layout.addWidget(self.ritual_card)
         self._layout.addWidget(self.coverage_note)
         self._layout.addWidget(self.note)
         self._layout.addWidget(self.table, 2)
@@ -2367,6 +2373,7 @@ class TagWeekPage(_StepPage):
         self._finish_layout()
 
     def reload(self) -> None:
+        self.ritual_card.load()
         if self._worker is not None and self._worker.isRunning():
             return
         self.refresh_button.setEnabled(False)
@@ -2376,6 +2383,11 @@ class TagWeekPage(_StepPage):
         worker.failed.connect(self._on_rows_failed)
         self._worker = worker
         worker.start()
+
+    def shutdown(self) -> None:
+        """This page's readers, and the Sunday ritual card's."""
+        super().shutdown()
+        self.ritual_card.shutdown()
 
     def _read_everything(self) -> dict:
         """Every store this page reads, and no widget. Runs on the worker.
