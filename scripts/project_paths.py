@@ -326,6 +326,8 @@ def get_diagnostics_dir() -> Path:
 # Kept on local disk rather than the shared store: caches are replaceable and
 # would only bloat the operational folder and the hourly cold push to the DAS.
 LOCAL_LOG_DIR = LOCAL_SETTINGS_DIR / "logs"
+#: When the trader last saw each night slot's output on screen (`slot_output_reads`).
+SLOT_OUTPUT_READS_FILE = LOCAL_SETTINGS_DIR / "slot_output_reads.json"
 RUNTIME_DATA_DIR = DATA_DIR / "runtime"
 REPORTS_DIR = OUTPUT_DIR / "reports"
 AI_SUMMARY_EXPORT_DIR = REPORTS_DIR / "ai_summaries"

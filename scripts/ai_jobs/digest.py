@@ -1526,7 +1526,10 @@ def run_daily_digest(
     # narrator is handed) stays without them.
     published = dict(pack)
     try:
-        published[NIGHT_TELEMETRY_KEY] = {"lines": night_telemetry_lines(job_rows, day)}
+        import slot_output_reads
+
+        lines = night_telemetry_lines(job_rows, day) + [slot_output_reads.unread_line()]
+        published[NIGHT_TELEMETRY_KEY] = {"lines": lines}
     except Exception as exc:  # noqa: BLE001 - telemetry never costs the digest
         _log.info("Daily digest: night telemetry not built (%s).", exc)
 

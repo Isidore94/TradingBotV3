@@ -21,6 +21,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from econ_brief import ORIGIN_NIGHT
+from slot_output_reads import note_slot_output_read
+
 EASTERN = ZoneInfo("America/New_York")
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
@@ -117,6 +120,8 @@ class EconBriefBlock(QFrame):
         origin = str(view.get("origin_text") or "")
         self.origin_label.setText(f"— {origin}" if origin else "")
         self.body_label.setText(format_view(view))
+        if str(view.get("origin") or "") == ORIGIN_NIGHT:
+            note_slot_output_read("econ_brief")
 
     def session(self) -> str:
         return self._session

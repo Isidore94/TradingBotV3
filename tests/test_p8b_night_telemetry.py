@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
+
+import pytest
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT_DIR / "scripts"
@@ -317,3 +321,104 @@ def test_the_health_worker_payload_carries_the_telemetry_lines(tmp_path, monkeyp
     lines = health_panel._with_ai_night_lines({})["ai_night_lines"]
     assert any(line.startswith("Night AI: first token 16.3 s") for line in lines)
     assert any(line.startswith("Broker import: ok 12 of last 14 nights") for line in lines)
+
+
+# ---------------------------------------------------------------------------
+# 4. Unread-output stamp
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def registry(tmp_path, monkeypatch):
+    import project_paths
+    import slot_output_reads
+
+    path = tmp_path / "slot_output_reads.json"
+    monkeypatch.setattr(project_paths, "SLOT_OUTPUT_READS_FILE", path)
+    monkeypatch.setattr(slot_output_reads, "_NOTED_TODAY", {})
+    return path
+
+
+@pytest.fixture
+def qapp():
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
+def test_the_registry_stamps_reads_and_counts_days(registry):
+    import slot_output_reads as reads
+
+    assert reads.days_since_read("econ_brief") is None
+    assert reads.unread_line() == "unread 14+ days: unknown (no reads recorded yet)"
+    reads.note_slot_output_read("econ_brief", today=date(2026, 9, 1), path=registry)
+    reads.note_slot_output_read("week_questions", today=date(2026, 9, 20), path=registry)
+    assert reads.days_since_read("econ_brief", today=date(2026, 9, 25)) == 24
+    assert reads.days_since_read("week_questions", today=date(2026, 9, 25)) == 5
+    # Never read since stamping began 24 days ago: unread too.
+    assert reads.unread_line(today=date(2026, 9, 25)) == (
+        "unread 14+ days: day_review_narration, econ_brief, improvement_ideas"
+    )
+    for slot in reads.TRACKED_SLOTS:
+        reads.note_slot_output_read(slot, today=date(2026, 9, 25), path=registry)
+    assert reads.unread_line(today=date(2026, 9, 25)) == "unread 14+ days: none"
+
+
+def test_the_digest_facts_carry_the_unread_line(tmp_path, monkeypatch, registry):
+    from ai_jobs import digest
+
+    monkeypatch.setattr(digest, "_read_job_rows", _ledger_rows)
+    digest.run_daily_digest(
+        session_date=DIGEST_DAY, now=DIGEST_NOW, root=tmp_path, is_session=False, narrate=False,
+    )
+    written = json.loads(digest.facts_path(tmp_path, DIGEST_DAY).read_text(encoding="utf-8"))
+    assert written[digest.NIGHT_TELEMETRY_KEY]["lines"][2] == (
+        "unread 14+ days: unknown (no reads recorded yet)"
+    )
+
+
+def test_the_panels_stamp_a_read_when_they_render_a_fresh_output(qapp, registry):
+    import slot_output_reads as reads
+    from ui.panels.day_review_panel import DayReviewPanel
+    from ui.widgets.econ_brief_block import EconBriefBlock
+    from ui.widgets.ideas_card import IdeasCard
+    from ui.widgets.week_coach_card import WeekCoachCard
+
+    # Day story: the night's narration for the session on screen.
+    fake = SimpleNamespace(
+        story_body=MagicMock(), story_note=MagicMock(), story_warning=MagicMock(),
+        _story_attempt_state=lambda card: "", _verdict_text=lambda verdict: verdict,
+    )
+    DayReviewPanel._render_day_story(
+        fake, {"session_date": "2026-09-24", "narration": {"headline": "A day"}},
+        "2026-09-24", {},
+    )
+    assert reads.days_since_read("day_review_narration") == 0
+
+    block = EconBriefBlock()
+    try:
+        block.set_view({"session": "2026-09-25", "origin": "last_brief", "summary_lines": []})
+        assert reads.days_since_read("econ_brief") is None  # not the night's words
+        block.set_view({"session": "2026-09-25", "origin": "night", "summary_lines": ["x"]})
+        assert reads.days_since_read("econ_brief") == 0
+    finally:
+        block.deleteLater()
+
+    ideas = IdeasCard(writer=lambda *_a: None)
+    try:
+        ideas.show_ideas([])
+        assert reads.days_since_read("improvement_ideas") is None
+        ideas.show_ideas([{"idea_id": "a", "kind": "process", "text": "First", "status": ""}])
+        assert reads.days_since_read("improvement_ideas") == 0
+    finally:
+        ideas.deleteLater()
+
+    card = WeekCoachCard(read=lambda *_a, **_k: {})
+    try:
+        card.render({"questions": [{"question": "why?", "status": "pending"}]})
+        assert reads.days_since_read("week_questions") is None
+        card.render({"questions": [{"question": "why?", "status": "answered",
+                                    "answer": {"claims": [{"text": "because"}]}}]})
+        assert reads.days_since_read("week_questions") == 0
+    finally:
+        card.deleteLater()
