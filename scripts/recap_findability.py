@@ -849,7 +849,7 @@ def where_to_look(traits: Mapping[str, Any], surfaced_info: Mapping[str, Any]) -
         line = "Trading Desk M5 alerts column: tick 'Prioritise what is working' (Working lately strip) to sort by grade"
         out.append(line)
         if tier in ("S", "A", "B"):
-            label = {"S": "S tier / PROVEN only", "A": "A tier and above", "B": "B tier and above"}[tier]
+            label = {"S": "S tier / top grade only", "A": "A tier and above", "B": "B tier and above"}[tier]
             out.append(f"Alert Center 'Alerts' tab: Min tier = '{label}' keeps alerts like this one")
         out.append("The 'Working now' strip shows how today's alerts of this kind are doing, in R.")
     if any(s.get("surface") == "Focus" for s in surfaced_info.get("surfaces") or ()):

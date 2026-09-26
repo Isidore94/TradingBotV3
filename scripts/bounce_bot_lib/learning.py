@@ -28,9 +28,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from market_session import get_market_session_window
-from project_paths import INTRADAY_BOUNCE_OUTCOMES_FILE
+from project_paths import INTRADAY_BOUNCE_OUTCOMES_FILE, LOCAL_SETTINGS_DIR
 
 BOUNCE_LEARNING_STATE_FILE = INTRADAY_BOUNCE_OUTCOMES_FILE.with_name("intraday_bounce_learning_state.json")
+#: P14: the setup grades the Working-lately build publishes (`setup_grades`).
+SETUP_GRADES_FILE = LOCAL_SETTINGS_DIR / "working_lately" / "setup_grades_latest.json"
 
 MIN_SAMPLES = 10
 # A mute suppresses the live alert entirely, so it demands far more evidence
@@ -89,12 +91,10 @@ COMPOSITE_DIMENSIONS = (
     ("master_avwap_priority_bucket", 0.6),
     ("master_avwap_focus", 0.6),
 )
-# PROVEN segments (2026-07-09, user rule "see the best bounces live"): a
-# segment with real sample size, strong average AND non-negative median R is a
-# proven winner - a live bounce matching one gets stamped PROVEN, upgraded,
-# and bypasses the Alert Center tier gate the way the retired BANGER class
-# used to (P0 removed that class on 2026-09-01; this path is unchanged and the
-# comparison is kept only because it names the behaviour). Includes the
+# Proven segments: a segment with real sample size, strong average AND
+# non-negative median R floors a matching bounce's tier at A (S above
+# PROVEN_S_FLOOR_AVG_R). P14 (2026-09-26) retired the PROVEN stamp and its
+# tier-gate bypass: the alert carries its setup grade instead. Includes the
 # dimensions the tier composite does NOT blend (combos, swing traits, setup
 # family), because that is where the best measured results live
 # (trendline_break_recent +1.93R n=31, dynamic_vwap_upper_band +0.88R n=59,
@@ -109,6 +109,25 @@ PROVEN_DIMENSIONS = (
 PROVEN_MIN_SAMPLES = 12
 PROVEN_MIN_AVG_R = 0.45
 PROVEN_MIN_MEDIAN_R = 0.0
+
+# S9 shadow tier (trader 2026-09-26: "a new tier formula, tried in shadow
+# first"). Recorded beside the live tier; never read by an alert, a sort, the
+# Show filter or the phone. Each segment weighs base x min(1, |mean R| / SE):
+# a near-zero mean gets little say however big its n. Setup identity (type,
+# combo, family) carries the most; time and environment are capped at 0.25.
+SHADOW_S9_DIMENSIONS = (
+    ("bounce_type", 1.0),
+    ("bounce_combo", 1.0),
+    ("master_avwap_setup_family", 1.0),
+    ("master_avwap_priority_bucket", 0.6),
+    ("master_avwap_focus", 0.6),
+    ("structural_regime", 0.4),
+    ("time_bucket", 0.25),
+    ("market_environment", 0.25),
+)
+# Per-alert close-R spread assumed when a state predates `std_close_r`: the
+# median over the 236 live segments rebuilt on 2026-09-26 (p10 1.15, p90 1.72).
+SHADOW_S9_FALLBACK_STD_R = 1.5
 
 
 def _seg_key(direction: str, segment: str) -> str:
@@ -237,6 +256,7 @@ def build_learning_state(perf_rows: list[dict], *, min_samples: int = MIN_SAMPLE
             "target_1r_rate": target_1r_rate,
             "avg_mfe_r": _float_or_none(row.get("avg_mfe_r")),
             "median_close_r": median_close_r,
+            "std_close_r": _float_or_none(row.get("std_close_r")),
             "score_delta": delta,
             "proven": proven,
         }
@@ -310,10 +330,9 @@ def evaluate_bounce_quality(
     ``entry_quality_r``) of every segment this bounce belongs to, each shrunk
     by sample size; unknown segments simply do not contribute, so a bounce
     with no history lands in the neutral B/C range instead of failing.
-    A bounce matching any PROVEN segment (see PROVEN_* thresholds) is flagged
-    so the alert path can stamp it and the Alert Center gives it the bypass
-    the retired BANGER class used to get - unless a mute fires (proven
-    negatives keep the veto). The class is gone as of P0; the bypass is not.
+    A bounce matching any proven segment (see PROVEN_* thresholds) is flagged
+    and floored at A/S unless a mute fires (proven negatives keep the veto);
+    since P14 the alert prints its setup grade instead of a PROVEN stamp.
     """
     segments = (state or {}).get("segments") or {}
     direction = str(direction or "").strip().lower()
@@ -416,6 +435,146 @@ def evaluate_bounce_quality(
         "proven": proven,
         "proven_reasons": proven_reasons[:3],
     }
+
+
+def segment_information(entry: dict) -> float:
+    """min(1, |mean R| / SE) for one stored segment; 0 when it has no mean.
+
+    SE = std(close R) / sqrt(n); a state without `std_close_r` uses
+    SHADOW_S9_FALLBACK_STD_R.
+    """
+    mean = _segment_entry_r(entry)
+    n = int(entry.get("sample_count") or 0)
+    if mean is None or n <= 0:
+        return 0.0
+    std = _float_or_none(entry.get("std_close_r"))
+    if std is None or std <= 0:
+        std = SHADOW_S9_FALLBACK_STD_R
+    se = std / (n ** 0.5)
+    return min(1.0, abs(mean) / se) if se > 0 else 1.0
+
+
+def evaluate_shadow_tier(
+    state: dict | None,
+    *,
+    direction: str,
+    bounce_types: list[str] | tuple = (),
+    time_bucket: str = "",
+    market_environment: str = "",
+    priority_bucket: str = "",
+    focus_label: str = "",
+    bounce_combo: str = "",
+    setup_family: str = "",
+    structural_regime: str = "",
+) -> dict:
+    """S9 shadow tier: information-weighted composite, same bars and mutes, no PROVEN floor.
+
+    Each matching segment weighs base / (values in its dimension) x
+    `segment_information`. Unknown segments (and an unknown regime) add nothing.
+    Returns `{"tier", "composite_r"}`; never read by any live decision.
+    """
+    segments = (state or {}).get("segments") or {}
+    direction = str(direction or "").strip().lower()
+    dim_values = {
+        "bounce_type": list(bounce_types or []),
+        "bounce_combo": [bounce_combo],
+        "master_avwap_setup_family": [setup_family],
+        "master_avwap_priority_bucket": [priority_bucket],
+        "master_avwap_focus": [focus_label],
+        "structural_regime": [structural_regime],
+        "time_bucket": [time_bucket],
+        "market_environment": [market_environment],
+    }
+    weighted_sum = 0.0
+    weight_used = 0.0
+    matched = False
+    muted = False
+    for dimension, base in SHADOW_S9_DIMENSIONS:
+        values = [str(v).strip() for v in dim_values.get(dimension, []) if str(v or "").strip()]
+        by_key = segments.get(dimension) or {}
+        entries = [by_key.get(_seg_key(direction, value)) for value in values]
+        entries = [entry for entry in entries if entry]
+        if not entries:
+            continue
+        matched = True
+        share = base / len(entries)
+        for entry in entries:
+            weight = share * segment_information(entry)
+            weighted_sum += weight * (_segment_entry_r(entry) or 0.0)
+            weight_used += weight
+            muted = muted or _segment_is_muted(dimension, entry)
+    if not matched:
+        return {"tier": "B", "composite_r": None}
+    composite = (weighted_sum / weight_used) if weight_used > 0 else 0.0
+    tier = "D"
+    if not muted:
+        for label, threshold in TIER_THRESHOLDS:
+            if composite >= threshold:
+                tier = label
+                break
+    return {"tier": tier, "composite_r": round(composite, 3)}
+
+
+_grades_cache: dict = {"path": None, "mtime": None, "lookup": None}
+
+
+def load_daytrade_grade_lookup(path: Path | None = None) -> dict | None:
+    """`setup_grades.daytrade_lookup` of the published grades, mtime-cached; None when unreadable."""
+    grades_path = Path(path) if path else SETUP_GRADES_FILE
+    try:
+        mtime = grades_path.stat().st_mtime
+    except OSError:
+        return None
+    if _grades_cache["path"] == grades_path and _grades_cache["mtime"] == mtime:
+        return _grades_cache["lookup"]
+    try:
+        import setup_grades
+
+        payload = json.loads(grades_path.read_text(encoding="utf-8"))
+        lookup = setup_grades.daytrade_lookup(payload if isinstance(payload, dict) else {})
+    except (OSError, ValueError) as exc:
+        logging.warning("Could not load the setup grades: %s", exc)
+        return _grades_cache["lookup"]
+    _grades_cache.update(path=grades_path, mtime=mtime, lookup=lookup)
+    return lookup
+
+
+def daytrade_grade_text(lookup: dict | None, *, direction: str, bounce_types: list[str] | tuple = ()) -> str:
+    """P14: "1:1 B · 2R C" for the alert's best-graded bounce type; "unknown" without grades."""
+    if not lookup:
+        return "unknown"
+    import setup_grades
+
+    cell = setup_grades.daytrade_cell_for_alert(lookup, "-".join(bounce_types or ()), direction)
+    if not cell:
+        return f"1:1 {setup_grades.badge(setup_grades.NEW)}"
+    text = f"1:1 {setup_grades.badge(cell.get('grade'))}"
+    if cell.get("grade_2r"):
+        text += f" · 2R {setup_grades.badge(cell.get('grade_2r'))}"
+    return text
+
+
+_regime_cache: dict = {"day": None, "regime": ""}
+
+
+def structural_regime_on(day) -> str:
+    """The trader's structural regime in force on `day` ("" = unknown), cached per day.
+
+    Reads the journal's `structural_regime` rows read-only once per day.
+    """
+    key = str(day or "")[:10]
+    if _regime_cache["day"] == key:
+        return _regime_cache["regime"]
+    regime = ""
+    try:
+        import regime_join
+
+        label = regime_join.Joiner(regime_join.read_segments()).label(key)
+        regime = "" if label == regime_join.UNKNOWN else str(label)
+    except Exception as exc:  # noqa: BLE001 - unknown contributes nothing
+        logging.debug("Structural regime unavailable for the shadow tier: %s", exc)
+    _regime_cache.update(day=key, regime=regime)
+    return regime
 
 
 # ---------------------------------------------------------------------------
