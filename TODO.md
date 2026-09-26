@@ -54,8 +54,9 @@ Gates #257-#263: none judged yet (first proof tonight and Monday).
 
 ### Phase B - simpler code, truer numbers (no live data needed)
 
-Order for the morning session (trader 2026-09-25 night): R1 first, then B0, then
-Phase S from S1, then the rest of B. Each packet names goal, files, tests and
+Order for the morning session (trader 2026-09-26 00:40 PT): R1 first, then B0, then
+S10a (kill `h1_blue_after_red`), S10b (earnings warning on shorts), S1 with S10c (the
+second grade on top), then S2 onward, then the rest of B. Each packet names goal, files, tests and
 ask-first status; a builder that finds the code disagreeing with a line here reports
 it instead of forcing it. The desk is DOWN (closed 21:51 PT on the trader's word);
 restart only on the trader's word.
@@ -245,11 +246,40 @@ S1 and keep the order. The two 500 MB logs are read with
   bounce_combo, setup_family, time_bucket) instead of by n; cap the weight of
   `internals_breadth`, `rrs_*_alignment` and `market_environment`. Propose, with the
   F2 numbers, before touching anything. Ties into P14.
-- **S10 Decisions from the data** (trader): disable or mute `h1_blue_after_red` long
-  (34%, n=994); no shorts 3-14 days before earnings as a scan filter (ask-first, it
-  changes output); whether the day-trade grade should score a 2R target or EOD R
-  instead of the 1:1 bracket (a ladder change, golden fixtures). Each is one sentence
-  of the trader's, then a packet.
+- **S10a Kill `h1_blue_after_red`** (noise ->7; ASK-FIRST `bounce_bot_lib/legacy.py`,
+  satisfied for this exact change by the trader's words 2026-09-26: "Sure kill it", on
+  the finding F3: 34.1% win, n=994, EOD -0.41R). Turn the bounce type off where the
+  live desk reads it: `BOUNCE_TYPE_DEFAULTS` / its `CHECK_BOUNCE_*` flag in
+  `bounce_bot_lib/legacy.py`, AND any persisted M5 settings that override the defaults
+  (find the settings key the desk saves; set it too, or the kill never reaches the
+  desk). Golden fixtures FIRST: run the detector goldens on the fixture tapes with the
+  type on and off; every other alert byte-identical, only `h1_blue_after_red` rows
+  gone. The learning state keeps the segment's history; the Daytrade Tracker shows the
+  family as "off since 2026-09-26". One CHANGELOG line; GATES "#268: on the next
+  session no `h1_blue_after_red` alert is confirmed, the other components' counts are
+  in line with the prior session [lead]".
+- **S10b Earnings warning on short setups** (grades/noise; annotate only, no ask-first;
+  the trader 2026-09-26: "leave those shorts, just warn me whenever those charts pop
+  up", on F10: shorts 3-14 days before earnings lost 3.6-5.7% vs SPY). Pure
+  `earnings_warning.short_into_earnings(days_to_next_earnings, side) -> str`: for a
+  SHORT within 0-14 days of the next earnings date, "earnings in N d - shorts 3-14 d
+  before earnings: X% vs SPY (60 d)" with X read from the live
+  `master_avwap_scan_factor_leaderboard.csv` row (`days_to_next_earnings`, SHORT, h5;
+  plain wording when the row is absent). Shown wherever a short chart pops up: the
+  Setup Tracker row (badge + tooltip through the existing delegate, SHORT rows only),
+  the M5 alert row's grade line and the chart review header for SHORT alerts (days from
+  the earnings dates cache `chart_snapshot.earnings_anchor_dates` uses; unknown date =
+  no warning, never a guess), the Movers Rip-weak row. It never hides, sorts or mutes.
+  Tests: the boundary days, unknown date, long side silent, the leaderboard fallback.
+- **S10c Second grade on top** (grades ->7; scoring code, the trader 2026-09-26: "we can
+  do this on top of what we already do"): keep the 1:1 bracket grade exactly as it is
+  (badges, Show filter and sorting keep reading it). Add, per day-trade cell, a 2R
+  grade from the same ladder on "+2R before -1R" (`target_2r_hit` is cumulative like
+  `target_1r_hit`; first decisive row decides; avg R = 3p - 1) and the EOD close R mean
+  and median. `setup_grades.daytrade_cells` returns the extra fields; `cell_line` reads
+  "1:1 C - 2R D - EOD +0.04R - n 427"; the Daytrade Tracker shows the three. New golden
+  fixtures for the new fields; the existing grade goldens must not change. This is S1's
+  second half; build them together.
 
 ### Phase C - needs live days (trigger named)
 
@@ -277,9 +307,6 @@ S1 and keep the order. The two 500 MB logs are read with
 - Dead-script review: yes or no.
 - B11: surface the two unread slot outputs, or kill the slots.
 - Risk per trade ($) in Settings, `trading_plan.md`, the 139 setup tags waiting.
-- From the setup study (Phase S, S10): disable or mute `h1_blue_after_red` long;
-  a no-shorts-within-14-days-of-earnings scan filter (changes output); grade the
-  day-trade cells on a 2R target or EOD R instead of the 1:1 bracket.
 
 ## Carried over
 
