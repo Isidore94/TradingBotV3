@@ -229,3 +229,109 @@ def test_the_search_runs_study_families_first_on_their_own_three_facets(tmp_path
     assert "avwap_breakout LONG" in block["families"]
     trials = [row["trial_id"] for row in trial_ledger.load(tmp_path)]
     assert trials[0].split(":")[2] == LPL  # registered before any other family
+
+
+# --- the Setup Tracker: graded like any family, raw first for longs
+
+
+def _hrow(symbol, scan, target, ret, tag, side="LONG"):
+    return {"symbol": symbol, "side": side, "scan_date": scan, "target_session": target,
+            "horizon_sessions": "5", "side_return_pct": str(ret), "measured": "True", "maturity": "mature",
+            "outcome_kind": "favorable_direction_session_v2", "study_families": tag}
+
+
+SPY = {"2026-09-01": 100.0, "2026-09-08": 102.0,   # SPY-up window (+2%)
+       "2026-09-02": 100.0, "2026-09-09": 100.5}   # flat window (+0.5%)
+
+
+def test_study_cells_grade_raw_in_spy_up_windows_and_tape_on_every_row():
+    import setup_grades
+
+    rows = [
+        _hrow("A1", "2026-09-01", "2026-09-08", 3.0, LPL),   # raw win, beats SPY
+        _hrow("A2", "2026-09-01", "2026-09-08", 1.0, LPL),   # raw win, lags SPY
+        _hrow("A3", "2026-09-01", "2026-09-08", -1.0, f"{LPL};{BBL}"),
+        _hrow("B1", "2026-09-02", "2026-09-09", 4.0, LPL),   # flat window: tape only
+        _hrow("C1", "2026-09-01", "2026-09-08", 9.0, ""),    # untagged: never counted
+        _hrow("D1", "2026-09-02", "2026-09-09", 1.0, LPL) | {"measured": "False"},
+    ]
+    cells = {cell["family"]: cell for cell in setup_grades.study_family_cells(rows, SPY, as_of="2026-09-25")}
+    lpl = cells[LPL]
+    assert lpl["headline"] == "raw"
+    assert (lpl["raw"]["n"], lpl["raw"]["wins"]) == (3, 2)
+    assert lpl["raw"]["mean_pct"] == pytest.approx(1.0)
+    assert (lpl["tape"]["n"], lpl["tape"]["wins"]) == (4, 2)
+    assert lpl["tape"]["mean_pct"] == pytest.approx(((3 - 2) + (1 - 2) + (-1 - 2) + (4 - 0.5)) / 4)
+    assert lpl["raw"]["grade"] == setup_grades.NEW  # under 30: the same ladder as every family
+    assert (cells[BBL]["raw"]["n"], cells[BBL]["tape"]["n"]) == (1, 1)
+    line = setup_grades.study_family_line(lpl)
+    assert line.index("raw in SPY-up") < line.index("vs SPY")
+    assert "(study)" in line and "n 3" in line and "n 4" in line
+
+
+def test_a_study_family_with_no_rows_says_so():
+    import setup_grades
+
+    cells = setup_grades.study_family_cells([], SPY)
+    assert [cell["family"] for cell in cells] == list(lsf.STUDY_FAMILIES)
+    assert setup_grades.STUDY_NO_DATA in setup_grades.study_family_line(cells[0])
+
+
+def test_the_worker_reader_builds_the_lines_from_the_horizon_file(tmp_path, monkeypatch):
+    import csv
+
+    from ui.services import working_lately_service as service
+
+    horizon = tmp_path / "horizon.csv"
+    row = _hrow("A1", "2026-09-01", "2026-09-08", 3.0, LPL)
+    with horizon.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(row))
+        writer.writeheader()
+        writer.writerow(row)
+    monkeypatch.setattr(service, "_horizon_outcomes_path", lambda: horizon)
+    monkeypatch.setattr(service, "_spy_bars_path", lambda: tmp_path / "SPY.parquet")
+    monkeypatch.setattr(service, "read_spy_closes", lambda: dict(SPY))
+    service._LOOKING_BACK_CACHE.clear()
+    try:
+        lines = service.read_study_family_lines("2026-09-25")
+        assert len(lines) == 2 and lines[0].startswith(f"{LPL} LONG (study): raw in SPY-up")
+        assert "n 1" in lines[0]
+    finally:
+        service._LOOKING_BACK_CACHE.clear()
+
+
+def test_the_tracker_worker_carries_the_lines_and_survives_a_failure(monkeypatch):
+    from ui.panels import setup_tracker_panel as module
+    from ui.services import working_lately_service
+
+    monkeypatch.setattr(working_lately_service, "read_study_family_lines", lambda as_of="": ["a", "b"])
+    assert module._read_tracker_exports(1)["study_family_lines"] == ["a", "b"]
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(working_lately_service, "read_study_family_lines", _boom)
+    assert module._read_tracker_exports(1)["study_family_lines"] == []
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
+@pytest.mark.qt
+def test_the_tracker_prints_the_study_lines_it_was_handed(qapp):
+    from ui.panels import setup_tracker_panel as module
+
+    panel = module.SetupTrackerPanel()
+    try:
+        panel._on_exports_loaded({"signatures": {}, "ranked": {}, "raw": {}, "study_family_lines": ["x", "y"]})
+        assert panel.study_family_label.text() == "x\ny"
+        panel._on_exports_loaded({"signatures": {}, "ranked": {}, "raw": {}, "min_closed": 1})
+        assert panel.study_family_label.text() == ""
+    finally:
+        panel.shutdown()
+        panel.deleteLater()
