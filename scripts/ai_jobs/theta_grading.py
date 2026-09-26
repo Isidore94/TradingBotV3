@@ -86,16 +86,24 @@ def run_theta_pick_grading(
         status: sum(1 for row in graded if row.get("status") == status)
         for status in (STATUS_MEASURED, STATUS_PENDING, STATUS_DEAD, STATUS_UNMEASURED)
     }
+    # B7: picks measured on price vs a level (strike or lowest held support).
+    ref_measured = sum(1 for row in graded if row.get("ref_status") == STATUS_MEASURED)
     _log.info(
-        "Theta pick grading: %d pick(s) at %s -> %s", len(graded), as_of.isoformat(), counts
+        "Theta pick grading: %d pick(s) at %s -> %s, %d underlying-only",
+        len(graded),
+        as_of.isoformat(),
+        counts,
+        ref_measured,
     )
     return {
         "status": "ok",
         "reason": (
-            f"graded {len(graded)} theta pick(s) as of {as_of.isoformat()}: "
-            f"{counts[STATUS_MEASURED]} measured, {counts[STATUS_PENDING]} pending, "
+            f"graded {len(graded)} theta pick(s) as of {as_of.isoformat()} "
+            f"({ref_measured} measured underlying-only, price vs level, not option P&L); "
+            f"option grade: {counts[STATUS_MEASURED]} measured, {counts[STATUS_PENDING]} pending, "
             f"{counts[STATUS_DEAD]} dead (never quoted), {counts[STATUS_UNMEASURED]} unmeasured"
         ),
+        "ref_measured": ref_measured,
         "picks": len(rows),
         "as_of": as_of.isoformat(),
         "session_date": str(session_date or ""),
