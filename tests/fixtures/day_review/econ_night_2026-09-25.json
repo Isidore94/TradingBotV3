@@ -1,0 +1,98 @@
+{
+ "_about": "Night of 2026-09-25 (target session 2026-09-28): the live econ pack and the econ_brief ledger rows, copied read-only from the live stores on 2026-09-26.",
+ "pack": {
+  "schema": "econ_brief_v1",
+  "target_session": "2026-09-28",
+  "brief_session": "2026-09-24",
+  "brief_hash": "5577fcba7cc8e72eee2a2a2f3a8f97e58ad74d312ce3ca7b7d4511bfb5b7bccc",
+  "events_source": "prose",
+  "unread_lines": 0,
+  "today": [],
+  "week": [
+   {
+    "date": "2026-09-29",
+    "time_et": "10:00",
+    "label": "August JOLTS",
+    "source_line": "August JOLTS arrives Tuesday, September 29 at 10 am ET.",
+    "kind": "jolts",
+    "id": "w1"
+   },
+   {
+    "date": "2026-09-30",
+    "time_et": "",
+    "label": "ADP employment",
+    "source_line": "Wednesday, Sept 30: ADP employment, August PCE, personal spending and the third Q2 GDP estimate.",
+    "kind": "adp",
+    "id": "w2"
+   },
+   {
+    "date": "2026-09-30",
+    "time_et": "",
+    "label": "August PCE",
+    "source_line": "The crucial August PCE report arrives next Wednesday, September 30.",
+    "kind": "pce",
+    "id": "w3"
+   },
+   {
+    "date": "2026-09-30",
+    "time_et": "",
+    "label": "GDP",
+    "source_line": "The third GDP estimate also arrives September 30.",
+    "kind": "gdp",
+    "id": "w4"
+   },
+   {
+    "date": "2026-10-02",
+    "time_et": "08:30",
+    "label": "September employment report",
+    "source_line": "After PCE comes the September employment report on Friday, October 2 at 8:30 am ET.",
+    "kind": "payrolls",
+    "id": "w5"
+   }
+  ],
+  "bottom_line": "Today's tape is materially worse than Tuesday's. The critical numbers are now roughly 10Y 5.13%, 30Y 5.44%, Brent $105 and Nasdaq futures down about 1%. The fresh claims report did nothing to undermine the “strong economy / hawkish Fed” narrative. For today, focus on whether the 10-year can retreat from the 5.14–5.15% area, what comes out of Trump-Xi, and the 1 p.m. 7-year auction. If yields keep climbing despite the equity selloff, that is the signal I would respect most.",
+  "ranked_signals": [
+   "10Y yield",
+   "Brent",
+   "Trump-Xi headlines",
+   "NVDA/SMH",
+   "1 p.m. Treasury auction."
+  ],
+  "turbulence_lines": [
+   "Turbulence: 9.5/10.",
+   "Turbulence: ~8.5–9/10."
+  ],
+  "playbook_bullish": "Bullish reversal: 10Y backs down toward 5.05%, Brent falls below ~$103, Trump-Xi headlines are constructive and NVDA/SMH reclaim VWAP. That combination could generate a strong oversold tech reversal.",
+  "playbook_bearish": "Bearish continuation: 10Y pushes through ~5.15%, Brent holds $105+, semis fail opening bounces and the 7-year auction is weak. In that setup, I would treat attempts to buy QQQ dips cautiously."
+ },
+ "ledger_rows": [
+  {
+   "schema": "ai_job_ledger_v1",
+   "job": "econ_brief",
+   "status": "degraded_no_narrative",
+   "session_date": "2026-09-25",
+   "started_at": "2026-09-25T22:16:01-07:00",
+   "reason": "econ summary rejected; the last good file was kept: a time in 'The 1 p.m. Treasury auction is important today.' is not the time of an event it cites",
+   "goal": "market_read"
+  },
+  {
+   "schema": "ai_job_ledger_v1",
+   "job": "econ_brief",
+   "status": "degraded_no_narrative",
+   "session_date": "2026-09-25",
+   "started_at": "2026-09-25T23:00:38-07:00",
+   "reason": "econ summary rejected; the last good file was kept: a time in 'The 1 p.m. Treasury auction is important today.' is not the time of an event it cites",
+   "goal": "market_read"
+  },
+  {
+   "schema": "ai_job_ledger_v1",
+   "job": "econ_brief",
+   "status": "skipped",
+   "session_date": "2026-09-25",
+   "started_at": "2026-09-25T23:30:04-07:00",
+   "reason": "two consecutive attempts for 2026-09-25 failed identically (econ summary rejected; the last good file was kept: a time in 'The 1 p.m. Treasury auction is important today.' is not the time of an event it cites); this is deterministic, not transient",
+   "goal": "market_read",
+   "terminal": true
+  }
+ ]
+}
