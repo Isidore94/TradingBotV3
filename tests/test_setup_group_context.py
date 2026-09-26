@@ -104,8 +104,9 @@ def test_master_setup_columns_carry_group_strength_and_expected_r():
     # that new columns go on the END, and an exact tail is what proves it.
     # 2026-09-08: the point system's `points` column, appended under the same
     # rule, widens the window once more. P1-5 5a appends `setup_key` the same way,
-    # P1-6 6b its five plan columns, and 6d its timing chip.
-    assert keys[-15:] == [
+    # P1-6 6b its five plan columns, and 6d its timing chip. p9 (2026-09-26)
+    # appends the six swing-table columns the same way.
+    assert keys[-21:] == [
         "sector",
         "d1_vs_sector",
         "industry",
@@ -121,5 +122,11 @@ def test_master_setup_columns_carry_group_strength_and_expected_r():
         "plan_r",
         "plan_shares",
         "timing",
+        "regime_grade",
+        "leader",
+        "sp4",
+        "strength",
+        "study",
+        "universe",
     ]
     assert not {"theta", "days_to_earnings"} & set(keys)

@@ -11,6 +11,8 @@ SETUP_BUCKET_LABELS = {
     # the trader can filter on - and it grants nothing: a like never makes a
     # row a favourite or a high-conviction pick, and never invents a score.
     "claimed_like": "My liked trade",
+    # p9 (trader, 2026-09-26): a `long_setups` row (leader pullback / post-earnings drift).
+    "long_leader": "Long leader",
     "near_favorite_zone": "Near",
     "high_conviction": "High Conviction",
     "post_earnings_play": "Post Earnings",
@@ -38,6 +40,7 @@ STUDY_FAMILY_LABELS = {
 }
 
 DEFAULT_SETUP_BUCKET_FILTER_LABELS = (
+    "Long leader",
     "High Conviction",
     "Favorite",
     "Near",

@@ -61,6 +61,12 @@ QLabel#CautionLabel {
     color: @caution@;
 }
 
+/* p9 swing table: the Master AVWAP regime line (regime, longs gate, SPY M5..W). */
+QLabel#SwingRegimeLine {
+    color: @text_secondary@;
+    font-size: @font_body@;
+}
+
 /* Day Recap coach: today's rule, on the status bar and the Market Prep page. */
 QLabel#RuleChip {
     color: @caution@;

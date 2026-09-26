@@ -67,6 +67,8 @@ CHIP_HC = "high_conviction"
 CHIP_NEAR = "near_favorite_zone"
 CHIP_LIKED = "claimed_like"
 CHIP_ALL = "all"
+#: p9 (trader, 2026-09-26): the Long leaders chip, first and ON by default.
+CHIP_LEADER = "long_leader"
 
 
 # ---------------------------------------------------------------------------
@@ -537,10 +539,11 @@ def chip_panel(tmp_path, monkeypatch):
     panel.deleteLater()
 
 
-def test_the_strip_offers_five_independently_checkable_chips(chip_panel):
+def test_the_strip_offers_six_independently_checkable_chips(chip_panel):
     panel, _ = chip_panel
 
-    assert set(panel.bucket_chips) == {CHIP_FAV, CHIP_HC, CHIP_NEAR, CHIP_LIKED, CHIP_ALL}
+    assert set(panel.bucket_chips) == {CHIP_LEADER, CHIP_FAV, CHIP_HC, CHIP_NEAR, CHIP_LIKED, CHIP_ALL}
+    assert list(panel.bucket_chips)[0] == CHIP_LEADER, "Long leaders is the first chip"
     for key, chip in panel.bucket_chips.items():
         assert chip.isCheckable(), key
 
@@ -603,8 +606,8 @@ def test_no_chip_checked_reads_as_all(chip_panel):
 @pytest.mark.parametrize(
     "old_value, expected",
     [
-        ("fav_hc_near", {CHIP_FAV, CHIP_HC, CHIP_NEAR, CHIP_LIKED}),
-        ("fav_hc", {CHIP_FAV, CHIP_HC, CHIP_LIKED}),
+        ("fav_hc_near", {CHIP_LEADER, CHIP_FAV, CHIP_HC, CHIP_NEAR, CHIP_LIKED}),
+        ("fav_hc", {CHIP_LEADER, CHIP_FAV, CHIP_HC, CHIP_LIKED}),
         ("all", set()),
     ],
 )
@@ -621,10 +624,10 @@ def test_the_old_exclusive_setting_migrates_once(tmp_path, monkeypatch, old_valu
         panel.deleteLater()
 
 
-def test_with_no_setting_at_all_the_default_is_fav_hc_near_and_liked(tmp_path, monkeypatch):
+def test_with_no_setting_at_all_the_default_is_leaders_fav_hc_near_and_liked(tmp_path, monkeypatch):
     panel, _ = _build_panel(tmp_path, monkeypatch, settings={})
     try:
-        assert panel.active_bucket_chip_keys() == {CHIP_FAV, CHIP_HC, CHIP_NEAR, CHIP_LIKED}
+        assert panel.active_bucket_chip_keys() == {CHIP_LEADER, CHIP_FAV, CHIP_HC, CHIP_NEAR, CHIP_LIKED}
     finally:
         panel.deleteLater()
 

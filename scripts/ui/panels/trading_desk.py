@@ -626,6 +626,8 @@ class TradingDeskPanel(QWidget):
         self.m5_alert_bar.set_working_lately_order(day_order)
         self.alert_center.set_working_lately_order(day_order)
         self.master_panel.set_working_lately_order(working_lately.swing_order(payload))
+        # p9: the swing table's regime grade column and regime line.
+        self.master_panel.set_regime_grades(payload.get("setup_grades_by_regime") or {})
         if grades and grades is not getattr(self, "_pushed_setup_grades", None):
             self._pushed_setup_grades = grades
             self.m5_alert_bar.set_setup_grades(grades)

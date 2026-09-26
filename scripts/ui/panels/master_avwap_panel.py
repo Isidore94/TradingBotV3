@@ -64,6 +64,8 @@ from ui.widgets.setup_delegate import _PAD as SETUP_CELL_PAD
 from ui.widgets.setup_delegate import SetupTableDelegate
 from ui.widgets.empty_state import EmptyState
 from ui.widgets.setup_detail_view import SetupDetailView
+from ui.models import swing_columns
+from ui.panels.master_avwap_swing import SWING_COMPACT_WIDTHS, SwingTableMixin
 from swallowed import note_swallowed
 
 
@@ -81,13 +83,21 @@ from swallowed import note_swallowed
 _CLAIMS_UNREAD = object()
 
 CHIP_ALL = "all"
+#: p9 (trader, 2026-09-26): the Long leaders chip, first and on by default.
+CHIP_LONG_LEADER = swing_columns.LONG_LEADER_BUCKET
 BUCKET_CHIP_KEYS = (
+    CHIP_LONG_LEADER,
     "favorite_setup",
     "high_conviction",
     "near_favorite_zone",
     "claimed_like",
 )
 BUCKET_CHIPS = {
+    CHIP_LONG_LEADER: (
+        "Long leaders",
+        "Long leaders from the scan (leader pullback, post-earnings drift): a buy limit, "
+        "a stop, hold up to 10 sessions. A name already in the table wears a Leader chip.",
+    ),
     "favorite_setup": ("FAV", "Favourite setups"),
     "high_conviction": ("HC", "High-conviction setups"),
     "near_favorite_zone": ("Near", "Near the favourite zone"),
@@ -98,6 +108,8 @@ BUCKET_CHIPS = {
 DEFAULT_BUCKET_CHIPS = frozenset(BUCKET_CHIP_KEYS)
 #: The new persisted key (a sorted list of raw bucket keys).
 SETTING_BUCKET_CHIPS = "qt_setups_bucket_chips"
+#: Set once the Long leaders chip was added to a stored selection (p9, default ON).
+SETTING_LEADER_CHIP_SEEDED = "qt_setups_long_leader_chip_seeded"
 #: Trader, 2026-09-15: a row vetoed for the day leaves the setups table. OFF
 #: hides (and counts) the rejected rows; ON shows them with their red ✕.
 SETTING_SHOW_VETOED = "qt_setups_show_vetoed"
@@ -485,7 +497,7 @@ class _DayDecisionsWorker(QThread):
         self.done.emit(payload)
 
 
-class MasterAvwapPanel(QWidget):
+class MasterAvwapPanel(SwingTableMixin, QWidget):
     setupSelected = Signal(object)
     rowsChanged = Signal(int, int, int)
     statusChanged = Signal(str)
@@ -511,6 +523,8 @@ class MasterAvwapPanel(QWidget):
             and getattr(focus_store, "uses_default_paths", lambda: False)()
         )
         self._uses_default_feedback_paths = default_store
+        # p9: the swing context is read on a worker by the desk's panel only.
+        self._reads_swing_context = default_store
         self._review_events_path = (
             Path(review_events_path)
             if review_events_path is not None
@@ -695,6 +709,7 @@ class MasterAvwapPanel(QWidget):
         self.max_dte_input.setValue(0)
         self.max_dte_input.valueChanged.connect(self._apply_filters)
 
+        self._build_swing_controls()
         self._build_bucket_toggle()
         self._build_points_toggle()
         self._build_show_vetoed_toggle()
@@ -725,6 +740,8 @@ class MasterAvwapPanel(QWidget):
         self.report_poll_timer.timeout.connect(self._poll_longs_gate)
         # P1-6 6d: the timing chips re-read on the same 30 s tick (worker only).
         self.report_poll_timer.timeout.connect(self._start_entry_timing_read)
+        # p9: the swing context re-reads on the same tick, only when an input moved.
+        self.report_poll_timer.timeout.connect(self._start_swing_context_read)
         start_staggered(self.report_poll_timer, 43_000)
         self.scheduler_timer = QTimer(self)
         self.scheduler_timer.setInterval(15_000)
@@ -759,10 +776,10 @@ class MasterAvwapPanel(QWidget):
             strip.addWidget(button)
         strip.addSpacing(6)
         strip.addWidget(self.points_toggle)
+        strip.addWidget(self.best_swing_toggle)
         strip.addWidget(self.show_vetoed_toggle)
         strip.addWidget(self.hide_sector_toggle)
         strip.addWidget(self.longs_off_toggle)
-        strip.addWidget(self.longs_off_banner)
         strip.addWidget(self.search_input, 1)
         strip.addWidget(self.data_as_of_label)
         strip.addWidget(self.overflow_button)
@@ -779,7 +796,16 @@ class MasterAvwapPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
+        # p9: the regime line, with the one longs-off banner beside it.
+        regime_row = QHBoxLayout()
+        regime_row.setContentsMargins(0, 0, 0, 0)
+        regime_row.setSpacing(12)
+        regime_row.addWidget(self.swing_regime_label)
+        regime_row.addWidget(self.longs_off_banner)
+        regime_row.addStretch(1)
+
         layout.addLayout(strip)
+        layout.addLayout(regime_row)
         layout.addWidget(self.detail_splitter, 1)
         layout.addLayout(status_row)
 
@@ -939,6 +965,7 @@ class MasterAvwapPanel(QWidget):
         self.longs_off_banner.setText(text)
         if self.longs_off_banner.parent() is not None:
             self.longs_off_banner.setVisible(bool(text))
+        self.refresh_swing_regime_line()
 
     def longs_off_banner_text(self) -> str:
         return self.longs_off_banner.text()
@@ -961,6 +988,8 @@ class MasterAvwapPanel(QWidget):
             return
         self._longs_gate = verdict
         self._apply_longs_gate()
+        if self.best_swing_toggle.isChecked():
+            self._resort_from_source()  # Best swing puts longs last while the gate says no
 
     def _poll_longs_gate(self) -> None:
         try:
@@ -1154,6 +1183,14 @@ class MasterAvwapPanel(QWidget):
             "apply to the Points column. OFF = the default weights."
         )
         self._learned_weights_action.toggled.connect(self._on_learned_weights_toggled)
+        self._swing_columns_action = menu.addAction("Swing columns")
+        self._swing_columns_action.setCheckable(True)
+        self._swing_columns_action.setChecked(self.swing_columns_enabled())
+        self._swing_columns_action.setToolTip(
+            "Regime grade, Long leader, SP4 (shadow), Strength (shadow), Study / note and Source. "
+            "Compact view shows the regime grade only."
+        )
+        self._swing_columns_action.toggled.connect(self._on_swing_columns_toggled)
         menu.addSeparator()
         copy_menu = menu.addMenu("Copy visible")
         for label, kind in (
@@ -1195,15 +1232,21 @@ class MasterAvwapPanel(QWidget):
         """
         stored = get_local_setting(SETTING_BUCKET_CHIPS, None)
         if isinstance(stored, (list, tuple, set)):
-            return {
+            keys = {
                 str(key).strip().lower() for key in stored if str(key).strip()
             } & set(BUCKET_CHIP_KEYS)
-        legacy = str(
-            get_local_setting(SETTING_BUCKET_FILTER_LEGACY, "") or ""
-        ).strip().lower()
-        if legacy in BUCKET_FILTER_MIGRATION:
-            return set(BUCKET_FILTER_MIGRATION[legacy])
-        return set(DEFAULT_BUCKET_CHIPS)
+        else:
+            legacy = str(
+                get_local_setting(SETTING_BUCKET_FILTER_LEGACY, "") or ""
+            ).strip().lower()
+            keys = set(BUCKET_FILTER_MIGRATION.get(legacy, DEFAULT_BUCKET_CHIPS))
+        # p9: the Long leaders chip joins a stored selection ONCE (default ON); an
+        # empty selection is `All`, which already shows it. Unchecking it later sticks.
+        if not get_local_setting(SETTING_LEADER_CHIP_SEEDED, False):
+            if keys:
+                keys.add(CHIP_LONG_LEADER)
+            save_local_setting(SETTING_LEADER_CHIP_SEEDED, True)
+        return keys
 
     def active_bucket_chip_keys(self) -> set[str]:
         """The bucket keys the trader has chosen. Empty means `All`."""
@@ -1367,17 +1410,21 @@ class MasterAvwapPanel(QWidget):
             if key == "timing" and (profile == "compact" or not self.model.has_timing()):
                 # P1-6 6d: same rule; the chip rides the key-level tooltip in compact.
                 self.table.setColumnHidden(column, True)
+            if key in swing_columns.SWING_COLUMNS and self._swing_column_hidden(key, profile):
+                # p9: compact shows the regime grade only; any swing column with nothing to say hides.
+                self.table.setColumnHidden(column, True)
         if profile == "compact":
             # The compact profile is untouched by G2b, elision included.
             self.table.setItemDelegateForColumn(key_level_column, None)
             header.setStretchLastSection(False)
             for column, (key, _label) in enumerate(self.model.COLUMNS):
-                width = COMPACT_COLUMN_WIDTHS.get(key)
+                width = COMPACT_COLUMN_WIDTHS.get(key) or SWING_COMPACT_WIDTHS.get(key)
                 if width:
                     header.resizeSection(column, width)
             # Exp R is appended last in COLUMNS (indices 0/1/2 are pinned click
             # targets), so move it into reading position beside the level.
             self._move_column_after("expected_r", "key_level")
+            self._move_column_after("regime_grade", "bucket")
             self._fit_compact_columns()
             header.setStretchLastSection(True)
         else:
@@ -1443,7 +1490,7 @@ class MasterAvwapPanel(QWidget):
                 overflow -= take
         # Still over: drop columns in reverse value order rather than let a
         # scrollbar hide them silently.
-        for key in ("d1_vs_sector", "industry", "setup_tags", "family_win_rate"):
+        for key in ("d1_vs_sector", "industry", "regime_grade", "setup_tags", "family_win_rate"):
             if overflow <= 0:
                 break
             column = keys.index(key)
@@ -1923,6 +1970,7 @@ class MasterAvwapPanel(QWidget):
             # The evidence log and grade, off this thread; test panels stay silent.
             self._start_points_evidence(rows, str(meta.get("data_date") or ""))
         self._apply_data_as_of(meta)
+        self._start_swing_context_read()
         self._refresh_watcher_paths()
         self._report_signatures = self._current_report_signatures()
 
@@ -2076,9 +2124,13 @@ class MasterAvwapPanel(QWidget):
         # order) hand the scan's rows back here and the claims are merged
         # afresh - which is also how a dropped claim leaves the table.
         self._working_lately_source_rows = list(rows)
+        # p9: Long leaders merge after the claims; "Best swing" (when on) is the last word.
         rows = self._weak_variants_last(self._by_points(
-            self._prioritised(self._merge_active_claims(self._working_lately_source_rows))
+            self._prioritised(self._merge_long_leaders(
+                self._merge_active_claims(self._working_lately_source_rows)
+            ))
         ))
+        rows = self._best_swing(rows)
         self._push_plan_context(reset=False)
         self.model.set_rows(rows)
         self._refresh_bucket_filter(rows)
@@ -2317,6 +2369,10 @@ class MasterAvwapPanel(QWidget):
     def set_bounce_service(self, service) -> None:
         """Optional: cached M5 bars for the snapshot popup's lower chart."""
         self._bounce_service = service
+        # p9: the regime line reads the desk strip's SPY M5..W (no second fetch).
+        strip_signal = getattr(service, "regimeStripChanged", None)
+        if strip_signal is not None:
+            strip_signal.connect(self.set_spy_regime)
 
     def set_chart_watch_host(self, host) -> None:
         """Optional: the Alert Center panel that owns chart watches and the

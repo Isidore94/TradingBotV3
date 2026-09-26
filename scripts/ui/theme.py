@@ -25,6 +25,8 @@ THEMES: dict[str, dict[str, str]] = {
         "favorite": "#E9B949",
         "near": "#6EA8FF",
         "study": "#9B7CFF",
+        # p9 swing table: the Long leaders bucket chip (a green apart from `long`).
+        "leader": "#2DD4BF",
         # WS-SX. The ✕ of a name the trader rejected TODAY - vetoed, disliked,
         # passed on, or clicked away from an M5 alert. Brighter and more
         # saturated than `short`, which is a SIDE and has to sit calmly beside
@@ -69,6 +71,7 @@ THEMES: dict[str, dict[str, str]] = {
         "favorite": "#B7791F",
         "near": "#2563EB",
         "study": "#7C3AED",
+        "leader": "#0F766E",
         # Darker than the dark theme's, for the same reason `short` is: a
         # #FF2D2D on white reads as pink rather than as a warning.
         "reject_today": "#C21010",
