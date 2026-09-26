@@ -378,6 +378,37 @@ S1 and keep the order. The two 500 MB logs are read with
   This is the frame S4, S12, S14 and S15 hang off; build the journal (1) first so the
   backfill (S15 item 1) is labelled the day it lands.
 
+- **S17 Auto regimes on every timeframe, then the AI reads them** (the trader 2026-09-26:
+  M5, M30, H1, H4, D1 and Weekly auto regimes for context; the local AI turns them into
+  sensible summaries, or we prep them for a frontier AI). Two halves:
+  1. **Deterministic multi-timeframe regime table.** `journal_regime_fill.py` already reads
+     SPY / QQQ / IWM on D1, 5-day, M5 and M30 through the champion Auto Market Bias
+     (`env_key` labels `bullish_strong` ... `bearish_strong`, `neutral_chop`) and writes one
+     row per journal trade date. Generalise it into `market_regimes.py` + a night job
+     `market_regime_table` (goal market_read, no model): one JSONL row per session for SPY,
+     QQQ, IWM (and the sector ETFs the desk already tracks) with the env_key on M5, M30, H1,
+     H4, D1 and W, plus the structure facts from S16 item 2 (weekly HH/HL count, daily LH/LL
+     channel, ATR-percentile compression, distance to the 20-day and its slope). H1 and H4
+     come from the cached intraday bars aggregated the way M30 is today; W from daily bars.
+     Append-only, point in time (bars completed before the close), never re-labelled. Three
+     intraday snapshots (10:00, 12:00, close ET) for the intraday timeframes. Same
+     classifier, same thresholds as the champion: no new detector. Shown on the desk as one
+     regime strip (six cells per index) fed off the existing bias worker, no new timer.
+     Golden fixture from one recorded week.
+  2. **The AI reads, it does not decide.** Nightly `regime_read` slot (goal market_read,
+     `uses_model`, after `market_story_narration`): input = the table's last 20 sessions +
+     the trader's S16 regime + the structure facts; output = a bounded, grounded paragraph
+     ("weekly still in the compression that followed the March-May run; daily a bear channel
+     since 08-14 with a lower high on 09-18; H4 turned neutral 09-23; M30 has flipped bullish
+     twice this week and failed both times") whose every timeframe word and date is checked
+     against the table (reject whole, keep last good, as the day story does). It joins the
+     market story and the Day Review Show. In parallel `research_pack.py export` gains a
+     `market_regimes` section (the full table, the trader's regime journal, the setups-by-
+     regime grades from S16) so a frontier model can be handed one file and asked the big
+     questions: what changed between regimes, and which setups belong to which.
+  Order: the table first (it is facts and it feeds S12, S14, S16 at once); the local read
+  second; the frontier pack alongside.
+
 ### Phase C - needs live days (trigger named)
 
 - Gates #257/#258: tonight's ledger and Monday morning. #259-#263: Monday's session.
