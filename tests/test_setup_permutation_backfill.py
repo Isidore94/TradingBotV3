@@ -87,7 +87,15 @@ def _feature_rows() -> list[dict]:
     return rows
 
 
+def _target_session(day: str, sessions: int) -> str:
+    target = date.fromisoformat(day)
+    for _ in range(sessions):
+        target = market_calendar.next_session(target)
+    return target.isoformat()
+
+
 def _horizon_rows(features: list[dict]) -> list[dict]:
+    """S4: the v2 fields `setup_grades.tape_result` reads (scan and target session, maturity)."""
     out = []
     latest = {}
     for row in features:
@@ -97,8 +105,12 @@ def _horizon_rows(features: list[dict]) -> list[dict]:
             measured = horizon != 10
             out.append({
                 "scan_row_id": f"{row['symbol']}:{row['last_trade_date']}:{row['run_id']}",
+                "side": row["side"],
+                "scan_date": row["last_trade_date"],
+                "target_session": _target_session(row["last_trade_date"], horizon),
                 "horizon_sessions": horizon,
                 "measured": measured,
+                "maturity": "mature" if measured else "",
                 "favorable": (int(row["symbol"][1:]) + horizon) % 2 == 0 if measured else "",
                 "side_return_pct": 1.0 if measured else "",
                 "entry_close": row["last_close"],
@@ -123,11 +135,17 @@ def _m5_rows() -> list[dict]:
     return rows
 
 
+def _spy_rows() -> list[dict]:
+    """A flat SPY: the tape-relative win (S4) is then the side return above zero."""
+    return [{"datetime": day.isoformat(), "close": 500.0} for day in _sessions(30)]
+
+
 @pytest.fixture()
 def fixture_files(tmp_path):
     features = _feature_rows()
     assert len(features) == 200
     return {
+        "spy": _write_csv(tmp_path / "SPY.csv", _spy_rows()),
         "features": _write_csv(tmp_path / "d1_features_history.csv", features),
         "horizons": _write_csv(tmp_path / "session_horizons.csv", _horizon_rows(features)),
         "m5": _write_csv(tmp_path / "intraday_bounce_outcomes.csv", _m5_rows()),
@@ -152,7 +170,8 @@ def test_the_backfill_keys_every_episode_horizon_as_of_the_scan_date(fixture_fil
     import pyarrow.parquet as pq
 
     result = bf.build_permutation_outcomes(fixture_files["features"], horizons=fixture_files["horizons"],
-                                           m5_outcomes=fixture_files["m5"], last_completed=SESSIONS[-1])
+                                           m5_outcomes=fixture_files["m5"], last_completed=SESSIONS[-1],
+                                           spy_bars=fixture_files["spy"])
     swing = [row for row in result.rows if row["population"] == bf.POPULATION_SWING]
     assert result.counts["scan_rows_keyed"] == len(SYMBOLS) * len(SESSIONS)
     # 3 measured horizons per representative; horizon 10 is unmeasured and absent.
@@ -175,7 +194,8 @@ def test_the_backfill_keys_every_episode_horizon_as_of_the_scan_date(fixture_fil
 
 def test_m5_rows_take_the_previous_session_scan_never_the_same_day(fixture_files):
     result = bf.build_permutation_outcomes(fixture_files["features"], horizons=fixture_files["horizons"],
-                                           m5_outcomes=fixture_files["m5"], last_completed=SESSIONS[-1])
+                                           m5_outcomes=fixture_files["m5"], last_completed=SESSIONS[-1],
+                                           spy_bars=fixture_files["spy"])
     m5 = [row for row in result.rows if row["population"] == bf.POPULATION_M5]
     assert len(m5) == 4
     assert {row["family"] for row in m5} == {"ema_15"}
@@ -195,6 +215,7 @@ def test_daily_bars_rebuild_matches_the_session_horizon_file(fixture_files, tmp_
             rows.append({"datetime": day.isoformat(), "open": 1, "high": 1, "low": 1,
                          "close": 100.0 + n + (0.5 if index % 2 else -0.5)})
         _write_csv(bars / f"{symbol}.csv", rows)
+    _write_csv(bars / "SPY.csv", _spy_rows())  # S4: the tape win reads SPY beside the bars
     result = bf.build_permutation_outcomes(fixture_files["features"], daily_bars=bars,
                                            last_completed=_sessions(30)[-1])
     swing = result.rows
@@ -212,6 +233,7 @@ def test_the_cli_writes_the_parquet_in_a_child_with_scratch_roots(fixture_files,
         [sys.executable, str(SCRIPTS_DIR / "setup_permutation_backfill.py"), "--scratch", str(tmp_path / "scratch"),
          "--features", str(fixture_files["features"]), "--horizons", str(fixture_files["horizons"]),
          "--m5-outcomes", str(fixture_files["m5"]), "--last-completed", SESSIONS[-1].isoformat(),
+         "--spy-bars", str(fixture_files["spy"]),
          "--out", str(out)],
         capture_output=True, text=True, timeout=600, env=environment, cwd=str(SCRIPTS_DIR),
     )
@@ -230,7 +252,7 @@ def test_ctx_facets_come_from_the_copied_stores_for_the_row_s_own_session(fixtur
                       encoding="utf-8")
     stores = bf.ContextStores(review_events=events, m5_outcomes=fixture_files["m5"])
     result = bf.build_permutation_outcomes(fixture_files["features"], horizons=fixture_files["horizons"],
-                                           stores=stores, last_completed=SESSIONS[-1])
+                                           stores=stores, last_completed=SESSIONS[-1], spy_bars=fixture_files["spy"])
     rows = {(row["symbol"], row["session"]): row for row in result.rows if row["horizon"] == 1}
     same_day = rows[("S01", SESSIONS[5].isoformat())]
     assert same_day["f_entry_trigger"] == "pullback_sma_retest"
@@ -250,7 +272,7 @@ def test_backfill_ctx_before_a_source_s_first_event_is_unknown_not_none(fixture_
                       encoding="utf-8")
     stores = bf.ContextStores(review_events=events, m5_outcomes=fixture_files["m5"])
     result = bf.build_permutation_outcomes(fixture_files["features"], horizons=fixture_files["horizons"],
-                                           stores=stores, last_completed=SESSIONS[-1])
+                                           stores=stores, last_completed=SESSIONS[-1], spy_bars=fixture_files["spy"])
     rows = {(row["symbol"], row["session"]): row for row in result.rows if row["horizon"] == 1}
     early = rows[("S01", SESSIONS[2].isoformat())]
     assert early["f_entry_trigger"] == sp.UNKNOWN  # before the review log's first watch_fired
