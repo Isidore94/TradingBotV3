@@ -20,8 +20,8 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
   22:00-02:00 PT.
 - **In flight:** `claude/p8b-phaseB-2026-09-26` (NOT merged; merge needs the trader's
   word): R1 Show, B0, B1b, B3, B8, B9, B11-B13, P4b, A6 steps 2-3, S1-S6, S8, S10b/c,
-  S11; gates #267-#275. Reviewer GO. Full suite 12,685 passed + 2 known order flakes
-  (both pass alone twice); ruff clean, smoke 7/7, selftest 105/105 source and frozen.
+  S11-S13; gates #267-#277. Reviewer GO. Full suite 12,720 passed, 1 order flake
+  (`test_tj9q_review_round`, passes alone twice); ruff, smoke 7/7, selftest 105/105.
 - **Owed:** TLT/USO/HYG daily bars (scan-side, ask first); halted-name refetch; movers
   summary into the night AI; phone-brief rule line; pre-Aug entry_at (outcome code, ask
   first); review of the per-trade Mentor Save (`182f3e08`); weekly-options facet needs a
