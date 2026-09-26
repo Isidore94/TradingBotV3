@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #291 Long leaders (p9 long setups): after the next scan, Research > Setup Tracker shows a Long leaders section at the top with rows (entry limit, stop, take +1 ATR or 10 sessions) and the market-gate state ('ready' or 'waiting for the market') [trader]
 - #290 PROVEN retired (P14): on the next session no alert says PROVEN; an alert that matched a proven segment says `grade 1:1 <X>`; with Min tier 'S tier / top grade only', grade-B `regime_pause_rs` long rows still show while no grade A exists [trader]
 - #289 Shadow S9 (S9): after 10 sessions with the shadow recorded, compare shadow S9 vs live tier by bracket outcome (+1R before -1R) per tier from `intraday_bounces.csv` `shadow_s9_tier` joined to the outcome log; promote or drop with the numbers [lead]
 - #288 April-September permutations (S15 item 1): the Setup keys page shows the April-September report with April-July rows (swing selection window starts 2026-03-17) [trader]

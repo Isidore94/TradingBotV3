@@ -37,11 +37,11 @@ def _bars(closes, volumes=None, *, spread=0.5):
             for d, c, v in zip(days, closes, volumes, strict=True)]
 
 
-def _leader(pullback_sessions=10, step=0.012, pullback_volume=600_000, run_bars=290):
+def _leader(pullback_sessions=10, step=0.012, pullback_volume=1_200_000, run_bars=290, run_volume=2_000_000):
     closes = [50.0 + 0.25 * i for i in range(run_bars)]
     peak = closes[-1]
     closes += [peak * (1 - step * k) for k in range(1, pullback_sessions + 1)]
-    volumes = [1_000_000] * run_bars + [pullback_volume] * pullback_sessions
+    volumes = [run_volume] * run_bars + [pullback_volume] * pullback_sessions
     return _bars(closes, volumes)
 
 
@@ -70,7 +70,7 @@ def test_leader_bonus_raises_strength():
 
 
 @pytest.mark.parametrize("bars", [
-    _leader(pullback_volume=1_500_000),          # the pullback is heavier than the run
+    _leader(pullback_volume=3_000_000),          # the pullback is heavier than the run
     _leader(pullback_sessions=2, step=0.01),     # only 2-3% off the high
     _leader(pullback_sessions=10, step=0.03),    # ~30% off the high: too deep
 ])
@@ -173,12 +173,48 @@ def test_post_earnings_drift_is_point_in_time():
 
 # --- one scan: the market gate, ranking, staleness
 
-def _scan(working="yes", **row):
-    bars = _leader()
+def _scan(working="yes", bars=None, caps=None, **row):
+    bars = bars or _leader()
     feature = {"symbol": "LEAD", "side": "LONG", "perm_regime_working": working,
-               "perm_regime_working_rule": "trader", **row}
+               "perm_regime_working_rule": "trader", "perm_market_cap_m": 5000.0, **row}
     return ls.build_rows(bars_by_symbol={"LEAD": bars}, spy_bars=bars, feature_rows=[feature],
-                         atr_by_symbol={"LEAD": 2.0}, as_of=bars[-1]["date"])
+                         atr_by_symbol={"LEAD": 2.0}, market_cap_by_symbol=caps, as_of=bars[-1]["date"])
+
+
+# --- the trader's floor, 2026-09-26: "We want 1B market cap and a avg20 daily volume of shares
+# traded to be 1m. That's my minimum."
+
+def test_the_floor_is_the_universe_builders_own():
+    import universe_builder
+
+    assert ls.MIN_MARKET_CAP_M == universe_builder.DEFAULT_MIN_MARKET_CAP_M == 1000.0
+    assert ls.MIN_AVG_VOLUME == universe_builder.DEFAULT_MIN_AVG_VOLUME == 1_000_000
+
+
+@pytest.mark.parametrize("cap, rows", [(5000.0, 1), (1000.0, 1), (999.0, 0), (None, 0), ("", 0)])
+def test_market_cap_floor_one_billion(cap, rows):
+    assert len(_scan("yes", perm_market_cap_m=cap)["rows"]) == rows
+
+
+def test_the_scan_cap_cache_wins_over_the_row():
+    assert _scan("yes", perm_market_cap_m=None, caps={"LEAD": 2000.0})["rows"]
+    assert _scan("yes", perm_market_cap_m=5000.0, caps={"LEAD": 500.0})["rows"] == []
+
+
+def test_twenty_session_share_volume_floor_one_million():
+    # The run traded 1.4M a day and the pullback 0.6M: the last 20 sessions average 1.0M.
+    assert _scan("yes", bars=_leader(run_volume=1_400_000, pullback_volume=600_000))["rows"]
+    # 1.3M / 0.6M: 0.95M a day over the last 20 sessions, under the floor.
+    assert _scan("yes", bars=_leader(run_volume=1_300_000, pullback_volume=600_000))["rows"] == []
+
+
+def test_an_unknown_volume_fails_the_floor():
+    bars = _leader()
+    assert ls.meets_liquidity_floor(bars, 5000.0) is True
+    holed = [dict(bar) for bar in bars]
+    holed[-15]["volume"] = None
+    assert ls.meets_liquidity_floor(holed, 5000.0) is False
+    assert ls.meets_liquidity_floor(bars[:19], 5000.0) is False
 
 
 def test_market_working_promotes_the_row():
@@ -212,7 +248,8 @@ def test_leader_bonus_from_the_scan_rows():
 def test_a_stale_name_is_skipped():
     bars = _leader()
     payload = ls.build_rows(bars_by_symbol={"LEAD": bars[:-1]}, spy_bars=bars, feature_rows=[],
-                            atr_by_symbol={"LEAD": 2.0}, as_of=bars[-1]["date"])
+                            atr_by_symbol={"LEAD": 2.0}, market_cap_by_symbol={"LEAD": 5000.0},
+                            as_of=bars[-1]["date"])
     assert payload["rows"] == []
 
 

@@ -31,18 +31,21 @@ import test_setup_permutation_scan_parity as base  # noqa: E402
 #: A rise to a 52-week high, then a 10-session pullback on light volume (a leader pullback).
 _SHAPE = r'''
 if BARS_SHAPE == "leader_pullback":
+    frame["volume"] = 2_000_000  # over the trader's 1M 20-session share-volume floor
     peak_index = SESSION_COUNT - 11
     for index in range(peak_index + 1, SESSION_COUNT):
         step = index - peak_index
         close = float(frame.at[peak_index, "close"]) * (1.0 - 0.012 * step)
         frame.loc[index, ["open", "high", "low", "close"]] = [close + 0.3, close + 0.8, close - 0.6, close]
-        frame.loc[index, "volume"] = 600_000
+        frame.loc[index, "volume"] = 1_200_000
 '''
 
 _DISABLE = '''
 # p9 long setups: only the long-setups hook is switched off (every other hook stays on).
 if os.environ.get("LONG_SETUPS_HOOK") == "off" and hasattr(runner, "publish_long_setups"):
     runner.publish_long_setups = lambda *args, **kwargs: None
+# A $5B cap for the synthetic name (the scratch home has no cap cache), in both runs.
+runner.load_permutation_market_caps = lambda *args, **kwargs: {"PKEY": 5000.0}
 '''
 
 _DUMP = r'''

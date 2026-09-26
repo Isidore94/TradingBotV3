@@ -35,6 +35,8 @@ from typing import Any, Iterable, Mapping, Sequence
 from indicators.atr import wilder_atr
 from research_warehouse.retest_entry import RETEST_ATR_FRACTION, limit_fill
 from setup_permutations import UNKNOWN, _sector_third, long_regime_working
+from universe_builder import DEFAULT_MIN_AVG_VOLUME as MIN_AVG_VOLUME
+from universe_builder import DEFAULT_MIN_MARKET_CAP_M as MIN_MARKET_CAP_M
 
 LEADER_PULLBACK = "leader_pullback"
 POST_EARNINGS_DRIFT = "post_earnings_drift"
@@ -92,6 +94,12 @@ GRADE_SPY_UP_MIN_PCT = 1.0
 #: session, with this score base (the auto-populate ADR scores run ~1.25-3).
 FOCUS_MAX_AGE_DAYS = 4
 FOCUS_SCORE_BASE = 3.0
+
+#: The trader's floor (2026-09-26: "We want 1B market cap and a avg20 daily volume of shares
+#: traded to be 1m. That's my minimum."): market cap >= `MIN_MARKET_CAP_M` ($M) and the mean
+#: share volume of the last `LIQUIDITY_VOLUME_SESSIONS` completed bars >= `MIN_AVG_VOLUME`,
+#: both the universe builder's own constants. An unknown cap or volume is no row.
+LIQUIDITY_VOLUME_SESSIONS = 20
 
 STATUS_READY = "ready"
 STATUS_WAITING = "waiting for the market"
@@ -173,6 +181,18 @@ def _atr(bars: Sequence[Mapping[str, Any]], atr: Any) -> float | None:
         return value
     value = wilder_atr(list(bars), ATR_LENGTH)
     return value if value is not None and value > 0 else None
+
+
+def meets_liquidity_floor(bars: Any, market_cap_m: Any) -> bool:
+    """True only for a known cap >= $1B and a known 20-session mean share volume >= 1M."""
+    cap = _num(market_cap_m)
+    if cap is None or cap < MIN_MARKET_CAP_M:
+        return False
+    recent = list(bars or ())[-LIQUIDITY_VOLUME_SESSIONS:]
+    volumes = [_num(bar.get("volume")) if isinstance(bar, Mapping) else None for bar in recent]
+    if len(volumes) < LIQUIDITY_VOLUME_SESSIONS or any(volume is None for volume in volumes):
+        return False
+    return sum(volumes) / len(volumes) >= MIN_AVG_VOLUME
 
 
 # --- "strong at one point"
@@ -422,13 +442,16 @@ def build_rows(
     earnings_by_symbol: Mapping[str, Mapping[str, Any]] | None = None,
     atr_by_symbol: Mapping[str, Any] | None = None,
     sector_by_symbol: Mapping[str, Any] | None = None,
+    market_cap_by_symbol: Mapping[str, Any] | None = None,
     as_of: Any = None,
 ) -> dict[str, Any]:
     """Every long-setup row of one scan, gated and ranked: ``{as_of, market_working, market_rule, rows}``.
 
     ``bars_by_symbol`` are each name's completed bars; a name whose last bar is not
     ``as_of`` is stale and skipped. ``feature_rows`` give the sector RS rank, the family
-    and the market gate; they are read, never changed.
+    and the market gate; they are read, never changed. A name under the trader's liquidity
+    floor (`meets_liquidity_floor`; cap from ``market_cap_by_symbol``, else the row's
+    ``perm_market_cap_m``) gives no row.
     """
     as_of_text = _text(as_of)[:10]
     feature_rows = list(feature_rows or ())
@@ -450,6 +473,12 @@ def build_rows(
     out = []
     for symbol, bars in current.items():
         facts = rows_by_symbol.get(symbol, [])
+        cap = _num((market_cap_by_symbol or {}).get(symbol))
+        if cap is None:
+            cap = next((_num(row.get("perm_market_cap_m")) for row in facts
+                        if _num(row.get("perm_market_cap_m")) is not None), None)
+        if not meets_liquidity_floor(bars, cap):
+            continue
         thirds = {_sector_third(row, "perm_sector_rs_rank_20d") for row in facts} - {None}
         sector_top = True if "top" in thirds else (False if thirds else None)
         top_pattern = any(_text(row.get("setup_family")) == "top_pattern_tracking" for row in facts)

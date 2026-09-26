@@ -55,6 +55,7 @@ def publish_long_setups(
     earnings_by_symbol: Mapping[str, Mapping[str, Any]] | None = None,
     atr_by_symbol: Mapping[str, Any] | None = None,
     sector_by_symbol: Mapping[str, Any] | None = None,
+    market_cap_by_symbol: Mapping[str, Any] | None = None,
     as_of: Any = None,
     now: datetime | None = None,
     path: Path | None = None,
@@ -70,7 +71,7 @@ def publish_long_setups(
     payload = long_setups.build_rows(
         bars_by_symbol=bars_by_symbol, spy_bars=spy_bars, feature_rows=feature_rows,
         earnings_by_symbol=earnings_by_symbol, atr_by_symbol=atr_by_symbol,
-        sector_by_symbol=sector_by_symbol, as_of=as_of,
+        sector_by_symbol=sector_by_symbol, market_cap_by_symbol=market_cap_by_symbol, as_of=as_of,
     )
     if not payload["as_of"]:
         logging.info("Long setups: no completed scan session; nothing published.")

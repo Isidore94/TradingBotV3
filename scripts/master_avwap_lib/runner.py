@@ -3282,6 +3282,7 @@ def _run_master_impl(
                 str(symbol).strip().upper(): (context or {}).get("sector")
                 for symbol, context in (industry_context_by_symbol or {}).items()
             },
+            market_cap_by_symbol=load_permutation_market_caps(),
             as_of=completed_through,
         )
     except Exception:
