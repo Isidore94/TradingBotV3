@@ -611,6 +611,8 @@ H1_EMA10_BOUNCE_TOUCH_ATR = 0.02  # trader spec: |low - EMA10| <= 0.02 * ATR
 H1_EMA10_BOUNCE_TYPE = "h1_ema10_bounce"
 H1_BLUE_AFTER_RED_TYPE = "h1_blue_after_red"
 H1_GREEN_TO_YELLOW_TYPE = "h1_green_to_yellow"
+# H1 colour types the sweep no longer records at all (trader 2026-09-26: "Yes stop recording").
+H1_COLOR_TYPES_OFF = frozenset({H1_BLUE_AFTER_RED_TYPE})
 # H1 alerts retired 2026-07-17 (trader: "I get a lot of useless H1 alerts").
 # Measured basis: H1-sourced types were ~1,700 of 4,506 recorded episodes with
 # the worst quick production in the book (h1_ema10_bounce 13% 60-minute WR
@@ -9026,6 +9028,8 @@ class BounceBot(EWrapper, EClient):
         for side in ("long", "short"):
             for symbol in self._h1_color_sweep_symbols(side):
                 for hit in self._evaluate_h1_color_signals(symbol, side, today):
+                    if hit["type"] in H1_COLOR_TYPES_OFF:
+                        continue
                     key = f"{symbol}|{hit['type']}|{hit['signal_bar'].dt:%H:%M}"
                     if key in state["alerted"]:
                         continue

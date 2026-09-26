@@ -1,0 +1,1226 @@
+{
+  "schema": "h1_color_sweep_v1",
+  "feature_version": "h1_color_sweep@2026-09-26",
+  "raw_input_keys": [
+    "cases",
+    "spy",
+    "watch"
+  ],
+  "raw_input_sha256": "cc5eaa6bcef20efd82abbf8ed6f93bf11e81d555b420d7f1bad288a5c769da90",
+  "acquired_at": "2026-09-26T00:00:00-07:00",
+  "universe_version": "synthetic-h1-color-2026-09-26",
+  "provider_assumptions": "Hand-built closed H1 bars, 31 per name, hourly from 2026-07-01 01:30 market-local; the last candle (2026-07-02 07:30) is the one swept. SPY shares the timestamps and is the session clock. No provider is called: get_cached_5m_bars is stubbed and the M5->H1 fold is identity.",
+  "as_of": "2026-07-02T08:30:00-07:00",
+  "expected_keys": [
+    "expected"
+  ],
+  "numeric_tolerance": 0.0,
+  "intentional_difference": "Frozen BEFORE S10a (trader 2026-09-26: 'Yes stop recording'). After S10a the sweep writes no h1_blue_after_red row; every other row stays byte-identical.",
+  "cases": {
+    "BLUE": [
+      {
+        "dt": "2026-07-01T01:30:00",
+        "open": 100.0,
+        "high": 100.1,
+        "low": 99.4,
+        "close": 99.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T02:30:00",
+        "open": 99.5,
+        "high": 99.6,
+        "low": 98.9,
+        "close": 99.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T03:30:00",
+        "open": 99.0,
+        "high": 99.1,
+        "low": 98.4,
+        "close": 98.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T04:30:00",
+        "open": 98.5,
+        "high": 98.6,
+        "low": 97.9,
+        "close": 98.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T05:30:00",
+        "open": 98.0,
+        "high": 98.1,
+        "low": 97.4,
+        "close": 97.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T06:30:00",
+        "open": 97.5,
+        "high": 97.6,
+        "low": 96.9,
+        "close": 97.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T07:30:00",
+        "open": 97.0,
+        "high": 97.1,
+        "low": 96.4,
+        "close": 96.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T08:30:00",
+        "open": 96.5,
+        "high": 96.6,
+        "low": 95.9,
+        "close": 96.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T09:30:00",
+        "open": 96.0,
+        "high": 96.1,
+        "low": 95.4,
+        "close": 95.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T10:30:00",
+        "open": 95.5,
+        "high": 95.6,
+        "low": 94.9,
+        "close": 95.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T11:30:00",
+        "open": 95.0,
+        "high": 95.1,
+        "low": 94.4,
+        "close": 94.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T12:30:00",
+        "open": 94.5,
+        "high": 94.6,
+        "low": 93.9,
+        "close": 94.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T13:30:00",
+        "open": 94.0,
+        "high": 94.1,
+        "low": 93.4,
+        "close": 93.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T14:30:00",
+        "open": 93.5,
+        "high": 93.6,
+        "low": 92.9,
+        "close": 93.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T15:30:00",
+        "open": 93.0,
+        "high": 93.1,
+        "low": 92.4,
+        "close": 92.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T16:30:00",
+        "open": 92.5,
+        "high": 92.6,
+        "low": 91.9,
+        "close": 92.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T17:30:00",
+        "open": 92.0,
+        "high": 92.1,
+        "low": 91.4,
+        "close": 91.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T18:30:00",
+        "open": 91.5,
+        "high": 91.6,
+        "low": 90.9,
+        "close": 91.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T19:30:00",
+        "open": 91.0,
+        "high": 91.1,
+        "low": 90.4,
+        "close": 90.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T20:30:00",
+        "open": 90.5,
+        "high": 90.6,
+        "low": 89.9,
+        "close": 90.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T21:30:00",
+        "open": 90.0,
+        "high": 90.1,
+        "low": 89.4,
+        "close": 89.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T22:30:00",
+        "open": 89.5,
+        "high": 89.6,
+        "low": 88.9,
+        "close": 89.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T23:30:00",
+        "open": 89.0,
+        "high": 89.1,
+        "low": 88.4,
+        "close": 88.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T00:30:00",
+        "open": 88.5,
+        "high": 88.6,
+        "low": 87.9,
+        "close": 88.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T01:30:00",
+        "open": 88.0,
+        "high": 88.1,
+        "low": 87.4,
+        "close": 87.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T02:30:00",
+        "open": 87.5,
+        "high": 87.6,
+        "low": 86.9,
+        "close": 87.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T03:30:00",
+        "open": 87.0,
+        "high": 87.1,
+        "low": 86.4,
+        "close": 86.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T04:30:00",
+        "open": 86.5,
+        "high": 86.6,
+        "low": 85.9,
+        "close": 86.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T05:30:00",
+        "open": 86.0,
+        "high": 86.1,
+        "low": 85.4,
+        "close": 85.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T06:30:00",
+        "open": 85.5,
+        "high": 85.6,
+        "low": 84.9,
+        "close": 85.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T07:30:00",
+        "open": 85.0,
+        "high": 91.2,
+        "low": 84.8,
+        "close": 91.0,
+        "volume": 100000.0
+      }
+    ],
+    "BNCE": [
+      {
+        "dt": "2026-07-01T01:30:00",
+        "open": 100.0,
+        "high": 100.6,
+        "low": 99.9,
+        "close": 100.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T02:30:00",
+        "open": 100.5,
+        "high": 101.1,
+        "low": 100.4,
+        "close": 101.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T03:30:00",
+        "open": 101.0,
+        "high": 101.6,
+        "low": 100.9,
+        "close": 101.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T04:30:00",
+        "open": 101.5,
+        "high": 102.1,
+        "low": 101.4,
+        "close": 102.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T05:30:00",
+        "open": 102.0,
+        "high": 102.6,
+        "low": 101.9,
+        "close": 102.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T06:30:00",
+        "open": 102.5,
+        "high": 103.1,
+        "low": 102.4,
+        "close": 103.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T07:30:00",
+        "open": 103.0,
+        "high": 103.6,
+        "low": 102.9,
+        "close": 103.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T08:30:00",
+        "open": 103.5,
+        "high": 104.1,
+        "low": 103.4,
+        "close": 104.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T09:30:00",
+        "open": 104.0,
+        "high": 104.6,
+        "low": 103.9,
+        "close": 104.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T10:30:00",
+        "open": 104.5,
+        "high": 105.1,
+        "low": 104.4,
+        "close": 105.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T11:30:00",
+        "open": 105.0,
+        "high": 105.6,
+        "low": 104.9,
+        "close": 105.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T12:30:00",
+        "open": 105.5,
+        "high": 106.1,
+        "low": 105.4,
+        "close": 106.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T13:30:00",
+        "open": 106.0,
+        "high": 106.6,
+        "low": 105.9,
+        "close": 106.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T14:30:00",
+        "open": 106.5,
+        "high": 107.1,
+        "low": 106.4,
+        "close": 107.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T15:30:00",
+        "open": 107.0,
+        "high": 107.6,
+        "low": 106.9,
+        "close": 107.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T16:30:00",
+        "open": 107.5,
+        "high": 108.1,
+        "low": 107.4,
+        "close": 108.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T17:30:00",
+        "open": 108.0,
+        "high": 108.6,
+        "low": 107.9,
+        "close": 108.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T18:30:00",
+        "open": 108.5,
+        "high": 109.1,
+        "low": 108.4,
+        "close": 109.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T19:30:00",
+        "open": 109.0,
+        "high": 109.6,
+        "low": 108.9,
+        "close": 109.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T20:30:00",
+        "open": 109.5,
+        "high": 110.1,
+        "low": 109.4,
+        "close": 110.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T21:30:00",
+        "open": 110.0,
+        "high": 110.6,
+        "low": 109.9,
+        "close": 110.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T22:30:00",
+        "open": 110.5,
+        "high": 111.1,
+        "low": 110.4,
+        "close": 111.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T23:30:00",
+        "open": 111.0,
+        "high": 111.6,
+        "low": 110.9,
+        "close": 111.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T00:30:00",
+        "open": 111.5,
+        "high": 112.1,
+        "low": 111.4,
+        "close": 112.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T01:30:00",
+        "open": 112.0,
+        "high": 112.6,
+        "low": 111.9,
+        "close": 112.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T02:30:00",
+        "open": 112.5,
+        "high": 113.1,
+        "low": 112.4,
+        "close": 113.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T03:30:00",
+        "open": 113.0,
+        "high": 113.6,
+        "low": 112.9,
+        "close": 113.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T04:30:00",
+        "open": 113.5,
+        "high": 114.1,
+        "low": 113.4,
+        "close": 114.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T05:30:00",
+        "open": 114.0,
+        "high": 114.6,
+        "low": 113.9,
+        "close": 114.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T06:30:00",
+        "open": 114.5,
+        "high": 115.1,
+        "low": 114.4,
+        "close": 115.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T07:30:00",
+        "open": 115.4,
+        "high": 115.7,
+        "low": 112.9,
+        "close": 115.6,
+        "volume": 100000.0
+      }
+    ],
+    "DUMP": [
+      {
+        "dt": "2026-07-01T01:30:00",
+        "open": 100.0,
+        "high": 100.6,
+        "low": 99.9,
+        "close": 100.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T02:30:00",
+        "open": 100.5,
+        "high": 101.1,
+        "low": 100.4,
+        "close": 101.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T03:30:00",
+        "open": 101.0,
+        "high": 101.6,
+        "low": 100.9,
+        "close": 101.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T04:30:00",
+        "open": 101.5,
+        "high": 102.1,
+        "low": 101.4,
+        "close": 102.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T05:30:00",
+        "open": 102.0,
+        "high": 102.6,
+        "low": 101.9,
+        "close": 102.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T06:30:00",
+        "open": 102.5,
+        "high": 103.1,
+        "low": 102.4,
+        "close": 103.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T07:30:00",
+        "open": 103.0,
+        "high": 103.6,
+        "low": 102.9,
+        "close": 103.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T08:30:00",
+        "open": 103.5,
+        "high": 104.1,
+        "low": 103.4,
+        "close": 104.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T09:30:00",
+        "open": 104.0,
+        "high": 104.6,
+        "low": 103.9,
+        "close": 104.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T10:30:00",
+        "open": 104.5,
+        "high": 105.1,
+        "low": 104.4,
+        "close": 105.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T11:30:00",
+        "open": 105.0,
+        "high": 105.6,
+        "low": 104.9,
+        "close": 105.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T12:30:00",
+        "open": 105.5,
+        "high": 106.1,
+        "low": 105.4,
+        "close": 106.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T13:30:00",
+        "open": 106.0,
+        "high": 106.6,
+        "low": 105.9,
+        "close": 106.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T14:30:00",
+        "open": 106.5,
+        "high": 107.1,
+        "low": 106.4,
+        "close": 107.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T15:30:00",
+        "open": 107.0,
+        "high": 107.6,
+        "low": 106.9,
+        "close": 107.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T16:30:00",
+        "open": 107.5,
+        "high": 108.1,
+        "low": 107.4,
+        "close": 108.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T17:30:00",
+        "open": 108.0,
+        "high": 108.6,
+        "low": 107.9,
+        "close": 108.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T18:30:00",
+        "open": 108.5,
+        "high": 109.1,
+        "low": 108.4,
+        "close": 109.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T19:30:00",
+        "open": 109.0,
+        "high": 109.6,
+        "low": 108.9,
+        "close": 109.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T20:30:00",
+        "open": 109.5,
+        "high": 110.1,
+        "low": 109.4,
+        "close": 110.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T21:30:00",
+        "open": 110.0,
+        "high": 110.6,
+        "low": 109.9,
+        "close": 110.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T22:30:00",
+        "open": 110.5,
+        "high": 111.1,
+        "low": 110.4,
+        "close": 111.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-01T23:30:00",
+        "open": 111.0,
+        "high": 111.6,
+        "low": 110.9,
+        "close": 111.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T00:30:00",
+        "open": 111.5,
+        "high": 112.1,
+        "low": 111.4,
+        "close": 112.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T01:30:00",
+        "open": 112.0,
+        "high": 112.6,
+        "low": 111.9,
+        "close": 112.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T02:30:00",
+        "open": 112.5,
+        "high": 113.1,
+        "low": 112.4,
+        "close": 113.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T03:30:00",
+        "open": 113.0,
+        "high": 113.6,
+        "low": 112.9,
+        "close": 113.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T04:30:00",
+        "open": 113.5,
+        "high": 114.1,
+        "low": 113.4,
+        "close": 114.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T05:30:00",
+        "open": 114.0,
+        "high": 114.6,
+        "low": 113.9,
+        "close": 114.5,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T06:30:00",
+        "open": 114.5,
+        "high": 115.1,
+        "low": 114.4,
+        "close": 115.0,
+        "volume": 100000.0
+      },
+      {
+        "dt": "2026-07-02T07:30:00",
+        "open": 115.0,
+        "high": 115.2,
+        "low": 108.8,
+        "close": 109.0,
+        "volume": 100000.0
+      }
+    ]
+  },
+  "spy": [
+    {
+      "dt": "2026-07-01T01:30:00",
+      "open": 400.0,
+      "high": 400.2,
+      "low": 399.9,
+      "close": 400.1,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T02:30:00",
+      "open": 400.1,
+      "high": 400.3,
+      "low": 400.0,
+      "close": 400.2,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T03:30:00",
+      "open": 400.2,
+      "high": 400.4,
+      "low": 400.1,
+      "close": 400.3,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T04:30:00",
+      "open": 400.3,
+      "high": 400.5,
+      "low": 400.2,
+      "close": 400.4,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T05:30:00",
+      "open": 400.4,
+      "high": 400.6,
+      "low": 400.3,
+      "close": 400.5,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T06:30:00",
+      "open": 400.5,
+      "high": 400.7,
+      "low": 400.4,
+      "close": 400.6,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T07:30:00",
+      "open": 400.6,
+      "high": 400.8,
+      "low": 400.5,
+      "close": 400.7,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T08:30:00",
+      "open": 400.7,
+      "high": 400.9,
+      "low": 400.6,
+      "close": 400.8,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T09:30:00",
+      "open": 400.8,
+      "high": 401.0,
+      "low": 400.7,
+      "close": 400.9,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T10:30:00",
+      "open": 400.9,
+      "high": 401.1,
+      "low": 400.8,
+      "close": 401.0,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T11:30:00",
+      "open": 401.0,
+      "high": 401.2,
+      "low": 400.9,
+      "close": 401.1,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T12:30:00",
+      "open": 401.1,
+      "high": 401.3,
+      "low": 401.0,
+      "close": 401.2,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T13:30:00",
+      "open": 401.2,
+      "high": 401.4,
+      "low": 401.1,
+      "close": 401.3,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T14:30:00",
+      "open": 401.3,
+      "high": 401.5,
+      "low": 401.2,
+      "close": 401.4,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T15:30:00",
+      "open": 401.4,
+      "high": 401.6,
+      "low": 401.3,
+      "close": 401.5,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T16:30:00",
+      "open": 401.5,
+      "high": 401.7,
+      "low": 401.4,
+      "close": 401.6,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T17:30:00",
+      "open": 401.6,
+      "high": 401.8,
+      "low": 401.5,
+      "close": 401.7,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T18:30:00",
+      "open": 401.7,
+      "high": 401.9,
+      "low": 401.6,
+      "close": 401.8,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T19:30:00",
+      "open": 401.8,
+      "high": 402.0,
+      "low": 401.7,
+      "close": 401.9,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T20:30:00",
+      "open": 401.9,
+      "high": 402.1,
+      "low": 401.8,
+      "close": 402.0,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T21:30:00",
+      "open": 402.0,
+      "high": 402.2,
+      "low": 401.9,
+      "close": 402.1,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T22:30:00",
+      "open": 402.1,
+      "high": 402.3,
+      "low": 402.0,
+      "close": 402.2,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-01T23:30:00",
+      "open": 402.2,
+      "high": 402.4,
+      "low": 402.1,
+      "close": 402.3,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-02T00:30:00",
+      "open": 402.3,
+      "high": 402.5,
+      "low": 402.2,
+      "close": 402.4,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-02T01:30:00",
+      "open": 402.4,
+      "high": 402.6,
+      "low": 402.3,
+      "close": 402.5,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-02T02:30:00",
+      "open": 402.5,
+      "high": 402.7,
+      "low": 402.4,
+      "close": 402.6,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-02T03:30:00",
+      "open": 402.6,
+      "high": 402.8,
+      "low": 402.5,
+      "close": 402.7,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-02T04:30:00",
+      "open": 402.7,
+      "high": 402.9,
+      "low": 402.6,
+      "close": 402.8,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-02T05:30:00",
+      "open": 402.8,
+      "high": 403.0,
+      "low": 402.7,
+      "close": 402.9,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-02T06:30:00",
+      "open": 402.9,
+      "high": 403.1,
+      "low": 402.8,
+      "close": 403.0,
+      "volume": 100000.0
+    },
+    {
+      "dt": "2026-07-02T07:30:00",
+      "open": 403.0,
+      "high": 403.3,
+      "low": 402.8,
+      "close": 403.1,
+      "volume": 100000.0
+    }
+  ],
+  "watch": {
+    "long": [
+      "BLUE",
+      "BNCE"
+    ],
+    "short": [
+      "DUMP",
+      "BLUE"
+    ]
+  },
+  "expected": {
+    "hits": [
+      {
+        "symbol": "BLUE",
+        "side": "long",
+        "type": "h1_blue_after_red"
+      },
+      {
+        "symbol": "BNCE",
+        "side": "long",
+        "type": "h1_ema10_bounce"
+      },
+      {
+        "symbol": "DUMP",
+        "side": "short",
+        "type": "h1_green_to_yellow"
+      }
+    ],
+    "records": [
+      {
+        "call": "candidate_event",
+        "kind": "confirmed",
+        "symbol": "BLUE",
+        "side": "long",
+        "levels": {
+          "h1_blue_after_red": 88.74877503068488
+        },
+        "bounce_candle": {
+          "time": "20260702  07:30:00",
+          "open": 85.0,
+          "high": 91.2,
+          "low": 84.8,
+          "close": 91.0
+        },
+        "current_candle": {
+          "time": "20260702  07:30:00",
+          "open": 85.0,
+          "high": 91.2,
+          "low": 84.8,
+          "close": 91.0
+        },
+        "reason": "H1 color signal: blue reclaim candle after a red H1: close 91.00 back above the 15-EMA 88.75 and 20-SMA 89.58 (H1 candle 07:30)",
+        "event_id": "BLUE_long_h1_blue_after_red"
+      },
+      {
+        "call": "register_outcome",
+        "symbol": "BLUE",
+        "side": "long",
+        "levels": {
+          "h1_blue_after_red": 88.74877503068488
+        },
+        "bounce_candle": {
+          "time": "20260702  08:30:00",
+          "open": 85.0,
+          "high": 91.2,
+          "low": 84.8,
+          "close": 91.0
+        },
+        "current_candle": {
+          "time": "20260702  08:30:00",
+          "open": 85.0,
+          "high": 91.2,
+          "low": 84.8,
+          "close": 91.0
+        },
+        "event_id": "BLUE_long_h1_blue_after_red"
+      },
+      {
+        "call": "alert_tier",
+        "event_id": "BLUE_long_h1_blue_after_red",
+        "tier": "B"
+      },
+      {
+        "call": "log_symbol",
+        "symbol": "BLUE",
+        "message": "LEARNING_ONLY [H1 retired]: [B-TIER] H1 BLUE AFTER RED BLUE (long): blue reclaim candle after a red H1: close 91.00 back above the 15-EMA 88.75 and 20-SMA 89.58 on the 07:30 H1 candle."
+      },
+      {
+        "call": "candidate_event",
+        "kind": "confirmed",
+        "symbol": "BNCE",
+        "side": "long",
+        "levels": {
+          "h1_ema10_bounce": 113.27364791407717
+        },
+        "bounce_candle": {
+          "time": "20260702  07:30:00",
+          "open": 115.4,
+          "high": 115.7,
+          "low": 112.9,
+          "close": 115.6
+        },
+        "current_candle": {
+          "time": "20260702  07:30:00",
+          "open": 115.4,
+          "high": 115.7,
+          "low": 112.9,
+          "close": 115.6
+        },
+        "reason": "H1 color signal: green H1 pierced the 10-EMA 113.27 and closed back above it (H1 candle 07:30)",
+        "event_id": "BNCE_long_h1_ema10_bounce"
+      },
+      {
+        "call": "register_outcome",
+        "symbol": "BNCE",
+        "side": "long",
+        "levels": {
+          "h1_ema10_bounce": 113.27364791407717
+        },
+        "bounce_candle": {
+          "time": "20260702  08:30:00",
+          "open": 115.4,
+          "high": 115.7,
+          "low": 112.9,
+          "close": 115.6
+        },
+        "current_candle": {
+          "time": "20260702  08:30:00",
+          "open": 115.4,
+          "high": 115.7,
+          "low": 112.9,
+          "close": 115.6
+        },
+        "event_id": "BNCE_long_h1_ema10_bounce"
+      },
+      {
+        "call": "alert_tier",
+        "event_id": "BNCE_long_h1_ema10_bounce",
+        "tier": "B"
+      },
+      {
+        "call": "log_symbol",
+        "symbol": "BNCE",
+        "message": "LEARNING_ONLY [H1 retired]: [B-TIER] H1 10-EMA BOUNCE BNCE (long): green H1 pierced the 10-EMA 113.27 and closed back above it on the 07:30 H1 candle."
+      },
+      {
+        "call": "candidate_event",
+        "kind": "confirmed",
+        "symbol": "DUMP",
+        "side": "short",
+        "levels": {
+          "h1_green_to_yellow": 110.425
+        },
+        "bounce_candle": {
+          "time": "20260702  07:30:00",
+          "open": 115.0,
+          "high": 115.2,
+          "low": 108.8,
+          "close": 109.0
+        },
+        "current_candle": {
+          "time": "20260702  07:30:00",
+          "open": 115.0,
+          "high": 115.2,
+          "low": 108.8,
+          "close": 109.0
+        },
+        "reason": "H1 color signal: green H1 failed straight to yellow: close 109.00 broke below the 15-EMA 111.25 and 20-SMA 110.42 (H1 candle 07:30)",
+        "event_id": "DUMP_short_h1_green_to_yellow"
+      },
+      {
+        "call": "register_outcome",
+        "symbol": "DUMP",
+        "side": "short",
+        "levels": {
+          "h1_green_to_yellow": 110.425
+        },
+        "bounce_candle": {
+          "time": "20260702  08:30:00",
+          "open": 115.0,
+          "high": 115.2,
+          "low": 108.8,
+          "close": 109.0
+        },
+        "current_candle": {
+          "time": "20260702  08:30:00",
+          "open": 115.0,
+          "high": 115.2,
+          "low": 108.8,
+          "close": 109.0
+        },
+        "event_id": "DUMP_short_h1_green_to_yellow"
+      },
+      {
+        "call": "alert_tier",
+        "event_id": "DUMP_short_h1_green_to_yellow",
+        "tier": "B"
+      },
+      {
+        "call": "log_symbol",
+        "symbol": "DUMP",
+        "message": "LEARNING_ONLY [H1 retired]: [B-TIER] H1 GREEN->YELLOW FADE DUMP (short): green H1 failed straight to yellow: close 109.00 broke below the 15-EMA 111.25 and 20-SMA 110.42 on the 07:30 H1 candle."
+      }
+    ]
+  }
+}
