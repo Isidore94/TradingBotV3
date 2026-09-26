@@ -998,8 +998,11 @@ def test_the_drain_re_checks_the_gate_and_drops_what_no_longer_qualifies(
         lambda entry, *_a, **kw: real_gate_ok(entry, now, not_before=kw.get("not_before")),
     )
     # The panel stamps the flip from its own clock, so freeze that too.
-    monkeypatch.setattr(
-        "ui.panels.alert_center_panel.datetime",
+    from alert_center_support import patch_alert_center_global
+
+    patch_alert_center_global(
+        monkeypatch,
+        "datetime",
         type("D", (datetime,), {"now": staticmethod(lambda: now)}),
     )
 
@@ -1056,8 +1059,11 @@ def _flip_harness(monkeypatch, tmp_path, clock):
         "ui.panels.alert_center_panel.QTimer",
         type("T", (), {"singleShot": staticmethod(lambda _ms, fn: fn())}),
     )
-    monkeypatch.setattr(
-        "ui.panels.alert_center_panel.datetime",
+    from alert_center_support import patch_alert_center_global
+
+    patch_alert_center_global(
+        monkeypatch,
+        "datetime",
         type("D", (datetime,), {"now": staticmethod(lambda: clock["now"])}),
     )
     real_gate_ok = core.pending_pick_gate_ok
