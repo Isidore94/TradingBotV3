@@ -227,6 +227,16 @@ S1 and keep the order. The two 500 MB logs are read with
   six-week bearish-rotation window (08-14 to 09-24); the April-June bull window is in
   the backfill the trader still owes, and S4's tape-relative search with `spy_trend` /
   `side_aligned_day` is the test that turns "shorts work now" into "shorts work when".
+- **F19 The shorts pay even when SPY rises** (the trader's observation, 2026-09-26). SPY
+  08-14 -> 09-25 is -0.6% inside a 761-776 chop, +1.3% in the last week. Splitting the
+  5-session outcomes by SPY's own move over the same window: when SPY rose more than 1%,
+  SHORT rows still returned +0.42% raw (62% positive, +2.05% vs SPY, n=2,121) while LONG
+  rows returned +0.59% raw with 48% positive and -0.95% vs SPY (n=2,262). When SPY fell
+  more than 1%: shorts +2.71% raw, longs -0.75%. In up windows the best shorts were
+  `previous_avwape_bounce` +2.4% raw (n=43), `avwap_retest_followthrough` +1.5% (n=108),
+  `favorite_zone_watch` +1.0% (n=163); `avwap_breakout` short lost -0.8%. A rotation tape:
+  the index floats, the names the scan flags short keep breaking down, and the names it
+  flags long lag the index. The setup is the signal; the index is not.
 
 **Findings, swings (D1):**
 - **F9 Short families carried the last six weeks.** Session-horizon outcomes 08-14 to
