@@ -16,6 +16,7 @@ MIXIN_MODULES: tuple[str, ...] = (
     "ui.panels.alert_center.wall",
     "ui.panels.alert_center.any_bounce",
     "ui.panels.alert_center.h1",
+    "ui.panels.alert_center.pullback",
 )
 
 
