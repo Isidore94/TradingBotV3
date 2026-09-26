@@ -41,6 +41,8 @@ from project_paths import (
     get_local_setting,
     save_local_setting,
 )
+import alert_show_filter
+import longs_market_gate
 import sector_exclusion
 from review_events import record_review_event, setup_context_fields
 from pick_feedback import reviewed_symbols_today
@@ -697,6 +699,7 @@ class MasterAvwapPanel(QWidget):
         self._build_points_toggle()
         self._build_show_vetoed_toggle()
         self._build_hide_sector_toggle()
+        self._build_longs_off_toggle()
         self._build_overflow_menu()
         self._column_profile = ""
         self._build_layout()
@@ -718,6 +721,8 @@ class MasterAvwapPanel(QWidget):
         self.report_poll_timer.timeout.connect(self._check_decision_day_roll)
         # The Oil & Gas / Real Estate switch is shared; follow a flip made elsewhere.
         self.report_poll_timer.timeout.connect(self.sync_sector_switch)
+        # Longs off: the worker reads the market verdict once a day; this tick picks it up.
+        self.report_poll_timer.timeout.connect(self._poll_longs_gate)
         # P1-6 6d: the timing chips re-read on the same 30 s tick (worker only).
         self.report_poll_timer.timeout.connect(self._start_entry_timing_read)
         start_staggered(self.report_poll_timer, 43_000)
@@ -756,6 +761,8 @@ class MasterAvwapPanel(QWidget):
         strip.addWidget(self.points_toggle)
         strip.addWidget(self.show_vetoed_toggle)
         strip.addWidget(self.hide_sector_toggle)
+        strip.addWidget(self.longs_off_toggle)
+        strip.addWidget(self.longs_off_banner)
         strip.addWidget(self.search_input, 1)
         strip.addWidget(self.data_as_of_label)
         strip.addWidget(self.overflow_button)
@@ -891,6 +898,76 @@ class MasterAvwapPanel(QWidget):
             self.hide_sector_toggle.blockSignals(False)
             self.proxy.set_filters(hide_excluded_sectors=stored)
         self._refresh_hide_sector_label()
+
+    def _build_longs_off_toggle(self) -> None:
+        """Trader, 2026-09-26: longs only in a good market (display only, shared switch)."""
+        self._longs_gate = longs_market_gate.snapshot()
+        self.longs_off_toggle = QCheckBox(longs_market_gate.LABEL)
+        self.longs_off_toggle.setToolTip(
+            "Hides LONG rows while the market is not on a long's side: your regime first, "
+            "else SPY above a rising 20-day. Focus names, your typed names, names you hold "
+            "and leader-pullback / post-earnings-drift rows always show. An unknown market "
+            "shows longs. The scan still tracks every row."
+        )
+        self.longs_off_toggle.setChecked(longs_market_gate.enabled())
+        self.longs_off_toggle.toggled.connect(self._on_longs_off_toggled)
+        self.longs_off_banner = QLabel("")
+        self.longs_off_banner.setObjectName("SwingLongsOffBanner")
+        self.longs_off_banner.setVisible(False)
+        self._apply_longs_gate()
+
+    def _long_row_exempt(self, row) -> bool:
+        """Focus and typed names always show."""
+        symbol = str(getattr(row, "symbol", "") or "").strip().upper()
+        if not symbol:
+            return True
+        if self.focus_service is not None and self.focus_service.is_focus(symbol):
+            return True
+        return symbol in alert_show_filter.typed_symbols()
+
+    def _apply_longs_gate(self) -> None:
+        gate = self._longs_gate if self.longs_off_toggle.isChecked() else None
+        self.proxy.set_filters(longs_gate=gate, longs_exempt=self._long_row_exempt)
+        self._refresh_longs_off_label()
+
+    def _refresh_longs_off_label(self) -> None:
+        on = self.longs_off_toggle.isChecked()
+        text = longs_market_gate.banner_text(self._longs_gate) if on else ""
+        hidden = self.proxy.hidden_longs() if text else 0
+        label = longs_market_gate.LABEL
+        self.longs_off_toggle.setText(f"{label} ({hidden})" if hidden else label)
+        self.longs_off_banner.setText(text)
+        if self.longs_off_banner.parent() is not None:
+            self.longs_off_banner.setVisible(bool(text))
+
+    def longs_off_banner_text(self) -> str:
+        return self.longs_off_banner.text()
+
+    def _on_longs_off_toggled(self, checked: bool) -> None:
+        try:
+            longs_market_gate.set_enabled(bool(checked))
+        except Exception as exc:  # noqa: BLE001 - a preference never costs the table
+            note_swallowed("longs-off setting write failed", exc)
+        self._apply_longs_gate()
+
+    def set_longs_gate(self, verdict) -> None:
+        """A new cached market verdict (or the shared switch moved elsewhere)."""
+        stored = longs_market_gate.enabled()
+        if stored != self.longs_off_toggle.isChecked():
+            self.longs_off_toggle.blockSignals(True)
+            self.longs_off_toggle.setChecked(stored)
+            self.longs_off_toggle.blockSignals(False)
+        elif verdict is self._longs_gate:
+            return
+        self._longs_gate = verdict
+        self._apply_longs_gate()
+
+    def _poll_longs_gate(self) -> None:
+        try:
+            longs_market_gate.refresh_async()
+            self.set_longs_gate(longs_market_gate.snapshot())
+        except Exception as exc:  # noqa: BLE001 - unknown shows
+            note_swallowed("longs-off verdict not refreshed", exc)
 
     def _rejected_today_symbols(self) -> frozenset[str]:
         """Today's swing-side rejects, from the snapshot the ★/✕ columns read."""
@@ -1168,6 +1245,8 @@ class MasterAvwapPanel(QWidget):
 
     def _repaint_focus_stars(self) -> None:
         """Repaint the table because Focus membership moved. Presentation only."""
+        if self.proxy.longs_gate is not None:
+            self._apply_longs_gate()  # Focus is a longs-off exemption
         self.table.viewport().update()
 
     def refresh_decisions(self) -> None:
@@ -2005,6 +2084,7 @@ class MasterAvwapPanel(QWidget):
         self._refresh_bucket_filter(rows)
         self._apply_filters()
         self._refresh_hide_sector_label()
+        self._refresh_longs_off_label()
         self.stack.setCurrentWidget(self.table if rows else self.empty_state)
         if rows:
             # Rows arrive pre-ranked (conviction bucket, then tracker-led

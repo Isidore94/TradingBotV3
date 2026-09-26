@@ -8,6 +8,7 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyMod
 _NO_PARENT = QModelIndex()
 from PySide6.QtGui import QColor
 
+import longs_market_gate
 from sector_exclusion import is_excluded, symbol_is_excluded
 from swing_headline import OUTCOME_KIND_FAVORABLE_DIRECTION, headline_labels
 from ui import theme
@@ -470,6 +471,11 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
         # Trader, 2026-09-23: hide Oil & Gas / Real Estate rows (display only).
         # Off on a bare proxy; the panel sets it from the shared switch.
         self.hide_excluded_sectors: bool = False
+        # Longs off in a bad market (trader 2026-09-26, display only): the day's
+        # `longs_market_gate.Verdict` while the switch is on, else None (shows all).
+        # `longs_exempt(row)` = the panel's Focus / typed-name exemptions.
+        self.longs_gate = None
+        self.longs_exempt = None
         self.setSortRole(SORT_ROLE)
         self.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
 
@@ -485,6 +491,8 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
         rejected_symbols=_UNSET,
         show_rejected: bool | None = None,
         hide_excluded_sectors: bool | None = None,
+        longs_gate=_UNSET,
+        longs_exempt=_UNSET,
     ) -> None:
         """Update only the filters named by the caller.
 
@@ -517,6 +525,10 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
             self.show_rejected = bool(show_rejected)
         if hide_excluded_sectors is not None:
             self.hide_excluded_sectors = bool(hide_excluded_sectors)
+        if longs_gate is not _UNSET:
+            self.longs_gate = longs_gate
+        if longs_exempt is not _UNSET:
+            self.longs_exempt = longs_exempt
         self.endFilterChange()
 
     def hidden_rejected(self) -> int:
@@ -541,6 +553,26 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
             return 0
         return sum(1 for row in model.rows() if _row_is_excluded_sector(row))
 
+    def hides_long(self, row) -> bool:
+        """True when longs off hides this swing row (exempt rows and open positions show)."""
+        gate = self.longs_gate
+        if gate is None or not gate.longs_off or not longs_market_gate.is_long(getattr(row, "side", "")):
+            return False
+        exempt = longs_market_gate.row_is_exempt(getattr(row, "raw", None))
+        if not exempt and self.longs_exempt is not None:
+            try:
+                exempt = bool(self.longs_exempt(row))
+            except Exception:  # noqa: BLE001 - an unreadable exemption shows the row
+                exempt = True
+        return longs_market_gate.hides_long(gate, row.side, row.symbol, exempt=exempt)
+
+    def hidden_longs(self) -> int:
+        """How many source rows longs off is holding back right now."""
+        model = self.sourceModel()
+        if model is None or self.longs_gate is None:
+            return 0
+        return sum(1 for row in model.rows() if self.hides_long(row))
+
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         model = self.sourceModel()
         if model is None:
@@ -557,6 +589,8 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
         ):
             return False
         if self.hide_excluded_sectors and _row_is_excluded_sector(row):
+            return False
+        if self.longs_gate is not None and self.hides_long(row):
             return False
         if row.score is not None and row.score < self.min_score:
             return False

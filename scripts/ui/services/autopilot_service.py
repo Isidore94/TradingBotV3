@@ -1816,6 +1816,25 @@ class AutopilotService(QObject):
 
         threading.Thread(target=worker, name="autopilot-evening", daemon=True).start()
 
+    @staticmethod
+    def _hide_longs_off(payload: dict, typed_longs) -> dict:
+        """Longs off in a bad market: today's cached verdict (worker only; reads on a miss)."""
+        import longs_market_gate
+
+        if not longs_market_gate.enabled():
+            return payload
+        verdict = longs_market_gate.current()
+        if not verdict.longs_off:
+            return payload
+        exempt = set(typed_longs or ())
+        try:
+            from focus_picks import load_focus_map
+
+            exempt |= set(load_focus_map().get("long") or ())
+        except Exception:  # noqa: BLE001 - unread Focus exempts nothing more
+            logging.debug("Focus names unread for the longs-off filter.", exc_info=True)
+        return core.hide_longs_off(payload, verdict=verdict, exempt_symbols=exempt)
+
     def _push_swing_picks(self, payload: dict, now: datetime | None = None) -> None:
         """Phone the best swings on each VERIFIED Away publish.
 
@@ -1853,6 +1872,12 @@ class AutopilotService(QObject):
                 return  # digest still published; the phone just stays quiet
             if not push_notify.push_configured():
                 return
+            # The "Longs off" line goes to the phone once per day, not every hour.
+            today = (now or datetime.now()).date().isoformat()
+            longs_off = bool(payload.get("longs_off_line"))
+            if longs_off and getattr(self, "_longs_off_pushed_day", "") == today:
+                payload = {k: v for k, v in payload.items() if k != "longs_off_line"}
+                longs_off = False
             built = core.build_swing_push(payload)
             if built is None:
                 return  # nothing qualified; silence beats an hourly "none"
@@ -1860,6 +1885,8 @@ class AutopilotService(QObject):
             push_notify.send_push(
                 title, message, priority="default", tags="chart_with_upwards_trend"
             )
+            if longs_off:
+                self._longs_off_pushed_day = today
         except Exception as exc:
             self._log(f"Swing picks push failed: {exc}")
 
@@ -2086,6 +2113,10 @@ class AutopilotService(QObject):
                 payload = core.hide_show_filtered_alerts(payload)
             except Exception:
                 logging.exception("Away report Show filter failed; publishing unfiltered.")
+            try:
+                payload = self._hide_longs_off(payload, longs)
+            except Exception:
+                logging.exception("Away report longs-off filter failed; publishing unfiltered.")
             try:
                 payload = core.hide_sector_names(payload)
             except Exception:

@@ -40,6 +40,7 @@ from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 import alert_show_filter
 import avwape_side
 import focus_adoption_gate
+import longs_market_gate
 import opening_regime_history
 import prev_day_gate
 import sector_exclusion
@@ -4117,8 +4118,11 @@ def build_swing_push(payload: Mapping[str, Any], *, limit: int = 5) -> tuple[str
         if len(symbols) >= max(1, int(limit)):
             break
     roster_lines = format_roster_lines(payload.get("bucket_roster"))
-    if not lines and not roster_lines:
+    longs_off_line = str(payload.get("longs_off_line") or "").strip()
+    if not lines and not roster_lines and not longs_off_line:
         return None
+    if longs_off_line:
+        lines.insert(0, longs_off_line)
     if payload.get("swing_data_current") is not True:
         lines.append("! not from the current session - check the digest")
     if symbols:
@@ -4228,6 +4232,61 @@ def hide_show_filtered_alerts(payload: Mapping[str, Any]) -> dict[str, Any]:
     out["alert_symbols"] = [symbol for _line, symbol in kept]
     out["show_hidden_count"] = len(removed)
     out["show_hidden_new"] = sum(1 for is_new in removed.values() if is_new)
+    return out
+
+
+def hide_longs_off(
+    payload: Mapping[str, Any],
+    *,
+    verdict: longs_market_gate.Verdict | None,
+    exempt_symbols: Iterable[str] = (),
+) -> dict[str, Any]:
+    """Longs off in a bad market (display only): drop LONG swing picks and roster names.
+
+    One ``longs_off_line`` replaces them. Exempt: ``exempt_symbols`` (typed and Focus
+    names), open positions and leader_pullback / post_earnings_drift rows. An unknown
+    or working market leaves the payload alone. ``longs_off_hidden_count`` = names removed.
+    """
+    out = dict(payload)
+    text = longs_market_gate.banner_text(verdict)
+    if not text:
+        return out
+    exempt = {str(symbol or "").strip().upper() for symbol in exempt_symbols or ()}
+    removed: set[str] = set()
+
+    def hides(symbol: Any, raw: Any = None) -> bool:
+        key = str(symbol or "").strip().upper()
+        if key in exempt or longs_market_gate.row_is_exempt(raw):
+            return False
+        if longs_market_gate.hides_long(verdict, "LONG", key):
+            removed.add(key)
+            return True
+        return False
+
+    picks = out.get("swing_picks")
+    if isinstance(picks, (list, tuple)):
+        out["swing_picks"] = [
+            pick
+            for pick in picks
+            if not isinstance(pick, Mapping)
+            or not longs_market_gate.is_long(pick.get("side"))
+            or not hides(pick.get("symbol"), pick.get("raw"))
+        ]
+    roster = out.get("bucket_roster")
+    if isinstance(roster, Mapping):
+        out["bucket_roster"] = {
+            bucket: (
+                {
+                    side: [s for s in (names or []) if side != "LONG" or not hides(s)]
+                    for side, names in sides.items()
+                }
+                if isinstance(sides, Mapping)
+                else sides
+            )
+            for bucket, sides in roster.items()
+        }
+    out["longs_off_line"] = text + (f" - {len(removed)} long name(s) hidden" if removed else "")
+    out["longs_off_hidden_count"] = len(removed)
     return out
 
 
@@ -4417,6 +4476,9 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         swing_lines = ["No qualified current-session swing opportunity."]
     if swing_data_line:
         swing_lines = [*swing_lines, swing_data_line]
+    longs_off_line = str(payload.get("longs_off_line") or "").strip()
+    if longs_off_line:
+        swing_lines = [longs_off_line, *swing_lines]
     sector_line = sector_exclusion.hidden_line(int(payload.get("sector_hidden_count") or 0))
     show_text = alert_show_filter.hidden_text(
         int(payload.get("show_hidden_count") or 0), int(payload.get("show_hidden_new") or 0)

@@ -68,6 +68,7 @@ from chart_watch import (
 )
 import focus_adoption_gate
 import alert_show_filter
+import longs_market_gate
 import regime_pause_hold
 import sector_exclusion
 from regime_pause_focus import day_bias, focus_side_for
@@ -715,6 +716,22 @@ class AlertCenterPanel(
         )
         self.first30_input.setChecked(alert_show_filter.first30_enabled())
         self.first30_input.toggled.connect(self._on_show_filter_changed)
+        # Longs off in a bad market (trader 2026-09-26): hide LONG rows while the
+        # cached market verdict says no. Focus, typed, watches and open positions show.
+        self._longs_gate = longs_market_gate.snapshot()
+        self.longs_off_input = QCheckBox(longs_market_gate.LABEL)
+        self.longs_off_input.setObjectName("AlertShowLongsOff")
+        self.longs_off_input.setToolTip(
+            "Hide LONG alerts while the market is not on a long's side: your regime "
+            "first, else SPY above a rising 20-day. Focus names, your typed names, "
+            "armed watches and names you hold always show. An unknown market shows "
+            "longs. Hidden rows are still recorded."
+        )
+        self.longs_off_input.setChecked(longs_market_gate.enabled())
+        self.longs_off_input.toggled.connect(self._on_show_filter_changed)
+        self.longs_off_banner = QLabel("")
+        self.longs_off_banner.setObjectName("AlertLongsOffBanner")
+        self.longs_off_banner.setVisible(False)
 
         clear_button = QPushButton("Clear")
         clear_button.clicked.connect(self.clear_feed)
@@ -1055,6 +1072,8 @@ class AlertCenterPanel(
         # Focus picks are auto-watched for every D1 event kind - no arming
         # needed. Rides the same 60s cadence as the armed D1 watches.
         self._d1_watch_timer.timeout.connect(self._poll_focus_d1_interest)
+        # The longs-off verdict: the worker reads it once a day; this tick only picks it up.
+        self._d1_watch_timer.timeout.connect(self._poll_longs_gate)
         start_staggered(self._d1_watch_timer, 77_000)
         # A3: the fade check. Deliberately NOT on the 60s tick above - it walks
         # every Focus entry and asks a calendar, which has no business inside a
@@ -1114,6 +1133,8 @@ class AlertCenterPanel(
             self.hide_sector_input,
             self.show_filter_input,
             self.first30_input,
+            self.longs_off_input,
+            self.longs_off_banner,
             None,  # the stretch
             self.ignored_button,
             clear_button,
@@ -1125,6 +1146,7 @@ class AlertCenterPanel(
         layout.setSpacing(6)
         layout.addLayout(controls)
         layout.addWidget(splitter, 1)
+        self._refresh_longs_off_banner()
 
         # The compact desk (Settings > Desk layout): the chart pane over the
         # tab stack as a collapsible drawer, and the Movers column handed to
@@ -1750,15 +1772,59 @@ class AlertCenterPanel(
         return str(self.show_filter_input.currentData() or alert_show_filter.DEFAULT_MODE)
 
     def show_filter_active(self) -> bool:
-        """True when the Show mode or the first-30 switch can hide a row."""
-        return self.show_filter_mode() != alert_show_filter.ALL or self.first30_input.isChecked()
+        """True when the Show mode, the first-30 switch or longs off can hide a row."""
+        return (
+            self.show_filter_mode() != alert_show_filter.ALL
+            or self.first30_input.isChecked()
+            or self.longs_off_active()
+        )
+
+    def longs_off_active(self) -> bool:
+        """The longs-off switch is on and today's cached verdict says no (unknown = off)."""
+        gate = self._longs_gate
+        return bool(self.longs_off_input.isChecked() and gate is not None and gate.longs_off)
+
+    def longs_off_banner_text(self) -> str:
+        return longs_market_gate.banner_text(self._longs_gate) if self.longs_off_input.isChecked() else ""
+
+    def _refresh_longs_off_banner(self) -> None:
+        text = self.longs_off_banner_text()
+        self.longs_off_banner.setText(text)
+        self.longs_off_banner.setVisible(bool(text))
+
+    def set_longs_gate(self, verdict) -> None:
+        """A new cached market verdict: redraw by diff when it changes what hides."""
+        if verdict is self._longs_gate:
+            return
+        self._longs_gate = verdict
+        self._refresh_longs_off_banner()
+        self._show_verdicts.clear()
+        self._sync_feed()
+        self.showFilterChanged.emit()
+        self._emit_feed_status()
+
+    def _poll_longs_gate(self) -> None:
+        """Timer tick: start the worker read when stale, then pick up the cache."""
+        try:
+            longs_market_gate.refresh_async()
+            self.set_longs_gate(longs_market_gate.snapshot())
+        except Exception:  # noqa: BLE001 - unknown shows
+            logging.debug("Longs-off verdict not refreshed.", exc_info=True)
+
+    def _longs_off_for(self, alert: BounceAlert) -> bool:
+        """True when longs off hides this row (a name with an open position shows)."""
+        if not self.longs_off_active():
+            return False
+        return longs_market_gate.hides_long(self._longs_gate, alert.side, alert.symbol)
 
     def _on_show_filter_changed(self, *_args) -> None:
         try:
             alert_show_filter.set_mode(self.show_filter_mode())
             alert_show_filter.set_first30_enabled(self.first30_input.isChecked())
+            longs_market_gate.set_enabled(self.longs_off_input.isChecked())
         except Exception:  # noqa: BLE001 - a preference never costs the feed
             logging.debug("Show filter setting not saved.", exc_info=True)
+        self._refresh_longs_off_banner()
         self._show_verdicts.clear()
         self._rebuild_feed()
         self.showFilterChanged.emit()
@@ -1887,7 +1953,7 @@ class AlertCenterPanel(
         return (hidden, grade == alert_show_filter.setup_grades.NEW)
 
     def show_filter_reason(self, alert: BounceAlert, grade: str | None = None) -> str:
-        """Why the row hides: `first30`, the Show mode, or "" (shows)."""
+        """Why the row hides: `longs_off`, `first30`, the Show mode, or "" (shows)."""
         if not self.show_filter_active():
             return ""
         if not str(alert.symbol or "").strip() or not self._is_m5_review_alert(alert):
@@ -1904,6 +1970,7 @@ class AlertCenterPanel(
             first30=self.first30_input.isChecked(),
             when=alert_show_filter.alert_time(alert),
             bypass=self._bypass_grades,
+            longs_off=self._longs_off_for(alert),
         )
 
     def show_filter_hides(self, alert: BounceAlert) -> bool:
