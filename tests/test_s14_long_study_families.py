@@ -119,7 +119,8 @@ def test_session_horizon_rows_carry_the_study_families():
     )
     tags = {row["symbol"]: row["study_families"] for row in built.rows}
     assert tags == {"TECH": LPL, "BNCE": BBL, "LOW1": LPL, "SHRT": "", "NORS": ""}
-    assert sho.SESSION_HORIZON_OUTCOME_COLUMNS[-1] == "study_families"
+    # The p9 strength shadow column appends after it.
+    assert sho.SESSION_HORIZON_OUTCOME_COLUMNS[-2:] == ["study_families", "strength_filter"]
 
 
 def test_a_history_without_the_inputs_tags_nothing():

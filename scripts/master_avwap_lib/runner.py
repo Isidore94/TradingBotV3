@@ -26,6 +26,7 @@ from setup_permutations import ma_distance_columns as permutation_ma_distance_co
 from setup_permutations import regime_columns as permutation_regime_columns
 from setup_permutations import sector_rank_columns as permutation_sector_rank_columns
 from setup_permutations import setup_age_columns as permutation_setup_age_columns
+from setup_permutations import strength_columns as permutation_strength_columns
 from setup_permutations import trendline_columns as permutation_trendline_columns
 from tracker_store import record_write_failure as record_setup_tracker_write_failure
 from tracker_store import record_write_success as record_setup_tracker_write_success
@@ -3287,6 +3288,12 @@ def _run_master_impl(
         )
     except Exception:
         logging.debug("Setup permutation regime columns skipped for this scan.", exc_info=True)
+
+    # p9: the strength shadow filter on every LONG row (its MA distance + the regime columns); appended, never scored.
+    try:
+        permutation_strength_columns(feature_rows)
+    except Exception:
+        logging.debug("Setup permutation strength column skipped for this scan.", exc_info=True)
 
     # p9 long setups: leader pullbacks and the post-earnings drift, to their own file; reads, never edits, a row.
     try:

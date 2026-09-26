@@ -191,7 +191,7 @@ def test_the_d1_columns_never_read_a_bar_after_the_scan_date():
 def test_the_new_scan_columns_append_after_every_older_column():
     # P8b appends its setup-age column after the P11 set; S6 its trendline columns after that; then S15,
     # then the S15 item 2 regime columns.
-    newest = (*sp.S15_COLUMNS, *sp.REGIME_COLUMNS)
+    newest = (*sp.S15_COLUMNS, *sp.REGIME_COLUMNS, *sp.STRENGTH_COLUMNS)
     assert sp.SCAN_ROW_COLUMNS[-len(newest):] == newest
     older = sp.SCAN_ROW_COLUMNS[:-len(newest)]
     assert older[-len(sp.TRENDLINE_COLUMNS):] == sp.TRENDLINE_COLUMNS
@@ -580,7 +580,7 @@ def test_the_scan_writes_the_p11_columns(scan_runs):
     row = stamped["history"][-1]
     header = list(row)
     # S6, then S15, then the regime columns append after the setup age.
-    tail = len(sp.TRENDLINE_COLUMNS) + len(sp.S15_COLUMNS) + len(sp.REGIME_COLUMNS)
+    tail = len(sp.TRENDLINE_COLUMNS) + len(sp.S15_COLUMNS) + len(sp.REGIME_COLUMNS) + len(sp.STRENGTH_COLUMNS)
     assert header[-len(sp.D1_HISTORY_COLUMNS) - 1 - tail:-1 - tail] == list(sp.D1_HISTORY_COLUMNS)
     assert header[-1 - tail] == sp.SETUP_AGE_COLUMN
     for column in ("perm_atr14_pctile_252", "perm_low_52w_dist_atr", "perm_closes_right_of_level_5",

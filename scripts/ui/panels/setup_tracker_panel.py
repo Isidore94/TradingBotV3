@@ -1640,7 +1640,9 @@ class SetupTrackerPanel(QFrame):
         self.tape_side_label.setText(
             setup_grades.side_by_tape_line(tape if isinstance(tape, dict) else None)
         )
-        self.study_family_label.setText("\n".join(str(line) for line in data.get("study_family_lines") or ()))
+        study_lines = [*(data.get("study_family_lines") or ()), *([data["strength_filter_line"]]
+                                                                  if data.get("strength_filter_line") else [])]
+        self.study_family_label.setText("\n".join(str(line) for line in study_lines))
         self.long_leaders_label.setText("\n".join(str(line) for line in data.get("long_leader_lines") or ()))
 
         rendered: dict[str, tuple] = {}
@@ -2064,6 +2066,14 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 - one line, never the tracker
         logging.debug("Setup Tracker study family lines could not be built", exc_info=True)
         study_family_lines = []
+    # p9: the strength shadow's kept-vs-dropped line, shown under the study lines. Display only.
+    try:
+        from ui.services import working_lately_service
+
+        strength_filter_line = working_lately_service.read_strength_filter_line()
+    except Exception:  # noqa: BLE001 - one line, never the tracker
+        logging.debug("Setup Tracker strength shadow line could not be built", exc_info=True)
+        strength_filter_line = ""
     # p9: the Long leaders section and its grades. Display only; one line on failure.
     try:
         from ui.services import working_lately_service
@@ -2108,6 +2118,7 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
         "ranked": ranked,
         "side_by_tape": side_by_tape,
         "study_family_lines": study_family_lines,
+        "strength_filter_line": strength_filter_line,
         "long_leader_lines": long_leader_lines,
         "exit_model_sentence": exit_model_review.review_sentence(exit_models),
         "regime_sentence": regime_grades.status_sentence(regime_payload),

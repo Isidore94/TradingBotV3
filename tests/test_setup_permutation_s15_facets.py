@@ -221,8 +221,8 @@ def test_a_row_without_the_columns_keys_as_before():
 
 
 def test_the_columns_are_appended_last_and_perm_prefixed():
-    # The S15 item 2 regime columns append after these.
-    tail = len(sp.REGIME_COLUMNS)
+    # The S15 item 2 regime columns, then the p9 strength shadow, append after these.
+    tail = len(sp.REGIME_COLUMNS) + len(sp.STRENGTH_COLUMNS)
     assert sp.SCAN_ROW_COLUMNS[-len(sp.S15_COLUMNS) - tail:-tail] == sp.S15_COLUMNS
     assert all(column.startswith("perm_") for column in sp.S15_COLUMNS)
 
@@ -292,7 +292,7 @@ def scan_runs(tmp_path_factory):
 def test_the_scan_writes_the_s15_columns(scan_runs):
     _parity, stamped, _plain = scan_runs
     row = stamped["history"][-1]
-    tail = len(sp.REGIME_COLUMNS)  # the regime columns append after S15
+    tail = len(sp.REGIME_COLUMNS) + len(sp.STRENGTH_COLUMNS)  # the regime, then the strength shadow, append after S15
     assert list(row)[-len(sp.S15_COLUMNS) - tail:-tail] == list(sp.S15_COLUMNS)
     # The child's bars: close ~60-112, volume 1M, last bar yesterday (completed).
     assert 50.0 < float(row[DV]) < 125.0

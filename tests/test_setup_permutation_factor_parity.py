@@ -124,6 +124,8 @@ def _history(hooks_on: bool) -> pd.DataFrame:
             spy = [(as_of, 400.0 + k) for k in range(30)]
             sp.regime_columns(feature_rows, trader_segment={"regime": "range", "session_count": s_index + 1},
                               spy_closes=spy, closes_by_symbol=closes, as_of=as_of)
+            # p9: the strength shadow on every LONG row, after the regime columns (as runner.py does).
+            sp.strength_columns(feature_rows)
             spc.stamp_scan_rows(feature_rows, session=session, context=spc.SessionContext())
             for row in feature_rows:
                 row.pop("weekly_ema8_hold_weeks", None)  # not in the runner's CSV allowlist
@@ -149,12 +151,17 @@ def _export(tmp_path: Path, frame: pd.DataFrame) -> dict[str, bytes]:
 CLOCK_COLUMNS = ("generated_at", "updated_at", "exported_at")
 
 
-def _without_clock(data: bytes) -> bytes:
+#: p9: the horizon export's one shadow column that carries a hook value by design (the scan row's
+#: `perm_strength_filter`); every OTHER byte must still match, and it is checked on its own.
+SHADOW_EXPORT_COLUMNS = ("strength_filter",)
+
+
+def _without_clock(data: bytes, columns: tuple[str, ...] = CLOCK_COLUMNS) -> bytes:
     lines = data.decode("utf-8").splitlines()
     if not lines:
         return data
     header = lines[0].split(",")
-    drop = {index for index, name in enumerate(header) if name in CLOCK_COLUMNS}
+    drop = {index for index, name in enumerate(header) if name in columns}
     if not drop:
         return data
     out = io.StringIO()
@@ -174,15 +181,26 @@ def test_scan_factor_and_tier_exports_are_byte_identical_with_the_hooks_on(tmp_p
     assert set(stamped["perm_trendline_direction"].dropna()) == {"up", "down"}
     assert stamped[list(sp.S15_COLUMNS)].notna().all().all()
     assert stamped[list(sp.REGIME_COLUMNS)].notna().all().all()
+    longs = stamped["side"].eq("LONG")
+    assert set(stamped.loc[longs, "perm_strength_filter"]) == {"no"}  # 3 over the 50-day is under 2 ATR here
+    assert stamped.loc[~longs, "perm_strength_filter"].isna().all()
     assert stamped["permutation_rule_version"].eq(sp.PERMUTATION_RULE_VERSION).all()
     off = _export(tmp_path / "off", plain)
     on = _export(tmp_path / "on", stamped)
     # Matured horizons really are in the fixture, so the leaderboard is not empty.
     assert off["observations"].count(b"\n") > 100
     assert off["leaderboard"].count(b"\n") > 1
-    # Byte-identical apart from the export's own wall-clock stamp column.
+    # Byte-identical apart from the export's own wall-clock stamp column (and, on the horizons,
+    # the p9 strength shadow column, checked below).
     for name in off:
+        if name == "horizons":
+            assert _without_clock(on[name], SHADOW_EXPORT_COLUMNS) == _without_clock(off[name], SHADOW_EXPORT_COLUMNS)
+            continue
         assert on[name] == off[name], f"{name} changed when the 4a columns were added"
+    shadow = {kind: [row["strength_filter"] for row in csv.DictReader(io.StringIO(data["horizons"].decode()))]
+              for kind, data in (("on", on), ("off", off))}
+    assert set(shadow["off"]) == {""}
+    assert set(shadow["on"]) == {"", "no"}  # blank on the shorts
 
 
 def test_no_scan_factor_row_gains_a_factor_from_the_4a_columns():

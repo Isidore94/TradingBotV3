@@ -80,6 +80,9 @@ if DISABLE:
     if hasattr(runner, "permutation_regime_columns"):
         runner.permutation_regime_columns = lambda *args, **kwargs: 0
         runner.load_permutation_trader_regime = lambda *args, **kwargs: None
+    # p9: the strength shadow column is switched off the same way.
+    if hasattr(runner, "permutation_strength_columns"):
+        runner.permutation_strength_columns = lambda *args, **kwargs: 0
 
 
 def _sessions(count):

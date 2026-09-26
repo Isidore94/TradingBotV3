@@ -12,7 +12,7 @@ names, "Ya that's the post earnings play".
   `STRONG_LOOKBACK_SESSIONS` (a 52-week high, a `RUN_MIN_PCT` run inside
   `RUN_MAX_SESSIONS`, or 63-day RS vs SPY in the universe's top decile), now pulling
   back: `UNDER_AVWAP_PCT` under the VWAP anchored at the swing high OR back at the 21/50
-  EMA, `OFF_HIGH_PCT` off that high, above its 200-day, on lighter volume than the run.
+  EMA, `OFF_HIGH_PCT` off that high, above its 100-day and 200-day, on lighter volume than the run.
   A sector in the top RS third or a ``top_pattern_tracking`` row is a leader (a bonus).
 * ``post_earnings_drift`` - an earnings gap up of `PED_GAP_MIN_ATR`+ ATR that closed in
   the upper half of the gap day, now `PED_SESSIONS` sessions later and holding above the
@@ -38,7 +38,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from indicators.atr import wilder_atr
 from research_warehouse.retest_entry import RETEST_ATR_FRACTION, limit_fill
-from setup_permutations import UNKNOWN, _sector_third, long_regime_working
+from setup_permutations import UNKNOWN, _sector_third, long_regime_working, spy_trend, strength_filter_verdict
 from universe_builder import DEFAULT_MIN_AVG_VOLUME as MIN_AVG_VOLUME
 from universe_builder import DEFAULT_MIN_MARKET_CAP_M as MIN_MARKET_CAP_M
 
@@ -80,9 +80,14 @@ UNDER_AVWAP_PCT = (3.0, 12.0)
 #: ... or the close within `EMA_NEAR_ATR` ATR of one of these EMAs.
 EMA_LENGTHS = (21, 50)
 EMA_NEAR_ATR = 0.5
-#: And this % off the swing high (25% is a HARD cap: deeper lost -2.6% vs SPY), above this SMA.
+#: And this % off the swing high (25% is a HARD cap: deeper lost -2.6% vs SPY).
 OFF_HIGH_PCT = (8.0, 25.0)
-TREND_SMA = 200
+#: The last completed close must be above EVERY one of these SMAs (the 50-day is NOT one: a
+#: pullback to the 50 is allowed). The trader, 2026-09-26: "Just requires above 100-200". The SMA
+#: study (2026-09-26): above all three lifted the leader pullback to +1.6-1.9% vs SPY in every
+#: SPY-rising window. A missing SMA is no setup.
+TREND_SMAS = (100, 200)
+TREND_SMA = max(TREND_SMAS)
 #: The run's volume = the mean of this many sessions ending at the swing high.
 RUN_VOLUME_SESSIONS = 20
 #: ATR length when the scan row has no ATR of its own (the scan's `atr20`).
@@ -317,8 +322,7 @@ def leader_pullback(
         return None
     closes = [bar["close"] for bar in bars]
     close = closes[-1]
-    sma = sum(closes[-TREND_SMA:]) / TREND_SMA
-    if close <= sma:
+    if any(close <= sum(closes[-length:]) / length for length in TREND_SMAS):
         return None
     recent = range(len(bars) - SWING_HIGH_LOOKBACK, len(bars))
     high_index = max(recent, key=lambda index: (bars[index]["high"], index))
@@ -361,7 +365,7 @@ def leader_pullback(
     where.extend(f"at the {length} EMA" for length in near_emas)
     reasons = [*strong, *leaders,
                f"pulling back {off_high:.1f}% off the high, " + " and ".join(where),
-               "above the 200-day", "lighter volume on the pullback"]
+               "above the 100-day and the 200-day", "lighter volume on the pullback"]
     # A 52-week high qualifies a name but is never a rank input (long lab: <0.7 pt).
     strength = len(ranked_strong) + len(leaders)
     return {
@@ -434,6 +438,25 @@ def post_earnings_drift(
         "reasons": reasons,
         **_plan(close, atr_value, gap_bar["low"], "gap-day low"),
     }
+
+
+# --- the strength shadow (p9; changes nothing live)
+
+#: The strength shadow's SMA (`setup_permutations.strength_filter_verdict` holds the rule).
+STRENGTH_SMA = 50
+
+
+def strength_shadow(bars: Sequence[Mapping[str, Any]], atr: Any, spy_vs_sma20_pct: Any,
+                    spy_sma20_slope_pct: Any) -> dict[str, Any]:
+    """``{strength_sma50_atr, strength_filter}`` for one row: (close - SMA50) / ATR on the completed
+    bars and the shadow verdict (yes / no / unknown). Never read by the gate, the rank or promotion."""
+    closes = [bar["close"] for bar in bars]
+    atr_value = _num(atr)
+    distance = None
+    if len(closes) >= STRENGTH_SMA and atr_value is not None and atr_value > 0:
+        distance = round((closes[-1] - sum(closes[-STRENGTH_SMA:]) / STRENGTH_SMA) / atr_value, 4)
+    return {"strength_sma50_atr": distance,
+            "strength_filter": strength_filter_verdict(distance, spy_vs_sma20_pct, spy_sma20_slope_pct)}
 
 
 # --- one scan
@@ -509,6 +532,9 @@ def build_rows(
         return {"as_of": "", "market_working": working, "market_rule": rule, "rows": []}
     spy = _clean_bars(spy_bars) or []
     spy_closes = {bar["date"]: bar["close"] for bar in spy}
+    # SPY vs a rising 20-day for the strength shadow; a stale SPY is unknown.
+    spy_vs, spy_slope = (spy_trend([bar["close"] for bar in spy])
+                         if spy and spy[-1]["date"] == as_of_text else (None, None))
     rows_by_symbol: dict[str, list[Mapping[str, Any]]] = {}
     for row in feature_rows:
         rows_by_symbol.setdefault(_text(row.get("symbol")).upper(), []).append(row)
@@ -546,7 +572,8 @@ def build_rows(
             if row is not None:
                 # `setup_family` names the setup so `longs_market_gate.row_is_exempt` knows the row waits on its own.
                 out.append({"symbol": symbol, "as_of": as_of_text, "sector": sector,
-                            "setup_family": row["setup"], **row})
+                            "setup_family": row["setup"], **row,
+                            **strength_shadow(bars, row["atr"], spy_vs, spy_slope)})
     return {"as_of": as_of_text, "market_working": working, "market_rule": rule,
             "rows": apply_market_gate(rank(out), working, rule)}
 
