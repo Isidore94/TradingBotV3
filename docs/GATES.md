@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #283 Long study families (S14): after the next scan the Setup Tracker shows two study lines under the tape line, `leader_pullback_long` and `band_bounce_leader_long`, each with a raw line (SPY-up windows) first and a vs-SPY line second; Health lists the traded names the scan never sees (today DRAM, SPCX) [trader]
 - #281 Swing path facts (S15): after the next night the ledger has a `swing_path_facts` row that is ok, and `C:\TradingBotData\data\runtime\swing_path_facts.csv` exists with horizon 20 rows [lead]
 - #279 Regime journal (S16 item 1): the trader answers the Mentor's weekly regime question once (or uses 'Regime...' on the card) and confirms the three past regimes; `trade_journal.sqlite3` table `structural_regime` then holds bull_run 2026-03-01, weekly_hh_then_compression 2026-06-01 and bear_channel_lower_highs 2026-08-01 (or the dates the trader edited), all `source='trader'` [trader]
 - #278 Shadow setups (S7), shadow only: after the next session `C:\TradingBotData\m5_shadow_setups.jsonl` has rows from the four engines (`pd_level_break_hold`, `vwap_reclaim_after_flush` if SPY read bullish_strong, `m5_compression_break`, `trendline_break`), each with event_id, side, level, entry, stop and a zoned bar time, and no live alert, score, Show row or phone line changed [lead]
