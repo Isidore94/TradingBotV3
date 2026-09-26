@@ -136,6 +136,7 @@ from ui.panels.alert_center.pullback import PullbackWatchMixin
 from ui.panels.alert_center.h1 import H1RetesterMixin
 from ui.panels.alert_center.any_bounce import AnyBounceWatchMixin
 from ui.panels.alert_center.wall import WallGateMixin
+from ui.panels.alert_center import gates
 from ui.panels.alert_center.gates import (  # noqa: F401 - re-exported for callers and tests
     _D1_DEVELOPING_PREFIXES,
     _D1_PUSH_LABELS,
@@ -1623,12 +1624,58 @@ class AlertCenterPanel(
         self.tabs.setCurrentIndex(self._journal_tab_index)
         self._journal_text.setFocus()
 
+    def _alert_is_loud_cached(self, alert: BounceAlert) -> bool:
+        """`alert_is_loud` for one alert, remembered: it reads only the alert's own text."""
+        cache = self.__dict__.setdefault("_loud_cache", {})
+        cached = cache.get(id(alert))
+        if cached is not None and cached[0] is alert:
+            return cached[1]
+        loud = gates.alert_is_loud(alert)
+        if len(cache) > MAX_FEED_ITEMS * 8:
+            cache.clear()
+        cache[id(alert)] = (alert, loud)
+        return loud
+
+    def _feed_status_counts(self) -> tuple[int, int, int, int]:
+        """`(loud, hidden rows, hidden New, hidden first30)` in ONE pass over the backing list."""
+        loud = 0
+        active = self.show_filter_active()
+        first30_on = active and self.first30_input.isChecked()
+        mode = self._min_tier_mode()
+        hide_sectors = sector_exclusion.hide_enabled()
+        sector_memo: dict = {}
+        first30 = alert_show_filter.REASON_FIRST30
+        verdicts: list = []
+        first30_verdicts: list = []
+        for alert in self._alerts:
+            is_focus = self._alert_has_focus_privilege(alert)
+            if is_focus or self._alert_is_loud_cached(alert):
+                loud += 1
+            if not active or alert.symbol in self._ignored_symbols:
+                continue
+            if is_chart_watch_alert(alert):
+                # A chart-watch row is exempt per alert, so it never reads or feeds the memo.
+                sector_hidden = self._sector_hidden(alert, hide_sectors)
+            else:
+                sector_hidden = sector_memo.get(alert.symbol)
+                if sector_hidden is None:
+                    sector_hidden = self._sector_hidden(alert, hide_sectors)
+                    sector_memo[alert.symbol] = sector_hidden
+            if sector_hidden or not alert_passes_feed_gate(alert, mode, is_focus=is_focus):
+                continue
+            key = self._feed_row_key(alert)
+            hidden, is_new = self.show_filter_verdict(alert)
+            verdicts.append((key, hidden, is_new))
+            if first30_on:
+                first30_verdicts.append(
+                    (key, hidden and self.show_filter_reason(alert) == first30, False)
+                )
+        rows, new = alert_show_filter.count_hidden(verdicts) if active else (0, 0)
+        first30_rows = alert_show_filter.count_hidden(first30_verdicts)[0] if first30_on else 0
+        return loud, rows, new, first30_rows
+
     def _emit_feed_status(self) -> None:
-        loud = sum(
-            1
-            for item in self._alerts
-            if alert_should_sound(item, is_focus=self._alert_has_focus_privilege(item))
-        )
+        loud, hidden_rows, hidden_new, first30_rows = self._feed_status_counts()
         # The held count makes the prev-day gate visible: silence should never
         # be indistinguishable from a dead feed.
         held = (
@@ -1637,7 +1684,7 @@ class AlertCenterPanel(
             else ""
         )
         shown_hidden = alert_show_filter.hidden_text(
-            *self.show_filter_hidden_counts(), first30=self.show_filter_first30_count()
+            hidden_rows, hidden_new, first30=first30_rows
         )
         shown_hidden = f" {shown_hidden}." if shown_hidden else ""
         self.statusChanged.emit(
