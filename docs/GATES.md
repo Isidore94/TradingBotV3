@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #292 Momentum universe: after the first universe rebuild on this code (the after-close wrap-up or the Rebuild button; Monday pre-market if the lists were rebuilt over the weekend), the job ledger's `universe_rebuild` row has a `momentum_scanner` stage with N names (N > 0, at most 300) and a `momentum_scanner` block with `refreshed: true` and `elapsed_s` under 90; `universe_all.txt` does not grow from it; the next Master scan's `[run_master timing] TOTAL` stays within 25% of that slot's last-week median [lead]
 - #290 PROVEN retired (P14): on the next session no alert says PROVEN; an alert that matched a proven segment says `grade 1:1 <X>`; with Min tier 'S tier / top grade only', grade-B `regime_pause_rs` long rows still show while no grade A exists [trader]
 - #289 Shadow S9 (S9): after 10 sessions with the shadow recorded, compare shadow S9 vs live tier by bracket outcome (+1R before -1R) per tier from `intraday_bounces.csv` `shadow_s9_tier` joined to the outcome log; promote or drop with the numbers [lead]
 - #288 April-September permutations (S15 item 1): the Setup keys page shows the April-September report with April-July rows (swing selection window starts 2026-03-17) [trader]
