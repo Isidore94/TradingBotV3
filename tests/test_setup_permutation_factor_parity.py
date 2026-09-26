@@ -53,7 +53,15 @@ def _daily_ohlc(close: float, n: int) -> list[dict]:
 
 def _history(hooks_on: bool) -> pd.DataFrame:
     rows = []
-    for s_index, session in enumerate(_sessions(30)):
+    sessions = _sessions(30)
+    # P8b: a tracker view that first saw every symbol/side/family on the first session.
+    tracker = {"setups": {
+        f"{symbol}:{side}:{family}": {"symbol": symbol, "side": side, "setup_family": family,
+                                      "scan_date": sessions[0].isoformat()}
+        for symbol in SYMBOLS for side in ("LONG", "SHORT")
+        for family in ("avwap_band_bounce", "post_earnings_candle_break")
+    }}
+    for s_index, session in enumerate(sessions):
         feature_rows = []
         for n, symbol in enumerate(SYMBOLS):
             close = 50.0 + n * 3 + s_index * (0.4 if n % 2 else -0.3) + (s_index % 4) * 0.2
@@ -89,6 +97,7 @@ def _history(hooks_on: bool) -> pd.DataFrame:
                 row["weekly_ema8_hold_weeks"] = n  # on the in-memory feature row only
             feature_rows.append(row)
         if hooks_on:
+            sp.setup_age_columns(feature_rows, tracker, [day.isoformat() for day in sessions[: s_index + 1]])
             spc.stamp_scan_rows(feature_rows, session=session, context=spc.SessionContext())
             for row in feature_rows:
                 row.pop("weekly_ema8_hold_weeks", None)  # not in the runner's CSV allowlist
@@ -134,6 +143,7 @@ def test_scan_factor_and_tier_exports_are_byte_identical_with_the_hooks_on(tmp_p
     stamped = _history(hooks_on=True)
     assert set(sp.SCAN_ROW_COLUMNS) <= set(stamped.columns)
     assert stamped[list(sp.D1_HISTORY_COLUMNS)].notna().all().all()
+    assert stamped[sp.SETUP_AGE_COLUMN].notna().all()
     assert stamped["permutation_rule_version"].eq(sp.PERMUTATION_RULE_VERSION).all()
     off = _export(tmp_path / "off", plain)
     on = _export(tmp_path / "on", stamped)

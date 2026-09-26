@@ -728,6 +728,20 @@ def _d1_zone_arm(row, ctx, side):
     return f"zone_arm_{arm_side.lower()}_z{zone}"
 
 
+# --- P8b: setup age from the setup tracker's first-seen record (appended `perm_` column)
+
+
+@facet("setup_age", "age", in_label=False)
+def _setup_age(row, ctx, side):
+    # Completed sessions since the tracker first saw this symbol/side/family; blank = no record.
+    value = _num(row.get("perm_setup_age_sessions"))
+    if value is None or value < 0 or value != int(value):
+        return UNKNOWN
+    if value == 0:
+        return "setup_age_0"
+    return _band(value, (3.0, 6.0, 11.0), ("setup_age_1_2", "setup_age_3_5", "setup_age_6_10", "setup_age_11_plus"))
+
+
 # --- stamping (4a): the scan-row columns and the honest input view
 
 #: `perm_dist_<ma>_atr` columns the enrichment step writes: (close - ma) / ATR20. The `perm_`
@@ -745,8 +759,11 @@ D1_HISTORY_COLUMNS = (
     "perm_level_respect_20",
     "perm_d1_zone_arm",
 )
-#: Every column P1-4 appends to `d1_features_history.csv`, in order (4a first, then P11).
-SCAN_ROW_COLUMNS = (*MA_DISTANCE_COLUMNS, WEEKLY_STREAK_COLUMN, *STAMP_COLUMNS, *D1_HISTORY_COLUMNS)
+#: P8b: completed sessions since the setup tracker first saw this symbol/side/family.
+SETUP_AGE_COLUMN = "perm_setup_age_sessions"
+#: Every column P1-4 appends to `d1_features_history.csv`, in order (4a, then P11, then P8b).
+SCAN_ROW_COLUMNS = (*MA_DISTANCE_COLUMNS, WEEKLY_STREAK_COLUMN, *STAMP_COLUMNS, *D1_HISTORY_COLUMNS,
+                    SETUP_AGE_COLUMN)
 
 _WEEKLY_TOP_PATTERN_FLAGS = (
     "top_pattern_weekly_ema15_hold",
@@ -906,6 +923,74 @@ def d1_history_columns(
         zone = zone_arm.get("zone") if zone_arm else None
         out["perm_d1_zone_arm"] = f"{arm_side}_z{zone}" if arm_side != UNKNOWN and zone in (1, 2, 3) else "not_armed"
     return out
+
+
+# --- P8b: the setup-age column (pure; the scan passes the tracker view and bar dates it holds)
+
+
+def _setup_key(symbol: Any, side: Any, family: Any) -> tuple[str, str, str] | None:
+    symbol_text = (_text(symbol) or "").upper()
+    side_text = _side(side)
+    family_text = (_text(family) or "").lower()
+    if not symbol_text or side_text == UNKNOWN or not family_text:
+        return None
+    return symbol_text, side_text, family_text
+
+
+def setup_first_seen_index(tracker_payload: Any) -> dict[tuple[str, str, str], list[str]]:
+    """(symbol, side, setup family) -> sorted scan dates the setup tracker recorded for it."""
+    setups = tracker_payload.get("setups") if isinstance(tracker_payload, Mapping) else None
+    index: dict[tuple[str, str, str], set[str]] = {}
+    for setup in setups.values() if isinstance(setups, Mapping) else ():
+        if not isinstance(setup, Mapping):
+            continue
+        key = _setup_key(setup.get("symbol"), setup.get("side"), setup.get("setup_family"))
+        scanned = _date(setup.get("scan_date"))
+        if key is None or scanned is None:
+            continue
+        index.setdefault(key, set()).add(scanned.isoformat())
+    return {key: sorted(dates) for key, dates in index.items()}
+
+
+def setup_age_sessions(scan_dates: list[str] | None, as_of: Any, session_dates: list[str]) -> int | None:
+    """Sessions in ``session_dates`` after the first scan date on or before ``as_of``, up to ``as_of``.
+
+    None when no scan date is known at ``as_of`` or the calendar does not reach back to it.
+    """
+    as_of_day = _date(as_of)
+    if as_of_day is None or not scan_dates or not session_dates:
+        return None
+    as_of_text = as_of_day.isoformat()
+    known = [day for day in scan_dates if day <= as_of_text]
+    if not known:
+        return None
+    first = known[0]
+    if first < session_dates[0]:
+        return None
+    return sum(1 for day in session_dates if first < day <= as_of_text)
+
+
+def setup_age_columns(feature_rows: Any, tracker_payload: Any, session_dates: Any) -> int:
+    """Write ``perm_setup_age_sessions`` on each scan row in place (None = unknown). Returns rows aged.
+
+    ``session_dates`` is the session calendar (ISO dates), or a callable giving it for one symbol
+    (the scan passes each symbol's own daily-bar dates).
+    """
+    index = setup_first_seen_index(tracker_payload)
+    aged = 0
+    for row in feature_rows or ():
+        if not isinstance(row, dict):
+            continue
+        key = _setup_key(row.get("symbol"), row.get("side"), row.get("setup_family"))
+        scan_dates = index.get(key) if key else None
+        age = None
+        if scan_dates:
+            days = session_dates(key[0]) if callable(session_dates) else session_dates
+            calendar = sorted({str(day)[:10] for day in days or () if _date(day) is not None})
+            age = setup_age_sessions(scan_dates, row.get("last_trade_date"), calendar)
+        row[SETUP_AGE_COLUMN] = age
+        aged += age is not None
+    return aged
 
 
 # --- P11: M5-native facets over one alert's own inputs (group ``m5``)
