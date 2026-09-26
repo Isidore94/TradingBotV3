@@ -7,6 +7,7 @@ from ui.panels.master_market_prep_panel import MasterMarketPrepPanel
 from ui.panels.move_forensics_panel import MoveForensicsPanel
 from ui.panels.price_alerts_panel import PriceAlertsPanel
 from ui.panels.research_results_panel import ResearchResultsPanel
+from ui.panels.retest_study_panel import RetestStudyPanel
 from ui.panels.setup_docs_panel import SetupDocsPanel
 from ui.panels.setup_keys_panel import SetupKeysPanel
 from ui.panels.setup_tracker_panel import SetupTrackerPanel
@@ -39,6 +40,7 @@ class ResearchPanel(QFrame):
         self.ticker_lookup_panel = TickerLookupPanel()
         self.warehouse_readout_panel = WarehouseReadoutPanel()
         self.setup_keys_panel = SetupKeysPanel()
+        self.retest_study_panel = RetestStudyPanel()
         self.price_alerts_panel = PriceAlertsPanel(
             price_alert_service,
             read_only=price_alert_read_only,
@@ -53,6 +55,8 @@ class ResearchPanel(QFrame):
         tabs.addTab(self.price_alerts_panel, "Price Alerts")
         tabs.addTab(self.warehouse_readout_panel, "Research Warehouse")
         tabs.addTab(self.setup_keys_panel, "Setup keys")
+        # S8 (2026-09-26): the shadow retest-entry study, appended last.
+        tabs.addTab(self.retest_study_panel, "Retest entry")
         # Held so the Working-lately strip's click-through can raise the one
         # tab it points at (ST6.4). A named reference rather than a walk over
         # `findChildren`, which would find the first QTabWidget on the page and
@@ -113,3 +117,4 @@ class ResearchPanel(QFrame):
         # R1: it grew a reader thread in P4 B1 and was not on this list - the
         # exact failure the comment above already describes, one panel later.
         self.setup_tracker_panel.shutdown()
+        self.retest_study_panel.shutdown()
