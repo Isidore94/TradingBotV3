@@ -215,6 +215,8 @@ NIGHT_BUDGET_FLAG = "night_budget"
 MODEL_SLOT_PRIORITY = (
     "daily_digest",
     "day_review_narration",
+    # R1 (2026-09-26): the show reads the story, so it is protected right after it.
+    "day_review_show",
     "market_story_narration",
     "setup_research",
     "journal_enrichment",
@@ -1019,6 +1021,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         cohorts,
         day_review_narration,
         day_review_facts,
+        day_review_show_night,
         digest,
         econ_brief_narration,
         enrichment,
@@ -1450,6 +1453,21 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description=(
                 "Grounded overnight story of one session, plus the rolling D1 "
                 "view of what the trader believes lately"
+            ),
+            max_attempts=3,
+            uses_model=True,
+        ),
+        # R1 (2026-09-26), inside stage 2 DIRECTLY after `day_review_narration`:
+        # it reads that night's verified story beside the day pack. A rejected
+        # deck is degraded and keeps the last good file; the desk then shows facts.
+        JobSlot(
+            name="day_review_show",
+            goal="coaching",
+            run=day_review_show_night.run_day_review_show,
+            reserve_minutes=5.0,
+            description=(
+                "The Day Review Show: 6-10 grounded slides for one session, "
+                "numbers printed from the pack"
             ),
             max_attempts=3,
             uses_model=True,

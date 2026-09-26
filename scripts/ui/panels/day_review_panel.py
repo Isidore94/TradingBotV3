@@ -749,6 +749,8 @@ class DayReviewPanel(QFrame):
         self._retired_walks: list[Any] = []
         self._walk_ready = False
         self._walk_banner_dismissed: set[str] = set()
+        #: R1: the open Day Review Show overlay, or None.
+        self._show: Any = None
         #: The saved-clue layers on the name and trade charts (`clue_marker.ClueFlow`).
         self._name_clue_flow: Any = None
         self._trade_clue_flow: Any = None
@@ -865,6 +867,13 @@ class DayReviewPanel(QFrame):
         self.walk_button.setToolTip("A short guided walk through this day, one card at a time.")
         self.walk_button.clicked.connect(self.open_walk)
         self.walk_button.setEnabled(False)
+        # R1: the Day Review Show - the day as slides over the whole window.
+        self.show_button = QPushButton("Show")
+        self.show_button.setToolTip(
+            "Your day as slides. Right/Space next, Left back, A auto, Esc close."
+        )
+        self.show_button.clicked.connect(self.open_show)
+        self.show_button.setEnabled(False)
         # The closed-day nudge: a small line on the page, never a popup.
         self.walk_banner = QFrame()
         self.walk_banner.setObjectName("DayReviewWalkBanner")
@@ -1567,6 +1576,7 @@ class DayReviewPanel(QFrame):
         glance_row.setContentsMargins(0, 0, 0, 0)
         glance_row.addWidget(self.glance_strip, 1)
         glance_row.addWidget(self.walk_button, 0, Qt.AlignBottom)
+        glance_row.addWidget(self.show_button, 0, Qt.AlignBottom)
         glance_row.addWidget(self.details_toggle, 0, Qt.AlignBottom)
 
         page = QWidget()
@@ -3187,7 +3197,7 @@ class DayReviewPanel(QFrame):
         """
         try:
             if (
-                watched is self.entry_text
+                watched is getattr(self, "entry_text", None)
                 and event.type() == QEvent.Type.KeyPress
                 and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
                 and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
@@ -3384,6 +3394,7 @@ class DayReviewPanel(QFrame):
         """Enable the button for a loaded day; show the banner only after the close."""
         loaded = str(payload.get("session_date") or "") == session and bool(session)
         self.walk_button.setEnabled(loaded)
+        self.show_button.setEnabled(loaded)
         ready = self._walk_ready_for(session, payload)
         self.walk_banner.setVisible(ready and session not in self._walk_banner_dismissed)
         if ready != self._walk_ready:
@@ -3415,6 +3426,41 @@ class DayReviewPanel(QFrame):
             walk.start()
         self.body_stack.setCurrentWidget(walk)
         walk.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    # -- R1 Day Review Show --------------------------------------------------
+    def open_show(self) -> None:
+        """Lay the loaded day's deck over the whole window (chosen on the worker)."""
+        session = self.session_date()
+        if str(self._payload.get("session_date") or "") != session:
+            self.status.setText("The day is still loading - try again in a moment.")
+            return
+        chosen = self._payload.get("show")
+        if not isinstance(chosen, Mapping) or not chosen.get("deck"):
+            import day_review_show
+
+            chosen = {
+                "deck": day_review_show.fallback_deck(None, session_date=session),
+                "facts_only": True,
+                "reason": "the day's show was not read",
+                "model": "",
+            }
+        from ui.widgets.day_review_show_overlay import DayReviewShow
+
+        self.close_show()
+        overlay = DayReviewShow(chosen, spy_bars=self._payload.get("spy_m5_bars") or ())
+        overlay.closed.connect(self.close_show)
+        self._show = overlay
+        overlay.cover(self.window())
+
+    def show_overlay(self):
+        """The open Day Review Show overlay, or None."""
+        return self._show
+
+    def close_show(self) -> None:
+        overlay, self._show = self._show, None
+        if overlay is not None:
+            overlay.hide()
+            overlay.deleteLater()
 
     def close_walk(self) -> None:
         """Back to the page. The walk stays built, so reopening resumes it."""

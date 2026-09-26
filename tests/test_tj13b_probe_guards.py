@@ -643,7 +643,10 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
     # briefs are Saturday-only, so the chain is anchored on the exit-note reader
     # and `econ_brief` now follows it directly.
     assert "ticker_briefs" not in slate
-    assert slate[slate.index("exit_note_fields") - 2] == "day_review_narration"
+    # R1 (2026-09-26): the Day Review Show reads the story, so it follows it
+    # directly and the chain gains one step.
+    assert slate[slate.index("exit_note_fields") - 3] == "day_review_narration"
+    assert slate[slate.index("exit_note_fields") - 2] == "day_review_show"
     assert slate[slate.index("exit_note_fields") - 1] == "observation_tags"
     assert slate[slate.index("exit_note_fields") + 1] == "econ_brief"
     # AMENDMENT 2026-09-25 (Plan to 8/10 P4): `note_vocabulary_audit` was
@@ -661,6 +664,8 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
         "prediction_contrast",
         "day_review_facts",
         "day_review_narration",
+        # R1 (2026-09-26): pinned by `EXPECTED_SLOT_ORDER`, set aside here.
+        "day_review_show",
         "observation_tags",
         "exit_note_fields",
         # TJ-6 (2026-09-20): a new stage-3 slot is pinned where it sits by

@@ -114,9 +114,11 @@ def test_the_scope_can_be_selected_on_demand(scope):
     # reader, which is seconds of work per note and must not queue behind the
     # briefs either. Nothing else may.
     between = names[names.index("ai_summary") + 1:names.index("ticker_briefs")]
+    # R1 (2026-09-26): the Day Review Show reads the day story, so it follows
+    # it directly.
     allowed = [
-        "day_review_narration", "observation_tags", "week_review_narration",
-        "exit_note_fields",
+        "day_review_narration", "day_review_show", "observation_tags",
+        "week_review_narration", "exit_note_fields",
     ]
     assert between == [name for name in allowed if name in between]
     assert names.index("daily_digest") < names.index("ai_summary")

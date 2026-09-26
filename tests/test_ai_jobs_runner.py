@@ -358,6 +358,9 @@ EXPECTED_SLOT_ORDER = (
     # forward either - `ai_summary` sits directly after `day_review_facts` and
     # two other pins say so.
     "day_review_narration",
+    # R1 (2026-09-26): the Day Review Show reads that night's verified story, so
+    # it sits DIRECTLY after it, still inside stage 2 (decision 0018 unchanged).
+    "day_review_show",
     # TJ-16 item 4 (2026-09-20): grounded codes for the trader's own words.
     # A local MEDIUM model slot, so it is in stage 2 - after `ai_summary`
     # because AI-R3 pins `day_review_facts` directly before that name, and
