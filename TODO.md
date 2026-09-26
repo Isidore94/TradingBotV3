@@ -185,6 +185,34 @@ S1 and keep the order. The two 500 MB logs are read with
   +0.53% when SPY is above its 20-day (n=412); `avwap_breakout` and `avwap_band_bounce`
   long stay negative even then (-0.8%, -0.7%). Facets already carry `spy_trend` and
   `earnings_gap_age`; S4 should confirm both on the backfilled window.
+- **F21 A long permutation that wins** (hold-out search over 27 facets, LONG rows at 5
+  sessions, selection 08-14 to 09-07, hold-out 09-08 to 09-18; 43 keys cleared a 0.50
+  selection low bound AND 55%+ beat in hold-out, nearly all one cluster). The cluster:
+  **a leadership name pulled 3-10% UNDER its anchored VWAP**. `top_pattern_tracking` +
+  `pct_from_current_vwap` in [-10, -3]: 5 sessions 65% beat SPY (low 0.57, n=150),
+  +2.8% excess, +2.9% raw, median +2.3%; 10 sessions 71% (low 0.62, n=114), +3.6%,
+  +0.61 ATR. Technology + the same pullback: 60% / 68%. Either: 59% / 65% (n=374 /
+  277), 101 distinct names, 16 setups a session, 5 of 6 weeks at 48-64%. It works with
+  SPY BELOW its 20-day (60%, n=281) and with the name's own 20-day trend DOWN (61%): a
+  washout long, best when the 4-hour trend is NEUTRAL (69%, n=112). Controls: any-name
+  pullback 44%; the favourite zone long (0-10% ABOVE the anchor) 45%; extended >10%
+  above the anchor 46% with a -0.74% median. Why longs fail, single facets: Real Estate
+  29%, Consumer Cyclical 30%, Consumer Defensive 35%, Industrials 36%; 31-60 days before
+  earnings 35% (n=3,012, most of the long book); `avwap_breakout` 36%; `favorite_setup`
+  bucket 37%; near the favourite zone 37%; SPY below its 50-day 37%. MRNA's own rows
+  say the same: its pullback rows to VWAP -> UPPER_1 with trend UP paid (+7%, +18%,
+  +25%); its extended rows 16% above the anchor at S tier lost (-5%, -3%, -12%). SPCX
+  and DRAM are not in the scan universe at all (no daily bars, no feature rows).
+- **S14 Long pullback study family** (grades ->8; the trader 2026-09-26: "I need a solid
+  long setup"). Register `leader_pullback_long` as a STUDY family on the P1-4 4e path,
+  not a scoring change: rows where side is LONG, `pct_from_current_vwap` is in [-10, -3],
+  and the name is `top_pattern_tracking` or sector Technology; tag them in the sidecar and
+  the session-horizon outcomes (scan edit with no output change), grade them on the
+  Setup Tracker like any family, and put the key first in S4's tape-relative search with
+  the `spy_trend`, `trend20` and `htf_trend_4h` facets. Promotion to a scored family is
+  ask-first with golden fixtures after two Saturday reports. Also a universe check: the
+  trader's SPCX and DRAM wins came from names the scan never sees; list the journal's
+  traded symbols missing from the universe on Health once a week.
 
 **Findings, swings (D1):**
 - **F9 Short families carried the last six weeks.** Session-horizon outcomes 08-14 to
