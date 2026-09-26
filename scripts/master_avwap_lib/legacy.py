@@ -14628,28 +14628,36 @@ def _prune_main_setups(tracker: dict, *, reference_scan_date: str | None = None)
 
 def _prune_control_setups(control_setups: dict, *, reference_scan_date: str | None = None) -> None:
     """Bound the control namespace by age and hard count so it stays cheap to
-    recompute every scan."""
+    recompute every scan.
+
+    Retired favourite-zone longs (`FAVZONE_LONG_RETIRED`) keep the main namespace's
+    limits (SETUP_KEEP_DAYS / SETUP_MAX_RECORDS), never evict the sampled controls,
+    and an open one is never dropped by count."""
 
     if not isinstance(control_setups, dict) or not control_setups:
         return
     reference = _parse_iso_date_or_none(reference_scan_date) or datetime.now().date()
+
+    def _is_retired(setup) -> bool:
+        return isinstance(setup, dict) and setup.get("control_reason") == FAVZONE_LONG_RETIRED
+
     for setup_id, setup in list(control_setups.items()):
         scan_day = _parse_iso_date_or_none(isinstance(setup, dict) and setup.get("scan_date") or None)
-        if scan_day is None or (reference - scan_day).days > CONTROL_SETUP_KEEP_DAYS:
+        keep_days = SETUP_KEEP_DAYS if _is_retired(setup) else CONTROL_SETUP_KEEP_DAYS
+        if scan_day is None or (reference - scan_day).days > keep_days:
             control_setups.pop(setup_id, None)
-    # Retired favourite-zone longs are capped on their own so they never evict the sampled controls.
-    for retired in (False, True):
-        group = [
-            item for item in control_setups.items()
-            if (isinstance(item[1], dict) and item[1].get("control_reason") == FAVZONE_LONG_RETIRED) is retired
-        ]
-        if len(group) <= CONTROL_SETUP_MAX_RECORDS:
+    for retired, max_records in ((False, CONTROL_SETUP_MAX_RECORDS), (True, SETUP_MAX_RECORDS)):
+        group = [item for item in control_setups.items() if _is_retired(item[1]) is retired]
+        if len(group) <= max_records:
             continue
+        if retired:
+            group = [item for item in group if not int(item[1].get("open_scenario_count", 0) or 0)]
         ordered = sorted(
             group,
             key=lambda item: str(item[1].get("scan_date") or "") if isinstance(item[1], dict) else "",
         )
-        for setup_id, _setup in ordered[: len(group) - CONTROL_SETUP_MAX_RECORDS]:
+        excess = sum(1 for item in control_setups.values() if _is_retired(item) is retired) - max_records
+        for setup_id, _setup in ordered[: max(0, excess)]:
             control_setups.pop(setup_id, None)
 
 
@@ -14800,15 +14808,19 @@ def build_control_discovery_rows(tracker: dict | None = None) -> dict:
         "promoted": promoted,
         "near_miss": [obs for obs in control if obs["reason"] == "near_miss"],
         "random": [obs for obs in control if obs["reason"] == "random"],
+        # Retired favourite-zone longs: their own cohort, never pooled into the sample or its families.
+        FAVZONE_LONG_RETIRED: [obs for obs in control if obs["reason"] == FAVZONE_LONG_RETIRED],
     }
     cohort_rows = []
-    for label in ("promoted", "near_miss", "random"):
+    for label in ("promoted", "near_miss", "random", FAVZONE_LONG_RETIRED):
         summary = _summarize_control_observation_group(cohorts[label])
         summary["cohort"] = label
         cohort_rows.append(summary)
 
     family_groups: dict[tuple[str, str], list[dict]] = {}
     for obs in control:
+        if obs["reason"] == FAVZONE_LONG_RETIRED:
+            continue
         family_groups.setdefault((obs["side"], obs["setup_family"]), []).append(obs)
     family_rows = []
     for (side, family), observations in family_groups.items():
