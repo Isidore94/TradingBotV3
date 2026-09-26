@@ -4140,6 +4140,10 @@ def build_swing_push(payload: Mapping[str, Any], *, limit: int = 5) -> tuple[str
         if len(symbols) >= max(1, int(limit)):
             break
     roster_lines = format_roster_lines(payload.get("bucket_roster"))
+    # The favourite zone is SHORT-only (trader 2026-09-26): the promoted Long leaders take the long line.
+    long_leaders_line = str(payload.get("long_leaders_line") or "").strip()
+    if long_leaders_line:
+        roster_lines.append(long_leaders_line)
     longs_off_line = str(payload.get("longs_off_line") or "").strip()
     if not lines and not roster_lines and not longs_off_line:
         return None
