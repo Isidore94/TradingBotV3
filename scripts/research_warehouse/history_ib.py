@@ -102,19 +102,16 @@ CLOSED_STATUSES = frozenset({DONE, EMPTY, EMPTY_INFERRED})
 # ---------------------------------------------------------------------------
 # windows, symbols, schedule (pure)
 # ---------------------------------------------------------------------------
-def _add_year(day: date) -> date:
-    try:
-        return day.replace(year=day.year + 1)
-    except ValueError:  # 29 February
-        return day.replace(year=day.year + 1, day=28)
+#: IB's "1 Y" reaches back 365 calendar days, leap year or not.
+WINDOW_DAYS = 365
 
 
 def ib_windows(start: date, through: date) -> list[tuple[date, date]]:
-    """Fixed one-year windows from ``start``; the last one ends at ``through``."""
+    """Fixed 365-day windows from ``start`` (what one "1 Y" request covers); the last ends at ``through``."""
     out = []
     first = start
     while first <= through:
-        following = _add_year(first)
+        following = first + timedelta(days=WINDOW_DAYS)
         out.append((first, min(following - timedelta(days=1), through)))
         first = following
     return out

@@ -62,7 +62,7 @@ class FakeFetcher:
             status = queue.pop(0)
             if status != hib.OK:
                 return hib.IbFetch(status=status, message=status)
-        low = end - timedelta(days=366)
+        low = end - timedelta(days=365)  # IB "1 Y" = 365 days
         found = [b for b in self.bars.get(symbol, []) if low < b["interval_start"].astimezone(xcal.EXCHANGE_TZ).date() <= end]
         if not found:
             return hib.IbFetch(status=hib.NO_DATA, message="HMDS query returned no data")
@@ -105,11 +105,15 @@ def _yahoo_h1(symbol, start, close):
 def test_windows_are_fixed_years_from_the_start_and_end_at_the_last_session():
     windows = hib.ib_windows(date(2021, 9, 27), date(2026, 9, 25))
     assert windows[0] == (date(2021, 9, 27), date(2022, 9, 26))
-    assert windows[-1] == (date(2025, 9, 27), date(2026, 9, 25))
+    # IB's "1 Y" is 365 days: the window over 29 Feb 2024 ends a day earlier
+    # (2023-09-27 was lost when windows were calendar years - live run 2026-09-27).
+    assert windows[2] == (date(2023, 9, 27), date(2024, 9, 25))
+    assert windows[-1] == (date(2025, 9, 26), date(2026, 9, 25))
     assert len(windows) == 5
+    assert all((last - first).days + 1 <= 365 for first, last in windows)
     assert hib.duration_for(*windows[0]) == "1 Y"
-    assert hib.duration_for(date(2026, 9, 27), date(2026, 10, 2)) == "1 M"
-    assert hib.ib_windows(date(2021, 9, 27), date(2026, 10, 2))[-1] == (date(2026, 9, 27), date(2026, 10, 2))
+    assert hib.duration_for(date(2026, 9, 26), date(2026, 10, 2)) == "1 M"
+    assert hib.ib_windows(date(2021, 9, 27), date(2026, 10, 2))[-1] == (date(2026, 9, 26), date(2026, 10, 2))
 
 
 def test_request_is_m30_trades_rth_epoch_and_maps_share_classes():
