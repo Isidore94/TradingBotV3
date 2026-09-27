@@ -358,7 +358,84 @@ def read_long_leader_lines() -> list[str]:
                 setup_grades.long_setup_tier_line(setup_grades.long_setup_tier_cells(history))]
 
     key = (_file_key(Path(LONG_SETUPS_FILE)), _file_key(Path(LONG_SETUPS_HISTORY_FILE)))
-    return list(_cached("long_leader_lines", key, build))
+    lines = list(_cached("long_leader_lines", key, build))
+    try:
+        # The runner dip grade sits just above the "strong + under AVWAPE" tier line.
+        lines.insert(max(0, len(lines) - 1), read_runner_dip_grade_line())
+    except Exception:  # noqa: BLE001 - a grading read never costs the section
+        logging.debug("Runner dip grade line unreadable.", exc_info=True)
+    return lines
+
+
+def _parquet_closes(path: Path) -> dict[str, float]:
+    """One symbol's daily closes from the durable bar store, `{iso date: close}`; {} when unreadable."""
+    try:
+        import pandas as pd
+
+        frame = pd.read_parquet(path)
+    except Exception:  # noqa: BLE001 - no bars is pending, never a guess
+        return {}
+    column = next((c for c in ("datetime", "date") if c in frame.columns), None)
+    if column is None or "close" not in frame.columns:
+        return {}
+    days = pd.to_datetime(frame[column], errors="coerce")
+    closes = pd.to_numeric(frame["close"], errors="coerce")
+    return {day.date().isoformat(): float(close)
+            for day, close in zip(days, closes, strict=False) if not pd.isna(day) and not pd.isna(close)}
+
+
+def _runner_dip_fires() -> list[dict[str, Any]]:
+    """Every `runner_dip_fired` review event (first per name and session), cached on the store stamp."""
+    import review_events
+    import runner_dip_watch
+    from project_paths import ALERT_REVIEW_EVENTS_FILE
+
+    sources = review_events.review_event_sources(Path(ALERT_REVIEW_EVENTS_FILE))
+
+    def build() -> list[dict[str, Any]]:
+        rows = []
+        for source in sources:
+            try:
+                text = source.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for line in text.splitlines():
+                if runner_dip_watch.FIRED_ACTION not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict):
+                    rows.append(row)
+        rows.sort(key=lambda row: str(row.get("ts") or ""))
+        return runner_dip_watch.fires_from_events(rows)
+
+    key = (tuple(str(source) for source in sources), review_events._store_stamp(sources))
+    return list(_cached("runner_dip_fires", key, build))
+
+
+def read_runner_dip_grade_line() -> str:
+    """p9: the runner dip fires vs SPY at 1/5/10 sessions on completed daily bars. THE WORKER SIDE."""
+    import runner_dip_watch
+    from project_paths import MASTER_AVWAP_DAILY_BARS_DIR
+
+    fires = _runner_dip_fires()
+    last = _last_completed_session().isoformat()
+    bars_dir = Path(MASTER_AVWAP_DAILY_BARS_DIR)
+    symbols = sorted({fire["symbol"] for fire in fires})
+
+    def completed(closes: dict[str, float]) -> dict[str, float]:
+        return {day: close for day, close in closes.items() if day <= last}
+
+    def build() -> str:
+        closes = {symbol: completed(_parquet_closes(bars_dir / f"{symbol}.parquet")) for symbol in symbols}
+        graded = runner_dip_watch.grade_fires(fires, closes, completed(read_spy_closes()))
+        return runner_dip_watch.grade_line(graded)
+
+    key = (tuple((fire["symbol"], fire["session"], fire["price"]) for fire in fires), last,
+           _file_key(_spy_bars_path()), tuple(_file_key(bars_dir / f"{symbol}.parquet") for symbol in symbols))
+    return str(_cached("runner_dip_grade_line", key, build))
 
 
 def read_study_family_lines(as_of: str = "") -> list[str]:

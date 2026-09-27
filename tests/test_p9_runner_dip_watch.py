@@ -407,3 +407,43 @@ def test_the_tick_runs_the_sync_after_the_day_roll_clear():
 
     source = inspect.getsource(AutopilotService._tick)
     assert source.index("_maybe_clear_stale_auto_lists(now)") < source.index("_maybe_sync_runner_dip_names(now)")
+
+
+# --- the Setup Tracker line (worker side)
+
+def test_the_long_leaders_section_carries_the_runner_dip_grade(tmp_path, monkeypatch):
+    import pandas as pd
+
+    import project_paths
+    import review_events
+    from diagnostics.artifact_io import atomic_write_json
+    from ui.services import working_lately_service as service
+
+    events = tmp_path / "events.jsonl"
+    events.write_text("\n".join(json.dumps(row) for row in (
+        {"action": "runner_dip_fired", "symbol": "GTLB", "ts": "2026-09-21T10:00:00",
+         "detail": {"session": "2026-09-21", "price": 50.0, "spy_price": 600.0}},
+        {"action": "watch_fired", "symbol": "AMD", "ts": "2026-09-21T10:00:00", "detail": {}},
+    )) + "\n", encoding="utf-8")
+    monkeypatch.setattr(review_events, "review_event_sources", lambda *a, **k: [events])
+    bars_dir = tmp_path / "bars"
+    bars_dir.mkdir()
+    days = pd.to_datetime(["2026-09-21", "2026-09-22", "2026-09-23"])
+    pd.DataFrame({"datetime": days, "close": [600.0, 606.0, 700.0]}).to_parquet(bars_dir / "SPY.parquet")
+    pd.DataFrame({"datetime": days, "close": [50.0, 52.0, 99.0]}).to_parquet(bars_dir / "GTLB.parquet")
+    monkeypatch.setattr(project_paths, "MASTER_AVWAP_DAILY_BARS_DIR", bars_dir)
+    # 09-23's bar is still forming: completed bars only.
+    monkeypatch.setattr(service, "_last_completed_session", lambda: date(2026, 9, 22))
+    current, history = tmp_path / "long_setups.json", tmp_path / "long_setups_history.json"
+    atomic_write_json(current, {"as_of": "2026-09-25", "market_working": "yes", "rows": []})
+    atomic_write_json(history, {"rows": []})
+    monkeypatch.setattr(project_paths, "LONG_SETUPS_FILE", current)
+    monkeypatch.setattr(project_paths, "LONG_SETUPS_HISTORY_FILE", history)
+    service._LOOKING_BACK_CACHE.clear()
+    try:
+        lines = service.read_long_leader_lines()
+    finally:
+        service._LOOKING_BACK_CACHE.clear()
+    assert lines[-1].startswith("strong + under AVWAPE (shadow)")
+    assert lines[-2] == ("Runner dips (shadow, M5 trigger untested): 1 fired · 1d avg +4.0%, beat SPY 1/1"
+                         " · 5d pending 1 · 10d pending 1")
