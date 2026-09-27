@@ -120,6 +120,21 @@ def test_a_reaction_too_fresh_or_too_old_is_unknown(reaction_back):
     assert got == {"avwape": None, "avwape_z": None, "under_avwape": "unknown"}
 
 
+def test_a_reaction_on_the_last_bar_is_never_the_anchor_an_older_one_is():
+    """`index + 1 <= last`: the scan-session reaction is too fresh to anchor on, so the latest
+    reaction BEFORE it (here 30 sessions back) anchors - the long-lab study's rule."""
+    count = 150
+    last = count - 1
+    bars = _bars(count, {last - 30: 4.0, last: 4.0})
+    older = ls.earnings_avwap(bars, earnings_dates=[bars[last - 30]["date"]])
+    assert older["avwape"] is not None
+    # Reported after the close on the session before the scan: the reaction is the scan bar itself.
+    both = ls.earnings_avwap(bars, earnings_dates=[bars[last - 30]["date"], bars[last - 1]["date"]])
+    assert both == older
+    # Reported on the scan session itself (0 sessions back): the older one still anchors.
+    assert ls.earnings_avwap(bars, earnings_dates=[bars[last - 30]["date"], bars[last]["date"]]) == older
+
+
 def test_two_and_one_hundred_twenty_sessions_back_count():
     for back in (2, 120):
         bars = _bars(150, {149 - back: 4.0})
