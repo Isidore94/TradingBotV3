@@ -152,6 +152,7 @@ def _observed(day: date, *, allow_friday: bool = True) -> date:
 
 #: One-off full closures no rule produces (NYSE and Nasdaq both shut).
 SPECIAL_CLOSURES = {
+    date(2018, 12, 5): "National Day of Mourning for President George H. W. Bush",
     date(2025, 1, 9): "National Day of Mourning for President Carter",
 }
 

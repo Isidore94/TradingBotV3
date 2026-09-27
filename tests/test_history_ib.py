@@ -442,3 +442,9 @@ def test_cli_dry_run_counts_owed_windows_and_coverage_reports_ib(store):
     coverage = hist.coverage_report(store)
     assert coverage["ib_intraday"]["symbols"] == 1 and coverage["ib_intraday"]["bars"] == 65
     assert "IB intraday" in cli.format_history_coverage(coverage)
+
+
+def test_2018_12_05_bush_mourning_day_is_a_closure():
+    assert xcal.trading_session(date(2018, 12, 5)) is None  # national day of mourning (G. H. W. Bush)
+    assert xcal.trading_session(date(2018, 12, 4)) is not None
+    assert xcal.trading_session(date(2018, 12, 6)) is not None
