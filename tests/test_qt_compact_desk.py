@@ -47,28 +47,44 @@ def _pump(times: int = 20) -> None:
         _app.processEvents()
 
 
+def _quiet_setup_reads(patch):
+    """Layout tests use explicit rows and do not start background evidence reads."""
+    from ui.panels.master_avwap_panel import MasterAvwapPanel
+
+    for name in (
+        "_start_family_record_read", "_start_entry_timing_read",
+        "_start_scan_freshness_read", "_start_ai_state_compression_read",
+        "_start_points_projection_read", "_start_swing_context_read",
+    ):
+        patch.setattr(MasterAvwapPanel, name, lambda self: None)
+
+
 @pytest.fixture(scope="module")
 def window():
+    from PySide6.QtCore import QEvent, QThread
     from ui.app import MainWindow
 
-    made = MainWindow(UiState(workspace_mode="workspace", desk_layout="compact"))
-    made.resize(2560, 1400)
-    made.show()
-    _pump(40)
-    # Stop the movers poll and let any refresh in flight land, so its board
-    # update cannot change the widget tree between two snapshots.
-    made.movers_service.shutdown()
-    for _ in range(200):
-        if not made.movers_service.running:
-            break
-        _app.processEvents()
-        time.sleep(0.01)
-    _pump(20)
-    yield made
-    try:
+    with pytest.MonkeyPatch.context() as patch:
+        _quiet_setup_reads(patch)
+        made = MainWindow(UiState(workspace_mode="workspace", desk_layout="compact"))
+        made.resize(2560, 1400)
+        made.show()
+        _pump(40)
+        # Stop the movers poll and let any refresh in flight land, so its board
+        # update cannot change the widget tree between two snapshots.
+        made.movers_service.shutdown()
+        for _ in range(200):
+            if not made.movers_service.running:
+                break
+            _app.processEvents()
+            time.sleep(0.01)
+        _pump(20)
+        yield made
         made.close()
-    except Exception:
-        pass
+        for worker in made.findChildren(QThread):
+            assert worker.wait(10000), "Desk test worker did not stop"
+        made.deleteLater()
+        _app.sendPostedEvents(made, QEvent.DeferredDelete)
 
 
 def _switch(window, layout: str) -> None:

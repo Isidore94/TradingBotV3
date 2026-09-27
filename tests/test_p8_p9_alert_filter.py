@@ -240,10 +240,16 @@ def test_grades_not_loaded_hide_nothing(env, tmp_path, monkeypatch):
 
 
 def test_the_compact_drawer_carries_the_show_selector(panel):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QWidget
+
     panel.set_compact_layout(True)
     try:
-        corner = panel._controls_corner
-        assert panel.show_filter_input.parent() is corner
+        toolbar = panel.findChild(QWidget, "DeskAlertControls")
+        assert toolbar is panel._compact_controls_host
+        assert panel.tabs.cornerWidget(Qt.Corner.TopRightCorner) is None
+        assert panel.show_filter_input.parent() is toolbar
+        assert all(widget.parent() is toolbar for widget in panel._compact_control_widgets)
     finally:
         panel.set_compact_layout(False)
     assert panel.show_filter_input in panel._control_widgets

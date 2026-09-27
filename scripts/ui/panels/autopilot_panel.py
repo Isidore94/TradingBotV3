@@ -11,9 +11,11 @@ from PySide6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from project_paths import get_local_setting, save_local_setting
@@ -47,6 +49,7 @@ class AutopilotPanel(QFrame):
     def __init__(self, bounce_service, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
+        self.setProperty("workspaceSurface", True)
         self.service = AutopilotService(bounce_service, parent=self)
         self._staged_rows: list[tuple[str, str]] = []
         self._staged_worker: ReadWorker | None = None
@@ -56,7 +59,7 @@ class AutopilotPanel(QFrame):
         self._status_signatures: dict[int, tuple[str, str]] = {}
 
         title = QLabel("Auto Pilot - Mini PC Mode")
-        title.setObjectName("SectionTitle")
+        title.setObjectName("TitleLabel")
         subtitle = QLabel(
             "Unattended trading day: swing scans at open+1h then hourly from the first full hour "
             "(tracker writes in the final-hour runs), self-built longs/shorts from the open's gaps "
@@ -120,9 +123,12 @@ class AutopilotPanel(QFrame):
         ):
             key = QLabel(label_text)
             key.setObjectName("MutedLabel")
-            status_grid.addWidget(key, row, 0, Qt.AlignmentFlag.AlignTop)
-            status_grid.addWidget(value_label, row, 1)
+            value_label.setWordWrap(True)
+            column = 0 if row < 5 else 2
+            status_grid.addWidget(key, row % 5, column, Qt.AlignmentFlag.AlignTop)
+            status_grid.addWidget(value_label, row % 5, column + 1)
         status_grid.setColumnStretch(1, 1)
+        status_grid.setColumnStretch(3, 1)
 
         buttons = QHBoxLayout()
         buttons.addWidget(self.reconnect_button)
@@ -150,27 +156,44 @@ class AutopilotPanel(QFrame):
         self.staged.setEditTriggers(QTableWidget.NoEditTriggers)
         self.staged.setSelectionBehavior(QTableWidget.SelectRows)
         self.staged.setMinimumHeight(84)
-        self.staged.setMaximumHeight(150)
         self.add_button = QPushButton("Add selected staged pick to Focus")
         self.add_button.clicked.connect(self._add_selected)
         self.gate_note = QLabel("")
         self.gate_note.setWordWrap(True)
 
+        activity = QWidget()
+        activity_layout = QVBoxLayout(activity)
+        activity_layout.setContentsMargins(0, 0, 0, 0)
+        activity_layout.addWidget(log_title)
+        activity_layout.addWidget(self.log_view, 1)
+        picks = QWidget()
+        picks_layout = QVBoxLayout(picks)
+        picks_layout.setContentsMargins(0, 0, 0, 0)
+        picks_layout.addWidget(self.staged_heading)
+        picks_layout.addWidget(self.staged, 1)
+        picks_layout.addWidget(self.add_button)
+        picks_layout.addWidget(self.gate_note)
+        self.workspace_splitter = QSplitter(Qt.Horizontal)
+        self.workspace_splitter.setChildrenCollapsible(False)
+        self.workspace_splitter.addWidget(activity)
+        self.workspace_splitter.addWidget(picks)
+        self.workspace_splitter.setSizes([900, 600])
+        self.workspace_splitter.setStretchFactor(0, 3)
+        self.workspace_splitter.setStretchFactor(1, 2)
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
         layout.addWidget(title)
         layout.addWidget(subtitle)
         layout.addWidget(self.toggle_button)
         layout.addWidget(self.auto_arm_input)
         layout.addLayout(status_grid)
+        manual_heading = QLabel("Manual actions")
+        manual_heading.setObjectName("SectionTitle")
+        layout.addWidget(manual_heading)
         layout.addLayout(buttons)
-        layout.addWidget(log_title)
-        layout.addWidget(self.log_view, 1)
-        layout.addWidget(self.staged_heading)
-        layout.addWidget(self.staged)
-        layout.addWidget(self.add_button)
-        layout.addWidget(self.gate_note)
+        layout.addWidget(self.workspace_splitter, 1)
 
         self.service.logMessage.connect(self._append_log)
         self.service.enabledChanged.connect(self._sync_toggle)

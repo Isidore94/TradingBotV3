@@ -14,7 +14,7 @@ Everything reads through ``ui.services.journal_feed``. No tab holds a
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QTabWidget, QVBoxLayout
 
 from ui.read_worker import join_worker
@@ -25,6 +25,7 @@ from ui.panels.journal.header import JournalHeader
 from ui.panels.journal.health_tab import HealthTab
 from ui.panels.journal.trades_tab import TradesTab
 from ui.services import journal_feed
+from ui.widgets.section_header import SectionHeader
 
 
 #: What each Journal tab is for, shown when the mouse rests on its label.
@@ -104,12 +105,17 @@ class JournalPanel(QFrame):
         self.calendar_tab.daySelected.connect(self._on_day_selected)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        self.page_header = SectionHeader("Journal", "Trade records, plans and review. Your account, currency and date filters apply across every view.")
+        self.page_header.setObjectName("JournalPageHeader")
+        self.page_header.title_label.setObjectName("TitleLabel")
+        self.page_header.add_action(self.positions_on_watchlist_button)
+        layout.addWidget(self.page_header)
         layout.addWidget(self.migration_status)
         layout.addWidget(self.prepare_button)
-        layout.addWidget(self.positions_on_watchlist_button, 0, Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.header)
-        layout.addWidget(self.tabs)
+        layout.addWidget(self.tabs, 1)
 
         if not journal_feed.store_needs_preparation():
             self._finish_initialization({"migrated": False, "report": None})

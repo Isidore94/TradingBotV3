@@ -61,6 +61,50 @@ QLabel#CautionLabel {
     color: @caution@;
 }
 
+QFrame#JournalInspector {
+    background: @bg_panel@;
+    border: 1px solid @border@;
+    border-radius: @radius@;
+}
+
+QFrame#JournalInspector QLabel,
+QFrame[workspaceSurface="true"] QLabel,
+QFrame[workspaceSurface="true"] QCheckBox,
+QWidget#DeskAlertControls,
+QWidget#DeskAlertControls QLabel,
+QWidget#DeskAlertControls QCheckBox,
+QWidget#JournalPageHeader QLabel,
+QWidget#SummarySetup QLabel,
+QWidget#SummarySetup QCheckBox,
+QWidget#SettingsGeneral QLabel,
+QWidget#SettingsGeneral QCheckBox,
+QWidget#SectionHeader,
+QWidget#SectionHeader QLabel,
+QWidget#ResultsContent QLabel,
+QFrame[researchNavigation="true"] QLabel {
+    background: transparent;
+}
+
+QTabWidget#JournalDetailTabs::pane {
+    border: none;
+}
+
+QPushButton#JournalSaveAction,
+QPushButton#ReviewPrimaryAction {
+    background: @accent_soft@;
+    border: 1px solid @accent@;
+}
+
+QPushButton#JournalSaveAction:hover,
+QPushButton#ReviewPrimaryAction:hover {
+    background: @bg_hover@;
+}
+
+QPushButton#ReviewSectionJump {
+    color: @text_secondary@;
+    padding: 6px 12px;
+}
+
 /* p9 swing table: the Master AVWAP regime line (regime, longs gate, SPY M5..W). */
 QLabel#SwingRegimeLine {
     color: @text_secondary@;
@@ -421,6 +465,20 @@ QTextEdit {
     selection-background-color: @selection@;
 }
 
+QLineEdit:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus,
+QComboBox:focus,
+QPlainTextEdit:focus,
+QTextEdit:focus,
+QPushButton:focus,
+QToolButton:focus,
+QPushButton#NavButton:focus,
+QPushButton#PageTabButton:focus,
+QToolButton#PageTabMore:focus {
+    border-color: @accent@;
+}
+
 /* Weekend Prep > Focus Review (packet G1). The nine tables are one stack
    behind a nine-button selector, and the selected row is read WHOLE in the
    pane beside it - the cell elides at paint time, this does not. Both are
@@ -497,8 +555,17 @@ QTabBar::tab:selected {
     border-color: @accent@;
 }
 
+QTabBar::tab:hover:!selected {
+    background: @bg_hover@;
+    color: @text_primary@;
+}
+
 QSplitter::handle {
     background: @border@;
+}
+
+QSplitter::handle:hover {
+    background: @accent@;
 }
 
 QScrollBar:vertical,

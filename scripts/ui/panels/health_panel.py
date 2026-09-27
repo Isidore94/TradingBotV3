@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QTabWidget,
     QTextBrowser,
+    QToolButton,
     QVBoxLayout,
 )
 
@@ -404,6 +405,7 @@ class HealthPanel(QFrame):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
+        self.setProperty("workspaceSurface", True)
         self._payload: dict[str, Any] = {}
         #: Returns the live bot (or None); called on the audit worker only.
         self._bot_provider = bot_provider
@@ -416,17 +418,35 @@ class HealthPanel(QFrame):
 
         self.meta_label = QLabel("Waiting for the first audit...")
         self.meta_label.setObjectName("MutedLabel")
+        self.meta_label.setWordWrap(True)
 
         refresh_button = QPushButton("Refresh Now")
         refresh_button.clicked.connect(self.refresh)
         header = SectionHeader(
             "System Health",
+            "Service status and evidence. Unknown means unmeasured, not healthy.",
+        )
+        header.title_label.setObjectName("TitleLabel")
+        self.audit_help = QLabel(
             "Sol3 writer identity/lease, heartbeat, scheduler (with retry budgets), scan manifests and "
             "per-phase timings, owned processes/threads, universe and market-data age, disk/storage, "
             "SPY/Greatness shadows, candidate registry, and learning capture readiness. UNKNOWN rows are "
             "required evidence nobody has measured yet - they are not green. The large setup-tracker file "
             "is intentionally excluded.",
         )
+        self.audit_help.setObjectName("MutedLabel")
+        self.audit_help.setWordWrap(True)
+        self.audit_help.hide()
+        self.audit_help_toggle = QToolButton()
+        self.audit_help_toggle.setText("What is checked")
+        self.audit_help_toggle.setCheckable(True)
+        self.audit_help_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.audit_help_toggle.setArrowType(Qt.RightArrow)
+        self.audit_help_toggle.toggled.connect(self.audit_help.setVisible)
+        self.audit_help_toggle.toggled.connect(
+            lambda opened: self.audit_help_toggle.setArrowType(Qt.DownArrow if opened else Qt.RightArrow)
+        )
+        header.add_action(self.audit_help_toggle)
         header.add_action(refresh_button)
 
         self.table = QTableWidget(0, 4)
@@ -461,10 +481,13 @@ class HealthPanel(QFrame):
         self.detail_tabs.addTab(self.jobs_table, "Jobs")
         self.detail_tabs.addTab(self.phases_table, "Phase timings")
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
+        self.workspace_splitter = splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
         splitter.addWidget(self.table)
         splitter.addWidget(self.detail_tabs)
-        splitter.setSizes([440, 260])
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([900, 600])
 
         tiles = QHBoxLayout()
         for tile in (
@@ -480,6 +503,7 @@ class HealthPanel(QFrame):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
         layout.addWidget(header)
+        layout.addWidget(self.audit_help)
         layout.addLayout(tiles)
         layout.addWidget(self.meta_label)
         layout.addWidget(splitter, 1)

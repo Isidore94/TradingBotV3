@@ -33,8 +33,10 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QPushButton,
     QSplitter,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
@@ -367,7 +369,42 @@ class ResearchResultsPanel(QFrame):
         self.status_label = QLabel("")
         self.status_label.setObjectName("MutedLabel")
         self.section_label = QLabel("")
-        self.section_label.setObjectName("SectionSubtitle")
+        self.section_label.setObjectName("SectionTitle")
+        self.reading_guide_button = QToolButton()
+        self.reading_guide_button.setObjectName("ResultsHelpButton")
+        self.reading_guide_button.setText("How to read these results")
+        self.reading_guide_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self.reading_guide_button.setArrowType(Qt.ArrowType.RightArrow)
+        self.reading_guide_button.setCheckable(True)
+        self.reading_guide = QFrame()
+        self.reading_guide.setObjectName("Panel")
+        guide_layout = QVBoxLayout(self.reading_guide)
+        guide_layout.setContentsMargins(
+            theme.px(12), theme.px(10), theme.px(12), theme.px(10)
+        )
+        self.reading_guide_label = QLabel(
+            "Results reads the same Working Lately snapshot as the Desk; the "
+            "Desk's own line remains the primary view. The other Research pages "
+            "are study tools. Capture, Journal, Weekend Prep, and the Away recap "
+            "keep trader-critical details close to the work. Results keeps Bot "
+            "setups / My trades and Swing / Day "
+            "trading separate. Swing shows win rate, sample count, and the Wilson "
+            "lower bound; Day trading shows held-run score and coverage. Bot cells "
+            "keep their own window; the date filter applies to My trades by "
+            "closed_at. The selected result carries its exact definition and "
+            "evidence."
+        )
+        self.reading_guide_label.setObjectName("MutedLabel")
+        guide_row = QHBoxLayout()
+        guide_row.addWidget(self.reading_guide_label, 1)
+        guide_row.addStretch(1)
+        guide_layout.addLayout(guide_row)
+        self.reading_guide.setVisible(False)
+        self.reading_guide_button.toggled.connect(self._set_reading_guide_visible)
+        self.band_summary_heading = QLabel("Band summaries")
+        self.band_summary_heading.setObjectName("SectionTitle")
         # Every running-text label on this page reads at one measure, left,
         # with the slack on the right (`_reader_measure`). Wrapped, because a
         # capped line that could not wrap would just elide.
@@ -376,6 +413,7 @@ class ResearchResultsPanel(QFrame):
             self.environment_label,
             self.section_label,
             self.status_label,
+            self.reading_guide_label,
         )
         for label in self._reading_labels:
             label.setWordWrap(True)
@@ -423,6 +461,12 @@ class ResearchResultsPanel(QFrame):
             label.ensurePolished()
             label.setMaximumWidth(_reader_measure(label.fontMetrics()))
 
+    def _set_reading_guide_visible(self, visible: bool) -> None:
+        self.reading_guide.setVisible(visible)
+        self.reading_guide_button.setArrowType(
+            Qt.ArrowType.DownArrow if visible else Qt.ArrowType.RightArrow
+        )
+
     # -- construction ------------------------------------------------------
 
     def _make_group(self, specs, store: dict, index: int) -> QButtonGroup:
@@ -449,62 +493,123 @@ class ResearchResultsPanel(QFrame):
         )
         return group
 
-    def _build_layout(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
-        layout.addWidget(
-            SectionHeader(
-                "Results",
-                "What is working, for whom, over which horizon, and on how much "
-                "evidence. Bot setups and My trades, Swing and Day trading, are "
-                "four separate populations and are never pooled.",
-            )
+    def _filter_group(self, title: str, widgets: tuple[QWidget, ...]) -> QFrame:
+        group = QFrame()
+        group.setObjectName("Panel")
+        group_layout = QVBoxLayout(group)
+        group_layout.setContentsMargins(
+            theme.px(10), theme.px(7), theme.px(10), theme.px(7)
         )
+        group_layout.setSpacing(theme.px(5))
+        heading = QLabel(title)
+        heading.setObjectName("MutedLabel")
+        group_layout.addWidget(heading)
+        control_row = QHBoxLayout()
+        control_row.setSpacing(theme.px(4))
+        for widget in widgets:
+            control_row.addWidget(widget, 0)
+        control_row.addStretch(1)
+        group_layout.addLayout(control_row)
+        return group
 
-        controls = QHBoxLayout()
-        controls.setSpacing(6)
-        for store in (self.population_buttons, self.horizon_buttons, self.window_buttons):
-            for button in store.values():
-                controls.addWidget(button, 0)
-            controls.addSpacing(12)
-        self._custom_labels = (QLabel("from"), QLabel("to"))
-        controls.addWidget(self._custom_labels[0], 0)
-        controls.addWidget(self.custom_start, 0)
-        controls.addWidget(self._custom_labels[1], 0)
-        controls.addWidget(self.custom_end, 0)
-        controls.addSpacing(12)
-        controls.addWidget(QLabel("By environment"), 0)
-        controls.addWidget(self.environment_combo, 0)
-        controls.addStretch(1)
-        row = QWidget()
-        row.setLayout(controls)
-        layout.addWidget(row)
+    def _build_layout(self) -> None:
+        self.content_scroll_area = QScrollArea(self)
+        self.content_scroll_area.setObjectName("ResultsScrollArea")
+        self.content_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.content_scroll_area.setWidgetResizable(True)
+        self.content_scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.content_scroll_area.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.content_widget = QWidget()
+        self.content_widget.setObjectName("ResultsContent")
+        content_layout = QVBoxLayout(self.content_widget)
+        content_layout.setContentsMargins(12, 12, 12, 12)
+        content_layout.setSpacing(theme.px(12))
+        content_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
-        layout.addWidget(self.environment_label)
-        layout.addWidget(self.freshness_label)
-        layout.addWidget(self.section_label)
+        heading_row = QHBoxLayout()
+        heading_row.setSpacing(theme.px(12))
+        results_header = SectionHeader(
+            "Results",
+            "Results for a population and horizon, with the evidence beside each row.",
+        )
+        results_header.title_label.setObjectName("TitleLabel")
+        heading_row.addWidget(
+            results_header,
+            1,
+        )
+        heading_row.addWidget(self.reading_guide_button, 0, Qt.AlignmentFlag.AlignTop)
+        content_layout.addLayout(heading_row)
+        content_layout.addWidget(self.reading_guide)
 
-        cards = QHBoxLayout()
-        cards.setSpacing(8)
-        for key, _title in BAND_TITLES:
-            cards.addWidget(self._cards[key], 1)
-        card_row = QWidget()
-        card_row.setLayout(cards)
-        layout.addWidget(card_row)
+        self._custom_labels = (QLabel("From"), QLabel("To"))
+        scope_row = QHBoxLayout()
+        scope_row.setSpacing(theme.px(8))
+        scope_row.addWidget(
+            self._filter_group("Population", tuple(self.population_buttons.values())), 2
+        )
+        scope_row.addWidget(
+            self._filter_group("Horizon", tuple(self.horizon_buttons.values())), 2
+        )
+        scope_row.addWidget(
+            self._filter_group(
+                "Window",
+                (
+                    *self.window_buttons.values(),
+                    self._custom_labels[0],
+                    self.custom_start,
+                    self._custom_labels[1],
+                    self.custom_end,
+                ),
+            ),
+            5,
+        )
+        scope_row.addWidget(
+            self._filter_group("Environment", (self.environment_combo,)), 2
+        )
+        content_layout.addLayout(scope_row)
+
+        # Give wrapped text its actual reading width when Qt computes height.
+        for label in (
+            self.environment_label, self.freshness_label,
+            self.section_label, self.status_label,
+        ):
+            reading_row = QHBoxLayout()
+            reading_row.addWidget(label, 1)
+            reading_row.addStretch(1)
+            content_layout.addLayout(reading_row)
 
         self.detail_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.detail_splitter.addWidget(self.shortlist)
         self.detail_splitter.addWidget(self.explanation_view)
         self.detail_splitter.setStretchFactor(0, 3)
         self.detail_splitter.setStretchFactor(1, 2)
-        layout.addWidget(self.detail_splitter, 1)
-        layout.addWidget(self.looking_back_view)
-        # TJ-1 item 6(a): the Daily Recap's Review tab, as a section at the FOOT
-        # of this page. Under the four populations, because it is the desk's own
-        # published readout rather than a cut of them.
-        layout.addWidget(self._measured_report_section())
-        layout.addWidget(self.status_label)
+        self.detail_splitter.setSizes([650, 350])
+        self.detail_splitter.setMinimumHeight(theme.px(460))
+        content_layout.addWidget(self.detail_splitter)
+
+        content_layout.addWidget(self.band_summary_heading)
+        cards = QHBoxLayout()
+        cards.setSpacing(theme.px(8))
+        for key, _title in BAND_TITLES:
+            cards.addWidget(self._cards[key], 1)
+        card_row = QWidget()
+        card_row.setLayout(cards)
+        content_layout.addWidget(card_row)
+
+        content_layout.addWidget(self.looking_back_view)
+        # TJ-1 item 6(a): this remains the desk's own published report, after
+        # the four-population readout rather than inside its selected result.
+        content_layout.addWidget(self._measured_report_section())
+        self.content_scroll_area.setWidget(self.content_widget)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.content_scroll_area)
 
     # -- selection ---------------------------------------------------------
 

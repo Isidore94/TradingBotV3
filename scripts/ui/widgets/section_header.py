@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 class SectionHeader(QWidget):
     def __init__(self, title: str, subtitle: str = "", parent=None) -> None:
         super().__init__(parent)
+        self.setObjectName("SectionHeader")
         self.title_label = QLabel(title)
         self.title_label.setObjectName("SectionTitle")
         self.subtitle_label = QLabel(subtitle)

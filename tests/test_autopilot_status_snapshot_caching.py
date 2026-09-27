@@ -288,6 +288,42 @@ def test_the_hidden_panel_refresh_does_no_work(monkeypatch):
         _qapp().processEvents()
 
 
+def test_wide_workspace_keeps_activity_and_staged_picks_side_by_side(monkeypatch, tmp_path):
+    import os
+    from pathlib import Path
+
+    from PySide6.QtCore import QEvent, QPoint, Qt
+    from PySide6.QtGui import QFontDatabase
+    from ui import theme
+
+    app = _qapp()
+    old_theme, old_scale = theme.active_theme(), theme.active_scale()
+    font_path = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "segoeui.ttf"
+    font_id = QFontDatabase.addApplicationFont(str(font_path)) if font_path.is_file() else -1
+    panel = _panel(monkeypatch)
+    try:
+        theme.apply_theme(panel, "dark", scale=1.0)
+        panel._apply_status(_snapshot_payload())
+        for width, height in ((1920, 1080), (2560, 1440), (3840, 2160)):
+            panel.resize(width, height)
+            panel.show()
+            app.processEvents()
+            assert panel.width() == width
+            assert panel.workspace_splitter.orientation() == Qt.Horizontal
+            assert panel.log_view.height() > height * .5
+            assert panel.staged.height() > height * .5
+            assert panel.rect().contains(panel.add_button.mapTo(panel, panel.add_button.rect().bottomRight()))
+            assert panel.rect().contains(panel.toggle_button.mapTo(panel, QPoint(0, 0)))
+            assert panel.grab().save(str(tmp_path / f"autopilot-{width}.png"))
+    finally:
+        panel.shutdown()
+        panel.deleteLater()
+        app.sendPostedEvents(panel, QEvent.DeferredDelete)
+        theme._ACTIVE_THEME, theme._ACTIVE_SCALE = old_theme, old_scale
+        if font_id >= 0:
+            QFontDatabase.removeApplicationFont(font_id)
+
+
 def test_status_labels_restyle_only_on_change(monkeypatch):
     _qapp()
     panel = _panel(monkeypatch)

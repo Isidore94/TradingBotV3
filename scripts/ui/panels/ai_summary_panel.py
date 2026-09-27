@@ -5,20 +5,24 @@ import threading
 from pathlib import Path
 from typing import Any, Mapping
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFrame,
-    QHBoxLayout,
+    QFormLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
+    QSplitter,
     QTabWidget,
     QTextBrowser,
+    QToolButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from ai_credentials import AiCredentialVault
@@ -214,6 +218,7 @@ class AiSummaryPanel(QFrame):
             "Attach ChatGPT or Claude to selected evidence for an advisory daily/research review.",
         )
         header.add_action(self.open_export_button)
+        header.title_label.setObjectName("TitleLabel")
 
         safety = QLabel(
             "ADVISORY + EXPORT ONLY · The provider receives only checked scopes after you click Generate. "
@@ -234,21 +239,27 @@ class AiSummaryPanel(QFrame):
             "story, and ideas without starting a model or manual review."
         )
 
-        provider_row = QHBoxLayout()
-        provider_row.setContentsMargins(0, 0, 0, 0)
-        provider_row.setSpacing(8)
-        provider_row.addWidget(QLabel("Provider"))
-        provider_row.addWidget(self.provider_input)
-        provider_row.addWidget(QLabel("Model"))
-        provider_row.addWidget(self.model_input, 1)
-
-        key_row = QHBoxLayout()
-        key_row.setContentsMargins(0, 0, 0, 0)
-        key_row.setSpacing(8)
-        key_row.addWidget(self.key_input, 1)
-        key_row.addWidget(self.save_key_button)
-        key_row.addWidget(self.delete_key_button)
-        key_row.addWidget(self.key_status)
+        header.add_action(self.daily_review_button)
+        provider_form = QFormLayout()
+        provider_form.addRow("Provider", self.provider_input)
+        provider_form.addRow("Model", self.model_input)
+        self.key_status.setWordWrap(True)
+        self.key_toggle = QToolButton()
+        self.key_toggle.setText("API key settings")
+        self.key_toggle.setCheckable(True)
+        self.key_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.key_toggle.setArrowType(Qt.RightArrow)
+        self.key_controls = QWidget()
+        key_layout = QVBoxLayout(self.key_controls)
+        key_layout.setContentsMargins(0, 0, 0, 0)
+        key_layout.addWidget(self.key_input)
+        key_layout.addWidget(self.save_key_button)
+        key_layout.addWidget(self.delete_key_button)
+        self.key_controls.hide()
+        self.key_toggle.toggled.connect(self.key_controls.setVisible)
+        self.key_toggle.toggled.connect(
+            lambda opened: self.key_toggle.setArrowType(Qt.DownArrow if opened else Qt.RightArrow)
+        )
 
         scopes = QFrame()
         scopes.setObjectName("InfoDrawer")
@@ -256,41 +267,57 @@ class AiSummaryPanel(QFrame):
         scope_layout.setContentsMargins(10, 8, 10, 8)
         scope_layout.setSpacing(4)
         scope_title = QLabel("What should the model review?")
-        scope_title.setStyleSheet("font-weight: 700;")
+        scope_title.setObjectName("SectionTitle")
         scope_layout.addWidget(scope_title)
-        row = QHBoxLayout()
+        row = QVBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         for checkbox in self.scope_inputs.values():
             row.addWidget(checkbox)
-        row.addStretch(1)
         scope_layout.addLayout(row)
 
-        actions = QHBoxLayout()
+        actions = QVBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(8)
         actions.addWidget(self.preview_button)
         actions.addWidget(self.generate_button)
-        actions.addStretch(1)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
-        gate_row = QHBoxLayout()
-        gate_row.setContentsMargins(0, 0, 0, 0)
-        gate_row.setSpacing(8)
-        gate_row.addWidget(self.gate_strip, 1)
-        gate_row.addWidget(self.refresh_gates_button, 0)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        setup = QWidget()
+        setup.setObjectName("SummarySetup")
+        setup_layout = QVBoxLayout(setup)
+        setup_layout.setContentsMargins(12, 12, 12, 12)
+        setup_layout.setSpacing(12)
+        setup_layout.addLayout(provider_form)
+        setup_layout.addWidget(self.key_status)
+        setup_layout.addWidget(self.key_toggle, 0, Qt.AlignLeft)
+        setup_layout.addWidget(self.key_controls)
+        setup_layout.addWidget(scopes)
+        setup_layout.addLayout(actions)
+        setup_layout.addWidget(safety)
+        setup_layout.addWidget(daily_review_note)
+        gate_heading = QLabel("Local AI status")
+        gate_heading.setObjectName("SectionTitle")
+        setup_layout.addWidget(gate_heading)
+        setup_layout.addWidget(self.gate_strip)
+        setup_layout.addWidget(self.refresh_gates_button, 0, Qt.AlignLeft)
+        setup_layout.addStretch(1)
+        self.setup_scroll = QScrollArea()
+        self.setup_scroll.setWidgetResizable(True)
+        self.setup_scroll.setFrameShape(QFrame.NoFrame)
+        self.setup_scroll.setWidget(setup)
+        self.setup_scroll.setMinimumWidth(340)
+        self.workspace_splitter = QSplitter(Qt.Horizontal)
+        self.workspace_splitter.setChildrenCollapsible(False)
+        self.workspace_splitter.addWidget(self.setup_scroll)
+        self.workspace_splitter.addWidget(self.tabs)
+        self.workspace_splitter.setStretchFactor(0, 0)
+        self.workspace_splitter.setStretchFactor(1, 1)
+        self.workspace_splitter.setSizes([440, 1600])
 
         layout.addWidget(header)
-        layout.addWidget(safety)
-        layout.addWidget(daily_review_note)
-        layout.addWidget(self.daily_review_button)
-        layout.addLayout(gate_row)
-        layout.addLayout(provider_row)
-        layout.addLayout(key_row)
-        layout.addWidget(scopes)
-        layout.addLayout(actions)
-        layout.addWidget(self.tabs, 1)
+        layout.addWidget(self.workspace_splitter, 1)
         layout.addWidget(self.status_label)
 
     def _wire(self) -> None:
