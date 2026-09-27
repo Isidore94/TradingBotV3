@@ -360,6 +360,7 @@ def test_dataset_registry_is_the_frozen_increment_plus_registered_context(store)
             "feature_snapshot_daily",
             "feature_snapshot_intraday",
             "level_state_daily",
+            "market_regime_daily",
             "outcome_path",
             "scan_coverage",
             "setup_occurrence",
