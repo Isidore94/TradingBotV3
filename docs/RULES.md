@@ -27,6 +27,7 @@ in the same commit.
 - `setup_research` narration is a bounded view selected by size (`stats.n`, then name), never by an R statistic; every reader says `narrated K of N`.
 - `bar_d1` always carries `BENCHMARK_SYMBOLS` (SPY/QQQ/IWM), members or not. A `setup_market_context` fix is a new `bias_definition_id`, never a rewrite; old rows stay and readers take the newest definition per occurrence/timeframe (`newest_context_rows`).
 - The like-link payload uses `match_basis`; `LikeLink.from_payload` is its sole strict reader, and the dataset is `bronze_like_occurrence_link`.
+- Backtests (`research_warehouse.backtest`): a setup rule reads bars <= its signal bar only (the truncation test pins every registered setup); a changed rule bumps its `version`; regimes join on the signal session (`as_of=close`); pending is NaN, never 0; cells under 30 are never ranked; every run/search is registered in `trial_ledger` before outcomes; a run folder is never rewritten. Nothing reads a backtest into a live score, alert or list.
 
 ## Alert Center and review
 - The arm bar stays UNDER the chart. Never propose moving it without asking. Rail shortcuts are bound at panel scope; hidden-tab shortcuts and duplicate bindings do not work.

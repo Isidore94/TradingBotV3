@@ -454,6 +454,9 @@ def test_the_trial_ledger_has_exactly_one_production_writer():
         # SECOND writer, on purpose - it registers each grid before reading its
         # outcomes, and `register` still refuses a trial_id already declared.
         "scripts/setup_permutation_search.py": "writer",
+        # P10 (2026-09-27, lead's brief "every run/search registered in trial_ledger"):
+        # the D1 backtester registers each run and search before measuring outcomes.
+        "scripts/research_warehouse/backtest.py": "writer",
     }
 
     # IMPORT-shaped, not any mention: P8's authorization block in `outcomes.py`
@@ -471,6 +474,7 @@ def test_the_trial_ledger_has_exactly_one_production_writer():
     assert [name for name, role in ALLOWED.items() if role == "writer"] == [
         "scripts/research_warehouse/cli.py",
         "scripts/setup_permutation_search.py",
+        "scripts/research_warehouse/backtest.py",
     ]
 
     for name, role in ALLOWED.items():

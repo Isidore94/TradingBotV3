@@ -302,6 +302,9 @@ def leader_pullback_live(ctx: Ctx) -> Result:
         run_mean = (cv[safe + 1] - cv[run_start]) / (safe + 1 - run_start)
         pb_mean = (cv[idx + 1] - cv[safe + 1]) / np.maximum(idx - safe, 1)
     pre &= (run_mean > 0) & (pb_mean <= run_mean * (1 + SLACK))
+    eligible = ctx.cache.get("eligible")  # the replay's causal price / volume / date gate
+    if eligible is not None:
+        pre &= eligible
     rs = ctx.rs_share
     for i in np.nonzero(pre)[0]:
         share = float(rs[i]) if math.isfinite(rs[i]) else None
