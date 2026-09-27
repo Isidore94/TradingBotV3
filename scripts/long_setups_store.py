@@ -184,12 +184,12 @@ def publish_runner_dip_watch(inputs: Mapping[str, Any], *, now: datetime | None 
     return payload
 
 
-# --- the desk's cached copy: a worker reads the file, the Qt thread reads memory only
+# --- the desk's cached copy: a worker reads the files, the Qt thread reads memory only
 
 #: The worker re-checks the runner file at most this often.
 RUNNER_REFRESH_SECONDS = 60.0
 _runner_lock = threading.Lock()
-_runner_state: dict[str, Any] = {"payload": None, "key": None, "running": False, "checked": None}
+_runner_state: dict[str, Any] = {"payload": None, "key": None, "running": False, "checked": None, "seed": None}
 
 
 def runner_dip_snapshot() -> dict[str, Any] | None:
@@ -198,15 +198,51 @@ def runner_dip_snapshot() -> dict[str, Any] | None:
         return _runner_state["payload"]
 
 
-def set_runner_dip_snapshot(payload: dict[str, Any] | None) -> None:
+def set_runner_dip_snapshot(payload: dict[str, Any] | None, *, seed: tuple[str, frozenset] | None = None) -> None:
     """Replace the cache (tests, and a caller that read it on its own worker)."""
     with _runner_lock:
-        _runner_state.update(payload=payload, key=None, checked=None)
+        _runner_state.update(payload=payload, key=None, checked=None, seed=seed)
 
 
-def _refresh_runner_dip(path: Path | None) -> None:
+def runner_dip_fired_seed(day: str) -> frozenset | None:
+    """Names that already fired on ``day`` (from the review events), or None until the worker has
+    read that day. Never does IO."""
+    with _runner_lock:
+        seed = _runner_state["seed"]
+    return seed[1] if seed is not None and seed[0] == day else None
+
+
+def read_runner_dip_fired(day: str, sources: Iterable[Path] | None = None) -> frozenset:
+    """Every symbol with a `runner_dip_fired` review event for session ``day`` (worker side)."""
+    import review_events
+
+    names = set()
+    for source in sources if sources is not None else review_events.review_event_sources():
+        try:
+            text = Path(source).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if runner_dip_watch.FIRED_ACTION not in line or day not in line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            detail = row.get("detail") if isinstance(row, dict) else None
+            if (row.get("action") == runner_dip_watch.FIRED_ACTION and isinstance(detail, dict)
+                    and str(detail.get("session") or "")[:10] == day):
+                names.add(str(row.get("symbol") or "").strip().upper())
+    return frozenset(names - {""})
+
+
+def _refresh_runner_dip(path: Path | None, day: str | None = None) -> None:
     import project_paths
 
+    if day is not None and runner_dip_fired_seed(day) is None:
+        seed = (day, read_runner_dip_fired(day))
+        with _runner_lock:
+            _runner_state["seed"] = seed
     target = Path(path or project_paths.RUNNER_DIP_WATCH_FILE)
     try:
         stat = target.stat()
@@ -221,18 +257,22 @@ def _refresh_runner_dip(path: Path | None) -> None:
         _runner_state.update(payload=payload, key=key)
 
 
-def refresh_runner_dip_async(path: Path | None = None) -> bool:
-    """Start one worker re-read when the last check is `RUNNER_REFRESH_SECONDS` old. Qt-safe."""
+def refresh_runner_dip_async(path: Path | None = None, *, day: str | None = None) -> bool:
+    """Start one worker re-read when the last check is `RUNNER_REFRESH_SECONDS` old, or at once
+    when ``day``'s fired seed is not read yet. Qt-safe."""
     now = time.monotonic()
     with _runner_lock:
         checked = _runner_state["checked"]
-        if _runner_state["running"] or (checked is not None and now - checked < RUNNER_REFRESH_SECONDS):
+        seed = _runner_state["seed"]
+        seed_due = day is not None and (seed is None or seed[0] != day)
+        if _runner_state["running"] or (
+                not seed_due and checked is not None and now - checked < RUNNER_REFRESH_SECONDS):
             return False
         _runner_state.update(running=True, checked=now)
 
     def run() -> None:
         try:
-            _refresh_runner_dip(path)
+            _refresh_runner_dip(path, day)
         except Exception:  # noqa: BLE001 - the last cached payload stays; the next tick retries
             logging.debug("Runner dip watch cache not refreshed.", exc_info=True)
         finally:

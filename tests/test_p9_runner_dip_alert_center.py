@@ -68,8 +68,8 @@ def panel(tmp_path, monkeypatch):
 
     widget = AlertCenterPanel(parked_symbols_path=tmp_path / "parked.json",
                               focus_d1_flags_path=tmp_path / "focus_flags.json")
-    monkeypatch.setattr(long_setups_store, "refresh_runner_dip_async", lambda path=None: False)
-    long_setups_store.set_runner_dip_snapshot(PAYLOAD)
+    monkeypatch.setattr(long_setups_store, "refresh_runner_dip_async", lambda path=None, **_k: False)
+    long_setups_store.set_runner_dip_snapshot(PAYLOAD, seed=("2026-09-28", frozenset()))
     bars = {"GTLB": _bars(), "NVDA": _bars(), "SPY": _bars(close=600.0)}
     widget._m5_bars_for = lambda symbol, sessions=1: bars.get(symbol, [])
     widget._events = []
@@ -116,7 +116,7 @@ def test_bars_landing_in_a_batch_still_fire(panel):
     first_now = bars[-1]["dt"] + timedelta(minutes=5)
     panel._poll_runner_dips(now=first_now)
     assert panel._events == []
-    for index, close in enumerate((99.95, 100.5, 100.5)):
+    for close in (99.95, 100.5, 100.5):
         start = bars[-1]["dt"] + timedelta(minutes=5)
         bars.append({"dt": start, "open": close, "high": close + 0.1, "low": close - 0.1, "close": close,
                      "volume": 1000.0})
@@ -180,5 +180,67 @@ def test_the_worker_cache_reads_the_file_once_per_change(tmp_path, monkeypatch):
         for thread in threading.enumerate():
             if thread.name == "runner-dip-watch-read":
                 thread.join(5)
+    finally:
+        long_setups_store.set_runner_dip_snapshot(None)
+
+
+# --- a desk restart never fires a name twice in one session
+
+def test_a_name_that_fired_before_a_restart_does_not_fire_again(panel):
+    long_setups_store.set_runner_dip_snapshot(PAYLOAD, seed=("2026-09-28", frozenset({"GTLB"})))
+    panel._poll_runner_dips(now=NOW)
+    assert panel._events == [] and panel._alerts_added == []
+
+
+def test_nothing_fires_until_the_worker_has_read_todays_fires(panel):
+    long_setups_store.set_runner_dip_snapshot(PAYLOAD)  # no seed yet
+    panel._poll_runner_dips(now=NOW)
+    assert panel._events == []
+    long_setups_store.set_runner_dip_snapshot(PAYLOAD, seed=("2026-09-27", frozenset()))  # yesterday's
+    panel._poll_runner_dips(now=NOW)
+    assert panel._events == []
+    long_setups_store.set_runner_dip_snapshot(PAYLOAD, seed=("2026-09-28", frozenset()))
+    panel._poll_runner_dips(now=NOW)
+    assert [action for action, _kw in panel._events] == [runner_dip_watch.FIRED_ACTION]
+
+
+def test_the_poll_asks_the_worker_for_todays_seed_and_reads_no_review_file(panel, monkeypatch):
+    import review_events
+
+    asked = []
+    monkeypatch.setattr(long_setups_store, "refresh_runner_dip_async",
+                        lambda path=None, **kw: asked.append(kw) or False)
+
+    def refuse(*_a, **_k):
+        raise AssertionError("the Qt thread read the review events")
+
+    monkeypatch.setattr(review_events, "review_event_sources", refuse)
+    monkeypatch.setattr(long_setups_store, "read_runner_dip_fired", refuse)
+    panel._poll_runner_dips(now=NOW)
+    assert asked == [{"day": "2026-09-28"}] and panel._events
+
+
+def test_the_worker_seeds_todays_fires_from_the_review_events(tmp_path, monkeypatch):
+    import json
+
+    import review_events
+
+    events = tmp_path / "events.jsonl"
+    rows = [
+        {"action": "runner_dip_fired", "symbol": "GTLB", "detail": {"session": "2026-09-28"}},
+        {"action": "runner_dip_fired", "symbol": "CRM", "detail": {"session": "2026-09-25"}},
+        {"action": "watch_fired", "symbol": "ANF", "detail": {"session": "2026-09-28"}},
+    ]
+    events.write_text("\n".join(json.dumps(row) for row in rows) + "\n{bad\n", encoding="utf-8")
+    monkeypatch.setattr(review_events, "review_event_sources", lambda *a, **k: [events])
+    assert long_setups_store.read_runner_dip_fired("2026-09-28") == frozenset({"GTLB"})
+    runner = tmp_path / "runner_dip_watch.json"
+    runner.write_text(json.dumps(PAYLOAD), encoding="utf-8")
+    long_setups_store.set_runner_dip_snapshot(None)
+    try:
+        assert long_setups_store.runner_dip_fired_seed("2026-09-28") is None
+        long_setups_store._refresh_runner_dip(runner, "2026-09-28")
+        assert long_setups_store.runner_dip_fired_seed("2026-09-28") == frozenset({"GTLB"})
+        assert long_setups_store.runner_dip_fired_seed("2026-09-29") is None
     finally:
         long_setups_store.set_runner_dip_snapshot(None)

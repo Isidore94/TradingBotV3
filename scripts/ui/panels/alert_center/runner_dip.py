@@ -36,23 +36,28 @@ class RunnerDipWatchMixin:
 
     def _poll_runner_dips(self, now: datetime | None = None) -> None:
         """Evaluate each armed runner on its cached M5 bars; fire once per name per session."""
+        moment = now or datetime.now()
+        day = moment.date().isoformat()
         try:
-            long_setups_store.refresh_runner_dip_async()
+            # The worker also reads today's fires from the review events (a restart's seed).
+            long_setups_store.refresh_runner_dip_async(day=day)
         except Exception as exc:  # the cached payload stays
             note_swallowed("runner dip watch refresh not started", exc, quiet=True)
-        moment = now or datetime.now()
         payload = long_setups_store.runner_dip_snapshot()
         self._set_runner_dip_status(runner_dip_watch.status_line(payload, today=moment.date()))
         members = runner_dip_watch.armed_members(payload, today=moment.date())
         if not members:
             return
+        seed = long_setups_store.runner_dip_fired_seed(day)
+        if seed is None:
+            return  # today's earlier fires are not read yet: never risk a second fire
         fired = getattr(self, "_runner_dips_fired", None)
         if fired is None:
             fired = self._runner_dips_fired = set()
+        fired.update((symbol, day) for symbol in seed)
         checked = getattr(self, "_runner_dip_checked", None)
         if checked is None:
             checked = self._runner_dip_checked = {}
-        day = moment.date().isoformat()
         for member in members:
             symbol = str(member.get("symbol") or "").strip().upper()
             if not symbol or (symbol, day) in fired:
