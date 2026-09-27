@@ -208,6 +208,25 @@ def test_backfill_stores_rth_m30_quarantines_the_rest_and_is_idempotent(store):
     assert again.rows_published.get("bar_derived_history", 0) == 0
 
 
+def test_a_window_sealed_under_the_old_window_size_is_asked_again_and_fills_its_gap(store):
+    import json
+
+    days = _days(WEEK, date(2026, 9, 25))
+    fetcher = FakeFetcher({"SPY": [b for b in session_bars(days) if b["interval_start"].astimezone(xcal.EXCHANGE_TZ).date() != WEEK]})
+    _run(store, ["SPY"], fetcher)
+    path = hist.HistoryLedger(store.root, hib.LEDGER_NAME).path
+    old_style = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    for record in old_style:
+        record.pop("window_days", None)  # written before 365-day windows (live 2026-09-27)
+    path.write_text("".join(json.dumps(r) + "\n" for r in old_style), encoding="utf-8")
+
+    fetcher.bars["SPY"] = session_bars(days)
+    report = _run(store, ["SPY"], fetcher)
+    assert len(fetcher.calls) == 2
+    assert report.rows_published["bar_m30"] == 13  # only the missing Monday
+    assert len(hr.read_intraday("M30", ["SPY"], store=store, now=SATURDAY)["SPY"]) == 65
+
+
 def test_h1_and_h4_are_derived_from_m30_and_the_reader_serves_one_basis(store):
     days = _days(WEEK, date(2026, 9, 25))
     fetcher = FakeFetcher({"SPY": session_bars(days)})

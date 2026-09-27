@@ -527,8 +527,11 @@ def _split_days(store, symbols) -> dict[str, set]:
 # the job
 # ---------------------------------------------------------------------------
 def _window_closed(record: dict | None, revision: str, last: date) -> bool:
+    """Closed = sealed under this revision, through ``last``, with today's window size."""
     if not record or record.get("status") not in CLOSED_STATUSES or record.get("revision") != revision:
         return False
+    if record.get("window_days") != WINDOW_DAYS:
+        return False  # sealed under another window size: its span may differ
     try:
         return date.fromisoformat(str(record.get("through"))) >= last
     except ValueError:
@@ -664,7 +667,7 @@ def run_ib_backfill(
                     key = f"{symbol}|{first.isoformat()}"
                     if _window_closed(memory.get(key), revision, last):
                         continue
-                    base = {"key": key, "sym": symbol, "revision": revision, "through": last.isoformat(), "at": stamp.isoformat(), "run_id": run_id}
+                    base = {"key": key, "sym": symbol, "revision": revision, "through": last.isoformat(), "window_days": WINDOW_DAYS, "at": stamp.isoformat(), "run_id": run_id}
                     if listed_after is not None and last < listed_after:
                         pending_ledger.append({**base, "status": EMPTY_INFERRED, "rows": 0})
                         continue
