@@ -135,6 +135,15 @@ def test_at_most_fifteen_armed_by_rs():
     assert armed[0] == "S19" and "S04" not in armed and "S05" in armed
 
 
+def test_under_the_avwape_names_take_the_cap_first_then_rs():
+    """Lead, 2026-09-27: Friday armed 15 by RS and left CMBT and FRO (under the AVWAPE) out."""
+    members = [_m(f"S{index:02d}", 0.99 - index / 1000, 0.5) for index in range(20)]
+    members += [_m("UNDERLOW", 0.901, -0.3), _m("UNDERHI", 0.95, -1.2)]
+    armed = rdw.arm(members, "yes")
+    assert len(armed) == 15 and armed[:2] == ["UNDERHI", "UNDERLOW"]
+    assert armed[2:] == [f"S{index:02d}" for index in range(13)]
+
+
 def test_the_armed_list_serves_the_next_sessions_only():
     payload = {"as_of": "2026-09-25", "market_working": "yes",
                "members": [{"symbol": "gtlb", "armed": True}, {"symbol": "NVDA", "armed": False}]}

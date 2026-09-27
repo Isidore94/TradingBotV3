@@ -122,9 +122,16 @@ def near_avwape(member: Mapping[str, Any]) -> bool:
 
 
 def arm(members: list[dict[str, Any]], working: str) -> list[str]:
-    """Mark each member ``armed`` (working market + near the AVWAPE, top `ARMED_MAX` by RS)."""
+    """Mark each member ``armed`` (working market + near the AVWAPE). The `ARMED_MAX` cap takes the
+    names already under the AVWAPE first, then RS (lead, 2026-09-27)."""
+
+    def order(row):
+        close, level = _num(row.get("close")), _num(row.get("avwape"))
+        under = close is not None and level is not None and close < level
+        return (not under, -(row.get("rs_percentile") or 0.0), row["symbol"])
+
     armed: list[str] = []
-    for member in sorted(members, key=lambda row: (-(row.get("rs_percentile") or 0.0), row["symbol"])):
+    for member in sorted(members, key=order):
         member["armed"] = working == "yes" and len(armed) < ARMED_MAX and near_avwape(member)
         if member["armed"]:
             armed.append(member["symbol"])
