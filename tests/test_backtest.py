@@ -482,3 +482,19 @@ def test_cli_run_reads_the_lake_through_the_history_and_regime_readers(tmp_path,
     assert (cand[cand.signal_date < first_regime].rg_trend20 == bt.NO_LABEL).all()
     assert trial_ledger.load(out)[0]["trial_id"] == "backtest_e2e"
     assert not trial_ledger.load(tmp_path / "lake"), "the read lake gets no ledger row"
+
+
+def test_earnings_setups_are_unmeasured_without_earnings_dates(tmp_path):
+    """No earnings dates in the lake = "no earnings data yet", never an empty result shown as one."""
+    bars, _earnings, days = universe(n_names=8, n_bars=420, seed=4)
+    result = bt.run_backtest(bt.Inputs(bars=bars, earnings={}), root=tmp_path, min_avg_volume=0, run_id="ne")
+    needs = {s.key for s in bs.REGISTRY if s.needs_earnings}
+    assert needs == {"strength_under_avwape", "favourite_zone_long", "favourite_zone_short",
+                     "weak_rally_to_avwape", "post_earnings_drift"}
+    summary = result["summary"]
+    assert summary["unmeasured_setups"] == dict.fromkeys(needs, bt.NO_EARNINGS)
+    shown = {c["setup"] for c in summary["straight_up"]}
+    assert shown and not shown & needs
+    for side in summary["ranked"].values():
+        assert not {c["setup"] for c in side["best"] + side["worst"]} & needs
+    assert "NOT MEASURED: no earnings data yet" in bt.format_report(summary)

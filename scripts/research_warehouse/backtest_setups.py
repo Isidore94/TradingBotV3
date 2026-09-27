@@ -468,27 +468,29 @@ class Setup:
     version: str
     fn: Callable[[Ctx], Result]
     approx: bool = False
+    needs_earnings: bool = False  # reads earnings dates: no dates = no measurement, not a result
     note: str = ""
 
     def meta(self) -> dict[str, Any]:
         return {"key": self.key, "side": self.side, "family": self.family, "version": self.version,
-                "approx": self.approx, "note": self.note, "rule": (self.fn.__doc__ or "").strip()}
+                "approx": self.approx, "needs_earnings": self.needs_earnings, "note": self.note, "rule": (self.fn.__doc__ or "").strip()}
 
 
 REGISTRY: tuple[Setup, ...] = (
     Setup("leader_pullback", LONG, "pullback", "1", _leader_pullback_cached, approx=True,
           note="live long_setups.leader_pullback; no sector / top-pattern bonus facts in bars"),
-    Setup("strength_under_avwape", LONG, "pullback", "1", strength_under_avwape, approx=True,
+    Setup("strength_under_avwape", LONG, "pullback", "1", strength_under_avwape, approx=True, needs_earnings=True,
           note="live promotion tier; its SPY-above-rising-20d part is a regime axis here"),
-    Setup("favourite_zone_long", LONG, "earnings_avwap", "1", favourite_zone_long, approx=True,
+    Setup("favourite_zone_long", LONG, "earnings_avwap", "1", favourite_zone_long, approx=True, needs_earnings=True,
           note="retired live setup, kept for contrast; anchor from the earnings-dates store"),
     Setup("high_52w_breakout", LONG, "breakout", "1", high_52w_breakout),
-    Setup("post_earnings_drift", LONG, "earnings_drift", "1", post_earnings_drift_live, approx=True,
+    Setup("post_earnings_drift", LONG, "earnings_drift", "1", post_earnings_drift_live, approx=True, needs_earnings=True,
           note="live long_setups.post_earnings_drift; gap size in ATR(14) of the prior bar"),
     Setup("rising_20_50_baseline", LONG, "baseline", "1", rising_20_50_baseline),
-    Setup("favourite_zone_short", SHORT, "earnings_avwap", "1", favourite_zone_short, approx=True,
+    Setup("favourite_zone_short", SHORT, "earnings_avwap", "1", favourite_zone_short, approx=True, needs_earnings=True,
           note="mirror of the favourite-zone long after an earnings gap down"),
-    Setup("weak_rally_to_avwape", SHORT, "earnings_avwap", "1", weak_rally_to_avwape),
+    Setup("weak_rally_to_avwape", SHORT, "earnings_avwap", "1", weak_rally_to_avwape,
+          needs_earnings=True),
     Setup("low_52w_breakdown", SHORT, "breakout", "1", low_52w_breakdown),
     Setup("falling_20_50_baseline", SHORT, "baseline", "1", falling_20_50_baseline),
 )

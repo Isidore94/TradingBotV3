@@ -715,9 +715,12 @@ def run_backtest(inputs: Inputs, *, root: Path, setups: Sequence[bs.Setup] | Non
     signal_range = ([str(candidates["signal_date"].min().date()), str(candidates["signal_date"].max().date())]
                     if not candidates.empty else [None, None])
     counts = candidates.groupby("setup").size().to_dict() if not candidates.empty else {}
+    unmeasured = unmeasured_setups(setups, ctxs)
+    shown = [c for c in cells if c["setup"] not in unmeasured]
     summary = {
         "schema": SCHEMA, "run_id": run_id, "caveats": list(CAVEATS),
-        "straight_up": straight_up(cells), "ranked": rank_cells(cells),
+        "unmeasured_setups": unmeasured,
+        "straight_up": straight_up(shown), "ranked": rank_cells(shown),
         "cells": cells, "flags_per_setup": counts, "family_trials_to_date": family_trials(root),
     }
     timings["total_s"] = time.perf_counter() - t_start
@@ -738,6 +741,17 @@ def run_backtest(inputs: Inputs, *, root: Path, setups: Sequence[bs.Setup] | Non
     path = write_run(root, run_id, tables={"candidates": candidates, "cells": cells_frame},
                      summary=summary, manifest=manifest)
     return {"run_id": run_id, "path": path, "summary": summary, "manifest": manifest}
+
+
+NO_EARNINGS = "no earnings data yet"
+
+
+def unmeasured_setups(setups: Sequence[bs.Setup], ctxs: Mapping[str, bs.Ctx]) -> dict[str, str]:
+    """Setups that read earnings dates when no stock has any: their empty result is missing
+    input, not evidence, so they are listed here and kept out of the straight-up and ranked views."""
+    if any(c.earnings for s, c in ctxs.items() if is_stock(s)):
+        return {}
+    return {s.key: NO_EARNINGS for s in setups if s.needs_earnings}
 
 
 def _rule_version(regimes: pd.DataFrame) -> str:
@@ -973,6 +987,8 @@ def format_report(summary: Mapping[str, Any], manifest: Mapping[str, Any] | None
                          f"{_rate(c['wilson_lb']):>5} {_pct(c['mean_vs_spy']):>7} {_pct(c['median_vs_spy']):>7} "
                          f"{'-' if c['mean_R'] is None else format(c['mean_R'], '+.2f'):>6} {c['n_test']:>6} "
                          f"{_rate(c['win_test']):>6} {_pct(c['mean_test']):>7}")
+        for key, why in (summary.get("unmeasured_setups") or {}).items():
+            lines.append(f"{key[:24]:24} NOT MEASURED: {why}")
         for side, ranked in summary["ranked"].items():
             for which in ("best", "worst"):
                 lines.append(f"{side} {which} regime cells (n >= {MIN_CELL_N}):")
