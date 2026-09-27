@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QFrame, QLabel, QTabWidget, QVBoxLayout
+from PySide6.QtWidgets import (
+    QButtonGroup,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ui.panels.daytrade_tracker_panel import DaytradeTrackerPanel
 from ui.panels.long_lab_panel import LongLabPanel
@@ -15,7 +25,39 @@ from ui.panels.setup_tracker_panel import SetupTrackerPanel
 from ui.panels.ticker_lookup_panel import TickerLookupPanel
 from ui.panels.warehouse_readout_panel import WarehouseReadoutPanel
 from ui.services.price_alert_service import PriceAlertService
+from ui import theme
 from ui.widgets.section_header import SectionHeader
+
+
+LOCAL_NAV_DESTINATIONS = (
+    ("Results", (("Results", "results_panel"),)),
+    (
+        "Setups",
+        (
+            ("Setup Tracker", "setup_tracker_panel"),
+            ("Setup Playbook", "setup_docs_panel"),
+            ("Setup keys", "setup_keys_panel"),
+        ),
+    ),
+    (
+        "Studies",
+        (
+            ("Move Forensics", "move_forensics_panel"),
+            ("Day Trade Tracker", "daytrade_tracker_panel"),
+            ("Long lab", "long_lab_panel"),
+            ("Retest entry", "retest_study_panel"),
+        ),
+    ),
+    (
+        "Tools",
+        (
+            ("Master AVWAP Market Prep", "market_prep_panel"),
+            ("Ticker Lookup", "ticker_lookup_panel"),
+            ("Price Alerts", "price_alerts_panel"),
+        ),
+    ),
+    ("Data", (("Research Warehouse", "warehouse_readout_panel"),)),
+)
 
 
 class ResearchPanel(QFrame):
@@ -67,31 +109,70 @@ class ResearchPanel(QFrame):
         # break the day a second one appears.
         self.tabs = tabs
         tabs.setCurrentIndex(0)
+        tabs.tabBar().hide()
+
+        self.local_nav_buttons: dict[str, QPushButton] = {}
+        self.local_nav_groups: dict[str, tuple[QPushButton, ...]] = {}
+        self.local_nav_destinations: dict[str, QWidget] = {}
+        nav_group = QButtonGroup(self)
+        nav_group.setExclusive(True)
+        navigation = QFrame()
+        navigation.setObjectName("NavRail")
+        navigation.setProperty("researchNavigation", True)
+        navigation.setMinimumWidth(theme.px(205))
+        navigation.setMaximumWidth(theme.px(250))
+        navigation_layout = QVBoxLayout(navigation)
+        navigation_layout.setContentsMargins(
+            theme.px(10), theme.px(12), theme.px(10), theme.px(12)
+        )
+        navigation_layout.setSpacing(theme.px(8))
+        for group_title, destinations in LOCAL_NAV_DESTINATIONS:
+            heading = QLabel(group_title)
+            heading.setObjectName("MutedLabel")
+            navigation_layout.addWidget(heading)
+            buttons: list[QPushButton] = []
+            for label, panel_name in destinations:
+                destination = getattr(self, panel_name)
+                button = QPushButton(label)
+                button.setObjectName("NavButton")
+                button.setCheckable(True)
+                button.setSizePolicy(
+                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+                )
+                button.setMinimumHeight(theme.px(34))
+                nav_group.addButton(button)
+                button.clicked.connect(
+                    lambda _checked=False, page=destination: tabs.setCurrentWidget(page)
+                )
+                buttons.append(button)
+                self.local_nav_buttons[label] = button
+                self.local_nav_destinations[label] = destination
+                navigation_layout.addWidget(button)
+            self.local_nav_groups[group_title] = tuple(buttons)
+        navigation_layout.addStretch(1)
+        tabs.currentChanged.connect(self._sync_local_navigation)
+        self._sync_local_navigation(tabs.currentIndex())
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
-        layout.addWidget(SectionHeader("Research", "Market prep, setup performance, and ticker lookup."))
-
-        # V3 item 5. Decision 0016: *"the Research tab is the builder's surface,
-        # not the trader's. Nothing the trader must see may live only there."*
-        # The pointer is here rather than in a doc because this is the screen
-        # somebody stands on when they wonder whether a number belongs here.
-        pointer = QLabel(
-            "Results is the trader's page here and it opens first: the full "
-            "readout of what is working, with Bot setups / My trades and Swing "
-            "/ Day trading kept as four separate populations. Every other tab "
-            "is the BUILDER'S surface. Nothing the trader has to see may live "
-            "only in Research - the Desk's own \"what is working lately\" line "
-            "stays the primary surface and reads the same snapshot as Results, "
-            "and the Trading Desk (Capture), the Journal, Weekend Prep and the "
-            "AWAY Recap still carry every number that matters."
+        header = SectionHeader(
+            "Research", "Results for the trader; studies are research."
         )
-        pointer.setObjectName("MutedLabel")
-        pointer.setWordWrap(True)
-        layout.addWidget(pointer)
+        header.title_label.setObjectName("TitleLabel")
+        layout.addWidget(header)
 
-        layout.addWidget(tabs, 1)
+        workspace = QHBoxLayout()
+        workspace.setContentsMargins(0, 0, 0, 0)
+        workspace.setSpacing(theme.px(12))
+        workspace.addWidget(navigation, 0)
+        workspace.addWidget(tabs, 1)
+        layout.addLayout(workspace, 1)
+
+    def _sync_local_navigation(self, index: int) -> None:
+        current = self.tabs.widget(index)
+        for label, button in self.local_nav_buttons.items():
+            button.setChecked(self.local_nav_destinations[label] is current)
 
     def set_working_lately_snapshot(self, payload) -> None:
         """Forward the desk's ONE snapshot to the Results page (packet G5.2).

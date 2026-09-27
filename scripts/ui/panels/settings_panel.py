@@ -185,19 +185,23 @@ class SettingsPanel(QFrame):
         form.addRow("Density", self.compact_input)
         form.addRow("UI scale", self.ui_scale_input)
         form.addRow("", self.ui_scale_hint)
-        form.addRow("Trade Mentor", self.trade_mentor_input)
-        form.addRow("", self.trade_mentor_hint)
+        risk_form = QFormLayout()
+        risk_form.setSpacing(10)
+        risk_form.addRow("Trade Mentor", self.trade_mentor_input)
+        risk_form.addRow("", self.trade_mentor_hint)
         mentor_row = QHBoxLayout()
         mentor_row.setContentsMargins(0, 0, 0, 0)
         mentor_row.setSpacing(8)
         mentor_row.addWidget(self.trade_mentor_next)
         mentor_row.addWidget(self.trade_mentor_pause)
         mentor_row.addStretch(1)
-        form.addRow("", mentor_row)
-        form.addRow("Risk per trade ($)", self.risk_input)
-        form.addRow("", self.risk_hint)
-        form.addRow("Data folder", self.data_dir_label)
-        form.addRow("Storage source", self.source_label)
+        risk_form.addRow("", mentor_row)
+        risk_form.addRow("Risk per trade ($)", self.risk_input)
+        risk_form.addRow("", self.risk_hint)
+        storage_form = QFormLayout()
+        storage_form.setSpacing(10)
+        storage_form.addRow("Data folder", self.data_dir_label)
+        storage_form.addRow("Storage source", self.source_label)
 
         data_actions = QHBoxLayout()
         data_actions.setContentsMargins(0, 0, 0, 0)
@@ -207,16 +211,34 @@ class SettingsPanel(QFrame):
         data_actions.addStretch(1)
 
         general_page = QFrame()
-        general_page.setObjectName("Panel")
+        general_page.setObjectName("SettingsGeneral")
         general_layout = QVBoxLayout(general_page)
         general_layout.setContentsMargins(12, 12, 12, 12)
         general_layout.setSpacing(10)
-        general_layout.addWidget(
-            SectionHeader("General", "Per-machine presentation and durable storage.")
-        )
-        general_layout.addLayout(form)
-        general_layout.addLayout(data_actions)
-        general_layout.addWidget(self.warm_status)
+        self.general_groups = {}
+        for title, section_form in (
+            ("Appearance", form), ("Risk and Mentor", risk_form), ("Storage", storage_form),
+        ):
+            group = QFrame()
+            group.setObjectName("InfoDrawer")
+            group_layout = QVBoxLayout(group)
+            group_layout.setContentsMargins(16, 16, 16, 16)
+            group_layout.setSpacing(12)
+            group_layout.addWidget(SectionHeader(title))
+            group_layout.addLayout(section_form)
+            self.general_groups[title] = group
+        self.general_groups["Storage"].layout().addLayout(data_actions)
+        self.general_groups["Storage"].layout().addWidget(self.warm_status)
+        columns = QHBoxLayout()
+        columns.setSpacing(16)
+        columns.addWidget(self.general_groups["Appearance"], 1, Qt.AlignTop)
+        right = QVBoxLayout()
+        right.setSpacing(16)
+        right.addWidget(self.general_groups["Risk and Mentor"])
+        right.addWidget(self.general_groups["Storage"])
+        right.addStretch(1)
+        columns.addLayout(right, 1)
+        general_layout.addLayout(columns)
         general_layout.addStretch(1)
 
         self.settings_tabs = QTabWidget()
@@ -235,12 +257,9 @@ class SettingsPanel(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
-        layout.addWidget(
-            SectionHeader(
-                "Settings",
-                "Presentation, data, and live-engine controls.",
-            )
-        )
+        header = SectionHeader("Settings", "Presentation, data, and live-engine controls.")
+        header.title_label.setObjectName("TitleLabel")
+        layout.addWidget(header)
         layout.addWidget(self.settings_tabs, 1)
 
     def _build_bounce_section(self) -> QFrame:

@@ -83,6 +83,7 @@ class UniversePanel(QFrame):
 
         self.build_status = QLabel("")
         self.build_status.setObjectName("MutedLabel")
+        self.build_status.setWordWrap(True)
 
         self.universe_text = QPlainTextEdit()
         self.universe_text.setReadOnly(True)
@@ -122,7 +123,7 @@ class UniversePanel(QFrame):
         action_row = QHBoxLayout()
         action_row.setSpacing(6)
         action_row.addWidget(self.list_selector)
-        action_row.addWidget(QLabel("Options:"))
+        action_row.addWidget(QLabel("Build filter:"))
         action_row.addWidget(self.options_filter_selector)
         action_row.addWidget(self.build_button)
         action_row.addWidget(refresh_button)
@@ -161,15 +162,18 @@ class UniversePanel(QFrame):
         splitter.setSizes([620, 620])
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
-        layout.addWidget(
-            SectionHeader(
-                "Universe",
-                "Self-built scan universe (optionable/weeklies filter + price/volume/cap/trend "
-                "screen via yfinance -- no IBKR pacing). Validate it against your TC2000 list on the right.",
-            )
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        header = SectionHeader(
+            "Universe",
+            "Inspect scan coverage and compare it with your TC2000 list.",
         )
+        header.title_label.setObjectName("TitleLabel")
+        header.subtitle_label.setToolTip(
+            "The build applies the selected options filter plus price, volume, cap and trend screens. "
+            "Market data comes from yfinance without using IBKR pacing."
+        )
+        layout.addWidget(header)
         layout.addWidget(splitter, 1)
 
     # ------------------------------------------------------------------

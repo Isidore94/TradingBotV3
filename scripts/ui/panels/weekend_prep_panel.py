@@ -114,7 +114,14 @@ class _StepPage(QFrame):
 
     statusChanged = Signal(str)
 
-    def __init__(self, step_id: str, service: WeekendPrepService, parent=None) -> None:
+    def __init__(
+        self,
+        step_id: str,
+        service: WeekendPrepService,
+        parent=None,
+        *,
+        scroll_content: bool = True,
+    ) -> None:
         super().__init__(parent)
         self.step_id = step_id
         self.service = service
@@ -129,17 +136,29 @@ class _StepPage(QFrame):
         self.skip_button = QPushButton("Skip this week")
         self.skip_button.clicked.connect(lambda: self._set_status("skipped"))
 
-        self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.addWidget(self.heading)
-        self._layout.addWidget(self.subtitle)
+        self._root_layout = QVBoxLayout(self)
+        self._root_layout.setContentsMargins(0, 0, 0, 0)
+        self._root_layout.addWidget(self.heading)
+        self._root_layout.addWidget(self.subtitle)
+        self.content_scroll: QScrollArea | None = None
+        if scroll_content:
+            body = QWidget()
+            self._layout = QVBoxLayout(body)
+            self._layout.setContentsMargins(0, 0, 0, 0)
+            self.content_scroll = QScrollArea(self)
+            self.content_scroll.setWidgetResizable(True)
+            self.content_scroll.setFrameShape(QFrame.NoFrame)
+            self.content_scroll.setWidget(body)
+            self._root_layout.addWidget(self.content_scroll, 1)
+        else:
+            self._layout = self._root_layout
 
     def _finish_layout(self) -> None:
         footer = QHBoxLayout()
         footer.addStretch(1)
         footer.addWidget(self.skip_button)
         footer.addWidget(self.done_button)
-        self._layout.addLayout(footer)
+        self._root_layout.addLayout(footer)
 
     def _set_status(self, status: str) -> None:
         self.service.set_step_status(self.step_id, status)
@@ -1202,7 +1221,7 @@ class FocusReviewPage(_StepPage):
     """Step 2: how the week's focus picks behaved."""
 
     def __init__(self, service, parent=None) -> None:
-        super().__init__("focus_review", service, parent)
+        super().__init__("focus_review", service, parent, scroll_content=False)
         self.subtitle.setText(
             "The week's focus picks and their outcomes; both graded cohorts "
             "beside them - what you vetoed and what you liked; the picks' own "
@@ -3068,7 +3087,7 @@ class WeekendPrepPanel(QFrame):
         self.header = QLabel("")
         self.header.setObjectName("WeekendHeader")
 
-        # V2 item 2a/2b: ONE Refresh and a verdict card, above the whole tab.
+        # V2 item 2a/2b: ONE Refresh for the tab; the verdict lives in Week Review.
         #
         # The trader's complaint, in their own words: the first screen is a wall
         # of text whose three callout lines are the only part that matters, the
@@ -3090,13 +3109,11 @@ class WeekendPrepPanel(QFrame):
         self.building_note.setObjectName("MutedLabel")
         self.building_note.setWordWrap(True)
         # ST5.4: `Confirmed tags: C of T closed trades. Provisional awaiting
-        # review: P. Planned risk recorded: R of T.` - one sentence, UNDER the
-        # card rather than in it, because the card is five to eight lines by the
-        # trader's own request. Filled from the tag page's worker.
-        self.coverage_note = QLabel("")
-        self.coverage_note.setObjectName("MutedLabel")
-        self.coverage_note.setWordWrap(True)
-        self.tag_week.coverageChanged.connect(self.coverage_note.setText)
+        # review: P. Planned risk recorded: R of T.` - one sentence kept on Tag
+        # Week beside the work it describes, filled from that page's worker.
+        # Keep the panel-level access path while showing coverage only in the
+        # Tag Week step where the trader can act on it.
+        self.coverage_note = self.tag_week.coverage_note
         self._verdict_worker = None
         # B11: the setup-research narration, shown on Week Ahead, read on a ReadWorker.
         self._setup_research_worker = None
@@ -3112,10 +3129,13 @@ class WeekendPrepPanel(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.addLayout(top)
-        layout.addWidget(self.verdict_card)
-        layout.addWidget(self.coverage_note)
         layout.addWidget(self.building_note)
         layout.addLayout(body, 1)
+
+        # The week verdict belongs with the week review, not above every step.
+        # This gives other steps more working height while retaining the same
+        # label and worker-driven updates.
+        self.week_review._layout.insertWidget(0, self.verdict_card)
 
         self.service.stateChanged.connect(self._refresh_rail)
         self.service.statusChanged.connect(self.statusChanged)

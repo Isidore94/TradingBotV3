@@ -124,6 +124,7 @@ from ui.widgets.alert_chart_review import AlertChartReview
 from ui.widgets.armed_watch_list import ArmedWatchList
 from ui.widgets.entry_assist_board import EntryAssistBoard
 from ui.widgets.focus_strength_board import FocusStrengthBoard
+from ui.widgets.flow_layout import FlowLayout
 from ui.widgets.movers_board import MoversBoard
 from ui.widgets.rrs_snapshot import RrsSnapshotWidget
 from ui.widgets.section_header import SectionHeader
@@ -1159,6 +1160,27 @@ class AlertCenterPanel(
         )
         self._fill_controls(controls)
 
+        compact_controls = QWidget(self)
+        compact_controls.setObjectName("DeskAlertControls")
+        compact_controls.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        compact_controls_layout = QVBoxLayout(compact_controls)
+        compact_controls_layout.setContentsMargins(0, 0, 0, 0)
+        compact_controls_layout.setSpacing(2)
+        compact_flow = FlowLayout(spacing=6)
+        compact_flow.setContentsMargins(0, 0, 0, 0)
+        compact_controls_layout.addLayout(compact_flow)
+        self._compact_controls_host = compact_controls
+        self._compact_controls_layout = compact_controls_layout
+        self._compact_controls_flow = compact_flow
+        self._compact_control_widgets = tuple(
+            widget
+            for widget in self._control_widgets
+            if widget is not None and widget is not self.longs_off_banner
+        )
+        compact_controls.hide()
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(6)
@@ -1205,11 +1227,11 @@ class AlertCenterPanel(
             # The desk takes the column next; until then it has no parent.
             self.movers_column.setParent(None)
             self.splitter.setVisible(False)
-            self._set_controls_in_tab_corner(True)
+            self._set_controls_in_compact_toolbar(True)
             self._drawer.activate(self.chart_review, self.tabs_row)
         else:
             self._drawer.deactivate()
-            self._set_controls_in_tab_corner(False)
+            self._set_controls_in_compact_toolbar(False)
             self.splitter.insertWidget(0, self.chart_review)
             self.splitter.insertWidget(1, self.tabs_row)
             if self.movers_column.parent() is not self.tabs_row:
@@ -1239,32 +1261,31 @@ class AlertCenterPanel(
             else:
                 row.addWidget(widget)
 
-    def _set_controls_in_tab_corner(self, corner: bool) -> None:
-        """Compact: the control row rides the drawer's tab bar, not a row of its own."""
-        if corner:
-            host = getattr(self, "_controls_corner", None)
-            if host is None:
-                host = QWidget()
-                host.setObjectName("AlertControlsCorner")
-                row = QHBoxLayout(host)
-                row.setContentsMargins(0, 0, theme.px(4), 0)
-                row.setSpacing(6)
-                self._controls_corner = host
+    def _set_controls_in_compact_toolbar(self, compact: bool) -> None:
+        """Move the existing controls between the classic row and compact toolbar."""
+        host = self._compact_controls_host
+        if compact:
+            self._root_layout.removeItem(self._controls_layout)
             while self._controls_layout.count():
                 self._controls_layout.takeAt(0)
-            self._fill_controls(host.layout())
-            self.tabs.setCornerWidget(host, Qt.Corner.TopRightCorner)
+            while self._compact_controls_flow.count():
+                self._compact_controls_flow.takeAt(0)
+            for widget in self._compact_control_widgets:
+                self._compact_controls_flow.addWidget(widget)
+            self.longs_off_banner.setWordWrap(True)
+            self._compact_controls_layout.addWidget(self.longs_off_banner)
+            self._root_layout.insertWidget(0, host)
             host.setVisible(True)
         else:
-            host = getattr(self, "_controls_corner", None)
-            if host is None:
-                return
             self.tabs.setCornerWidget(None, Qt.Corner.TopRightCorner)
-            host.setParent(self)
+            self._compact_controls_layout.removeWidget(self.longs_off_banner)
+            while self._compact_controls_flow.count():
+                self._compact_controls_flow.takeAt(0)
+            self.longs_off_banner.setWordWrap(False)
+            self._root_layout.removeWidget(host)
             host.setVisible(False)
-            while host.layout().count():
-                host.layout().takeAt(0)
             self._fill_controls(self._controls_layout)
+            self._root_layout.insertLayout(0, self._controls_layout)
 
     def _reveal_drawer(self) -> None:
         """A hotkey that raises a tab opens the compact drawer too."""

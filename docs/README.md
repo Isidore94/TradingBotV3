@@ -1,5 +1,7 @@
 # docs/
 
+- `../gui.md`: approved GUI design direction, page map and implementation status; trading rules stay in RULES.md.
+
 - `RULES.md`: the desk's rules by area. Read only the section you're changing.
 - `GATES.md`: live checks still owed, one line each.
 - `DECISIONS.md`: the accepted decisions, one line each.

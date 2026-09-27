@@ -62,11 +62,14 @@ NEW_SALE = dict(AAOI_SELL_1, id=7099, exchangeExecId="EXEC-7099",
 
 @pytest.fixture
 def local_settings_restored():
+    import journal_importers
     import project_paths
 
     path = Path(project_paths.LOCAL_SETTINGS_FILE)
     before = path.read_bytes() if path.is_file() else None
     try:
+        # Each repair starts before the import convention has been enabled.
+        project_paths.save_local_setting(journal_importers.QUESTRADE_INSTRUMENT_SETTING, None)
         yield
     finally:
         if before is None:

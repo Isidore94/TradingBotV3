@@ -776,7 +776,7 @@ class DayReviewPanel(QFrame):
         from PySide6.QtGui import QKeySequence, QShortcut
 
         self.heading = QLabel("Day Review")
-        self.heading.setObjectName("SectionTitle")
+        self.heading.setObjectName("TitleLabel")
         self.subtitle = QLabel(
             "One day: what happened, what you passed on, what you said and what "
             "you traded. Best available movement - never money earned."
@@ -998,6 +998,8 @@ class DayReviewPanel(QFrame):
                 "trades": getattr(self, "traded_section", None),
                 "status": self.status,
                 "story": getattr(self, "story_section", None),
+                "ideas": getattr(self, "ideas_section", None),
+                "plan": self.plan_view,
             }.get(name)
         if widget is None:
             return None
@@ -1589,7 +1591,6 @@ class DayReviewPanel(QFrame):
         glance_row = QHBoxLayout()
         glance_row.setContentsMargins(0, 0, 0, 0)
         glance_row.addWidget(self.glance_strip, 1)
-        glance_row.addWidget(self.walk_button, 0, Qt.AlignBottom)
         glance_row.addWidget(self.show_button, 0, Qt.AlignBottom)
         glance_row.addWidget(self.details_toggle, 0, Qt.AlignBottom)
 
@@ -1597,9 +1598,6 @@ class DayReviewPanel(QFrame):
         body = QVBoxLayout(page)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(10)
-        body.addWidget(self.heading)
-        body.addWidget(self.subtitle)
-        body.addLayout(header)
         body.addWidget(self.provisional_note)
         body.addWidget(self.walk_banner)
         # The glance strip heads the page; the full report card sits under
@@ -1625,9 +1623,39 @@ class DayReviewPanel(QFrame):
         # The walk replaces the page body while it is open.
         self.body_stack = QStackedWidget()
         self.body_stack.addWidget(self.scroll)
+        self.section_navigation = QWidget()
+        navigation = QHBoxLayout(self.section_navigation)
+        navigation.setContentsMargins(0, 0, 0, 0)
+        navigation.setSpacing(8)
+        self.section_buttons = {}
+        for target, label in (
+            ("story", "Overview"), ("said", "My calls"), ("trades", "My trades"),
+            ("miss", "Picks and passes"), ("ideas", "Ideas"), ("plan", "My plan"),
+        ):
+            button = QPushButton(label)
+            button.setObjectName("ReviewSectionJump")
+            button.clicked.connect(lambda _checked=False, key=target: self.reveal_card_target(key))
+            self.section_buttons[target] = button
+            navigation.addWidget(button)
+        navigation.addStretch(1)
+        self.walk_button.setObjectName("ReviewPrimaryAction")
+        navigation.addWidget(self.walk_button)
+        self.page_chrome = QWidget()
+        chrome = QVBoxLayout(self.page_chrome)
+        chrome.setContentsMargins(0, 0, 0, 0)
+        chrome.setSpacing(12)
+        chrome.addWidget(self.heading)
+        chrome.addWidget(self.subtitle)
+        chrome.addLayout(header)
+        chrome.addWidget(self.section_navigation)
+        self.body_stack.currentChanged.connect(
+            lambda index: self.page_chrome.setVisible(index == 0)
+        )
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(12, 12, 12, 12)
-        outer.addWidget(self.body_stack)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(12)
+        outer.addWidget(self.page_chrome)
+        outer.addWidget(self.body_stack, 1)
 
     def refresh_reader_measure(self) -> None:
         """The reader and the forecast span the RIGHT column (TJ-1L).

@@ -29,6 +29,11 @@ PRIMARY_PAGE_TITLES = ("Trading Desk", "Journal", "Day Review", "Research")
 #: Shorter tab labels for the primary pages that need one.
 TAB_LABELS = {"Trading Desk": "Desk"}
 MORE_LABEL = "More ▾"
+MORE_GROUPS = (
+    ("Review", ("Day Review", "Journal", "Weekend Prep")),
+    ("Explore", ("Research", "Universe", "A.I. Summary")),
+    ("System", ("Auto Pilot", "System Health", "Settings")),
+)
 
 
 class PageTabRow(QFrame):
@@ -66,25 +71,40 @@ class PageTabRow(QFrame):
             button = QPushButton(TAB_LABELS.get(title, title))
             button.setObjectName("PageTabButton")
             button.setCheckable(True)
-            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+            button.setAccessibleName(title)
             button.clicked.connect(lambda _checked=False, page=index: self._request(page))
             self.tab_buttons[index] = button
             layout.addWidget(button)
 
         self.more_menu = QMenu(self)
+        self._more_sections: list[tuple[QAction, list[QAction]]] = []
         for index, title in enumerate(self._titles):
             if index in self.tab_buttons:
                 continue
             action = QAction(title, self)
             action.setCheckable(True)
             action.triggered.connect(lambda _checked=False, page=index: self._request(page))
-            self.more_menu.addAction(action)
             self.more_actions[index] = action
+        remaining = dict(self.more_actions)
+        for heading, group_titles in (*MORE_GROUPS, ("Other pages", tuple(self._titles))):
+            members = [
+                (index, action) for index, action in remaining.items()
+                if self._titles[index] in group_titles
+            ]
+            if not members:
+                continue
+            section = self.more_menu.addSection(heading)
+            for index, action in members:
+                self.more_menu.addAction(action)
+                remaining.pop(index)
+            self._more_sections.append((section, [action for _, action in members]))
         self.more_button = QToolButton()
         self.more_button.setObjectName("PageTabMore")
         self.more_button.setText(MORE_LABEL)
         self.more_button.setCheckable(True)
-        self.more_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.more_button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.more_button.setAccessibleName("More pages")
         self.more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.more_button.setMenu(self.more_menu)
         layout.addWidget(self.more_button)
@@ -113,6 +133,9 @@ class PageTabRow(QFrame):
         for page, action in self.more_actions.items():
             action.setChecked(page == index)
         self.more_button.setChecked(index in self.more_actions)
+        active_action = self.more_actions.get(index)
+        self.more_button.setText(f"{active_action.text()} ▾" if active_action else MORE_LABEL)
+        self.more_button.setToolTip("Choose another page" if active_action else "More pages")
 
     def set_label(self, index: int, text: str) -> None:
         """Mirror a nav label (e.g. a review badge) onto the tab or menu entry."""
@@ -124,6 +147,8 @@ class PageTabRow(QFrame):
             )
         elif index in self.more_actions:
             self.more_actions[index].setText(text)
+            if index == self._current:
+                self.more_button.setText(f"{text} ▾")
 
     def label(self, index: int) -> str:
         if index in self.tab_buttons:
@@ -137,6 +162,8 @@ class PageTabRow(QFrame):
             self.tab_buttons[index].setVisible(bool(visible))
         elif index in self.more_actions:
             self.more_actions[index].setVisible(bool(visible))
+            for section, actions in self._more_sections:
+                section.setVisible(any(action.isVisible() for action in actions))
 
     def add_right_widget(self, widget: QWidget) -> None:
         self.right_layout.addWidget(widget, 0, Qt.AlignmentFlag.AlignVCenter)

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import threading
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -627,7 +628,7 @@ class TradesTab(QFrame):
         )
         self.decision_reason = QLineEdit()
         self.decision_reason.setPlaceholderText("Why did you make that decision?")
-        self.save_review_button = QPushButton("Save structured review")
+        self.save_review_button = QPushButton("Save review")
         self.save_review_button.clicked.connect(self._save_review)
 
         self.correct_button = QPushButton("Correct this trade...")
@@ -636,48 +637,105 @@ class TradesTab(QFrame):
         self.add_execution_button.clicked.connect(self._open_manual_execution)
         self.adjustments_list = QListWidget()
 
-        body = QWidget()
-        layout = QVBoxLayout(body)
-        layout.addWidget(self.review_banner)
-        layout.addWidget(QLabel("Plan and R"))
-        layout.addLayout(risk_form)
-        layout.addLayout(risk_row)
-        layout.addWidget(self.entry_grade_label)
-        layout.addWidget(self.excursion_label)
-        layout.addWidget(QLabel("Legs"))
-        layout.addWidget(self.legs_table)
-        layout.addWidget(QLabel("My tags"))
-        layout.addWidget(self.provisional_note)
-        layout.addWidget(self.tag_chips)
-        layout.addWidget(self.tags_input)
-        layout.addWidget(self.quick_tag_chips)
-        layout.addWidget(self.suggested_tag_chips)
-        layout.addWidget(QLabel("All suggestions (with confidence)"))
-        layout.addWidget(self.auto_tags)
-        layout.addLayout(self._tag_buttons_row)
-        layout.addWidget(self.notes_input)
-        layout.addWidget(self.save_notes_button)
-        layout.addWidget(self.confirm_tags_button)
-        layout.addWidget(self.note_lane_note)
-        layout.addWidget(QLabel("Overnight AI note (advisory)"))
-        layout.addWidget(self.ai_enrichment_note)
+        self.detail_title = QLabel("Select a trade")
+        self.detail_title.setObjectName("SectionTitle")
+        self.detail_title.setTextFormat(Qt.PlainText)
+        self.detail_title.setWordWrap(True)
+        self.detail_context = QLabel("Choose a row to review its plan, notes and executions.")
+        self.detail_context.setObjectName("MutedLabel")
+        self.detail_context.setTextFormat(Qt.PlainText)
+        self.detail_context.setWordWrap(True)
+        self.detail_context.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.detail_metrics = QLabel("")
+        self.detail_metrics.setObjectName("SectionTitle")
+        self.detail_metrics.setTextFormat(Qt.PlainText)
+        self.detail_metrics.setWordWrap(True)
+        self.detail_metrics.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.detail_tabs = QTabWidget()
+        self.detail_tabs.setObjectName("JournalDetailTabs")
+        self.detail_tabs.setDocumentMode(True)
+        self.detail_tabs.setEnabled(False)
+        self.detail_tabs.hide()
+
+        review = self._detail_section("Review", "Review the decision", "Your review stays separate from AI suggestions.")
+        self.review_plan_button = QPushButton("Check plan and risk")
+        self.review_plan_button.clicked.connect(lambda: self.detail_tabs.setCurrentIndex(1))
+        review.addWidget(self.review_plan_button, 0, Qt.AlignLeft)
         review_form = QFormLayout()
         review_form.addRow("Review outcome", self.review_outcome)
         review_form.addRow("Decision reason", self.decision_reason)
-        layout.addLayout(review_form)
-        layout.addWidget(self.save_review_button)
+        review.addLayout(review_form)
+        review.addWidget(self.save_review_button, 0, Qt.AlignLeft)
+        review.addWidget(self.note_lane_note)
+        review.addWidget(QLabel("Overnight AI note · advisory"))
+        review.addWidget(self.ai_enrichment_note)
+        review.addStretch(1)
+
+        plan = self._detail_section("Plan", "Plan and risk", "Keep the planned entry, stop and risk together.")
+        plan.addLayout(risk_form)
+        plan.addLayout(risk_row)
+        plan.addWidget(self.entry_grade_label)
+        plan.addWidget(self.excursion_label)
+        plan.addStretch(1)
+
+        executions = self._detail_section("Executions", "Recorded legs", "Each fill keeps its source.")
+        executions.addWidget(self.legs_table, 1)
+
+        notes = self._detail_section("Notes and tags", "Your notes and tags", "Suggestions become yours only when you accept them.")
+        notes.addWidget(self.tag_chips)
+        notes.addWidget(self.tags_input)
+        notes.addWidget(self.quick_tag_chips)
+        notes.addWidget(self.suggested_tag_chips)
+        notes.addWidget(QLabel("All suggestions · with confidence"))
+        notes.addWidget(self.auto_tags)
+        notes.addLayout(self._tag_buttons_row)
+        notes.addWidget(self.notes_input, 1)
+        notes.addWidget(self.save_notes_button, 0, Qt.AlignLeft)
+
+        corrections = self._detail_section("Corrections", "Correct the record", "Execution changes and their history stay together.")
         corrections_row = QHBoxLayout()
         corrections_row.addWidget(self.correct_button)
         corrections_row.addWidget(self.add_execution_button)
-        layout.addLayout(corrections_row)
-        layout.addWidget(QLabel("Corrections on this trade"))
-        layout.addWidget(self.adjustments_list)
-        # Scrolls rather than squeezing the legs and suggestion lists to nothing.
+        corrections_row.addStretch(1)
+        corrections.addLayout(corrections_row)
+        corrections.addWidget(QLabel("Corrections on this trade"))
+        corrections.addWidget(self.adjustments_list, 1)
+
+        for button in (self.save_review_button, self.save_risk_button, self.save_notes_button):
+            button.setObjectName("JournalSaveAction")
+        body = QFrame()
+        body.setObjectName("JournalInspector")
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        layout.addWidget(self.detail_title)
+        layout.addWidget(self.detail_context)
+        layout.addWidget(self.detail_metrics)
+        layout.addWidget(self.review_banner)
+        layout.addWidget(self.provisional_note)
+        layout.addWidget(self.confirm_tags_button, 0, Qt.AlignLeft)
+        layout.addWidget(self.detail_tabs, 1)
+        return body
+
+    def _detail_section(self, name: str, title: str, hint: str) -> QVBoxLayout:
+        """Keep each editor alive while its section is hidden."""
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(12, 16, 12, 12)
+        layout.setSpacing(12)
+        heading = QLabel(title)
+        heading.setObjectName("SectionTitle")
+        note = QLabel(hint)
+        note.setObjectName("MutedLabel")
+        note.setWordWrap(True)
+        layout.addWidget(heading)
+        layout.addWidget(note)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setWidget(body)
-        return scroll
+        self.detail_tabs.addTab(scroll, name)
+        return layout
 
     # -- loading -----------------------------------------------------------
 
@@ -764,6 +822,9 @@ class TradesTab(QFrame):
     def _populate_table(self) -> None:
         mode = self._header.currency_mode
         visible = self._visible_trades()
+        previous = self._current
+        selected_id = previous.trade_id if previous is not None else None
+        selected_row = next((i for i, trade in enumerate(visible) if trade.trade_id == selected_id), None)
         provisional = sum(
             1
             for trade in self._trades
@@ -774,29 +835,43 @@ class TradesTab(QFrame):
         self.tag_filter_note.setText(
             f"{len(visible)} of {len(self._trades)} shown; {provisional} provisional"
         )
-        self.table.setRowCount(len(visible))
-        for row, trade in enumerate(visible):
-            value, label = journal_feed.convert_amount(trade, mode)
-            r_value = journal_feed.r_multiple(trade)
-            cells = [
-                trade.trade_date,
-                trade.symbol,
-                trade.direction,
-                trade.status,
-                f"{trade.quantity:g}" if trade.quantity is not None else "",
-                # "unconverted" rather than a number: I5 at the render seam.
-                f"{value:,.2f} {label}" if value is not None else label or "-",
-                f"{r_value:.2f}R" if r_value is not None else "-",
-                self._tags_cell(trade),
-            ]
-            for column, text in enumerate(cells):
-                item = QTableWidgetItem(str(text))
-                if trade.raw.get("entry_invented"):
-                    item.setToolTip(NOT_COUNTED_TEXT)
-                elif str(trade.raw.get("reconcile_status") or "") == "NEEDS_REVIEW":
-                    item.setToolTip("Does not match the broker's reported position")
-                self.table.setItem(row, column, item)
-        self._visible = visible
+        # Apply the rows together so selection never addresses a half-updated list.
+        with QSignalBlocker(self.table):
+            self.table.clearSelection()
+            self._visible = visible
+            if self.table.rowCount() != len(visible):
+                self.table.setRowCount(len(visible))
+            for row, trade in enumerate(visible):
+                value, label = journal_feed.convert_amount(trade, mode)
+                r_value = journal_feed.r_multiple(trade)
+                cells = [
+                    trade.trade_date,
+                    trade.symbol,
+                    trade.direction,
+                    trade.status,
+                    f"{trade.quantity:g}" if trade.quantity is not None else "",
+                    f"{value:,.2f} {label}" if value is not None else label or "-",
+                    f"{r_value:.2f}R" if r_value is not None else "-",
+                    self._tags_cell(trade),
+                ]
+                for column, text in enumerate(cells):
+                    item = self.table.item(row, column)
+                    if item is None:
+                        item = QTableWidgetItem(str(text))
+                        self.table.setItem(row, column, item)
+                    elif item.text() != str(text):
+                        item.setText(str(text))
+                    tip = ""
+                    if trade.raw.get("entry_invented"):
+                        tip = NOT_COUNTED_TEXT
+                    elif str(trade.raw.get("reconcile_status") or "") == "NEEDS_REVIEW":
+                        tip = "Does not match the broker's reported position"
+                    item.setToolTip(tip)
+            if selected_row is not None:
+                self.table.selectRow(selected_row)
+        # In-memory filtering retains the editor and drafts without another read.
+        if selected_row is None or visible[selected_row] is not previous:
+            self._on_selection_changed()
         # G2a: Tags takes the slack, Symbol middle-elides with its full value
         # in the tooltip - the width rule only writes a tooltip where the
         # NEEDS_REVIEW branch above left none, so that tooltip is never
@@ -826,6 +901,14 @@ class TradesTab(QFrame):
         rows = {index.row() for index in self.table.selectedIndexes()}
         if not rows:
             self._current = None
+            self.detail_title.setText("Select a trade")
+            self.detail_context.setText("Choose a row to review its plan, notes and executions.")
+            self.detail_metrics.clear()
+            self.detail_tabs.setEnabled(False)
+            self.detail_tabs.hide()
+            self.review_banner.hide()
+            self.provisional_note.hide()
+            self.confirm_tags_button.hide()
             return
         # The visible list, not the loaded one: with a filter applied the two
         # differ, and indexing the wrong one opens somebody else's trade.
@@ -837,6 +920,10 @@ class TradesTab(QFrame):
         self._show_trade(self._current)
 
     def _show_trade(self, trade: JournalTrade) -> None:
+        self.detail_title.setText(f"{trade.symbol} · {trade.direction} · {trade.status}")
+        self.detail_context.setText(" · ".join(part for part in (trade.trade_date, trade.broker, trade.account) if part))
+        self.detail_tabs.setEnabled(True)
+        self.detail_tabs.show()
         raw = trade.raw
         status = str(raw.get("reconcile_status") or "")
         if raw.get("entry_invented"):
@@ -854,6 +941,11 @@ class TradesTab(QFrame):
         self.planned_stop.setValue(float(raw.get("planned_stop") or 0.0))
         self.planned_risk.setValue(float(raw.get("planned_risk") or 0.0))
         r_value = journal_feed.r_multiple(trade)
+        value, currency = journal_feed.convert_amount(trade, getattr(self._header, "currency_mode", "Native"))
+        missing = "unconverted" if currency == "unconverted" else f"Unknown {currency}".strip()
+        money = f"{value:,.2f} {currency}" if value is not None else missing
+        risk = f"{r_value:.2f}R" if r_value is not None else "R unknown"
+        self.detail_metrics.setText(f"P&L: {money} · {risk}")
         self.r_readout.setText(f"R: {r_value:.2f}" if r_value is not None else "R: - (needs risk and a booked FX rate)")
         self._show_entry_plan_readouts(trade)
 

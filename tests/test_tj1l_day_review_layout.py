@@ -82,6 +82,7 @@ def _panel(qapp, **kwargs):
 
 @pytest.fixture()
 def panel(qapp, monkeypatch):
+    from PySide6.QtCore import QEvent
     widget = _panel(qapp)
     # `reload` is the thread starter; every test here paints through `render`.
     monkeypatch.setattr(widget, "reload", lambda: None)
@@ -91,7 +92,7 @@ def panel(qapp, monkeypatch):
     except Exception:
         pass
     widget.deleteLater()
-    qapp.processEvents()
+    qapp.sendPostedEvents(widget, QEvent.DeferredDelete)
 
 
 @pytest.fixture()
@@ -517,6 +518,59 @@ def test_the_column_split_round_trips_through_the_saved_setting(qapp, clean_spli
 # ==========================================================================
 def test_the_page_is_still_one_scroll_area(panel):
     assert len(panel.findChildren(QScrollArea)) == 1
+
+
+def test_section_jumps_use_existing_sections_without_reloading(panel, monkeypatch):
+    seen = []
+    monkeypatch.setattr(panel.scroll, "ensureWidgetVisible", lambda widget: seen.append(widget))
+    monkeypatch.setattr(panel.service, "read_day", lambda *a, **k: pytest.fail("Navigation read data"))
+    expected = {
+        "story": panel.story_section, "said": panel.said_section,
+        "trades": panel.traded_section, "miss": panel.miss_section,
+        "ideas": panel.ideas_section, "plan": panel.plan_view,
+    }
+    for key, section in expected.items():
+        panel.section_buttons[key].click()
+        assert seen[-1] is section
+    assert not panel.scroll.isAncestorOf(panel.section_navigation)
+    assert not panel.scroll.isAncestorOf(panel.session_picker)
+
+
+@pytest.mark.parametrize("width,height", [(1920, 1080), (2560, 1440), (3840, 2160)])
+@pytest.mark.parametrize("theme_name", ["dark", "light"])
+def test_session_and_section_controls_stay_in_reach_when_scrolled(panel, qapp, tmp_path, width, height, theme_name):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QFontDatabase
+    from ui import theme
+    from ui.theme import active_scale, active_theme, apply_theme
+
+    previous_style = panel.styleSheet()
+    previous_theme, previous_scale = active_theme(), active_scale()
+    font_path = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "segoeui.ttf"
+    font_id = QFontDatabase.addApplicationFont(str(font_path)) if font_path.is_file() else -1
+    try:
+        apply_theme(panel, theme_name, scale=1.0)
+        panel.render(_payload())
+        panel.resize(width, height)
+        panel.show()
+        qapp.processEvents()
+        before = panel.session_picker.mapTo(panel, QPoint(0, 0))
+        panel.scroll.verticalScrollBar().setValue(panel.scroll.verticalScrollBar().maximum())
+        qapp.processEvents()
+        assert panel.session_picker.mapTo(panel, QPoint(0, 0)) == before
+        for control in (panel.session_picker, panel.walk_button, *panel.section_buttons.values()):
+            assert control.isVisible()
+            assert panel.rect().contains(control.mapTo(panel, control.rect().bottomRight()))
+        panel.scroll.verticalScrollBar().setValue(0)
+        image = tmp_path / f"day-review-{theme_name}-{width}.png"
+        assert panel.grab().save(str(image))
+        print(f"Day Review visual check: {image}")
+    finally:
+        panel.hide()
+        panel.setStyleSheet(previous_style)
+        theme._ACTIVE_THEME, theme._ACTIVE_SCALE = previous_theme, previous_scale
+        if font_id >= 0:
+            QFontDatabase.removeApplicationFont(font_id)
 
 
 def test_the_one_spy_chart_is_still_built_on_first_need_and_reused(panel):
