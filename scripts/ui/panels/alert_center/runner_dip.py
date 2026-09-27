@@ -49,6 +49,9 @@ class RunnerDipWatchMixin:
         fired = getattr(self, "_runner_dips_fired", None)
         if fired is None:
             fired = self._runner_dips_fired = set()
+        checked = getattr(self, "_runner_dip_checked", None)
+        if checked is None:
+            checked = self._runner_dip_checked = {}
         day = moment.date().isoformat()
         for member in members:
             symbol = str(member.get("symbol") or "").strip().upper()
@@ -59,7 +62,9 @@ class RunnerDipWatchMixin:
             if not bars:
                 continue
             try:
-                hit = runner_dip_watch.evaluate(member, bars, now=moment)
+                # Every bar newer than the last one checked: bars can land in a batch.
+                hit, checked[symbol] = runner_dip_watch.evaluate_new(
+                    member, bars, now=moment, after=checked.get(symbol))
             except Exception as exc:
                 note_swallowed("runner dip evaluation failed", exc, quiet=True)
                 continue

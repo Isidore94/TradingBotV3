@@ -613,6 +613,8 @@ class AlertCenterPanel(
         self._focus_gate_held = 0
         #: p9 runner dip watch: (symbol, day) already fired, and the one-line armed status.
         self._runner_dips_fired: set[tuple[str, str]] = set()
+        #: symbol -> the exchange-time start of the last M5 bar judged for it.
+        self._runner_dip_checked: dict[str, datetime] = {}
         self._runner_dip_status = ""
         # Phase 2 guidance: scoreboard + AI policy -> queue ordering and
         # chart annotations (review_guidance.py). Advisory only; with no

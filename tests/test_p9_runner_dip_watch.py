@@ -224,6 +224,35 @@ def test_only_completed_bars_of_todays_regular_session_count():
     assert rdw.evaluate(MEMBER, early, now=_now(early), tz=ET) is not None
 
 
+def _batch(qualifying_back: int):
+    """A squeeze under the AVWAPE on the bar ``qualifying_back`` from the end, then closes over it."""
+    bars = _m5(24)
+    for bar in bars[len(bars) - qualifying_back + 1:]:
+        bar.update(open=100.5, high=100.6, low=100.4, close=100.5)
+    return bars
+
+
+def _et(bar):
+    return bar["date"].replace(tzinfo=ET)
+
+
+def test_a_three_bar_batch_fires_on_its_first_qualifying_bar():
+    bars = _batch(3)
+    assert rdw.evaluate(MEMBER, bars, now=_now(bars), tz=ET) is None  # the latest bar alone misses it
+    hit, last = rdw.evaluate_new(MEMBER, bars, now=_now(bars), tz=ET, after=_et(bars[-4]))
+    assert hit is not None and hit.bar_time == _et(bars[-3]) and hit.close == 99.0
+    assert last == _et(bars[-1])
+    # Already judged: never again.
+    assert rdw.evaluate_new(MEMBER, bars, now=_now(bars), tz=ET, after=_et(bars[-3])) == (None, _et(bars[-1]))
+
+
+def test_a_stale_catch_up_is_skipped():
+    bars = _batch(4)  # the qualifying bar is 4 completed bars back
+    assert rdw.evaluate_new(MEMBER, bars, now=_now(bars), tz=ET, after=_et(bars[-5])) == (None, _et(bars[-1]))
+    assert rdw.evaluate_new(MEMBER, bars[:-1], now=_now(bars[:-1]), tz=ET, after=None)[0] is not None
+    assert rdw.evaluate_new(MEMBER, [], now=_now(bars), tz=ET, after=None) == (None, None)
+
+
 def test_missing_data_is_no_fire():
     bars = _m5(24)
     bars[5]["close"] = None

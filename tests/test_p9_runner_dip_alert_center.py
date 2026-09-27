@@ -108,16 +108,34 @@ def test_an_armed_runner_fires_once_per_session_with_the_grading_fields(panel):
     assert len(panel._events) == 1  # yesterday's bars never fire today
 
 
+def test_bars_landing_in_a_batch_still_fire(panel):
+    """Three bars arrive between two polls; the dip was on the first of them."""
+    bars = _bars(21, close=100.2)
+    by_symbol = {"GTLB": bars, "SPY": _bars(close=600.0)}
+    panel._m5_bars_for = lambda symbol, sessions=1: by_symbol.get(symbol, [])
+    first_now = bars[-1]["dt"] + timedelta(minutes=5)
+    panel._poll_runner_dips(now=first_now)
+    assert panel._events == []
+    for index, close in enumerate((99.95, 100.5, 100.5)):
+        start = bars[-1]["dt"] + timedelta(minutes=5)
+        bars.append({"dt": start, "open": close, "high": close + 0.1, "low": close - 0.1, "close": close,
+                     "volume": 1000.0})
+    panel._poll_runner_dips(now=bars[-1]["dt"] + timedelta(minutes=5))
+    assert [kw["detail"]["price"] for _a, kw in panel._events] == [99.95]
+
+
 def test_the_phone_hears_a_fire_only_in_away(panel):
     panel._poll_runner_dips(now=NOW)
     assert panel.price_alert_service.sent == []
     panel._runner_dips_fired.clear()
+    panel._runner_dip_checked.clear()
     panel._mode = "AWAY"
     panel._poll_runner_dips(now=NOW)
     assert panel.price_alert_service.sent == [{
         "watch_id": "runner_dip:GTLB:2026-09-28", "title": "Runner dip: GTLB",
         "message": "GTLB runner dip: strong name under the earnings VWAP (100.00), squeezing on M5 - box 98.90-99.10"}]
     panel._runner_dips_fired.clear()
+    panel._runner_dip_checked.clear()
     panel._mode = "EVENING"
     panel._poll_runner_dips(now=NOW)
     assert len(panel.price_alert_service.sent) == 1

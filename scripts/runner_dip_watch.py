@@ -337,19 +337,56 @@ def evaluate(member: Mapping[str, Any], bars: Sequence[Any], *, now: datetime, t
     Today = ``now``'s exchange date. Needs the last bar on today, its close under the member's
     earnings AVWAP and a squeeze (`squeeze_box`). Anything missing is no fire.
     """
-    avwape = _num(member.get("avwape"))
-    symbol = _text(member.get("symbol")).upper()
-    if avwape is None or not symbol or not bars:
-        return None
+    regular, today = _today_regular(member, bars, now=now, tz=tz)
+    return _hit_at(member, regular, len(regular) - 1, today) if regular else None
+
+
+#: A catch-up fire must be on one of the last this-many completed bars; older is skipped.
+CATCH_UP_BARS = 3
+
+
+def evaluate_new(member: Mapping[str, Any], bars: Sequence[Any], *, now: datetime, tz=None,
+                 after: datetime | None = None) -> tuple[RunnerDipHit | None, datetime | None]:
+    """``(hit, last bar checked)`` over every completed bar of today newer than ``after``.
+
+    Bars can land in a batch between two polls, so each new bar is judged on the bars up to it;
+    the first that qualifies AND is one of the last `CATCH_UP_BARS` completed bars fires. An older
+    qualifying bar is skipped (stale). ``after`` is the exchange-time start the caller last saw.
+    """
+    regular, today = _today_regular(member, bars, now=now, tz=tz)
+    if not regular:
+        return None, after
+    last = regular[-1][0]
+    first = max(0, len(regular) - CATCH_UP_BARS)
+    for index in range(first, len(regular)):
+        if after is not None and regular[index][0] <= after:
+            continue
+        hit = _hit_at(member, regular, index, today)
+        if hit is not None:
+            return hit, last
+    return None, last
+
+
+def _today_regular(member: Mapping[str, Any], bars: Sequence[Any], *, now: datetime, tz):
+    """(completed regular bars, today's exchange date); ([], None) when the member or bars are unusable."""
+    if _num(member.get("avwape")) is None or not _text(member.get("symbol")) or not bars:
+        return [], None
     regular = _regular(bars, now=now, tz=tz)
     if not regular:
-        return None
+        return [], None
     local = tz if tz is not None else _default_local_tz()
     today = (now if now.tzinfo is not None else now.replace(tzinfo=local)).astimezone(_exchange_tz()).date()
-    start, ohlc = regular[-1]
+    return regular, today
+
+
+def _hit_at(member: Mapping[str, Any], regular, index: int, today) -> RunnerDipHit | None:
+    """The fire judged on the bars up to ``regular[index]`` (a bar of today), or None."""
+    avwape = _num(member.get("avwape"))
+    symbol = _text(member.get("symbol")).upper()
+    start, ohlc = regular[index]
     if start.date() != today or not ohlc[3] < avwape:
         return None
-    box = squeeze_box(regular)
+    box = squeeze_box(regular[:index + 1])
     if box is None:
         return None
     box_high, box_low, atr = box
