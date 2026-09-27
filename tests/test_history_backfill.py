@@ -267,6 +267,70 @@ def test_topup_cli_path_runs_every_step_offline(store, tmp_path):
     assert not (tmp_path / "build.lock").exists()  # held only around each seal
 
 
+def test_night_slot_tops_up_and_sits_after_the_regime_table(store, monkeypatch, tmp_path):
+    import sys
+    from pathlib import Path
+
+    scripts_dir = str(Path(__file__).resolve().parents[1] / "scripts")
+    monkeypatch.syspath_prepend(scripts_dir)
+    from ai_jobs import lake_history_topup, runner
+
+    names = [slot.name for slot in runner.default_slots()]
+    assert names[names.index("lake_history_topup") - 1] == "market_regime_table"
+    slot = next(slot for slot in runner.default_slots() if slot.name == "lake_history_topup")
+    assert slot.uses_model is False
+
+    client = FakeClient()
+    client.bars["1d"] = {"SPY": _daily(_week(400.0))}
+    monkeypatch.setattr(hist, "history_universe", lambda *_a, **_k: ["SPY"])
+    from research_warehouse import history as pkg_history
+
+    monkeypatch.setattr(pkg_history, "history_universe", lambda *_a, **_k: ["SPY"])
+    monkeypatch.setenv("TRADINGBOTV3_RESEARCH_DIR", str(tmp_path / "unused"))
+    lake = sys.modules["research_warehouse.store"].ResearchStore(store.root)
+    result = lake_history_topup.run_lake_history_topup(store=lake, client=client)
+    assert result["status"] == "ok"
+    assert "bar_d1_history +4" in result["reason"]
+    again = lake_history_topup.run_lake_history_topup(store=lake, client=client)
+    assert "bar_d1_history" not in again["reason"]
+
+
+def test_night_slot_is_a_no_op_without_a_lake(monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    from ai_jobs import lake_history_topup
+    from research_warehouse.store import ResearchStore as PkgStore
+
+    monkeypatch.setattr(PkgStore, "open", classmethod(lambda cls, root=None: None))
+    result = lake_history_topup.run_lake_history_topup(client=object())
+    assert result["status"] == "ok" and "not configured" in result["reason"]
+
+
+def test_yahoo_client_splits_batches_and_retries_missing_once(monkeypatch):
+    import yfinance
+
+    frame = _daily([("2026-09-25", 1, 2, 0.5, 1.5, 10)])
+    both = pd.concat({"SPY": frame}, axis=1)
+    calls, sleeps = [], []
+
+    def fake_download(tickers, **kwargs):
+        calls.append(list(tickers))
+        return both if "SPY" in tickers else pd.DataFrame()
+
+    monkeypatch.setattr(yfinance, "download", fake_download)
+    client = hist.YahooClient(pause=1.0, backoff=10.0, sleep=sleeps.append)
+    out = client.fetch_bars(["SPY", "BRK.B"], interval="1d", start=date(2018, 1, 1))
+
+    assert list(out) == ["SPY"]
+    assert calls == [["SPY", "BRK-B"], ["BRK-B"]]  # Yahoo spelling; one second pass only
+    assert sleeps == [1.0]  # the pause between requests; no backoff for the single retry
+
+    with pytest.raises(hist.ProviderError):
+        hist.YahooClient(pause=1.0, retries=3, backoff=10.0, sleep=sleeps.append).fetch_bars(["XXX"], interval="1d", period="5d")
+    assert sleeps[1:] == [10.0, 1.0, 20.0, 1.0]  # backoff between tries, none after the last
+
+
 def test_history_lock_waits_for_a_running_build(tmp_path):
     from scripts.research_warehouse import cli
 

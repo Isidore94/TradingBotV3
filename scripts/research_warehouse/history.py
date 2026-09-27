@@ -67,6 +67,8 @@ D1_TOPUP_DAYS = 21  # ~10+ sessions plus holidays
 INTRADAY_TOPUP_PERIOD = "5d"
 EARNINGS_LIMIT = 40  # ~10 years of quarters; covers 2018+
 EARNINGS_REFRESH_DAYS = 7
+#: Earnings refreshes per night: the universe cycles in about a week at ~1/s.
+EARNINGS_TOPUP_LIMIT = 300
 NO_DATA_RETRY_DAYS = 7
 #: Median close disagreement that means the provider re-based the series.
 REBASE_TOLERANCE = 0.01
@@ -202,11 +204,12 @@ class YahooClient:
         self.sleep = sleep
         self.requests = 0
 
-    def _download(self, tickers, **kwargs):
+    def _download(self, tickers, *, attempts: int | None = None, **kwargs):
         import yfinance as yf
 
         last: Exception | None = None
-        for attempt in range(self.retries):
+        tries = max(1, int(attempts or self.retries))
+        for attempt in range(tries):
             if self.requests:
                 self.sleep(self.pause)
             self.requests += 1
@@ -226,7 +229,8 @@ class YahooClient:
                 data = None
             if data is not None and not data.empty:
                 return data
-            self.sleep(self.backoff * (2**attempt))
+            if attempt + 1 < tries:
+                self.sleep(self.backoff * (2**attempt))
         raise ProviderError(f"yfinance returned nothing for {len(tickers)} tickers: {last}")
 
     def fetch_bars(self, symbols, *, interval: str, start: date | None = None, period: str | None = None) -> dict:
@@ -242,7 +246,8 @@ class YahooClient:
         if missing and len(missing) < len(by_ticker):
             # One smaller second pass: batch downloads drop tickers under load.
             try:
-                out.update(split_download(self._download(missing, **kwargs), {t: by_ticker[t] for t in missing}))
+                second = self._download(missing, attempts=1, **kwargs)
+                out.update(split_download(second, {t: by_ticker[t] for t in missing}))
             except ProviderError:
                 pass
         return out
@@ -950,11 +955,13 @@ def run_earnings(
     run_id: str = "",
     refresh_days: int = EARNINGS_REFRESH_DAYS,
     flush_every: int = 50,
+    max_symbols: int | None = None,
     lock=contextlib.nullcontext,
     log=print,
 ) -> JobReport:
     """Earnings dates, ~1 request/s, resumable: a symbol refreshed within
-    ``refresh_days`` is skipped. ETFs and indexes have none and are not asked."""
+    ``refresh_days`` is skipped. ETFs and indexes have none and are not asked.
+    ``max_symbols`` caps one run (the nightly slice), oldest refresh first."""
     stamp = now or utc_now()
     run_id = run_id or f"history_earnings_{stamp:%Y%m%dT%H%M%SZ}"
     report = JobReport(job="earnings")
@@ -965,6 +972,8 @@ def run_earnings(
         s for s in (str(x).strip().upper() for x in symbols)
         if s and s not in skip and not s.startswith("^") and not _recent(memory.get(s), stamp, refresh_days)
     ]
+    if max_symbols is not None:
+        todo = sorted(todo, key=lambda s: str((memory.get(s) or {}).get("at") or ""))[: max(0, int(max_symbols))]
     report.symbols = len(todo)
     pending_rows: list[dict] = []
     pending_missing: list[str] = []
@@ -1136,7 +1145,9 @@ def run_topup(store: ResearchStore, *, client, symbols=None, now: datetime | Non
     out["d1"] = vars(run_d1(store, names, client=client, now=stamp, mode="topup", lock=lock, log=log))
     for timeframe in ("H1", "M30"):
         out[timeframe.lower()] = vars(run_intraday(store, names, timeframe, client=client, now=stamp, mode="topup", lock=lock, log=log))
-    out["earnings"] = vars(run_earnings(store, names, client=client, now=stamp, lock=lock, log=log))
+    out["earnings"] = vars(
+        run_earnings(store, names, client=client, now=stamp, max_symbols=EARNINGS_TOPUP_LIMIT, lock=lock, log=log)
+    )
     out["quality"] = vars(run_quality(store, now=stamp, lock=lock))
     coverage = coverage_report(store)
     coverage.pop("per_symbol", None)

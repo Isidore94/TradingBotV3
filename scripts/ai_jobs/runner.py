@@ -1031,6 +1031,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         family_side_evidence,
         improvement_ideas,
         journal_auto_tag,
+        lake_history_topup,
         market_regime_table,
         market_story_narration,
         measured_report_publish,
@@ -1367,6 +1368,21 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
                 "ETFs plus structure facts, appended per session (deterministic, no model)"
             ),
             max_attempts=3,
+        ),
+        # P10 (2026-09-27), INSIDE stage 1 after `market_regime_table`: the one
+        # owner of the lake history top-up (Yahoo D1/H1/H4/M30, earnings dates,
+        # series checks). Network, no model, works with the desk down; feeds
+        # nothing in the night, ahead of `day_review_facts` so Sunday keeps it.
+        JobSlot(
+            name="lake_history_topup",
+            goal="setup_quality",
+            run=lake_history_topup.run_lake_history_topup,
+            reserve_minutes=30.0,
+            description=(
+                "Top up the lake's 5-year provider history: D1, H1/H4, M30, earnings dates, "
+                "split re-pulls and quality checks (deterministic, no model)"
+            ),
+            max_attempts=2,
         ),
         # Packet WS-10D (2026-09-12), APPENDED at the END of the deterministic
         # stage, after `theta_pick_grading`, and it CLOSES the block. It reads
