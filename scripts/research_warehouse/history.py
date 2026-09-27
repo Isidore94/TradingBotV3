@@ -624,6 +624,23 @@ def current_state(store, dataset, symbols, *, key: str, lo: date | None = None) 
     return out
 
 
+def load_have(store, dataset, symbols, *, key: str, lo: date) -> tuple[dict, set]:
+    """Current state per symbol, and the symbols whose newest stored bar is
+    older than ``lo`` (lagging: history exists but the recent window is empty).
+
+    A lagging symbol is caught up INTO its current revision, never re-pulled as
+    a second, duplicate revision.
+    """
+    have = current_state(store, dataset, symbols, key=key, lo=lo)
+    missing = [symbol for symbol in symbols if symbol not in have]
+    lagging: set = set()
+    if missing:
+        older = current_state(store, dataset, missing, key=key)
+        have.update(older)
+        lagging = set(older)
+    return have, lagging
+
+
 def rebased(state: SeriesState, rows: list[dict], key: str) -> bool:
     """True when fetched closes disagree with stored ones: the basis moved."""
     diffs = []
@@ -770,13 +787,14 @@ def run_d1(
     memory = ledger.latest()
     symbols = [str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()]
     report.symbols = len(symbols)
-    have = current_state(store, "bar_d1_history", symbols, key="session_date", lo=stamp.date() - timedelta(days=60))
+    have, lagging = load_have(store, "bar_d1_history", symbols, key="session_date", lo=stamp.date() - timedelta(days=60))
     fresh = [s for s in symbols if s not in have and not (memory.get(s, {}).get("status") == "NO_DATA" and _recent(memory.get(s), stamp, NO_DATA_RETRY_DAYS))]
-    stale = [s for s in symbols if s in have] if mode == "topup" else []
+    stale = [s for s in symbols if s in have and s not in lagging] if mode == "topup" else []
+    behind = [s for s in symbols if s in lagging] if mode == "topup" else []
     repull: list[str] = []
 
-    def _ingest(batch, frames, *, full: bool):
-        states = have if not full else {}
+    def _ingest(batch, frames, *, new_revision: bool):
+        states = {} if new_revision else have
         bad = quarantined_keys(store)
         actions = existing_keys(store, "corporate_action", batch, ["symbol", "action_type", "ex_date"])
         rows, action_out, no_data = [], [], []
@@ -817,7 +835,7 @@ def run_d1(
             report.note("NO_DATA", len(no_data))
             _no_data_flags(store, "bar_d1_history", no_data, now=stamp, run_id=run_id, lock=lock, report=report)
 
-    def _pull(batch, *, full):
+    def _pull(batch, *, full, new_revision):
         try:
             if full:
                 frames = client.fetch_bars(batch, interval="1d", start=start)
@@ -828,16 +846,18 @@ def run_d1(
             report.notes.append(f"batch {batch[0]}..{batch[-1]}: {exc}")
             log(f"d1 batch failed {batch[0]}..{batch[-1]}: {exc}")
             return
-        _ingest(batch, frames, full=full)
+        _ingest(batch, frames, new_revision=new_revision)
         log(f"d1 {'full' if full else 'recent'} {batch[0]}..{batch[-1]} ok: {report.rows_published.get('bar_d1_history', 0)} rows so far")
 
     for batch in _batches(fresh, batch_size):
-        _pull(batch, full=True)
+        _pull(batch, full=True, new_revision=True)
     for batch in _batches(stale, batch_size):
-        _pull(batch, full=False)
+        _pull(batch, full=False, new_revision=False)
+    for batch in _batches(behind, batch_size):
+        _pull(batch, full=True, new_revision=False)
     for batch in _batches(repull, batch_size):
         report.repulled.extend(batch)
-        _pull(batch, full=True)
+        _pull(batch, full=True, new_revision=True)
     if report.failed_batches:
         report.status = "PARTIAL"
     return report
@@ -865,12 +885,13 @@ def run_intraday(
     memory = ledger.latest()
     symbols = [str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()]
     report.symbols = len(symbols)
-    have = current_state(store, dataset, symbols, key="interval_start", lo=stamp.date() - timedelta(days=20))
+    have, lagging = load_have(store, dataset, symbols, key="interval_start", lo=stamp.date() - timedelta(days=20))
     fresh = [s for s in symbols if s not in have and not (memory.get(s, {}).get("status") == "NO_DATA" and _recent(memory.get(s), stamp, NO_DATA_RETRY_DAYS))]
-    stale = [s for s in symbols if s in have] if mode == "topup" else []
+    stale = [s for s in symbols if s in have and s not in lagging] if mode == "topup" else []
+    behind = [s for s in symbols if s in lagging] if mode == "topup" else []
     repull: list[str] = []
 
-    def _pull(batch, *, full):
+    def _pull(batch, *, full, new_revision):
         try:
             frames = client.fetch_bars(batch, interval=interval, period=full_period if full else INTRADAY_TOPUP_PERIOD)
         except ProviderError as exc:
@@ -886,7 +907,7 @@ def run_intraday(
                 no_data.append(symbol)
                 ledger.append({"symbol": symbol, "status": "NO_DATA", "at": stamp.isoformat(), "run_id": run_id})
                 continue
-            state = None if full else have.get(symbol)
+            state = None if new_revision else have.get(symbol)
             if state is None:
                 prior = have.get(symbol)
                 revision = new_revision_id(symbol, run_id)
@@ -920,12 +941,14 @@ def run_intraday(
         log(f"{timeframe} {'full' if full else 'recent'} {batch[0]}..{batch[-1]} ok: {report.rows_published.get(dataset, 0)} rows so far")
 
     for batch in _batches(fresh, batch_size):
-        _pull(batch, full=True)
+        _pull(batch, full=True, new_revision=True)
     for batch in _batches(stale, batch_size):
-        _pull(batch, full=False)
+        _pull(batch, full=False, new_revision=False)
+    for batch in _batches(behind, batch_size):
+        _pull(batch, full=True, new_revision=False)
     for batch in _batches(repull, batch_size):
         report.repulled.extend(batch)
-        _pull(batch, full=True)
+        _pull(batch, full=True, new_revision=True)
     if report.failed_batches:
         report.status = "PARTIAL"
     return report
@@ -1184,7 +1207,16 @@ def coverage_report(store: ResearchStore, *, symbols=None) -> dict:
         if entry.dataset in datasets:
             quarantined[entry.dataset] = quarantined.get(entry.dataset, 0) + entry.row_count
     earnings = reader.read_earnings_dates(store=store)
-    history_symbols = [s for s, row in per_symbol.items() if row["source"] == reader.D1_DATASET]
+    # Intraday series whose newest bar is older than SPY's newest (a cut-short pull).
+    lagging_intraday = {}
+    for name in ("bar_h1", "bar_m30"):
+        table = reader._scan(store, name)
+        if not table.num_rows:
+            continue
+        newest = table.select(["symbol", "interval_start"]).to_pandas().groupby("symbol")["interval_start"].max()
+        if "SPY" in newest.index:
+            lagging_intraday[name] = sorted(str(s) for s in newest[newest < newest["SPY"]].index)
+    history_symbols =[s for s, row in per_symbol.items() if row["source"] == reader.D1_DATASET]
     return {
         "symbols": len(per_symbol),
         "history_symbols": len(history_symbols),
@@ -1196,6 +1228,7 @@ def coverage_report(store: ResearchStore, *, symbols=None) -> dict:
         "earnings_dates": sum(len(days) for days in earnings.values()),
         "flags": {check: int((flags["check"] == check).sum()) for check in sorted(set(flags["check"]))},
         "survivorship": SURVIVORSHIP_NOTE,
+        "intraday_lagging": {name: {"count": len(v), "symbols": v[:50]} for name, v in lagging_intraday.items()},
         "per_symbol": per_symbol,
     }
 
