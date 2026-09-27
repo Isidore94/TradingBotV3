@@ -194,6 +194,30 @@ def test_read_earnings_dates_merges_sources_sorted(store):
     assert hr.read_earnings_dates(["MSFT"], store=store) == {}
 
 
+def test_read_earnings_events_one_row_per_date_prefers_a_row_with_eps(store):
+    def _e(day, source, *, tod="AMC", est=None, rep=None, surprise=None, observed=OBSERVED):
+        return {
+            "symbol": "AAPL", "earnings_date": day, "time_of_day": tod, "earnings_at": None,
+            "eps_estimate": est, "eps_reported": rep, "surprise_pct": surprise, "source": source,
+            "observed_at": observed, "capture_mode": "BACKFILL",
+            "schema_version": schemas.SCHEMA_VERSION, "run_id": "t",
+        }
+
+    store.publish("earnings_date", [
+        _e(date(2025, 1, 30), "calendar"),
+        _e(date(2025, 1, 30), "yahoo", est=2.0, rep=2.4, surprise=20.0),
+        _e(date(2024, 2, 1), "yahoo", tod="BMO"),
+    ])
+    frame = hr.read_earnings_events(store=store)
+    assert list(frame.columns) == ["symbol", "earnings_date", "time_of_day", "eps_estimate",
+                                   "eps_reported", "surprise_pct", "source"]
+    assert frame["earnings_date"].tolist() == [date(2024, 2, 1), date(2025, 1, 30)]
+    row = frame.iloc[1]
+    assert (row["source"], row["surprise_pct"], row["eps_reported"]) == ("yahoo", 20.0, 2.4)
+    assert frame.iloc[0]["time_of_day"] == "BMO"
+    assert hr.read_earnings_events(["MSFT"], store=store).empty
+
+
 def test_empty_lake_reads_empty(store):
     assert hr.read_d1(store=store) == {}
     assert hr.read_intraday("M30", store=store) == {}

@@ -540,3 +540,12 @@ def test_search_manifest_records_the_data_range(tmp_path):
     result = bt.run_search(bt.Inputs(bars=bars, earnings=earnings), root=tmp_path, side=bs.SHORT, base="all",
                            max_k=1, split=days[300], min_train=1, min_test=1, run_id="dr")
     assert result["manifest"]["data_range"] == [str(days[0]), str(days[-1])]
+
+
+def test_theme_etfs_in_the_lake_are_not_stocks():
+    """The lake carries theme / industry ETFs (no earnings); they must not flag or join RS ranks."""
+    for etf in ("ARKG", "COPX", "FDN", "ICLN", "IGV", "IHF", "IHI", "ITA", "IYT", "IYZ", "JETS",
+                "KIE", "LIT", "OIH", "PAVE", "PEJ", "TAN", "URA"):
+        assert not bt.is_stock(etf), etf
+    for stock in ("JHG", "LC", "CRML", "AAPL"):
+        assert bt.is_stock(stock), stock

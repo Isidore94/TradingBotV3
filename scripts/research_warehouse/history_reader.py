@@ -327,6 +327,23 @@ def read_earnings_dates(symbols=None, *, store: ResearchStore | None = None) -> 
     return {symbol: sorted(days) for symbol, days in sorted(out.items())}
 
 
+EARNINGS_EVENT_COLUMNS = ["symbol", "earnings_date", "time_of_day", "eps_estimate", "eps_reported",
+                          "surprise_pct", "source"]
+
+
+def read_earnings_events(symbols=None, *, store: ResearchStore | None = None) -> pd.DataFrame:
+    """One row per (symbol, earnings date): a row carrying EPS facts wins, then the first observed.
+    Columns: ``EARNINGS_EVENT_COLUMNS`` (BMO/AMC, EPS estimate/actual, surprise %)."""
+    lake = _open(store)
+    frame = _scan(lake, EARNINGS_DATASET, symbols=_norm_symbols(symbols)).to_pandas()
+    if frame.empty:
+        return pd.DataFrame(columns=EARNINGS_EVENT_COLUMNS)
+    frame["_no_eps"] = frame["eps_reported"].isna() & frame["surprise_pct"].isna()
+    frame = frame.sort_values(["symbol", "earnings_date", "_no_eps", "observed_at"], kind="stable")
+    frame = frame.drop_duplicates(["symbol", "earnings_date"], keep="first")
+    return frame[EARNINGS_EVENT_COLUMNS].reset_index(drop=True)
+
+
 def read_corporate_actions(symbols=None, *, store: ResearchStore | None = None) -> pd.DataFrame:
     """Splits and dividends as recorded (symbol, action_type, ex_date, value, provider)."""
     lake = _open(store)
@@ -359,6 +376,7 @@ __all__ = [
     "read_corporate_actions",
     "read_d1",
     "read_earnings_dates",
+    "read_earnings_events",
     "read_intraday",
     "read_quality_flags",
 ]

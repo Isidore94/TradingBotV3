@@ -73,6 +73,9 @@ NON_STOCKS = frozenset({
     "GLD", "SLV", "USO", "UNG", "UUP", "EEM", "EFA", "FXI", "SMH", "SOXX", "XBI", "IBB", "KRE",
     "KBE", "XHB", "ITB", "XRT", "ARKK", "XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE",
     "XLU", "XLV", "XLY", "XME", "XOP", "GDX", "GDXJ", "VNQ", "TQQQ", "SQQQ", "UVXY", "VXX",
+    # theme / industry ETFs found in the lake (no earnings dates), 2026-09-27
+    "ARKG", "COPX", "FDN", "ICLN", "IGV", "IHF", "IHI", "ITA", "IYT", "IYZ", "JETS", "KIE",
+    "LIT", "OIH", "PAVE", "PEJ", "TAN", "URA",
 })
 NO_LABEL = "unknown"
 REGIME_META_COLUMNS = frozenset({"session_date", "symbol", "rule_version", "computed_at",
