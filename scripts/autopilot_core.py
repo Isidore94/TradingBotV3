@@ -3418,6 +3418,31 @@ def write_auto_watchlists(longs: Iterable[str], shorts: Iterable[str]) -> bool:
     return True
 
 
+def runner_dip_armed_names(*, today: Any = None, path: Path | None = None) -> list[str]:
+    """Today's armed runner-dip names from the scan's runner file; [] when missing or stale."""
+    try:
+        import long_setups_store
+        import runner_dip_watch
+
+        payload = long_setups_store.read_runner_dip_watch(path)
+        return runner_dip_watch.armed_symbols(payload, today=today or datetime.now().date())
+    except Exception:  # noqa: BLE001 - an unreadable file is no armed name
+        logging.debug("Runner dip watch unreadable for the auto longs.", exc_info=True)
+        return []
+
+
+def sync_runner_dip_auto_longs(
+    *, today: Any = None, path: Path | None = None, auto_longs_path: Path | None = None
+) -> list[str]:
+    """Append today's armed runner-dip names to ``autolongs.txt`` so the bounce bot keeps their
+    M5 bars (p9, lead 2026-09-27). Additive only: the typed ``longs.txt`` / ``shorts.txt`` are
+    never touched and nothing is removed; the day-roll clear retires them. Returns what was added."""
+    names = runner_dip_armed_names(today=today, path=path)
+    if not names:
+        return []
+    return append_watchlist_symbols(Path(auto_longs_path or AUTO_LONGS_FILE), names)
+
+
 def candidate_registry_path() -> Path:
     from project_paths import CACHE_DIR
 

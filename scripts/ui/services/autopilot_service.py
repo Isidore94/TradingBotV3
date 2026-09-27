@@ -604,6 +604,7 @@ class AutopilotService(QObject):
             # near-HOD pause alerts and the daily pick scorecard measure the
             # trader's normal days too (alerts only - no file writes when OFF).
             self._maybe_clear_stale_auto_lists(now)
+            self._maybe_sync_runner_dip_names(now)
             self._maybe_add_near_extreme_names(now)
             self._maybe_score_picks_daily(now)
             if not self._enabled:
@@ -710,6 +711,35 @@ class AutopilotService(QObject):
             self._log("New session - cleared autolongs.txt / autoshorts.txt for today's open scan.")
         except Exception:
             logging.exception("Auto watchlist day-roll clear failed")
+
+    def _maybe_sync_runner_dip_names(self, now: datetime) -> None:
+        """Keep today's armed runner-dip names in autolongs.txt so the bot holds their M5 bars.
+
+        Runs after the day-roll clear. Re-checked only when the day, the runner file or
+        autolongs.txt changes (two stats per tick); strict OFF writes nothing.
+        """
+        if not self._enabled and not self._shadow_research_allowed():
+            return
+        from project_paths import RUNNER_DIP_WATCH_FILE
+
+        def stamp(path) -> tuple[int, int]:
+            try:
+                stat = Path(path).stat()
+            except OSError:
+                return (0, 0)
+            return (stat.st_mtime_ns, stat.st_size)
+
+        key = (now.date(), stamp(RUNNER_DIP_WATCH_FILE), stamp(AUTO_LONGS_FILE))
+        if getattr(self, "_runner_dip_sync_key", None) == key:
+            return
+        self._runner_dip_sync_key = key
+        try:
+            added = core.sync_runner_dip_auto_longs(today=now.date())
+        except Exception:
+            logging.exception("Runner dip names not synced to autolongs.txt")
+            return
+        if added:
+            self._log(f"Runner dips armed: added to autolongs.txt for M5 bars: {', '.join(added)}.")
 
     def _maybe_reset_daytrade_watchlists(self, now: datetime) -> None:
         """Wipe longs.txt / shorts.txt once their session has closed.

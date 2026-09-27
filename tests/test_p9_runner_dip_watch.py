@@ -333,3 +333,77 @@ def test_a_scan_with_no_current_bars_keeps_the_last_good_runner_file(tmp_path):
     assert json.loads(runner.read_text(encoding="utf-8"))["as_of"] == "2026-09-24"
     assert long_setups_store.publish_runner_dip_watch({"bars_by_symbol": {}, "spy_bars": [], "feature_rows": [],
                                                        "as_of": ""}, path=runner) is None
+
+
+# --- the auto-longs feed (the bounce bot only has M5 bars for its scan set)
+
+def _runner_file(tmp_path, *, as_of="2026-09-25", working="yes", name="runner_dip_watch.json"):
+    path = tmp_path / name
+    path.write_text(json.dumps({"as_of": as_of, "market_working": working, "members": [
+        {"symbol": "GTLB", "armed": True}, {"symbol": "NVDA", "armed": False}]}), encoding="utf-8")
+    return path
+
+
+def test_armed_names_are_appended_to_autolongs_through_the_autopilot(tmp_path):
+    import autopilot_core as core
+
+    runner, auto = _runner_file(tmp_path), tmp_path / "autolongs.txt"
+    auto.write_text("AAPL\n", encoding="utf-8")
+    assert core.sync_runner_dip_auto_longs(today=date(2026, 9, 28), path=runner, auto_longs_path=auto) == ["GTLB"]
+    assert auto.read_text(encoding="utf-8").split() == ["AAPL", "GTLB"]
+    assert core.sync_runner_dip_auto_longs(today=date(2026, 9, 28), path=runner, auto_longs_path=auto) == []
+    assert auto.read_text(encoding="utf-8").split() == ["AAPL", "GTLB"]
+
+
+def test_a_stale_or_not_working_runner_file_adds_nothing(tmp_path):
+    import autopilot_core as core
+
+    auto = tmp_path / "autolongs.txt"
+    auto.write_text("AAPL\n", encoding="utf-8")
+    for runner, today in ((_runner_file(tmp_path), date(2026, 9, 25)),
+                          (_runner_file(tmp_path, working="no", name="off.json"), date(2026, 9, 28)),
+                          (tmp_path / "missing.json", date(2026, 9, 28))):
+        assert core.sync_runner_dip_auto_longs(today=today, path=runner, auto_longs_path=auto) == []
+    assert auto.read_text(encoding="utf-8").split() == ["AAPL"]
+
+
+def _service(*, enabled=True, shadow=True):
+    from ui.services.autopilot_service import AutopilotService
+
+    service = AutopilotService.__new__(AutopilotService)
+    service._enabled = enabled
+    service._logged = []
+    service._log = service._logged.append
+    service._shadow_research_allowed = lambda: shadow
+    return service
+
+
+def test_the_autopilot_tick_syncs_once_per_change_and_never_in_strict_off(tmp_path, monkeypatch):
+    import autopilot_core as core
+    import project_paths
+    from ui.services import autopilot_service
+
+    calls = []
+    monkeypatch.setattr(core, "sync_runner_dip_auto_longs", lambda **kw: calls.append(kw) or ["GTLB"])
+    monkeypatch.setattr(project_paths, "RUNNER_DIP_WATCH_FILE", _runner_file(tmp_path))
+    monkeypatch.setattr(autopilot_service, "AUTO_LONGS_FILE", tmp_path / "autolongs.txt")
+    now = datetime(2026, 9, 28, 6, 45)
+    _service(enabled=False, shadow=False)._maybe_sync_runner_dip_names(now)
+    assert calls == []
+    service = _service(enabled=False, shadow=True)
+    service._maybe_sync_runner_dip_names(now)
+    service._maybe_sync_runner_dip_names(now)
+    assert calls == [{"today": date(2026, 9, 28)}]
+    assert "GTLB" in service._logged[-1]
+    (tmp_path / "autolongs.txt").write_text("AAPL\n", encoding="utf-8")  # the open scan rewrote it
+    service._maybe_sync_runner_dip_names(now)
+    assert len(calls) == 2
+
+
+def test_the_tick_runs_the_sync_after_the_day_roll_clear():
+    import inspect
+
+    from ui.services.autopilot_service import AutopilotService
+
+    source = inspect.getsource(AutopilotService._tick)
+    assert source.index("_maybe_clear_stale_auto_lists(now)") < source.index("_maybe_sync_runner_dip_names(now)")
