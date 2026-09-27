@@ -56,6 +56,7 @@ def service(tmp_path):
 
 @pytest.fixture
 def panel(service):
+    from PySide6.QtCore import QEvent
     from ui.panels.weekend_prep_panel import WeekendPrepPanel
 
     focus = _FakeFocus()
@@ -64,6 +65,7 @@ def panel(service):
     yield widget
     widget.shutdown()
     widget.deleteLater()
+    _app.sendPostedEvents(widget, QEvent.DeferredDelete)
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +116,101 @@ def test_marking_every_step_completes_the_routine(panel, service):
     for step in STEP_IDS:
         service.set_step_status(step, "done")
     assert "complete" in panel.header.text()
+
+
+@pytest.mark.parametrize("width,height", [(2560, 1440), (1920, 1080)])
+def test_step_layout_keeps_actions_pinned_and_long_content_reachable(
+    panel, width, height
+):
+    """Long pages scroll inside their work area while step controls stay put."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QFont, QFontDatabase
+    from ui import theme
+
+    original_font = panel.font()
+    original_stylesheet = panel.styleSheet()
+    original_theme, original_scale = theme.active_theme(), theme.active_scale()
+    font_id = -1
+    font_file = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / "segoeui.ttf"
+    screenshot_dir = os.environ.get("WEEKEND_PREP_SCREENSHOT_DIR")
+
+    def _capture_screenshot(name: str) -> None:
+        if not screenshot_dir:
+            return
+        destination_dir = Path(screenshot_dir)
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        destination = destination_dir / name
+        assert panel.grab().save(str(destination)), f"Could not save {destination}"
+
+    try:
+        if font_file.is_file():
+            font_id = QFontDatabase.addApplicationFont(str(font_file))
+            families = QFontDatabase.applicationFontFamilies(font_id) if font_id >= 0 else []
+            if families:
+                panel.setFont(QFont(families[0], 10))
+        theme.apply_theme(panel, "dark", scale=1.0)
+        panel.resize(width, height)
+        panel.show()
+        _app.processEvents()
+
+        assert panel.rail.count() == len(STEP_IDS)
+        assert panel.rail.currentRow() == 0
+        assert panel.pages.currentWidget() is panel.week_review
+        assert panel.verdict_card.parentWidget() is panel.week_review.content_scroll.widget()
+        assert panel.coverage_note is panel.tag_week.coverage_note
+        _capture_screenshot(f"weekend-prep-review-{width}x{height}.png")
+
+        for row, step in enumerate(STEP_IDS):
+            panel.rail.setCurrentRow(row)
+            _app.processEvents()
+            page = panel._pages[step]
+            if step == "tag_week":
+                _capture_screenshot(f"weekend-prep-tags-{width}x{height}.png")
+            page_rect = page.rect()
+            assert page.heading.isVisible()
+            assert page.subtitle.isVisible()
+            assert page.skip_button.isVisible()
+            assert page.done_button.isVisible()
+            assert page_rect.contains(page.skip_button.geometry())
+            assert page_rect.contains(page.done_button.geometry())
+            assert page.skip_button.geometry().right() < page.done_button.geometry().left()
+            assert page.heading.geometry().bottom() < page.subtitle.geometry().top()
+
+            scroll = page.content_scroll
+            if scroll is None:
+                # Focus Review keeps its full-height 75/25 splitter directly
+                # in the page; it is deliberately exempt from the outer scroll.
+                assert step == "focus_review"
+                assert page.view_split.height() > 0
+                assert page.view_split.geometry().bottom() < page.skip_button.geometry().top()
+                continue
+
+            assert page._layout.parentWidget() is scroll.widget()
+            assert page.subtitle.geometry().bottom() < scroll.geometry().top()
+            assert scroll.geometry().bottom() < page.skip_button.geometry().top()
+            assert scroll.rect().contains(scroll.viewport().geometry())
+
+            fixed_footer = (page.skip_button.geometry(), page.done_button.geometry())
+            target = {
+                "week_review": panel.week_review.summary,
+                "tag_week": panel.tag_week.open_trade_button,
+            }.get(step)
+            if target is not None:
+                bar = scroll.verticalScrollBar()
+                bar.setValue(bar.maximum())
+                _app.processEvents()
+                target_top = target.mapTo(scroll.viewport(), QPoint(0, 0)).y()
+                assert target_top >= 0
+                assert target_top + target.height() <= scroll.viewport().height()
+                assert fixed_footer == (page.skip_button.geometry(), page.done_button.geometry())
+
+        assert panel.pages.currentWidget() is panel.week_ahead
+    finally:
+        panel.setFont(original_font)
+        panel.setStyleSheet(original_stylesheet)
+        theme._ACTIVE_THEME, theme._ACTIVE_SCALE = original_theme, original_scale
+        if font_id >= 0:
+            QFontDatabase.removeApplicationFont(font_id)
 
 
 # ---------------------------------------------------------------------------

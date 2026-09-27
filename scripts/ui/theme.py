@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Mapping
+
+
+def configure_platform() -> None:
+    """Use GDI fonts on Windows without overriding an explicit Qt platform."""
+    if sys.platform == "win32" and not os.environ.get("QT_QPA_PLATFORM"):
+        os.environ["QT_QPA_PLATFORM"] = "windows:fontengine=gdi"
 
 
 THEMES: dict[str, dict[str, str]] = {
@@ -360,4 +367,7 @@ def apply_theme(
 ) -> None:
     global _ACTIVE_THEME
     _ACTIVE_THEME = theme_name if theme_name in THEMES else "dark"
-    app.setStyleSheet(build_stylesheet(_ACTIVE_THEME, compact, scale))
+    stylesheet = build_stylesheet(_ACTIVE_THEME, compact, scale)
+    # Avoid repolishing every widget for an unchanged rendered theme.
+    if app.styleSheet() != stylesheet:
+        app.setStyleSheet(stylesheet)

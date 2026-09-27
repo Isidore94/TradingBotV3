@@ -33,6 +33,30 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+
+@pytest.fixture
+def page_factory(qapp):
+    from PySide6.QtCore import QEvent, QThread
+    from ui.panels.weekend_prep_panel import TagWeekPage
+    from ui.services.weekend_prep_service import WeekendPrepService
+
+    pages = []
+
+    def create():
+        page = TagWeekPage(WeekendPrepService())
+        pages.append(page)
+        return page
+
+    yield create
+    for page in pages:
+        page.shutdown()
+        for worker in page.findChildren(QThread):
+            assert worker.wait(10000), "tag-week test worker did not stop"
+        page.service.shutdown()
+        page.deleteLater()
+        qapp.sendPostedEvents(page, QEvent.DeferredDelete)
+
+
 def _seed(store, trade_id, *, date="2026-08-11", symbol="NVDA"):
     with store.connection() as conn:
         conn.execute(
@@ -131,17 +155,16 @@ def test_a_trade_outside_the_week_is_not_listed(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_confirm_all_shown_writes_the_traders_answer(qapp, tmp_path, monkeypatch):
+def test_confirm_all_shown_writes_the_traders_answer(page_factory, tmp_path, monkeypatch):
     from journal_store import TAG_STATUS_CONFIRMED, JournalStore
     from ui.panels import weekend_prep_panel
-    from ui.services.weekend_prep_service import WeekendPrepService
 
     store = JournalStore(tmp_path / "journal.sqlite3")
     _seed(store, "t1", symbol="AAA")
     store.apply_provisional_tags("t1", "avwap_breakout")
     monkeypatch.setattr("journal_store.JournalStore", lambda *a, **k: store)
 
-    page = weekend_prep_panel.TagWeekPage(WeekendPrepService())
+    page = page_factory()
     page._rows = weekend_prep_panel._read_week_tag_rows(WEEK)
     assert page._rows, "the fixture must offer something to confirm"
 
@@ -157,12 +180,10 @@ def test_confirm_all_shown_writes_the_traders_answer(qapp, tmp_path, monkeypatch
     assert "avwap_breakout" in str(trade.get("setup_tags") or "")
 
 
-def test_a_failed_write_is_reported_and_never_a_quiet_success(qapp, monkeypatch):
+def test_a_failed_write_is_reported_and_never_a_quiet_success(page_factory, monkeypatch):
     """A journal write is the one store on this desk that may not fail quietly."""
-    from ui.panels import weekend_prep_panel
-    from ui.services.weekend_prep_service import WeekendPrepService
 
-    page = weekend_prep_panel.TagWeekPage(WeekendPrepService())
+    page = page_factory()
     # R4 A15: the row needs a TAG. A row with none is skipped before any write,
     # because confirming a blank leaves the nightly tagger re-flagging it every
     # night - see `test_r4_tag_week_confirm.py`.
@@ -184,22 +205,18 @@ def test_a_failed_write_is_reported_and_never_a_quiet_success(qapp, monkeypatch)
     assert "database is locked" in page.note.text()
 
 
-def test_confirming_nothing_says_so_rather_than_reporting_a_write(qapp):
-    from ui.panels import weekend_prep_panel
-    from ui.services.weekend_prep_service import WeekendPrepService
+def test_confirming_nothing_says_so_rather_than_reporting_a_write(page_factory):
 
-    page = weekend_prep_panel.TagWeekPage(WeekendPrepService())
+    page = page_factory()
     page._rows = []
     page._confirm_all_shown()
     assert "Nothing selected" in page.note.text()
 
 
-def test_the_table_shows_ten_rows_before_scrolling(qapp):
+def test_the_table_shows_ten_rows_before_scrolling(page_factory):
     """Three at a time was the complaint."""
-    from ui.panels import weekend_prep_panel
-    from ui.services.weekend_prep_service import WeekendPrepService
 
-    page = weekend_prep_panel.TagWeekPage(WeekendPrepService())
+    page = page_factory()
     assert page.table.minimumHeight() >= 240
 
 

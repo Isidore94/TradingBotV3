@@ -2610,6 +2610,7 @@ def main(argv: list[str] | None = None) -> int:
         state.ui_scale = args.ui_scale
         state.save()
 
+    theme.configure_platform()
     install_qt_message_rate_limit()
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_DontShowIconsInMenus, False)
     app = QApplication(sys.argv[:1])

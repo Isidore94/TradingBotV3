@@ -1,5 +1,21 @@
 # Changelog
 
+- 2026-09-27 GUI/startup delivery: integrate the approved 4K layouts and GDI startup fix with current runner-dip work; retain hidden/armed label states; make GUI test imports self-contained and retire Tag Week test workers before destroying widgets. All 924 files verified in fresh processes (13,446 pass, 14 skip); source/frozen selftests 105/105. Long combined Qt test-worker crashes remain a harness limitation.
+
+- 2026-09-27 Startup: default Windows Qt to the GDI font backend before QApplication, avoiding the measured DirectWrite font-database stall; explicit Qt platform overrides remain intact.
+
+- 2026-09-27 GUI validation: label the live-results widget tests as Qt; combined-suite validation is required alongside the focused geometry checks.
+
+- 2026-09-27 GUI theme performance: repeated state updates skip a full Qt restyle when the rendered stylesheet is identical; theme, density and scale changes still apply.
+
+- 2026-09-27 GUI validation: page-scoped visual-test themes, completed widget teardown and quiet Desk fixtures avoid unrelated Qt work; swing/manifest assertions track their own readers, journal repair tests set their starting state, and the earnings retry test isolates its clock mock.
+
+- 2026-09-27 Desk GUI: compact filters wrap above the chart, the longs-off banner gets its own line, Capture/Journal tabs stay clear, and Manage lists distinguishes the editor from the daily Watchlist; existing filters and saved splitter settings retained.
+
+- 2026-09-26 GUI navigation: More groups pages by purpose and names the active page; page tabs support keyboard focus while the existing window retains navigation ownership.
+
+- 2026-09-26 GUI passes: approved 4K design language in gui.md; Journal detail sections, grouped Research, fixed Day Review/Weekend Prep navigation, paired Summary/Health/Auto Pilot workspaces, grouped Settings and shared static focus cues; existing data and save paths retained.
+
 One line per change, newest first. The commit message holds the detail. Keep
 about 40 lines and delete the oldest. The full old changelog and inventory are in
 `notes/CHANGELOG.md`, local only.

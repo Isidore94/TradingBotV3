@@ -2,14 +2,19 @@
 
 Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `git log`.
 
-**Updated:** 2026-09-27 09:25 PT (strength + under AVWAPE promotion and runner dip watch merged; desk still down)
+**Updated:** 2026-09-27 (GUI redesign and Windows startup delivery on the trader's word)
 
 - **Live on `main`:** round 1, round 2 Phase A (`81272d42`), Phase B + S (`2d59aace`),
   S10a + S7 (`3802c0d7`), p9 phase 1 regime frame (`849390a2`), p9 phase 2 long
   setups + momentum universe + longs off + S9/P14 (`55bbeb26`), p9 phase 3 favourite-zone
   LONG gutted for Long leaders (`d382986e`), p9 phase 4 swing table, strength + under AVWAPE promotion + runner dip watch (`79e8d658`); gates #257-#298.
-- **Desk:** DOWN. Restarted 20:50 PT on `81272d42`, then closed cleanly 21:51 PT on the
-  trader's word; restart only on the trader's word.
+- **GUI/startup delivery:** approved 4K GUI design in gui.md; Journal, Research,
+  Day Review, supporting pages and Desk polish; Windows font-startup fix.
+  All 924 test files verified in fresh processes: 13,446 pass, 14 skip; source
+  and frozen selftests 105/105, smoke 7/7, Ruff clean. Long combined Qt test runs
+  still hit worker-lifetime crashes; isolated coverage passed, not a harness fix.
+- **Desk:** not restarted by this delivery. Next launch uses main. Live 4K/resource
+  checks and actual first-usable timing remain owed in docs/GATES.md.
 - **Perf:** 09-24 baseline GUI blocked 1305 s, full GC 306 ms/min, young 156; on the new
   code (idle evening) full GC 4.7 ms/min, young 13.5. Monday: `desk_perf_report.py --day
   2026-09-28 --compare 2026-09-24`.

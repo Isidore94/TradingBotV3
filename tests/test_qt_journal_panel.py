@@ -98,12 +98,16 @@ def populated(store):
 
 @pytest.fixture
 def panel(qapp, populated):
+    from PySide6.QtCore import QEvent, QThread
     from ui.panels.journal_panel import JournalPanel
 
     widget = JournalPanel()
     yield widget
     widget.shutdown()
+    for worker in widget.findChildren(QThread):
+        assert worker.wait(10000), "journal test worker did not stop"
     widget.deleteLater()
+    qapp.sendPostedEvents(widget, QEvent.DeferredDelete)
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +377,130 @@ def test_selecting_a_trade_fills_the_detail_pane_and_its_legs(panel):
     panel.trades_tab.table.selectRow(0)
     assert panel.trades_tab._current is not None
     assert panel.trades_tab.legs_table.rowCount() >= 1
+
+
+def test_detail_sections_keep_drafts_and_selected_trade_without_reading_again(panel, monkeypatch):
+    tab = panel.trades_tab
+    tab.reload()
+    tab.table.selectRow(0)
+    trade_id = tab._current.trade_id
+    tab.notes_input.setPlainText("Unsaved lesson")
+    tab.planned_stop.setValue(123.45)
+    tab.decision_reason.setText("Unsaved reason")
+
+    def unexpected_read(*args, **kwargs):
+        pytest.fail("Changing detail sections must not reload a trade")
+
+    monkeypatch.setattr(journal_feed, "load_trades", unexpected_read)
+    monkeypatch.setattr(journal_feed, "trade_legs", unexpected_read)
+    for index in range(tab.detail_tabs.count()):
+        tab.detail_tabs.setCurrentIndex(index)
+        assert tab._current.trade_id == trade_id
+        assert tab.notes_input.toPlainText() == "Unsaved lesson"
+        assert tab.planned_stop.value() == pytest.approx(123.45)
+        assert tab.decision_reason.text() == "Unsaved reason"
+
+
+def test_reloading_keeps_the_selected_trade_and_detail_section(panel):
+    tab = panel.trades_tab
+    tab.reload()
+    tab.table.selectRow(0)
+    wanted = tab._current.trade_id
+    tab.detail_tabs.setCurrentIndex(1)
+    tab.reload()
+    assert tab._current is not None
+    assert tab._current.trade_id == wanted
+    assert tab.detail_tabs.currentIndex() == 1
+    assert tab.table.selectedIndexes()
+
+
+def test_filtering_out_the_selected_trade_clears_the_inspector(panel):
+    tab = panel.trades_tab
+    tab.reload()
+    tab.table.selectRow(0)
+    assert tab._current is not None
+    tab.tag_filter.setCurrentIndex(1)
+    assert tab.table.rowCount() == 0
+    assert tab._current is None
+    assert tab.detail_title.text() == "Select a trade"
+    assert not tab.detail_tabs.isEnabled()
+
+
+def test_detail_has_a_clear_empty_state_and_a_selected_trade_header(panel, qapp):
+    tab = panel.trades_tab
+    tab.reload()
+    tab.table.clearSelection()
+    assert not tab.detail_tabs.isEnabled()
+    assert tab.detail_title.text() == "Select a trade"
+    tab.table.selectRow(0)
+    assert tab.detail_tabs.isEnabled()
+    assert tab._current.symbol in tab.detail_title.text()
+    assert tab._current.trade_date in tab.detail_context.text()
+    tab.table.clearSelection()
+    assert tab.detail_title.text() == "Select a trade"
+    assert not tab.detail_tabs.isEnabled()
+
+
+def test_detail_sections_keep_each_existing_save_and_correction_reachable(panel, qapp):
+    tab = panel.trades_tab
+    tab.reload()
+    tab.table.selectRow(0)
+    panel.resize(2560, 1440)
+    panel.show()
+    qapp.processEvents()
+    targets = {
+        "Review": tab.save_review_button,
+        "Plan": tab.save_risk_button,
+        "Executions": tab.legs_table,
+        "Notes and tags": tab.save_notes_button,
+        "Corrections": tab.correct_button,
+    }
+    for name, control in targets.items():
+        index = next(i for i in range(tab.detail_tabs.count()) if tab.detail_tabs.tabText(i) == name)
+        tab.detail_tabs.setCurrentIndex(index)
+        qapp.processEvents()
+        assert control.isVisible()
+        assert control.isEnabled()
+        assert tab.detail_tabs.currentWidget().isAncestorOf(control)
+    panel.hide()
+
+
+@pytest.mark.parametrize("width,height", [(1920, 1080), (2560, 1440), (3840, 2160)])
+@pytest.mark.parametrize("theme_name", ["dark", "light"])
+def test_review_action_fits_the_full_screen_workspace(panel, qapp, tmp_path, width, height, theme_name):
+    import os
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QFontDatabase
+    from ui import theme
+    from ui.theme import active_scale, active_theme, apply_theme
+
+    previous_style = panel.styleSheet()
+    previous_theme, previous_scale = active_theme(), active_scale()
+    font_path = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "segoeui.ttf"
+    font_id = QFontDatabase.addApplicationFont(str(font_path)) if font_path.is_file() else -1
+    try:
+        apply_theme(panel, theme_name, scale=1.0)
+        panel.resize(width, height)
+        panel.trades_tab.reload()
+        panel.trades_tab.table.selectRow(0)
+        panel.show()
+        qapp.processEvents()
+        tab = panel.trades_tab
+        viewport = tab.detail_tabs.currentWidget().viewport()
+        action = tab.save_review_button
+        position = action.mapTo(viewport, QPoint(0, 0))
+        assert viewport.rect().contains(position)
+        assert position.y() + action.height() <= viewport.height()
+        assert tab.detail_tabs.tabBar().sizeHint().width() <= tab.detail_tabs.width()
+        image = tmp_path / f"journal-{theme_name}-{width}.png"
+        assert panel.grab().save(str(image))
+        print(f"Journal visual check: {image}")
+    finally:
+        panel.hide()
+        panel.setStyleSheet(previous_style)
+        theme._ACTIVE_THEME, theme._ACTIVE_SCALE = previous_theme, previous_scale
+        if font_id >= 0:
+            QFontDatabase.removeApplicationFont(font_id)
 
 
 def test_structured_trade_review_is_captured_through_the_real_store(panel, populated):

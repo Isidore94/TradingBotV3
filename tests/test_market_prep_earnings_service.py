@@ -3,7 +3,8 @@ import unittest
 from datetime import date, datetime, timedelta
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from scripts import earnings_history
 from market_prep.models import MarketPrepConfig
@@ -205,13 +206,13 @@ class MarketPrepEarningsServiceTests(unittest.TestCase):
             with (
                 patch("market_prep.services.earnings_service.get_default_cache_dir", return_value=Path(temp_dir)),
                 patch("market_prep.services.earnings_service.requests.get", side_effect=RuntimeError("nasdaq down")) as get_mock,
-                patch("market_prep.services.earnings_service.time.sleep") as sleep_mock,
+                patch("market_prep.services.earnings_service.time", SimpleNamespace(sleep=Mock())) as clock_mock,
             ):
                 rows = fetch_nasdaq_earnings_for_date(target_date)
 
         self.assertEqual(rows, cached_rows)
         self.assertEqual(get_mock.call_count, 3)
-        self.assertEqual(sleep_mock.call_count, 2)
+        self.assertEqual(clock_mock.sleep.call_count, 2)
 
     def test_yfinance_enrichment_preserves_nasdaq_market_cap_when_metadata_is_empty(self):
         event = {

@@ -936,9 +936,11 @@ class MasterAvwapWorkspace(QFrame):
         # WS-WL: second, directly after the setups - it is the list the trader
         # works from, and the pages it replaced were nav entries 1 and 2.
         if self.watchlist_tab is not None:
-            self.tabs.addTab(self.watchlist_tab, "Watchlist")
+            watchlist_index = self.tabs.addTab(self.watchlist_tab, "Watchlist")
+            self.tabs.setTabToolTip(watchlist_index, "Daily working board")
         self.tabs.addTab(self.theta_panel, "Theta Plays")
-        self.tabs.addTab(self.watchlists_panel, "Watchlists")
+        watchlists_index = self.tabs.addTab(self.watchlists_panel, "Manage lists")
+        self.tabs.setTabToolTip(watchlists_index, "Edit scanner symbol lists")
         if self.industry_panel is not None:
             self.tabs.addTab(self.industry_panel, "Industry Board")
         if self.rs_window_panel is not None:

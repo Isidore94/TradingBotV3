@@ -535,14 +535,14 @@ def test_nothing_is_read_on_the_qt_thread(qapp, monkeypatch):
 
 
 def test_the_swing_context_is_read_on_the_worker_thread(qapp, monkeypatch):
-    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtCore import QCoreApplication, QThread
 
     from ui.services import swing_table_context as swing_context
 
-    threads: list[bool] = []
+    threads: list[tuple[QThread, bool]] = []
 
     def fake_read(data_date=""):
-        threads.append(threading.current_thread() is threading.main_thread())
+        threads.append((QThread.currentThread(), threading.current_thread() is threading.main_thread()))
         return {"long_setups": _payload(_leader("MU"))}
 
     monkeypatch.setattr(swing_context, "read_swing_context", fake_read)
@@ -554,7 +554,8 @@ def test_the_swing_context_is_read_on_the_worker_thread(qapp, monkeypatch):
         assert worker is not None, "the report refresh starts the read"
         assert worker.wait(5000)
         QCoreApplication.processEvents()
-        assert threads == [False], "read off the Qt thread"
+        assert [on_main for owner, on_main in threads if owner is worker] == [False], "one read on this worker"
+        assert not any(on_main for _, on_main in threads), "all reads stay off the Qt thread"
         assert ("MU", "LONG") in {(r.symbol, r.side) for r in panel.model.rows()}
         panel._start_swing_context_read()
         assert panel._swing_worker is None, "nothing moved: no second read"

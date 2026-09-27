@@ -901,27 +901,34 @@ def test_the_manifest_is_read_on_the_refresh_path_and_never_on_paint(
 ):
     """*"never `json.loads` on paint"*. The refresh path reads the manifest; a
     repaint of the table and the whole panel must read nothing."""
+    from PySide6.QtCore import QThread
     from ui.panels.master_avwap_panel import MasterAvwapPanel
 
     _write_manifest(_ok_manifest())
     _write_report("NVDA LONG favorite_setup 88.4\n")
 
-    calls: list[int] = []
+    calls: list[tuple[object, bool]] = []
     real = scan_manifest.read_manifest
 
     def _counted(*args, **kwargs):
-        calls.append(1)
+        thread = QThread.currentThread()
+        calls.append((thread.parent(), thread is qt_app.thread()))
         return real(*args, **kwargs)
 
     monkeypatch.setattr(scan_manifest, "read_manifest", _counted)
 
     panel = MasterAvwapPanel()
+
+    def relevant_calls():
+        # Ignore other panels' workers, but catch every GUI-thread read.
+        return [call for call in calls if call[1] or call[0] is panel]
+
     try:
         panel.resize(1600, 900)
         panel.show()
         qt_app.processEvents()
         panel.refresh_from_reports()
-        assert _pump(qt_app, lambda: bool(calls)), (
+        assert _pump(qt_app, lambda: bool(relevant_calls())), (
             "the refresh path never read the scan manifest"
         )
 
@@ -930,8 +937,8 @@ def test_the_manifest_is_read_on_the_refresh_path_and_never_on_paint(
             panel.table.viewport().update()
             panel.update()
             qt_app.processEvents()
-        assert calls == [], (
-            f"the manifest was re-read {len(calls)} time(s) while painting"
+        assert relevant_calls() == [], (
+            f"the manifest was re-read {len(relevant_calls())} time(s) while painting"
         )
     finally:
         panel.deleteLater()

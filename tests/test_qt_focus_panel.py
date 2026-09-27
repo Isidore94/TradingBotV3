@@ -123,23 +123,34 @@ def test_focus_panel_marks_live_bounce_alert(tmp_path):
 
 
 def test_master_workspace_no_longer_tabs_focus_picks(tmp_path):
+    from PySide6.QtWidgets import QWidget
     from ui.panels.master_avwap_panel import MasterAvwapPanel
     from ui.panels.theta_panel import ThetaPanel
     from ui.panels.trading_desk import MasterAvwapWorkspace
     from ui.panels.watchlists_panel import WatchlistsPanel
 
     service = _service(tmp_path)
+    daily_watchlist = QWidget()
+    manage_lists = WatchlistsPanel()
     workspace = MasterAvwapWorkspace(
         MasterAvwapPanel(service),
         ThetaPanel(),
-        WatchlistsPanel(),
+        manage_lists,
+        watchlist_tab=daily_watchlist,
     )
 
     assert [workspace.tabs.tabText(index) for index in range(workspace.tabs.count())] == [
         "Setups",
+        "Watchlist",
         "Theta Plays",
-        "Watchlists",
+        "Manage lists",
     ]
+    assert workspace.tabs.widget(1) is daily_watchlist
+    assert workspace.tabs.widget(3) is manage_lists
+    assert workspace.show_watchlist()
+    assert workspace.tabs.currentWidget() is daily_watchlist
+    workspace.show_watchlists()
+    assert workspace.tabs.currentWidget() is manage_lists
 
 
 def test_focus_picks_is_top_level_app_page():
