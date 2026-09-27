@@ -2139,6 +2139,80 @@ def run_backfill_market_context(
         return {"status": "REFUSED", "applied": True, "reason": str(exc)}
 
 
+def _regime_modules():
+    try:
+        from . import regime_daily, regime_report
+    except ImportError:  # pragma: no cover - scripts/ directly on sys.path
+        import regime_daily  # type: ignore
+        import regime_report  # type: ignore
+    return regime_daily, regime_report
+
+
+def run_build_regimes(
+    store: ResearchStore | None,
+    *,
+    apply: bool = False,
+    symbols=None,
+    until: date | None = None,
+    now: datetime | None = None,
+    lock_path: Path | None = None,
+    d1_loader=None,
+    intraday_loader=None,
+) -> dict:
+    """Compute missing ``market_regime_daily`` rows; publish them only with ``apply`` (single-flight)."""
+    regime_daily, _report = _regime_modules()
+    kwargs = dict(
+        symbols=tuple(symbols or regime_daily.SYMBOLS), until=until, now=now,
+        d1_loader=d1_loader, intraday_loader=intraday_loader,
+    )
+    if store is None:
+        return {"status": "DISABLED", "message": "research_store_dir is not configured."}
+    if not apply:
+        return regime_daily.run_build(store, apply=False, **kwargs)
+    try:
+        with single_flight(lock_path):
+            report = regime_daily.run_build(store, apply=True, **kwargs)
+            _record_job("COMPLETED", {"job": regime_daily.DATASET, "rows": report.get("rows_published", 0)})
+            return report
+    except SingleFlightError as exc:
+        return {"status": "REFUSED", "applied": True, "reason": str(exc)}
+
+
+def run_regime_report(
+    store: ResearchStore | None,
+    *,
+    symbol: str = "SPY",
+    out: Path,
+    rule_version: str | None = None,
+    journal: Path | None = None,
+    d1_loader=None,
+) -> dict:
+    """Write the regime report JSON for one symbol. Read-only on the lake and the journal (a copy is read)."""
+    regime_daily, regime_report = _regime_modules()
+    if store is None:
+        return {"status": "DISABLED", "message": "research_store_dir is not configured."}
+    frame = regime_daily.read_regimes(symbol, rule_version, store=store)
+    if frame.empty:
+        return {"status": "EMPTY", "message": f"no {regime_daily.DATASET} rows for {symbol}"}
+    if d1_loader is None:
+        try:
+            from .history_reader import read_d1
+        except ImportError:  # pragma: no cover
+            from history_reader import read_d1  # type: ignore
+
+        d1 = read_d1([symbol], frame["session_date"].min(), None, store=store).get(symbol)
+    else:
+        d1 = d1_loader([symbol], frame["session_date"].min(), None).get(symbol)
+    if journal is None:
+        journal = Path(config._paths().JOURNAL_DB_FILE)
+    trader_rows = regime_report.read_trader_segments(journal)
+    report = regime_report.build_report(frame, d1, symbol=symbol, trader_rows=trader_rows)
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+    return {"status": "OK", "out": str(out), "sessions": report["span"]["sessions"], "span": report["span"]}
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="research_warehouse", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -2232,7 +2306,49 @@ def main(argv=None) -> int:
         help="dry run only: preview with this durable D1 store when bar_d1 has no SPY yet",
     )
 
+    regimes = sub.add_parser(
+        "build-regimes",
+        help="append missing market_regime_daily rows (SPY/QQQ/IWM); DRY RUN unless --apply",
+    )
+    regimes.add_argument("--apply", action="store_true", help="publish; without it only counts are printed")
+    regimes.add_argument("--symbols", default="", help="comma list; default SPY,QQQ,IWM")
+    regimes.add_argument("--until", default="", help="YYYY-MM-DD last session; default the last settled one")
+    regimes.add_argument("--root", default="", help="lake root to read (dry run only); default the configured lake")
+    regime_rep = sub.add_parser("regime-report", help="read-only: the regime report JSON for one symbol")
+    regime_rep.add_argument("--symbol", default="SPY")
+    regime_rep.add_argument("--out", required=True)
+    regime_rep.add_argument("--rule-version", default="")
+    regime_rep.add_argument("--journal", default="", help="journal sqlite to COPY for typed segments")
+    regime_rep.add_argument("--root", default="", help="lake root to read; default the configured lake")
+
     args = parser.parse_args(argv)
+    if args.command in {"build-regimes", "regime-report"}:
+        if args.command == "build-regimes" and args.root and args.apply:
+            parser.error("--root is for dry runs; --apply writes only the configured lake")
+        if args.root:
+            regime_store = ResearchStore(Path(args.root))
+        elif args.command == "build-regimes" and args.apply:
+            regime_store = ResearchStore.open()
+        else:
+            root = config.get_research_store_dir()
+            regime_store = ResearchStore(root) if root is not None else None
+        if args.command == "build-regimes":
+            report = run_build_regimes(
+                regime_store,
+                apply=bool(args.apply),
+                symbols=[s.strip().upper() for s in args.symbols.split(",") if s.strip()] or None,
+                until=date.fromisoformat(args.until) if args.until else None,
+            )
+        else:
+            report = run_regime_report(
+                regime_store,
+                symbol=args.symbol.upper(),
+                out=Path(args.out),
+                rule_version=args.rule_version or None,
+                journal=Path(args.journal) if args.journal else None,
+            )
+        print(json.dumps(report, indent=2, default=str))
+        return 0 if report.get("status") in {"OK", "DISABLED"} else 1
     if args.command in {"backfill-benchmark-d1", "backfill-market-context"} and args.root:
         if args.apply:
             parser.error("--root is for dry runs; --apply writes only the configured lake")

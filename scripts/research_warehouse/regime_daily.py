@@ -169,12 +169,12 @@ def _aware(value: Any) -> datetime | None:
 
 
 def intraday_bars(source: Any) -> list[dict]:
-    """Completed intraday rows with a tz-aware ``interval_start``, oldest first, tagged by ET session date."""
+    """Completed, non-stub intraday rows with a tz-aware ``interval_start``, oldest first, by ET session date."""
     out: dict[datetime, dict] = {}
     for row in _records(source):
         start = _aware(row.get("interval_start"))
         close = _num(row.get("close"))
-        if start is None or close is None or row.get("is_complete") is False:
+        if start is None or close is None or row.get("is_complete") in (False,) or row.get("is_stub") in (True,):
             continue
         out[start] = {
             **{key: _num(row.get(key)) for key in ("open", "high", "low", "volume")},
