@@ -47,6 +47,29 @@ def read_history(history_path: Path | None = None) -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
 
+def read_earnings_dates(path: Path | None = None) -> dict[str, list[str]]:
+    """``{SYMBOL: [iso dates, oldest first]}`` from the earnings-dates cache; {} when unreadable."""
+    import project_paths
+
+    try:
+        payload = json.loads(Path(path or project_paths.EARNINGS_DATES_CACHE_FILE).read_text(encoding="utf-8"))
+        symbols = payload.get("symbols") if isinstance(payload, dict) else None
+    except (OSError, ValueError):
+        return {}
+    out: dict[str, list[str]] = {}
+    for symbol, entry in (symbols if isinstance(symbols, dict) else {}).items():
+        days = set()
+        dates = entry.get("dates") if isinstance(entry, dict) else None
+        for text in dates if isinstance(dates, list) else ():
+            try:
+                days.add(datetime.fromisoformat(str(text)[:10]).date().isoformat())
+            except ValueError:
+                continue
+        if days:
+            out[str(symbol).strip().upper()] = sorted(days)
+    return out
+
+
 def publish_long_setups(
     *,
     bars_by_symbol: Mapping[str, Any],
@@ -64,6 +87,7 @@ def publish_long_setups(
     """Build this scan's long setups, settle the history, and write both files.
 
     Returns the published payload. Nothing is written without a scan session (``as_of``).
+    The earnings-dates cache (`read_earnings_dates`) anchors each leader pullback's earnings AVWAP.
     """
     from diagnostics.artifact_io import atomic_write_json
 
@@ -71,7 +95,8 @@ def publish_long_setups(
     payload = long_setups.build_rows(
         bars_by_symbol=bars_by_symbol, spy_bars=spy_bars, feature_rows=feature_rows,
         earnings_by_symbol=earnings_by_symbol, atr_by_symbol=atr_by_symbol,
-        sector_by_symbol=sector_by_symbol, market_cap_by_symbol=market_cap_by_symbol, as_of=as_of,
+        sector_by_symbol=sector_by_symbol, market_cap_by_symbol=market_cap_by_symbol,
+        earnings_dates_by_symbol=read_earnings_dates(), as_of=as_of,
     )
     if not payload["as_of"]:
         logging.info("Long setups: no completed scan session; nothing published.")

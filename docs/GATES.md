@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #297 Strong + under AVWAPE (p9): after the next scan the Long leaders rows that are strong and closed under the earnings VWAP lead the list, read "strong and dipped under the earnings VWAP", and are promoted first (Friday 2026-09-25 would have been GTLB, ANF, CRM, CMBT); after 10 sessions read the Setup Tracker line "strong + under AVWAPE (shadow)" [lead]
 - #296 Swing table (p9): on the next desk start the Master AVWAP table shows the Long leaders chip, the regime line (regime + day, longs verdict, SPY M5..W) and the new columns (Regime grade in compact; Long leader, SP4 shadow, Strength shadow, Study / note, Source in the full view when they have values); the Best swing switch ranks promoted Long leaders and the proven shorts first [trader]
 - #295 Favourite zone SHORT-only (p9 gut): after the next scan no LONG row is in the Favourite, Near or High Conviction bucket (setups table, phone push, digest); the favourite SHORT rows look as before; the Long leaders (Setup Tracker section, auto-populate longs, the push's "Long leaders" line) fill the long slots [trader]
 - #294 Strength shadow (p9): after 10 sessions compare the strength shadow's kept vs dropped longs (Setup Tracker line "strength filter (shadow)", from `strength_filter` in the session-horizon file) [lead]

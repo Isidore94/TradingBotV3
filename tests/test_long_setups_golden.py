@@ -25,7 +25,8 @@ def build(raw):
     return ls.build_rows(
         bars_by_symbol={symbol: _bars(rows) for symbol, rows in raw["bars"].items()},
         spy_bars=_bars(raw["spy"]), feature_rows=raw["feature_rows"],
-        earnings_by_symbol=raw["earnings"], atr_by_symbol=raw["atr"], as_of=raw["as_of"])
+        earnings_by_symbol=raw["earnings"], atr_by_symbol=raw["atr"],
+        earnings_dates_by_symbol=raw["earnings_dates"], as_of=raw["as_of"])
 
 
 def _golden():
@@ -34,9 +35,23 @@ def _golden():
     return load_fixture_contract("long_setups_golden_v1")
 
 
+#: The p9 strength + earnings-AVWAP tier (2026-09-27) adds these keys, one reason and a new
+#: promotion order; `test_p9_strength_avwape` pins those. Everything else is the golden.
+TIER_KEYS = {"avwape", "avwape_z", "under_avwape", "setup_tier", "promoted", "status"}
+
+
+def _untiered(payload):
+    rows = []
+    for row in payload["rows"]:
+        out = {key: value for key, value in row.items() if key not in TIER_KEYS}
+        out["reasons"] = [text for text in row["reasons"] if text != ls.REASON_STRENGTH_UNDER_AVWAPE]
+        rows.append(out)
+    return {**payload, "rows": sorted(rows, key=lambda row: (row["symbol"], row["setup"]))}
+
+
 def test_the_long_leaders_output_matches_the_golden():
     golden = _golden()
-    assert build(golden["raw"]) == golden["expected"]
+    assert _untiered(build(golden["raw"])) == _untiered(golden["expected"])
 
 
 def test_the_golden_is_not_empty():

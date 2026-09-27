@@ -352,8 +352,10 @@ def read_long_leader_lines() -> list[str]:
 
     def build() -> list[str]:
         lines = long_setups.tracker_lines(long_setups_store.read_long_setups(LONG_SETUPS_FILE))
-        cells = setup_grades.long_setup_cells(long_setups_store.read_history(LONG_SETUPS_HISTORY_FILE))
-        return [*lines, *(setup_grades.long_setup_line(cell) for cell in cells)]
+        history = long_setups_store.read_history(LONG_SETUPS_HISTORY_FILE)
+        cells = setup_grades.long_setup_cells(history)
+        return [*lines, *(setup_grades.long_setup_line(cell) for cell in cells),
+                setup_grades.long_setup_tier_line(setup_grades.long_setup_tier_cells(history))]
 
     key = (_file_key(Path(LONG_SETUPS_FILE)), _file_key(Path(LONG_SETUPS_HISTORY_FILE)))
     return list(_cached("long_leader_lines", key, build))

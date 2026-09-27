@@ -18,6 +18,10 @@ names, "Ya that's the post earnings play".
   the upper half of the gap day, now `PED_SESSIONS` sessions later and holding above the
   gap-day low and the VWAP anchored at the gap day.
 
+Every leader pullback also carries the earnings AVWAP (``avwape``, ``avwape_z``,
+``under_avwape``) and a ``setup_tier``: strong (the strength filter says yes) AND closed under
+the earnings AVWAP first, then strong, then the rest - the promotion order (trader, 2026-09-27).
+
 Each row carries an entry (a LIMIT `ENTRY_ATR_BELOW` ATR under the scan close - the S8 /
 S15.9 fill rule, `research_warehouse.retest_entry`), a stop, the exit (hold up to 10
 sessions, stop under the low - the long lab's time stop), its strength reasons in plain
@@ -129,6 +133,16 @@ LIQUIDITY_VOLUME_SESSIONS = 20
 #: stay listed.
 PROMOTE_RS_MIN_PERCENTILE = 0.8
 PROMOTE_MAX = 10
+
+#: The promotion tiers (trader, 2026-09-27: "Yes do it"). Long lab, SPY above a rising 20-day,
+#: 10 sessions vs SPY: leader_pullback 46% beat SPY (+0.0%), + strength 53% (+2.1%), + strength
+#: + close under the earnings AVWAP 58% (+5.4%, n 112). Tiered rows go first, RS-first inside.
+TIER_STRENGTH_UNDER_AVWAPE = "strength_under_avwape"
+TIER_STRENGTH = "strength"
+TIER_ORDER = {TIER_STRENGTH_UNDER_AVWAPE: 0, TIER_STRENGTH: 1}
+REASON_STRENGTH_UNDER_AVWAPE = "strong and dipped under the earnings VWAP"
+#: The earnings AVWAP counts only when the latest earnings reaction is this many sessions back.
+AVWAPE_SESSIONS = (2, 120)
 
 STATUS_READY = "ready"
 STATUS_WAITING = "waiting for the market"
@@ -440,16 +454,17 @@ def post_earnings_drift(
     }
 
 
-# --- the strength shadow (p9; changes nothing live)
+# --- the strength filter (p9): it orders promotion on leader pullbacks (`setup_tier`)
 
-#: The strength shadow's SMA (`setup_permutations.strength_filter_verdict` holds the rule).
+#: The strength filter's SMA (`setup_permutations.strength_filter_verdict` holds the rule).
 STRENGTH_SMA = 50
 
 
 def strength_shadow(bars: Sequence[Mapping[str, Any]], atr: Any, spy_vs_sma20_pct: Any,
                     spy_sma20_slope_pct: Any) -> dict[str, Any]:
     """``{strength_sma50_atr, strength_filter}`` for one row: (close - SMA50) / ATR on the completed
-    bars and the shadow verdict (yes / no / unknown). Never read by the gate, the rank or promotion."""
+    bars and the verdict (yes / no / unknown). Never read by the market gate or `promotable`; a
+    leader pullback's `setup_tier` reads it to order promotion."""
     closes = [bar["close"] for bar in bars]
     atr_value = _num(atr)
     distance = None
@@ -457,6 +472,74 @@ def strength_shadow(bars: Sequence[Mapping[str, Any]], atr: Any, spy_vs_sma20_pc
         distance = round((closes[-1] - sum(closes[-STRENGTH_SMA:]) / STRENGTH_SMA) / atr_value, 4)
     return {"strength_sma50_atr": distance,
             "strength_filter": strength_filter_verdict(distance, spy_vs_sma20_pct, spy_sma20_slope_pct)}
+
+
+# --- the earnings AVWAP (the study's anchor: the session before the latest earnings reaction)
+
+def avwap_bands(bars: Sequence[Mapping[str, Any]], start: int) -> tuple[float, float] | None:
+    """(AVWAP, sigma) from bar `start` through the last bar, `calc_anchored_vwap_bands`' formula:
+    OHLC/4 price, sigma from each bar's deviation to the running AVWAP, a blank or zero volume
+    skipped. None without volume."""
+    if not 0 <= start < len(bars):
+        return None
+    cum_volume = cum_vp = cum_sd = 0.0
+    for bar in bars[start:]:
+        volume = _num(bar.get("volume"))
+        if volume is None or not volume > 0:
+            continue
+        price = (bar["open"] + bar["high"] + bar["low"] + bar["close"]) / 4.0
+        cum_volume += volume
+        cum_vp += price * volume
+        deviation = price - cum_vp / cum_volume
+        cum_sd += deviation * deviation * volume
+    if cum_volume <= 0:
+        return None
+    return cum_vp / cum_volume, (cum_sd / cum_volume) ** 0.5
+
+
+def earnings_reaction_index(bars: Sequence[Mapping[str, Any]], earnings_day: Any) -> int | None:
+    """The reaction bar of one earnings date (`long_lab.reaction_day`): of the first session on or
+    after it and the next one, the bigger |open - prior close|; None when either bar is missing."""
+    day = _text(earnings_day)[:10]
+    first = next((index for index, bar in enumerate(bars) if bar["date"] >= day), None) if day else None
+    if first is None or first < 1 or first + 1 >= len(bars):
+        return None
+    return max((first, first + 1), key=lambda k: (abs(bars[k]["open"] - bars[k - 1]["close"]), -k))
+
+
+def earnings_avwap(bars: Sequence[Mapping[str, Any]], *, earnings_dates: Iterable[Any] | None = None,
+                   gap_date: Any = None) -> dict[str, Any]:
+    """``{avwape, avwape_z, under_avwape}``: the VWAP anchored the session before the latest
+    earnings reaction `AVWAPE_SESSIONS` back, (close - it) / sigma and yes / no / unknown.
+
+    The reaction comes from ``earnings_dates`` (the long-lab study's way); only a name with no
+    dates falls back to the scan's ``gap_date``. No reaction in the window = unknown.
+    """
+    unknown = {"avwape": None, "avwape_z": None, "under_avwape": UNKNOWN}
+    last = len(bars) - 1
+    days = [day for day in (_text(value)[:10] for value in earnings_dates or ()) if day]
+    if days:
+        reactions = {earnings_reaction_index(bars, day) for day in days} - {None}
+    else:
+        gap = _text(gap_date)[:10]
+        reactions = {index for index, bar in enumerate(bars) if gap and bar["date"] == gap}
+    past = sorted(index for index in reactions if index + 1 <= last)
+    if not past or past[-1] < 1 or not AVWAPE_SESSIONS[0] <= last - past[-1] <= AVWAPE_SESSIONS[1]:
+        return unknown
+    bands = avwap_bands(bars, past[-1] - 1)
+    if bands is None or not bands[1] > 0:
+        return unknown
+    level, sigma = bands
+    close = bars[-1]["close"]
+    return {"avwape": round(level, 4), "avwape_z": round((close - level) / sigma, 4),
+            "under_avwape": "yes" if close < level else "no"}
+
+
+def setup_tier(row: Mapping[str, Any]) -> str:
+    """A leader pullback's promotion tier: strong + under the earnings AVWAP, strong, or ""."""
+    if row.get("setup") != LEADER_PULLBACK or row.get("strength_filter") != "yes":
+        return ""
+    return TIER_STRENGTH_UNDER_AVWAPE if row.get("under_avwape") == "yes" else TIER_STRENGTH
 
 
 # --- one scan
@@ -498,10 +581,12 @@ def apply_market_gate(rows: list[dict[str, Any]], working: str, rule: str) -> li
 
 
 def rank(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """RS vs SPY first (long lab: deciles 9-10 best; unknown last), then strength, setup, symbol."""
+    """The `setup_tier` first (strong + under the earnings AVWAP, strong, the rest), then RS vs SPY
+    (long lab: deciles 9-10 best; unknown last), then strength, setup, symbol."""
     def key(row):
         rs = _num(row.get("rs_percentile"))
-        return (rs is None, -(rs or 0.0), -(row.get("strength") or 0.0), SETUPS.index(row["setup"]), row["symbol"])
+        return (TIER_ORDER.get(row.get("setup_tier"), len(TIER_ORDER)), rs is None, -(rs or 0.0),
+                -(row.get("strength") or 0.0), SETUPS.index(row["setup"]), row["symbol"])
 
     return sorted(rows, key=key)
 
@@ -515,6 +600,7 @@ def build_rows(
     atr_by_symbol: Mapping[str, Any] | None = None,
     sector_by_symbol: Mapping[str, Any] | None = None,
     market_cap_by_symbol: Mapping[str, Any] | None = None,
+    earnings_dates_by_symbol: Mapping[str, Iterable[Any]] | None = None,
     as_of: Any = None,
 ) -> dict[str, Any]:
     """Every long-setup row of one scan, gated and ranked: ``{as_of, market_working, market_rule, rows}``.
@@ -523,7 +609,8 @@ def build_rows(
     ``as_of`` is stale and skipped. ``feature_rows`` give the sector RS rank, the family
     and the market gate; they are read, never changed. A name under the trader's liquidity
     floor (`meets_liquidity_floor`; cap from ``market_cap_by_symbol``, else the row's
-    ``perm_market_cap_m``) gives no row.
+    ``perm_market_cap_m``) gives no row. ``earnings_dates_by_symbol`` (the earnings-dates
+    cache) anchors each leader pullback's earnings AVWAP (`earnings_avwap`).
     """
     as_of_text = _text(as_of)[:10]
     feature_rows = list(feature_rows or ())
@@ -571,9 +658,16 @@ def build_rows(
         for row in found:
             if row is not None:
                 # `setup_family` names the setup so `longs_market_gate.row_is_exempt` knows the row waits on its own.
-                out.append({"symbol": symbol, "as_of": as_of_text, "sector": sector,
-                            "setup_family": row["setup"], **row,
-                            **strength_shadow(bars, row["atr"], spy_vs, spy_slope)})
+                record = {"symbol": symbol, "as_of": as_of_text, "sector": sector,
+                          "setup_family": row["setup"], **row,
+                          **strength_shadow(bars, row["atr"], spy_vs, spy_slope)}
+                if row["setup"] == LEADER_PULLBACK:
+                    record.update(earnings_avwap(bars, earnings_dates=(earnings_dates_by_symbol or {}).get(symbol),
+                                                 gap_date=earnings.get("gap_date")))
+                record["setup_tier"] = setup_tier(record)
+                if record["setup_tier"] == TIER_STRENGTH_UNDER_AVWAPE:
+                    record["reasons"] = [REASON_STRENGTH_UNDER_AVWAPE, *record["reasons"]]
+                out.append(record)
     return {"as_of": as_of_text, "market_working": working, "market_rule": rule,
             "rows": apply_market_gate(rank(out), working, rule)}
 
@@ -628,7 +722,8 @@ def upsert_history(history: Iterable[Mapping[str, Any]], rows: Iterable[Mapping[
     rows = [dict(row) for row in rows
             if (_text(row.get("as_of")), _text(row.get("symbol")), _text(row.get("setup"))) not in seen]
     keep_keys = ("symbol", "as_of", "setup", "close", "atr", "entry_limit", "stop", "rs_percentile",
-                 "strength", "leader", "promoted", "market_working")
+                 "strength", "leader", "promoted", "market_working",
+                 "strength_filter", "under_avwape", "avwape_z", "setup_tier")
     return kept + [{key: row.get(key) for key in keep_keys} for row in rows]
 
 
