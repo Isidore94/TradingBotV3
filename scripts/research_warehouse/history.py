@@ -1031,9 +1031,12 @@ def run_earnings(
     report.symbols = len(todo)
     pending_rows: list[dict] = []
     pending_missing: list[str] = []
+    # Ledger lines are written only after their rows are sealed, so a crash
+    # between fetch and seal leaves the symbol owed, never marked done.
+    pending_ledger: list[dict] = []
 
     def _flush():
-        nonlocal pending_rows, pending_missing
+        nonlocal pending_rows, pending_missing, pending_ledger
         if pending_rows:
             names = sorted({row["symbol"] for row in pending_rows})
             known = existing_keys(store, "earnings_date", names, ["symbol", "earnings_date", "source"])
@@ -1047,7 +1050,9 @@ def run_earnings(
                 if ("earnings_date", s, FLAG_NO_EARNINGS) not in known
             ]
             report.add("history_quality_flag", _publish(store, "history_quality_flag", flags, lock=lock, job_id=run_id))
-        pending_rows, pending_missing = [], []
+        for record in pending_ledger:
+            ledger.append(record)
+        pending_rows, pending_missing, pending_ledger = [], [], []
 
     for index, symbol in enumerate(todo, start=1):
         try:
@@ -1065,7 +1070,7 @@ def run_earnings(
             pending_missing.append(symbol)
             report.note("NO_DATA")
             status = "NO_DATA"
-        ledger.append({"symbol": symbol, "status": status, "rows": len(rows), "at": stamp.isoformat(), "run_id": run_id})
+        pending_ledger.append({"symbol": symbol, "status": status, "rows": len(rows), "at": stamp.isoformat(), "run_id": run_id})
         if index % flush_every == 0:
             _flush()
             log(f"earnings {index}/{len(todo)}")

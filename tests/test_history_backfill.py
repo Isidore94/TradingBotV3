@@ -227,6 +227,29 @@ def test_earnings_dates_timing_gaps_etf_skip_and_resume(store):
     assert client.calls == []  # refreshed within a week: resumed, not re-asked
 
 
+def test_a_crash_before_the_seal_leaves_earnings_owed_not_done(store):
+    class Crashing(FakeClient):
+        def fetch_earnings(self, symbol, *, limit=hist.EARNINGS_LIMIT):
+            if symbol == "CCC":
+                raise RuntimeError("power loss")
+            return super().fetch_earnings(symbol, limit=limit)
+
+    client = Crashing()
+    for name in ("AAA", "BBB"):
+        client.earnings[name] = pd.DataFrame(
+            {"EPS Estimate": [1.0]}, index=pd.DatetimeIndex([pd.Timestamp("2026-07-30 16:00", tz=ET)])
+        )
+    with pytest.raises(RuntimeError):
+        hist.run_earnings(store, ["AAA", "BBB", "CCC"], client=client, now=SATURDAY, log=lambda *_: None)
+    assert store.read_table("earnings_date").num_rows == 0
+
+    retry = FakeClient()
+    retry.earnings = client.earnings
+    hist.run_earnings(store, ["AAA", "BBB"], client=retry, now=SATURDAY, log=lambda *_: None)
+    assert ("earnings", "AAA") in retry.calls  # still owed after the crash
+    assert store.read_table("earnings_date").num_rows == 2
+
+
 def test_quality_flags_missing_stale_and_unexplained_jump_once(store):
     client = FakeClient()
     spy = [(d, 400, 410, 399, 400 + i, 10) for i, d in enumerate(["2026-09-21", "2026-09-22", "2026-09-23", "2026-09-24", "2026-09-25"])]
