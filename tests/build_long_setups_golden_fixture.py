@@ -1,11 +1,11 @@
 """Build the Long leaders golden (`tests/fixtures/long_setups_golden_v1.json`).
 
-    python tests/build_long_setups_golden_fixture.py <daily_bars dir> <d1_features.csv> <long_setups.json>
+    python tests/build_long_setups_golden_fixture.py <daily_bars dir> <d1_features.csv> <long_setups.json> <earnings_dates_cache.json>
 
 Every source is only READ (the machine cache's daily bars, the scan's d1_features.csv and its
 long_setups.json). The inputs: the 2026-09-25 scan's top Long leaders rows (bars in full), 60
 seeded other names (their last 70 bars, only for the RS percentiles), SPY, each row name's
-feature facts (gate, sector rank, family, cap), earnings gap and scan ATR. ``expected`` is what
+feature facts (gate, sector rank, family, cap), earnings gap, scan ATR and earnings dates. ``expected`` is what
 `long_setups.build_rows` returns on them at the time of the build.
 """
 
@@ -43,7 +43,7 @@ def _bars(path: Path, last: int | None = None) -> list[list]:
 
 
 def main(argv: list[str]) -> int:
-    bars_dir, features_csv, payload_json = (Path(arg).resolve() for arg in argv[1:4])
+    bars_dir, features_csv, payload_json, dates_json = (Path(arg).resolve() for arg in argv[1:5])
     scratch = Path(tempfile.mkdtemp(prefix="long_setups_golden_"))
     os.environ["TRADINGBOTV3_DATA_DIR"] = str(scratch / "home")
     os.environ["LOCALAPPDATA"] = str(scratch / "localappdata")
@@ -79,6 +79,9 @@ def main(argv: list[str]) -> int:
                                      "gap_atr_multiple": abs(float(row["perm_earnings_gap_atr_signed"] or 0))}
                      for row in features if row["latest_release_gap_date"]},
         "atr": {row["symbol"]: round(float(row["atr20"]), 6) for row in features if row["atr20"]},
+        "earnings_dates": {symbol: sorted(entry.get("dates") or ())
+                           for symbol, entry in json.loads(dates_json.read_text(encoding="utf-8"))["symbols"].items()
+                           if symbol in names and (entry or {}).get("dates")},
     }
     raw = json.loads(json.dumps(raw, sort_keys=True))
     from test_long_setups_golden import build
