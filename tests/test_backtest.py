@@ -492,9 +492,20 @@ def test_earnings_setups_are_unmeasured_without_earnings_dates(tmp_path):
     assert needs == {"strength_under_avwape", "favourite_zone_long", "favourite_zone_short",
                      "weak_rally_to_avwape", "post_earnings_drift"}
     summary = result["summary"]
-    assert summary["unmeasured_setups"] == dict.fromkeys(needs, bt.NO_EARNINGS)
+    assert set(summary["unmeasured_setups"]) == needs
+    assert all(v.startswith(bt.NO_EARNINGS) for v in summary["unmeasured_setups"].values())
     shown = {c["setup"] for c in summary["straight_up"]}
     assert shown and not shown & needs
     for side in summary["ranked"].values():
         assert not {c["setup"] for c in side["best"] + side["worst"]} & needs
     assert "NOT MEASURED: no earnings data yet" in bt.format_report(summary)
+
+
+def test_thin_earnings_coverage_is_still_no_earnings_data(tmp_path):
+    """Dates for 1 of 8 names (a lake mid-load) is not a measurement of the earnings setups."""
+    bars, earnings, days = universe(n_names=8, n_bars=420, seed=4)
+    result = bt.run_backtest(bt.Inputs(bars=bars, earnings={"N00": earnings["N00"]}), root=tmp_path,
+                             min_avg_volume=0, run_id="thin")
+    assert result["summary"]["unmeasured_setups"]["favourite_zone_long"] ==         "no earnings data yet (1 of 8 stocks have earnings dates)"
+    full = bt.run_backtest(bt.Inputs(bars=bars, earnings=earnings), root=tmp_path, min_avg_volume=0, run_id="full")
+    assert full["summary"]["unmeasured_setups"] == {}

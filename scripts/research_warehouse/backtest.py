@@ -744,14 +744,19 @@ def run_backtest(inputs: Inputs, *, root: Path, setups: Sequence[bs.Setup] | Non
 
 
 NO_EARNINGS = "no earnings data yet"
+#: Earnings setups are reported only when at least this share of the stocks has earnings dates.
+EARNINGS_MIN_COVERAGE = 0.5
 
 
 def unmeasured_setups(setups: Sequence[bs.Setup], ctxs: Mapping[str, bs.Ctx]) -> dict[str, str]:
-    """Setups that read earnings dates when no stock has any: their empty result is missing
+    """Setups that read earnings dates when too few stocks have any: their result is missing
     input, not evidence, so they are listed here and kept out of the straight-up and ranked views."""
-    if any(c.earnings for s, c in ctxs.items() if is_stock(s)):
+    stocks = [c for s, c in ctxs.items() if is_stock(s)]
+    covered = sum(1 for c in stocks if c.earnings)
+    if stocks and covered / len(stocks) >= EARNINGS_MIN_COVERAGE:
         return {}
-    return {s.key: NO_EARNINGS for s in setups if s.needs_earnings}
+    why = f"{NO_EARNINGS} ({covered} of {len(stocks)} stocks have earnings dates)"
+    return {s.key: why for s in setups if s.needs_earnings}
 
 
 def _rule_version(regimes: pd.DataFrame) -> str:
