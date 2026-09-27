@@ -348,14 +348,14 @@ def test_regime_report_cli_path_writes_every_axis(tmp_path):
 
 
 # ---------------------------------------------------------------- night slot
-def test_the_night_slot_sits_after_the_regime_table_and_is_deterministic():
+def test_the_night_slot_sits_after_the_history_topup_and_is_deterministic():
     from ai_jobs import runner
 
     slots = runner.default_slots()
     names = [slot.name for slot in slots]
     slot = slots[names.index("market_regime_daily")]
     assert slot.goal == "market_read" and slot.uses_model is False
-    assert names[names.index("market_regime_daily") - 1] == "market_regime_table"
+    assert names[names.index("market_regime_daily") - 1] == "lake_history_topup"
 
 
 def test_the_night_slot_appends_once(tmp_path):

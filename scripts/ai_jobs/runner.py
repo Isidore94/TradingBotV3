@@ -1031,6 +1031,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         family_side_evidence,
         improvement_ideas,
         journal_auto_tag,
+        lake_history_topup,
         market_regime_daily,
         market_regime_table,
         market_story_narration,
@@ -1369,7 +1370,23 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             ),
             max_attempts=3,
         ),
-        # P10 (2026-09-27), INSIDE stage 1 directly after `market_regime_table`:
+        # P10 (2026-09-27), INSIDE stage 1 after `market_regime_table`: the one
+        # owner of the lake history top-up (Yahoo D1/H1/H4/M30, earnings dates,
+        # series checks). Network, no model, works with the desk down; feeds
+        # nothing in the night, ahead of `day_review_facts` so Sunday keeps it.
+        JobSlot(
+            name="lake_history_topup",
+            goal="setup_quality",
+            run=lake_history_topup.run_lake_history_topup,
+            reserve_minutes=30.0,
+            description=(
+                "Top up the lake's 5-year provider history: D1, H1/H4, M30, earnings dates, "
+                "split re-pulls and quality checks (deterministic, no model)"
+            ),
+            max_attempts=2,
+        ),
+        # P10 (2026-09-27), INSIDE stage 1 directly after `lake_history_topup`
+        # (which tops up the history it reads):
         # the point-in-time daily regime rows in the research lake. Reads the
         # lake's provider history only and feeds nothing in the night.
         JobSlot(

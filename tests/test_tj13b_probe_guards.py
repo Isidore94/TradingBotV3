@@ -668,6 +668,9 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
         # S17 (2026-09-26): `market_regime_table`, pinned by `EXPECTED_SLOT_ORDER`
         # directly after `exit_windows` and set aside here.
         "market_regime_table",
+        # P10 (2026-09-27): `lake_history_topup`, pinned by `EXPECTED_SLOT_ORDER`
+        # directly after `market_regime_table` and set aside here.
+        "lake_history_topup",
         # P10 (2026-09-27): `market_regime_daily`, pinned directly after it and set aside here.
         "market_regime_daily",
         "day_review_facts",

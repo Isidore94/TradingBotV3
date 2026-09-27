@@ -412,7 +412,9 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         # LEAD AMENDMENT 2026-09-26 (S17): the regime table, a deterministic
         # stage 1 slot directly after `exit_windows`.
         "market_regime_table",
-        # LEAD AMENDMENT 2026-09-27 (P10): the lake regime rows, directly after it.
+        # LEAD AMENDMENT 2026-09-27 (P10): the lake history top-up, then the lake
+        # regime rows that read it.
+        "lake_history_topup",
         "market_regime_daily",
         "market_story_rollups",
         "measured_report",
