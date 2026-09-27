@@ -529,3 +529,34 @@ def test_the_long_leaders_section_carries_the_runner_dip_grade(tmp_path, monkeyp
     assert lines[-1].startswith("strong + under AVWAPE (shadow)")
     assert lines[-2] == ("Runner dips (shadow, M5 trigger untested): 1 fired · 1d avg +4.0%, beat SPY 1/1"
                          " · 5d pending 1 · 10d pending 1")
+
+
+# --- attribution: runner names in autolongs.txt are not bot picks
+
+def test_the_phone_report_lists_runner_dips_apart_from_the_bot_picks():
+    import autopilot_core as core
+
+    text = core.render_away_report({"auto_longs": ["ABVX", "GTLB", "ATAI"], "auto_shorts": [],
+                                    "runner_dips_armed": ["GTLB", "CRM"]})
+    block = text[text.index("== BOT PICKS - LONGS"):text.index("== BOT PICKS - SHORTS")]
+    picks, _sep, runners = block.partition("Runner dips armed:")
+    assert "ABVX, ATAI" in picks and "GTLB" not in picks
+    assert runners.splitlines()[0].strip() == "GTLB, CRM"
+    assert "Runner dips armed" not in core.render_away_report({"auto_longs": ["ABVX"], "auto_shorts": []})
+
+
+def test_the_warehouse_labels_armed_runner_names_runner_dip(tmp_path, monkeypatch):
+    from scripts.research_warehouse import ingest_existing as ingest
+    from scripts.research_warehouse.store import ResearchStore
+
+    store = ResearchStore.open(tmp_path / "lake")
+    auto = tmp_path / "autolongs.txt"
+    auto.write_text("ABVX\nGTLB\n", encoding="utf-8")
+    paths = ingest._paths()
+    monkeypatch.setattr(paths, "AUTO_LONGS_FILE", auto, raising=False)
+    monkeypatch.setattr(paths, "RUNNER_DIP_WATCH_FILE", _runner_file(tmp_path), raising=False)
+    lists = (("autolongs", "AUTO_LONGS_FILE", "auto_populate"),)
+    ingest.snapshot_universe_membership(store, session_date=date(2026, 9, 28), lists=lists,
+                                        now=datetime(2026, 9, 28, 20, 0, tzinfo=ET))
+    rows = store.read_table("universe_membership_daily").to_pylist()
+    assert {row["symbol"]: row["inclusion_reason"] for row in rows} == {"ABVX": "auto_populate", "GTLB": "runner_dip"}

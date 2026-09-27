@@ -2118,6 +2118,8 @@ class AutopilotService(QObject):
                 "scorecard_line": self._scorecard_line,
                 "outcome_coverage_line": self._outcome_coverage_line,
                 "auto_longs": self._read_auto_watchlist(AUTO_LONGS_FILE),
+                # p9: armed runner-dip names ride autolongs.txt; the report lists them apart.
+                "runner_dips_armed": core.runner_dip_armed_names(),
                 "auto_shorts": self._read_auto_watchlist(AUTO_SHORTS_FILE),
                 # Since R2, AWAY and EVENING STAGE their picks rather than
                 # writing them to longs/shorts.txt. Without this the phone

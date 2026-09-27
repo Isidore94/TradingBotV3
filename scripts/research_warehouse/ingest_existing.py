@@ -645,6 +645,24 @@ UNIVERSE_LISTS: tuple[tuple[str, str, str], ...] = (
 )
 
 
+RUNNER_DIP_REASON = "runner_dip"
+
+
+def _runner_dip_armed(day: date) -> frozenset:
+    """The runner dip watch's armed names for session ``day`` (read-only); empty when unknown."""
+    path = getattr(_paths(), "RUNNER_DIP_WATCH_FILE", None)
+    if path is None:
+        return frozenset()
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        _ensure_scripts_on_path()
+        import runner_dip_watch
+
+        return frozenset(runner_dip_watch.armed_symbols(payload, today=day))
+    except Exception:  # noqa: BLE001 - an unreadable file labels nothing
+        return frozenset()
+
+
 def _read_symbol_file(path: Path) -> list[str]:
     try:
         text = Path(path).read_text(encoding="utf-8")
@@ -700,6 +718,7 @@ def snapshot_universe_membership(
     stamp = now or utc_now()
     rows: list[dict] = []
     sources = list(lists) if lists is not None else list(UNIVERSE_LISTS)
+    runner_dips = _runner_dip_armed(day)
     for list_name, attr, reason in sources:
         if (day.isoformat(), list_name) in already:
             continue
@@ -717,7 +736,10 @@ def snapshot_universe_membership(
                     "list_name": list_name,
                     "symbol": symbol,
                     "rank_in_list": rank,
-                    "inclusion_reason": reason,
+                    # Armed runner-dip names ride autolongs.txt for M5 bars; they are not auto picks.
+                    "inclusion_reason": (
+                        RUNNER_DIP_REASON if list_name == "autolongs" and symbol in runner_dips else reason
+                    ),
                     "snapshot_at": stamp,
                     "schema_version": SCHEMA_VERSION,
                     "run_id": run_id,

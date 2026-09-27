@@ -4381,7 +4381,7 @@ def hide_sector_names(
             pick for pick in picks if not isinstance(pick, Mapping) or keep(pick.get("symbol"))
         ]
         out["swing_picks"] = picks[:pick_limit] if pick_limit is not None else picks
-    for key in ("auto_longs", "auto_shorts"):
+    for key in ("auto_longs", "auto_shorts", "runner_dips_armed"):
         if isinstance(out.get(key), (list, tuple)):
             out[key] = [symbol for symbol in out[key] if keep(symbol)]
     staged = out.get("staged_picks")
@@ -4561,6 +4561,10 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         items = [str(item).strip().upper() for item in items if str(item).strip()]
         return ",".join(items) if items else "(none)"
 
+    # Runner-dip names ride autolongs.txt for their M5 bars; they are not bot picks.
+    runner_dips = [str(s).strip().upper() for s in payload.get("runner_dips_armed") or () if str(s).strip()]
+    bot_longs = [s for s in payload.get("auto_longs") or () if str(s).strip().upper() not in set(runner_dips)]
+
     mode_text = str(payload.get("auto_mode") or ("ON" if payload.get("enabled") else "OFF"))
     if mode_text in ("DESK", "AWAY", "EVENING"):
         mode_text = f"AUTO - {mode_text}"
@@ -4663,8 +4667,9 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         "",
         *staged_sections,
         "== BOT PICKS - LONGS (autolongs.txt) ==",
-        _tickers(payload.get("auto_longs", [])),
-        f"TV paste: {_tv_line(payload.get('auto_longs', []))}",
+        _tickers(bot_longs),
+        f"TV paste: {_tv_line(bot_longs)}",
+        *([f"Runner dips armed: {_tickers(runner_dips)}"] if runner_dips else []),
         "",
         "== BOT PICKS - SHORTS (autoshorts.txt) ==",
         _tickers(payload.get("auto_shorts", [])),
