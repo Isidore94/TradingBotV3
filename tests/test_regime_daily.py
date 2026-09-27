@@ -398,3 +398,49 @@ def test_the_default_loaders_read_bars_from_the_store_they_write_to(tmp_path, mo
     store = ResearchStore(tmp_path / "lake")
     rd.run_build(store, apply=False, now=NOW)
     assert seen and all(got is store for _kind, got in seen)
+
+
+def test_a_stale_ib_series_never_turns_the_h1_h4_axes_unknown(tmp_path):
+    """IB M30 stops 10 sessions early while Yahoo H1 runs on: the default loaders read Yahoo."""
+    from research_warehouse import history as hist
+    from research_warehouse import history_ib as hib
+    from research_warehouse import schemas
+
+    store = ResearchStore.open(tmp_path / "lake")
+    days = _days()
+    ib_days = days[-80:-10]
+
+    class Fetcher:
+        def fetch(self, symbol, *, end, duration):
+            bars = []
+            for day in ib_days:
+                session = xcal.trading_session(day)
+                moment = session.rth_open_at
+                while moment < session.rth_close_at:
+                    bars.append({"interval_start": moment, "open": 100.0, "high": 101.0, "low": 99.0,
+                                 "close": 100.0, "volume": 10, "vwap": 100.0, "trade_count": 1})
+                    moment += timedelta(minutes=30)
+            return hib.IbFetch(bars=[b for b in bars if b["interval_start"].date() <= end])
+
+    ib_now = datetime.combine(ib_days[-1] + timedelta(days=1), datetime.min.time(), UTC) + timedelta(hours=12)
+    hib.run_ib_backfill(store, ["SPY"], fetcher=Fetcher(), now=ib_now, start=ib_days[0],
+                        clock=lambda: ib_now, sleep=lambda _s: None, log=lambda *_: None)
+    yahoo = []
+    for row in _h1(days[-40:]):
+        end = row["interval_start"] + timedelta(hours=1)
+        yahoo.append({**row, "interval_end": end, "session_id": xcal.session_for(row["interval_start"]).session_id,
+                      "session_phase": "RTH", "vwap": None, "trade_count": None, "provider": "YAHOO",
+                      "is_complete": True, "quality": "COMPLETE", "source_hash": "x",
+                      "adjustment_version": "yahoo_split_v1", "event_at": end, "observed_at": NOW,
+                      "capture_mode": "BACKFILL", "revision_id": "y1", "supersedes_revision_id": "",
+                      "schema_version": schemas.SCHEMA_VERSION, "run_id": "t"})
+    store.publish("bar_h1", yahoo)
+    hist.derive_h4(store, {"SPY": "y1"}, lo=None, now=NOW, run_id="t", lock=hist.contextlib.nullcontext,
+                   report=hist.JobReport())
+
+    d1_loader, _unused = _loaders()
+    rd.run_build(store, apply=True, now=NOW, symbols=("SPY",), d1_loader=d1_loader)
+    rows = {row["session_date"]: row for row in rd.read_regimes("SPY", store=store).to_dict("records")}
+    for day in days[-3:]:
+        assert rows[day]["env_h1"] != "unknown", day
+        assert rows[day]["env_h4"] != "unknown", day

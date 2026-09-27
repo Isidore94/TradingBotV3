@@ -1,6 +1,6 @@
 # Changelog
 
-- 2026-09-27 Lake history (p10): `history-ib-backfill` pulls 5 years of IB M30 (client 1011, 365-day windows, paused in market hours, resumable) and derives H1/H4 from it; the history reader serves one intraday basis per symbol (the longest), and IB-vs-Yahoo H1 closes over 0.5% apart are flagged; the exchange calendar now closes 2025-01-09.
+- 2026-09-27 Lake history (p10): `history-ib-backfill` pulls 5 years of IB M30 (client 1011, 365-day windows, paused in market hours, resumable) and derives H1/H4 from it; the history reader serves one intraday basis per symbol (the longest, IBKR only while as fresh as Yahoo; the night slot tops IB up), and IB-vs-Yahoo H1 closes over 0.5% apart are flagged; the exchange calendar now closes 2025-01-09.
 
 - 2026-09-27 GUI/startup delivery: integrate the approved 4K layouts and GDI startup fix with current runner-dip work; retain hidden/armed label states; make GUI test imports self-contained and retire Tag Week test workers before destroying widgets. All 924 files verified in fresh processes (13,446 pass, 14 skip); source/frozen selftests 105/105. Long combined Qt test-worker crashes remain a harness limitation.
 

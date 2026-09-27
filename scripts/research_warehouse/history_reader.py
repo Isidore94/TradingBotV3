@@ -13,7 +13,7 @@ The contract every reader keeps: ONE consistent series per symbol.
 * Intraday is completed bars only, with ``interval_start`` tz-aware in
   America/New_York. Each symbol has ONE intraday basis provider for M30, H1
   and H4 alike: the provider whose native intraday series spans the longest
-  (IBKR on a tie). Yahoo basis: native H1 and M30, H4 derived from H1. IBKR
+  (IBKR on a tie, and IBKR only while it is as fresh as Yahoo). Yahoo basis: native H1 and M30, H4 derived from H1. IBKR
   basis: native M30 (5 years), H1 and H4 derived from that M30. The other
   provider's rows stay stored as a cross-check, never mixed in.
 * Earnings dates are the recorded ones; a symbol with none is absent, never
@@ -267,8 +267,9 @@ def intraday_basis(symbols=None, *, store: ResearchStore | None = None) -> dict[
     """Each symbol's intraday basis provider: the longest native intraday span.
 
     Span is last minus first ``interval_start`` over ``bar_m30`` and ``bar_h1``
-    together, per provider; a tie goes to IBKR. A symbol with no native
-    intraday rows is absent.
+    together, per provider; a tie goes to IBKR. IBKR counts only while its
+    newest bar is at least as new as the other provider's (else YAHOO). A
+    symbol with no native intraday rows is absent.
     """
     lake = _open(store)
     wanted = _norm_symbols(symbols)
@@ -292,10 +293,19 @@ def intraday_basis(symbols=None, *, store: ResearchStore | None = None) -> dict[
             key = (str(symbol), str(provider or ""))
             old = spans.get(key)
             spans[key] = [lo, hi] if old is None else [min(old[0], lo), max(old[1], hi)]
+    # IBKR is eligible only when its newest bar's ET date is no older than every
+    # other provider's: nothing tops IB up daily like Yahoo, so a stale IB
+    # series must not freeze the symbol's intraday history.
+    newest: dict[str, dict[str, date]] = {}
+    for (symbol, provider), (_lo, hi) in spans.items():
+        newest.setdefault(symbol, {})[provider] = pd.Timestamp(hi).tz_convert(MARKET_TZ).date()
     best: dict[str, tuple] = {}
     order = INTRADAY_PROVIDER_PREFERENCE
     for (symbol, provider), (lo, hi) in spans.items():
         name = provider.upper()
+        others = [day for other, day in newest[symbol].items() if other != provider]
+        if name == "IBKR" and others and newest[symbol][provider] < max(others):
+            continue
         tie = order.index(name) if name in order else len(order)
         rank = (-(hi - lo).total_seconds(), tie, provider)
         if symbol not in best or rank < best[symbol][0]:

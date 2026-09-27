@@ -91,6 +91,7 @@ OK = "OK"
 NO_DATA = "NO_DATA"
 NO_CONTRACT = "NO_CONTRACT"
 RETRY = "RETRY"
+MARKET_HOURS = "MARKET_HOURS"  # refused before sending: the guard began
 ERROR = "ERROR"
 # ledger statuses that close a window
 DONE = "DONE"
@@ -157,6 +158,21 @@ def market_guard_until(moment: datetime) -> datetime | None:
     if begin <= local < end:
         return end.astimezone(timezone.utc)
     return None
+
+
+def next_guard_start(moment: datetime) -> datetime:
+    """The next 09:15 ET on a trading day at or after ``moment`` (``moment`` itself inside the guard)."""
+    if market_guard_until(moment) is not None:
+        return moment
+    day = moment.astimezone(xcal.EXCHANGE_TZ).date()
+    for offset in range(15):
+        candidate = day + timedelta(days=offset)
+        if xcal.trading_session(candidate) is None:
+            continue
+        begin = datetime.combine(candidate, MARKET_GUARD_START, xcal.EXCHANGE_TZ).astimezone(timezone.utc)
+        if begin >= moment:
+            return begin
+    return moment + timedelta(days=15)
 
 
 def order_symbols(store, symbols, *, through: date | None) -> list[str]:
@@ -384,10 +400,11 @@ def classify(bars, error, pacer) -> IbFetch:
 class IbHistoryFetcher:
     """Client 1011 through the pacer; a dead connection is rebuilt, never reused."""
 
-    def __init__(self, transport_factory=None, *, spec=None, pacer=None, timeout=REQUEST_TIMEOUT_SECONDS, sleep=time.sleep, acquire_timeout=900.0):
+    def __init__(self, transport_factory=None, *, spec=None, pacer=None, timeout=REQUEST_TIMEOUT_SECONDS, sleep=time.sleep, acquire_timeout=900.0, clock=None):
         self.spec = spec or ib_capture.backfill_connection_spec()
         self.spec.validate()
-        self.pacer = pacer or pacer_mod.IbPacer(capture_allowance=CAPTURE_PER_WINDOW)
+        self.clock = clock or utc_now
+        self.pacer = pacer or pacer_mod.IbPacer(capture_allowance=CAPTURE_PER_WINDOW, clock=self.clock)
         self.factory = transport_factory or ib_capture.build_ib_transport
         self.timeout = float(timeout)
         self.sleep = sleep
@@ -416,11 +433,20 @@ class IbHistoryFetcher:
 
     def fetch(self, symbol: str, *, end: date, duration: str) -> IbFetch:
         request = ib_request(symbol, end, duration)
-        decision = self.pacer.acquire(key=f"{request['symbol']}|{end}|{duration}", timeout=self.acquire_timeout, sleep=self.sleep)
+        # Never wait past the next 09:15 ET guard start for a pacer slot.
+        left = (next_guard_start(self.clock()) - self.clock()).total_seconds()
+        if left <= 0:
+            return IbFetch(status=MARKET_HOURS, message="US market hours")
+        decision = self.pacer.acquire(
+            key=f"{request['symbol']}|{end}|{duration}", timeout=min(self.acquire_timeout, left), sleep=self.sleep
+        )
         if not decision.granted:
             return IbFetch(status=RETRY, message=f"pacer: {decision.reason}")
         if not self._connected():
             return IbFetch(status=RETRY, message="TWS not reachable")
+        # The pacer wait or a reconnect can run into the guard: check again right before sending.
+        if market_guard_until(self.clock()) is not None:
+            return IbFetch(status=MARKET_HOURS, message="US market hours")
         self.requests += 1
         try:
             bars, error = self.transport.request_historical(timeout=self.timeout, **request)
@@ -618,9 +644,13 @@ def run_ib_backfill(
     def _fetch(symbol, first, last, flush) -> IbFetch:
         pause = RETRY_SLEEP_SECONDS
         result = IbFetch(status=ERROR, message="not attempted")
-        for _attempt in range(MAX_ATTEMPTS):
+        attempts = 0
+        while attempts < MAX_ATTEMPTS:
             _wait_ready(flush)
             result = fetcher.fetch(symbol, end=last, duration=duration_for(first, last))
+            if result.status == MARKET_HOURS:
+                continue  # nothing was sent; _wait_ready now blocks until the guard lifts
+            attempts += 1
             report.note("requests")
             if result.status != RETRY:
                 return result
@@ -714,6 +744,119 @@ def run_ib_backfill(
     return report
 
 
+TOPUP_LOOKBACK_DAYS = 40
+TOPUP_MINUTES = 25.0
+
+
+def ib_recent_states(store, *, since: date, symbols=None) -> dict[str, tuple[str, datetime, datetime]]:
+    """Per symbol with IBKR M30 since ``since``: (current revision, newest bar start, first observed)."""
+    table = reader._scan(
+        store,
+        "bar_m30",
+        symbols=sorted(symbols) if symbols else None,
+        lo=since,
+        extra_filter=pads.field("provider") == PROVIDER_IBKR,
+        columns=["symbol", "interval_start", "revision_id", "supersedes_revision_id", "observed_at"],
+    )
+    if not table.num_rows:
+        return {}
+    out = {}
+    for symbol, rows in table.to_pandas().groupby("symbol"):
+        revision = reader._current_revision(rows)
+        rows = rows[rows["revision_id"] == revision]
+        out[str(symbol)] = (
+            revision,
+            rows["interval_start"].max().to_pydatetime(),
+            rows["observed_at"].min().to_pydatetime(),
+        )
+    return out
+
+
+def run_ib_topup(
+    store,
+    *,
+    fetcher,
+    now: datetime | None = None,
+    clock=None,
+    lock=contextlib.nullcontext,
+    log=print,
+    max_minutes: float = TOPUP_MINUTES,
+    symbols=None,
+    batch_symbols: int = BATCH_SYMBOLS,
+    run_id: str = "",
+) -> hist.JobReport:
+    """Best effort nightly: the last sessions of IB M30 (+H1/H4) for symbols that have an IBKR series.
+
+    One "1 M" request per symbol whose newest IB bar is behind the last
+    completed session (by at most 28 days; further behind is the backfill's
+    job). Stops, never raises, when TWS is unreachable, the market-hours
+    guard begins, pacing refuses, or ``max_minutes`` pass. A symbol it misses
+    simply reads from Yahoo (``intraday_basis`` wants IBKR fresh).
+    """
+    clock = clock or utc_now
+    stamp = now or clock()
+    run_id = run_id or f"history_ib_m30_topup_{stamp:%Y%m%dT%H%M%SZ}"
+    report = hist.JobReport(job="ib_m30_topup")
+    deadline = clock() + timedelta(minutes=float(max_minutes))
+    try:
+        through = hist.last_completed_session(stamp)
+        if through is None or market_guard_until(clock()) is not None:
+            report.status = "SKIPPED"
+            report.notes.append("market hours or no completed session")
+            return report
+        states = ib_recent_states(store, since=through - timedelta(days=TOPUP_LOOKBACK_DAYS), symbols=symbols)
+        splits = _split_days(store, list(states)) if states else {}
+        names = order_symbols(store, list(states), through=through)
+        report.symbols = len(names)
+        stop = ""
+        for batch in hist._batches(names, batch_symbols):
+            rows: list[dict] = []
+            for symbol in batch:
+                revision, newest, first_observed = states[symbol]
+                last_day = newest.astimezone(xcal.EXCHANGE_TZ).date()
+                if last_day >= through:
+                    report.note("FRESH")
+                    continue
+                pulled = first_observed.astimezone(xcal.EXCHANGE_TZ).date()
+                if any(pulled < day <= through for day in splits.get(symbol, ())):
+                    report.note("REBASE_OWED")  # the backfill re-pulls it as a new revision
+                    continue
+                if (through - last_day).days > 28:
+                    report.note("BEHIND")
+                    continue
+                if clock() >= deadline:
+                    stop = f"stopped after {max_minutes:.0f} min"
+                    break
+                result = fetcher.fetch(symbol, end=through, duration="1 M")
+                report.note("requests")
+                if result.status in (RETRY, MARKET_HOURS):
+                    stop = f"{result.status}: {result.message}"
+                    break
+                if result.status != OK:
+                    report.note(result.status)
+                    continue
+                built = m30_rows(
+                    symbol, result.bars, first=last_day + timedelta(days=1), last=through,
+                    revision_id=revision, supersedes="", observed_at=stamp, run_id=run_id,
+                )
+                rows.extend(built)
+                report.note("TOPPED_UP")
+            report.add("bar_m30", hist._publish(store, "bar_m30", rows, lock=lock, job_id=run_id, validate=ib_row_problem))
+            touched = sorted({row["symbol"] for row in rows})
+            if touched:
+                derive_and_flag(store, touched, now=stamp, run_id=run_id, lock=lock, report=report, flag_symbols=set())
+            if stop:
+                report.status = "SKIPPED" if not report.rows_published.get("bar_m30") else "PARTIAL"
+                report.notes.append(stop)
+                log(f"ib m30 top-up: {stop}")
+                break
+    except Exception as exc:  # noqa: BLE001 - best effort: the night slot never fails for IB
+        report.status = "FAILED"
+        report.notes.append(f"{type(exc).__name__}: {exc}")
+        log(f"ib m30 top-up failed: {exc}")
+    return report
+
+
 def _recent_no_contract(record: dict | None, now: datetime) -> bool:
     return bool(record) and record.get("status") == NO_CONTRACT and hist._recent(record, now, NO_CONTRACT_RETRY_DAYS)
 
@@ -801,4 +944,5 @@ __all__ = [
     "order_symbols",
     "plan",
     "run_ib_backfill",
+    "run_ib_topup",
 ]

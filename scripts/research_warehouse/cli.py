@@ -2267,6 +2267,25 @@ def run_history_ib_backfill(
     return {"status": report.status, **vars(report)}
 
 
+def run_history_ib_topup(store, *, fetcher=None, lock_path=None, log=print, **kwargs) -> dict:
+    """Best-effort nightly IB M30 top-up; unreachable TWS is a SKIPPED report, never an exception."""
+    from . import history_ib
+
+    if store is None:
+        return {"status": "DISABLED", "message": "research_store_dir is not configured."}
+    own = fetcher is None
+    try:
+        fetcher = fetcher or history_ib.IbHistoryFetcher()
+    except Exception as exc:  # noqa: BLE001 - no IB is a skip
+        return {"status": "SKIPPED", "notes": [f"IB fetcher unavailable: {exc}"]}
+    try:
+        report = history_ib.run_ib_topup(store, fetcher=fetcher, lock=history_lock(lock_path), log=log, **kwargs)
+    finally:
+        if own:
+            fetcher.close()
+    return {"status": report.status, **vars(report)}
+
+
 def format_history_coverage(report: dict, *, limit: int = 40) -> str:
     lines = [
         f"symbols {report['symbols']} (provider history {report['history_symbols']}, "

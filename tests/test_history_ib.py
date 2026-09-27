@@ -448,3 +448,139 @@ def test_2018_12_05_bush_mourning_day_is_a_closure():
     assert xcal.trading_session(date(2018, 12, 5)) is None  # national day of mourning (G. H. W. Bush)
     assert xcal.trading_session(date(2018, 12, 4)) is not None
     assert xcal.trading_session(date(2018, 12, 6)) is not None
+
+
+# --- market-hours guard at send time (review 2026-09-27) -----------------------
+MONDAY_0914_ET = datetime(2026, 9, 28, 13, 14, tzinfo=UTC)
+
+
+class GuardTransport:
+    """A fake TWS that records the (fake) time each request is sent."""
+
+    def __init__(self, clock, *, slow_connect_checks=0):
+        self.clock = clock
+        self.sent = []
+        self.checks = slow_connect_checks
+
+    def is_connected(self):
+        if self.checks > 0:
+            self.checks -= 1
+            return False
+        return True
+
+    def disconnect(self):
+        pass
+
+    def request_historical(self, *, timeout, **request):
+        self.sent.append(self.clock())
+        raw = []
+        for bar in session_bars(_days(WEEK, date(2026, 9, 25))):
+            item = dict(bar, date=str(int(bar["interval_start"].timestamp())))
+            item.pop("interval_start")
+            raw.append(item)
+        return raw, None
+
+
+def _guarded_fetcher(clock, transport, pacer):
+    return hib.IbHistoryFetcher(lambda spec: transport, pacer=pacer, sleep=clock.sleep, clock=clock)
+
+
+def test_a_pacer_backoff_that_runs_into_0915_et_never_sends():
+    clock = Clock(MONDAY_0914_ET)
+    pacer = pacer_mod.IbPacer(clock=clock)
+    pacer.note_error(420, "pacing", capture=True)
+    pacer.note_error(420, "pacing", capture=True)  # backoff until 09:16 ET
+    transport = GuardTransport(clock)
+    result = _guarded_fetcher(clock, transport, pacer).fetch("SPY", end=date(2026, 9, 25), duration="1 M")
+    assert transport.sent == []
+    assert result.status in (hib.MARKET_HOURS, hib.RETRY)
+    assert clock.now <= datetime(2026, 9, 28, 13, 15, tzinfo=UTC)  # never waited into the guard
+
+
+def test_a_reconnect_that_runs_into_0915_et_never_sends():
+    clock = Clock(MONDAY_0914_ET + timedelta(seconds=59))
+    transport = GuardTransport(clock, slow_connect_checks=10)  # ~2 s to connect
+    fetcher = _guarded_fetcher(clock, transport, pacer_mod.IbPacer(clock=clock))
+    result = fetcher.fetch("SPY", end=date(2026, 9, 25), duration="1 M")
+    assert result.status == hib.MARKET_HOURS and transport.sent == []
+
+
+def test_the_job_with_the_real_pacer_waits_out_market_hours(store):
+    clock = Clock(MONDAY_0914_ET)
+    pacer = pacer_mod.IbPacer(clock=clock)
+    pacer.note_error(420, "pacing", capture=True)
+    pacer.note_error(420, "pacing", capture=True)
+    transport = GuardTransport(clock)
+    fetcher = _guarded_fetcher(clock, transport, pacer)
+    report = hib.run_ib_backfill(
+        store, ["SPY"], fetcher=fetcher, now=MONDAY_0914_ET, start=WEEK, clock=clock, sleep=clock.sleep, log=_quiet
+    )
+    assert transport.sent and all(hib.market_guard_until(moment) is None for moment in transport.sent)
+    assert transport.sent[0] >= datetime(2026, 9, 28, 20, 15, tzinfo=UTC)
+    assert report.rows_published["bar_m30"] == 65
+
+
+# --- the nightly IB top-up and the fresh-basis rule -------------------------
+def _older_ib(store, symbols=("SPY",)):
+    older = _days(date(2026, 9, 1), date(2026, 9, 18))
+    _run(store, list(symbols), FakeFetcher({s: session_bars(older) for s in symbols}), start=date(2026, 9, 1),
+         now=datetime(2026, 9, 19, 12, tzinfo=UTC))
+    return older
+
+
+def test_ib_is_the_basis_only_while_as_fresh_as_yahoo(store):
+    older = _older_ib(store)
+    fresh = xcal.trading_session(date(2026, 9, 25))
+    store.publish("bar_h1", [_yahoo_h1("SPY", begin, 100.0) for begin, _end in hib.h1_buckets(fresh)])
+    assert hr.intraday_basis(["SPY"], store=store) == {"SPY": "YAHOO"}  # IB is longer but a week stale
+    assert set(hr.read_intraday("H1", ["SPY"], store=store, now=SATURDAY)["SPY"]["provider"]) == {"YAHOO"}
+
+    fetcher = FakeFetcher({"SPY": session_bars(older + _days(WEEK, date(2026, 9, 25)))})
+    report = hib.run_ib_topup(store, fetcher=fetcher, now=SATURDAY, clock=Clock(SATURDAY), log=_quiet)
+    assert report.rows_published["bar_m30"] == 65 and report.by_outcome["TOPPED_UP"] == 1
+    assert fetcher.calls == [("SPY", date(2026, 9, 25), "1 M")]
+    assert hr.intraday_basis(["SPY"], store=store) == {"SPY": "IBKR"}
+    h1 = hr.read_intraday("H1", ["SPY"], store=store, now=SATURDAY)["SPY"]
+    assert set(h1["provider"]) == {"IBKR"} and h1["interval_start"].iloc[-1].date() == date(2026, 9, 25)
+    again = hib.run_ib_topup(store, fetcher=FakeFetcher({}), now=SATURDAY, clock=Clock(SATURDAY), log=_quiet)
+    assert again.by_outcome == {"FRESH": 1}
+
+
+def test_ib_topup_skips_quietly_when_tws_is_down_or_in_market_hours(store):
+    _older_ib(store, ("SPY", "QQQ"))
+    down = FakeFetcher(script={"SPY": [hib.RETRY], "QQQ": [hib.RETRY]})
+    report = hib.run_ib_topup(store, fetcher=down, now=SATURDAY, clock=Clock(SATURDAY), log=_quiet)
+    assert report.status == "SKIPPED" and len(down.calls) == 1  # stops at the first unreachable answer
+    busy = FakeFetcher({})
+    moment = MONDAY_0914_ET + timedelta(minutes=5)
+    report = hib.run_ib_topup(store, fetcher=busy, now=moment, clock=Clock(moment), log=_quiet)
+    assert report.status == "SKIPPED" and busy.calls == []
+
+
+def test_night_slot_runs_ib_after_yahoo_and_never_fails_for_it(monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    from ai_jobs import lake_history_topup
+    from research_warehouse import cli as top_cli
+
+    order = []
+    monkeypatch.setattr(top_cli, "run_history_topup", lambda lake, **k: order.append("yahoo") or {"status": "OK"})
+
+    def ib(lake, *, fetcher=None, log=None):
+        order.append("ib")
+        return {"status": "SKIPPED", "notes": ["RETRY: TWS not reachable"], "rows_published": {}}
+
+    monkeypatch.setattr(top_cli, "run_history_ib_topup", ib)
+    result = lake_history_topup.run_lake_history_topup(store=object(), ib_fetcher=object())
+    assert order == ["yahoo", "ib"] and result["status"] == "ok"
+    assert "IB M30 top-up skipped (RETRY: TWS not reachable)" in result["reason"]
+
+    def broken(lake, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(top_cli, "run_history_ib_topup", broken)
+    assert lake_history_topup.run_lake_history_topup(store=object(), ib_fetcher=object())["status"] == "ok"
+    order.clear()
+    lake_history_topup.run_lake_history_topup(store=object(), client=object())
+    assert order == ["yahoo"]  # an injected Yahoo client (tests) never reaches real IB
