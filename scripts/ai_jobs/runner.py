@@ -1031,6 +1031,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         family_side_evidence,
         improvement_ideas,
         journal_auto_tag,
+        market_regime_daily,
         market_regime_table,
         market_story_narration,
         measured_report_publish,
@@ -1365,6 +1366,20 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description=(
                 "Auto regimes on M5, M30, H1, H4, D1 and W for the indexes and sector "
                 "ETFs plus structure facts, appended per session (deterministic, no model)"
+            ),
+            max_attempts=3,
+        ),
+        # P10 (2026-09-27), INSIDE stage 1 directly after `market_regime_table`:
+        # the point-in-time daily regime rows in the research lake. Reads the
+        # lake's provider history only and feeds nothing in the night.
+        JobSlot(
+            name="market_regime_daily",
+            goal="market_read",
+            run=market_regime_daily.run_market_regime_daily,
+            reserve_minutes=5.0,
+            description=(
+                "Point-in-time daily regimes (trend, vol, drawdown, champion env keys, "
+                "auto structural) for SPY/QQQ/IWM appended to the research lake (deterministic, no model)"
             ),
             max_attempts=3,
         ),

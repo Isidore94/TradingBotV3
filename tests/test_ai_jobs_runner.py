@@ -345,6 +345,9 @@ EXPECTED_SLOT_ORDER = (
     # it reads stored bars only and feeds nothing in the night, so it sits beside
     # `exit_windows` inside stage 1 and ahead of `day_review_facts` (Sunday slate).
     "market_regime_table",
+    # P10 (2026-09-27): point-in-time daily regime rows in the research lake.
+    # Deterministic, no model; directly after `market_regime_table`.
+    "market_regime_daily",
     # WS-10D (2026-09-12): the Market Journal's weekly/monthly/quarterly rollups.
     # Deterministic, no model; it reads the daily stories and the exchange calendar
     # and feeds nothing above it, so it CLOSES the deterministic stage.

@@ -341,3 +341,40 @@ def test_regime_report_cli_path_writes_every_axis(tmp_path):
     assert report["span"]["sessions"] == len(_days()) - rd.WARMUP_SESSIONS + 1
     assert report["trader_agreement"]["status"] == "no typed segments"
     assert report["baseline"]["fwd_1"]["n"] == report["span"]["sessions"] - 1
+
+
+# ---------------------------------------------------------------- night slot
+def test_the_night_slot_sits_after_the_regime_table_and_is_deterministic():
+    from ai_jobs import runner
+
+    slots = runner.default_slots()
+    names = [slot.name for slot in slots]
+    slot = slots[names.index("market_regime_daily")]
+    assert slot.goal == "market_read" and slot.uses_model is False
+    assert names[names.index("market_regime_daily") - 1] == "market_regime_table"
+
+
+def test_the_night_slot_appends_once(tmp_path):
+    from ai_jobs.market_regime_daily import run_market_regime_daily
+
+    store = ResearchStore(tmp_path / "lake")
+    d1_loader, intraday_loader = _loaders()
+    kwargs = dict(store=store, now=NOW, lock_path=tmp_path / "lock", d1_loader=d1_loader,
+                  intraday_loader=intraday_loader)
+    first = run_market_regime_daily(**kwargs)
+    assert first["status"] == "ok" and first["reason"].startswith(f"{3 * (len(_days()) - rd.WARMUP_SESSIONS + 1)} regime rows")
+    second = run_market_regime_daily(**kwargs)
+    assert second["status"] == "ok" and second["reason"].startswith("0 regime rows") and second["outputs"] == []
+
+
+def test_the_night_slot_failure_leaves_the_lake(tmp_path):
+    from ai_jobs.market_regime_daily import run_market_regime_daily
+
+    def broken(*_a, **_k):
+        raise OSError("lake offline")
+
+    store = ResearchStore(tmp_path / "lake")
+    result = run_market_regime_daily(store=store, now=NOW, lock_path=tmp_path / "lock", d1_loader=broken,
+                                     intraday_loader=broken)
+    assert result["status"] == "failed" and "lake unchanged" in result["reason"]
+    assert store.read_rows(rd.DATASET) == []
