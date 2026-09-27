@@ -2,12 +2,12 @@
 
 Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `git log`.
 
-**Updated:** 2026-09-26 15:55 PT (p9 phase 3 merged)
+**Updated:** 2026-09-26 17:00 PT (p9 phase 4 merged; desk still down)
 
 - **Live on `main`:** round 1, round 2 Phase A (`81272d42`), Phase B + S (`2d59aace`),
   S10a + S7 (`3802c0d7`), p9 phase 1 regime frame (`849390a2`), p9 phase 2 long
   setups + momentum universe + longs off + S9/P14 (`55bbeb26`), p9 phase 3 favourite-zone
-  LONG gutted for Long leaders (`d382986e`); gates #257-#295.
+  LONG gutted for Long leaders (`d382986e`), p9 phase 4 swing table; gates #257-#296.
 - **Desk:** DOWN. Restarted 20:50 PT on `81272d42`, then closed cleanly 21:51 PT on the
   trader's word; restart only on the trader's word.
 - **Perf:** 09-24 baseline GUI blocked 1305 s, full GC 306 ms/min, young 156; on the new
@@ -23,8 +23,6 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
   "narration absent", empty-evidence enrichment carries no tags, no event 2004). #264:
   tokens on 12 model rows; the digest lines exist but describe the goal-less 09-24 night
   (B1b); Health rows need a desk session. Econ brief still rejected (P4b).
-- **In flight (p9 phase 4, trader 2026-09-26):** everything from today that finds the best
-  swing trades goes into the Master AVWAP ("swing") table.
 - **Next action:** Monday: `desk_perf_report.py --day 2026-09-28 --compare 2026-09-24`,
   gates #258-#287. Left: B10, B2, C4a, Phase C.
 - **Trader actions owed:** set Risk per trade ($) in Settings > General; fill
