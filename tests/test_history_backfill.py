@@ -227,6 +227,16 @@ def test_earnings_dates_timing_gaps_etf_skip_and_resume(store):
     assert client.calls == []  # refreshed within a week: resumed, not re-asked
 
 
+def test_a_date_listed_twice_by_the_provider_is_stored_once(store):
+    client = FakeClient()
+    client.earnings["AAPL"] = pd.DataFrame(
+        {"EPS Estimate": [1.0, 1.0]},
+        index=pd.DatetimeIndex([pd.Timestamp("2026-07-30 16:00", tz=ET), pd.Timestamp("2026-07-30 16:05", tz=ET)]),
+    )
+    hist.run_earnings(store, ["AAPL"], client=client, now=SATURDAY, log=lambda *_: None)
+    assert store.read_table("earnings_date").num_rows == 1
+
+
 def test_a_crash_before_the_seal_leaves_earnings_owed_not_done(store):
     class Crashing(FakeClient):
         def fetch_earnings(self, symbol, *, limit=hist.EARNINGS_LIMIT):

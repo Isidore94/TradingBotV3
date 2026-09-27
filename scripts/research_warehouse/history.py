@@ -1040,7 +1040,12 @@ def run_earnings(
         if pending_rows:
             names = sorted({row["symbol"] for row in pending_rows})
             known = existing_keys(store, "earnings_date", names, ["symbol", "earnings_date", "source"])
-            fresh = [r for r in pending_rows if (r["symbol"], r["earnings_date"], r["source"]) not in known]
+            fresh = []
+            for r in pending_rows:  # the provider can list one date twice
+                key = (r["symbol"], r["earnings_date"], r["source"])
+                if key not in known:
+                    known.add(key)
+                    fresh.append(r)
             report.add("earnings_date", _publish(store, "earnings_date", fresh, lock=lock, job_id=run_id))
         if pending_missing:
             known = existing_keys(store, "history_quality_flag", pending_missing, ["dataset", "symbol", "check"])
