@@ -3399,6 +3399,11 @@ def write_bouncebot_watchlists(longs: Iterable[str], shorts: Iterable[str]) -> b
     return bool(wrote_longs and wrote_shorts)
 
 
+#: Serializes every in-process writer of autolongs.txt / autoshorts.txt (the open-scan write
+#: and the runner-dip append), so no read-modify-write works from a stale read.
+AUTO_LISTS_LOCK = threading.RLock()
+
+
 def write_auto_watchlists(longs: Iterable[str], shorts: Iterable[str]) -> bool:
     """The bot's own morning picks - written every day in both modes so the
     picks accumulate a clean, separately-attributable outcome history.
@@ -3410,8 +3415,9 @@ def write_auto_watchlists(longs: Iterable[str], shorts: Iterable[str]) -> bool:
     """
     longs = [str(s).strip().upper() for s in longs if str(s).strip()]
     shorts = [str(s).strip().upper() for s in shorts if str(s).strip()]
-    wrote_longs = write_watchlist_file(Path(AUTO_LONGS_FILE), longs)
-    wrote_shorts = write_watchlist_file(Path(AUTO_SHORTS_FILE), shorts)
+    with AUTO_LISTS_LOCK:
+        wrote_longs = write_watchlist_file(Path(AUTO_LONGS_FILE), longs)
+        wrote_shorts = write_watchlist_file(Path(AUTO_SHORTS_FILE), shorts)
     if not (wrote_longs and wrote_shorts):
         return False
     _mirror_auto_picks_into_registry(longs, shorts)
@@ -3440,7 +3446,8 @@ def sync_runner_dip_auto_longs(
     names = runner_dip_armed_names(today=today, path=path)
     if not names:
         return []
-    return append_watchlist_symbols(Path(auto_longs_path or AUTO_LONGS_FILE), names)
+    with AUTO_LISTS_LOCK:  # one read-append-write: an open-scan write waits, never interleaves
+        return append_watchlist_symbols(Path(auto_longs_path or AUTO_LONGS_FILE), names)
 
 
 def candidate_registry_path() -> Path:

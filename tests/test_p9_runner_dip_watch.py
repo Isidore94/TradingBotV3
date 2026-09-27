@@ -416,26 +416,70 @@ def _service(*, enabled=True, shadow=True):
     return service
 
 
+def _sync(service, now):
+    service._maybe_sync_runner_dip_names(now)
+    thread = getattr(service, "_runner_dip_sync_thread", None)
+    if thread is not None:
+        thread.join(5)
+
+
 def test_the_autopilot_tick_syncs_once_per_change_and_never_in_strict_off(tmp_path, monkeypatch):
+    import threading
+
     import autopilot_core as core
     import project_paths
     from ui.services import autopilot_service
 
-    calls = []
-    monkeypatch.setattr(core, "sync_runner_dip_auto_longs", lambda **kw: calls.append(kw) or ["GTLB"])
+    calls, threads = [], []
+
+    def fake_sync(**kw):
+        calls.append(kw)
+        threads.append(threading.current_thread())
+        return ["GTLB"]
+
+    monkeypatch.setattr(core, "sync_runner_dip_auto_longs", fake_sync)
     monkeypatch.setattr(project_paths, "RUNNER_DIP_WATCH_FILE", _runner_file(tmp_path))
     monkeypatch.setattr(autopilot_service, "AUTO_LONGS_FILE", tmp_path / "autolongs.txt")
     now = datetime(2026, 9, 28, 6, 45)
-    _service(enabled=False, shadow=False)._maybe_sync_runner_dip_names(now)
+    _sync(_service(enabled=False, shadow=False), now)
     assert calls == []
     service = _service(enabled=False, shadow=True)
-    service._maybe_sync_runner_dip_names(now)
-    service._maybe_sync_runner_dip_names(now)
+    _sync(service, now)
+    _sync(service, now)
     assert calls == [{"today": date(2026, 9, 28)}]
+    assert threads[0] is not threading.main_thread()  # the read/append runs on a worker
     assert "GTLB" in service._logged[-1]
     (tmp_path / "autolongs.txt").write_text("AAPL\n", encoding="utf-8")  # the open scan rewrote it
-    service._maybe_sync_runner_dip_names(now)
+    _sync(service, now)
     assert len(calls) == 2
+
+
+def test_the_sync_and_the_open_scan_writer_never_interleave(tmp_path, monkeypatch):
+    """The sync's read-append-write holds the auto-lists lock, so an open-scan write that lands
+    mid-sync waits and its picks survive (no stale read-modify-write overwrites them)."""
+    import threading
+
+    import autopilot_core as core
+
+    auto, shorts = tmp_path / "autolongs.txt", tmp_path / "autoshorts.txt"
+    auto.write_text("OLD\n", encoding="utf-8")
+    monkeypatch.setattr(core, "AUTO_LONGS_FILE", auto)
+    monkeypatch.setattr(core, "AUTO_SHORTS_FILE", shorts)
+    monkeypatch.setattr(core, "_mirror_auto_picks_into_registry", lambda *a: None)
+    real_read = core.read_watchlist_symbols
+    scan = threading.Thread(target=core.write_auto_watchlists, args=(["PICK1", "PICK2"], []))
+
+    def read_then_race(path):
+        symbols = real_read(path)
+        if Path(path) == auto and not scan.is_alive() and scan.ident is None:
+            scan.start()
+            scan.join(0.3)  # without the lock the scan write lands right here
+        return symbols
+
+    monkeypatch.setattr(core, "read_watchlist_symbols", read_then_race)
+    core.sync_runner_dip_auto_longs(today=date(2026, 9, 28), path=_runner_file(tmp_path), auto_longs_path=auto)
+    scan.join(5)
+    assert auto.read_text(encoding="utf-8").split() == ["PICK1", "PICK2"]
 
 
 def test_the_tick_runs_the_sync_after_the_day_roll_clear():
