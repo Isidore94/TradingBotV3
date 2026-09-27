@@ -367,6 +367,14 @@ def test_dataset_registry_is_the_frozen_increment_plus_registered_context(store)
             "setup_market_context",
             "trading_session",
             "universe_membership_daily",
+            # P10 provider history (2026-09-27), additive.
+            "bar_d1_history",
+            "bar_derived_history",
+            "bar_h1",
+            "bar_m30",
+            "corporate_action",
+            "earnings_date",
+            "history_quality_flag",
         ]
     )
     with pytest.raises(KeyError):
@@ -382,7 +390,7 @@ def test_every_dataset_carries_the_convention_columns():
         for dimension in spec.partition_by:
             assert dimension in {"year", "month", "timeframe", "symbol_bucket"}, name
     # Bar/observation datasets carry the point-in-time observation columns.
-    for name in ("bar_m5", "bar_d1"):
+    for name in ("bar_m5", "bar_d1", "bar_d1_history", "bar_h1", "bar_m30"):
         names = set(schemas.DATASETS[name].schema.names)
         assert {"event_at", "observed_at", "capture_mode", "revision_id"} <= names
     # MATURED is derived, never a stored result state (sec 14.2).

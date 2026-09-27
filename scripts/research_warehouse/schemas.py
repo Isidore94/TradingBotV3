@@ -579,6 +579,85 @@ COLLECTION_GAP = _schema(
 )
 
 
+# --- provider history for backtests (P10, 2026-09-27) ----------------------
+# ADDITIVE. Five-year provider bars live in their OWN datasets, never in
+# ``bar_d1``/``bar_derived``: the nightly build's readers (daily features, W1,
+# market_regimes) assume one ``bar_d1`` row per symbol and session, and
+# ``rebuild-month`` retires every ``bar_derived`` month partition and rebuilds
+# only what it derives from M5. Read these through ``history_reader``.
+
+#: Native provider intraday bars: ``bar_m5``'s columns plus the adjustment
+#: basis, because a provider's intraday history is split-adjusted as of the pull.
+BAR_INTRADAY_HISTORY = _schema(
+    list(BAR_M5)[:16],
+    [pa.field("adjustment_version", pa.string())],
+    _pit_source_columns(),
+    _revision_columns(),
+    _provenance_columns(),
+)
+
+#: Splits and cash dividends as the provider reported them. ``value`` is the
+#: split ratio (new shares per old, 4.0 for a 4-for-1) or the cash per share.
+CORPORATE_ACTION = _schema(
+    [
+        pa.field("symbol", pa.string()),
+        pa.field("action_type", pa.string()),
+        pa.field("ex_date", pa.date32()),
+        pa.field("value", pa.float64()),
+        pa.field("corporate_action_id", pa.string()),
+        pa.field("provider", pa.string()),
+    ],
+    _pit_source_columns(),
+    _revision_columns(),
+    _provenance_columns(),
+)
+
+#: One reported or scheduled earnings date. ``time_of_day`` is BMO/AMC/DURING
+#: when the provider's timestamp says so, else UNKNOWN - never guessed.
+EARNINGS_DATE = _schema(
+    [
+        pa.field("symbol", pa.string()),
+        pa.field("earnings_date", pa.date32()),
+        pa.field("time_of_day", pa.string()),
+        pa.field("earnings_at", _TS),
+        pa.field("eps_estimate", pa.float64()),
+        pa.field("eps_reported", pa.float64()),
+        pa.field("surprise_pct", pa.float64()),
+        pa.field("source", pa.string()),
+        pa.field("observed_at", _TS),
+        pa.field("capture_mode", pa.string()),
+    ],
+    _provenance_columns(),
+)
+
+#: Bars derived from a provider-history series (H4 from ``bar_h1``):
+#: ``bar_derived``'s columns plus the provider and the source series revision,
+#: so a split re-pull derives NEW rows instead of editing old ones.
+BAR_DERIVED_HISTORY = _schema(
+    list(BAR_DERIVED)[:-2],
+    [
+        pa.field("provider", pa.string()),
+        pa.field("source_revision_id", pa.string()),
+    ],
+    _provenance_columns(),
+)
+
+#: A series-level quality finding (missing session, stale repeat, unexplained
+#: jump, provider gap). Flags annotate; they never delete or edit a bar.
+HISTORY_QUALITY_FLAG = _schema(
+    [
+        pa.field("dataset", pa.string()),
+        pa.field("symbol", pa.string()),
+        pa.field("check", pa.string()),
+        pa.field("flag_date", pa.date32()),
+        pa.field("interval_start", _TS),
+        pa.field("detail", pa.string()),
+        pa.field("detected_at", _TS),
+    ],
+    _provenance_columns(),
+)
+
+
 # --- bronze wraps (plan sec 19.0/19.5) -------------------------------------
 # Legacy artifacts are wrapped, never rewritten and never re-owned: one row per
 # source record, payload preserved verbatim, hashed, with the source file's own
@@ -770,6 +849,63 @@ DATASETS: dict[str, DatasetSpec] = {
             "gap_start",
             ("month",),
             ("symbol", "timeframe", "gap_start"),
+        ),
+        # P10 provider history (additive; see the block above the bronze wraps).
+        _spec(
+            "bar_d1_history",
+            LAYER_SILVER,
+            BAR_D1,
+            "session_date",
+            ("year",),
+            ("symbol", "session_id", "provider", "revision_id"),
+        ),
+        _spec(
+            "bar_h1",
+            LAYER_SILVER,
+            BAR_INTRADAY_HISTORY,
+            "interval_start",
+            ("month",),
+            ("symbol", "interval_start", "provider", "revision_id"),
+        ),
+        _spec(
+            "bar_m30",
+            LAYER_SILVER,
+            BAR_INTRADAY_HISTORY,
+            "interval_start",
+            ("month",),
+            ("symbol", "interval_start", "provider", "revision_id"),
+        ),
+        _spec(
+            "bar_derived_history",
+            LAYER_SILVER,
+            BAR_DERIVED_HISTORY,
+            "interval_start",
+            ("timeframe", "month"),
+            ("symbol", "timeframe", "interval_start", "aggregation_contract_id", "source_revision_id"),
+        ),
+        _spec(
+            "corporate_action",
+            LAYER_SILVER,
+            CORPORATE_ACTION,
+            "ex_date",
+            ("year",),
+            ("symbol", "action_type", "ex_date", "provider"),
+        ),
+        _spec(
+            "earnings_date",
+            LAYER_SILVER,
+            EARNINGS_DATE,
+            "earnings_date",
+            ("year",),
+            ("symbol", "earnings_date", "source"),
+        ),
+        _spec(
+            "history_quality_flag",
+            LAYER_SILVER,
+            HISTORY_QUALITY_FLAG,
+            "flag_date",
+            ("year",),
+            ("dataset", "symbol", "check", "flag_date", "interval_start"),
         ),
     )
 }
