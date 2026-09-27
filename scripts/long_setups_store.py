@@ -1,15 +1,18 @@
 """The long-setups files (p9): the scan publishes, the desk and the phone report read.
 
 `long_setups` is the pure rule; this is its only I/O. The scan runner is the one writer of
-`LONG_SETUPS_FILE` (this scan's rows) and `LONG_SETUPS_HISTORY_FILE` (every scan session's
-rows, settled for grading) and `RUNNER_DIP_WATCH_FILE` (the runner dip watch). All are written whole and atomically, so a failed publish
-leaves the last good file in place. Readers get None / [] for a missing or unreadable file.
+`LONG_SETUPS_FILE` (this scan's rows), `LONG_SETUPS_HISTORY_FILE` (every scan session's
+rows, settled for grading) and `RUNNER_DIP_WATCH_FILE` (the runner dip watch). All are
+written whole and atomically, so a failed publish leaves the last good file in place.
+Readers get None / [] for a missing or unreadable file.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -179,3 +182,62 @@ def publish_runner_dip_watch(inputs: Mapping[str, Any], *, now: datetime | None 
     logging.info("Runner dip watch: %s runner(s) for %s, %s armed (market working: %s).",
                  len(payload["members"]), payload["as_of"], len(payload["armed"]), payload["market_working"])
     return payload
+
+
+# --- the desk's cached copy: a worker reads the file, the Qt thread reads memory only
+
+#: The worker re-checks the runner file at most this often.
+RUNNER_REFRESH_SECONDS = 60.0
+_runner_lock = threading.Lock()
+_runner_state: dict[str, Any] = {"payload": None, "key": None, "running": False, "checked": None}
+
+
+def runner_dip_snapshot() -> dict[str, Any] | None:
+    """The cached runner dip watch, or None before the first worker read. Never does IO."""
+    with _runner_lock:
+        return _runner_state["payload"]
+
+
+def set_runner_dip_snapshot(payload: dict[str, Any] | None) -> None:
+    """Replace the cache (tests, and a caller that read it on its own worker)."""
+    with _runner_lock:
+        _runner_state.update(payload=payload, key=None, checked=None)
+
+
+def _refresh_runner_dip(path: Path | None) -> None:
+    import project_paths
+
+    target = Path(path or project_paths.RUNNER_DIP_WATCH_FILE)
+    try:
+        stat = target.stat()
+        key = (str(target), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        key = (str(target), 0, 0)
+    with _runner_lock:
+        if key == _runner_state["key"]:
+            return
+    payload = read_runner_dip_watch(target) if key[1] else None
+    with _runner_lock:
+        _runner_state.update(payload=payload, key=key)
+
+
+def refresh_runner_dip_async(path: Path | None = None) -> bool:
+    """Start one worker re-read when the last check is `RUNNER_REFRESH_SECONDS` old. Qt-safe."""
+    now = time.monotonic()
+    with _runner_lock:
+        checked = _runner_state["checked"]
+        if _runner_state["running"] or (checked is not None and now - checked < RUNNER_REFRESH_SECONDS):
+            return False
+        _runner_state.update(running=True, checked=now)
+
+    def run() -> None:
+        try:
+            _refresh_runner_dip(path)
+        except Exception:  # noqa: BLE001 - the last cached payload stays; the next tick retries
+            logging.debug("Runner dip watch cache not refreshed.", exc_info=True)
+        finally:
+            with _runner_lock:
+                _runner_state["running"] = False
+
+    threading.Thread(target=run, name="runner-dip-watch-read", daemon=True).start()
+    return True
