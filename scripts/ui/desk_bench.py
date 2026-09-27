@@ -439,6 +439,9 @@ M5_CHART_BARS = 400
 M5_CHART_REDRAWS = 20
 MOVERS_BOARD_ROWS = 60
 MOVERS_BOARD_SETS = 20
+#: The Master AVWAP setups table (p9 swing table): rows per rebuild and rebuilds per run.
+SETUPS_TABLE_ROWS = 150
+SETUPS_TABLE_SETS = 10
 
 _ALERT_TIERS = ("S", "A", "B", "B", "C", "C", "C")
 _ALERT_TRIGGERS = ("Bounce confirmed", "VWAP reclaim", "Band touch", "Pause hold")
@@ -548,6 +551,81 @@ def synthetic_movers_board(rows: int, *, variant: int = 0) -> dict[str, Any]:
         "dip": {"long": [], "short": []},
         "mine": {"long": [], "short": []},
     }
+
+
+def synthetic_setup_rows(count: int, *, variant: int = 0) -> list[Any]:
+    """`count` Master AVWAP `SetupRow`s: both sides, the working buckets and a few families."""
+    from ui.models.setup import SetupRow
+
+    buckets = ("favorite_setup", "high_conviction", "near_favorite_zone", "study_playbook", "")
+    families = ("avwap_retest_followthrough", "avwap_band_bounce", "sma_breakout", "top_pattern_tracking")
+    rows = []
+    for index in range(int(count)):
+        side = "SHORT" if index % 3 == 0 else "LONG"
+        family = families[(index + variant) % len(families)]
+        rows.append(
+            SetupRow(
+                symbol=f"T{index:03d}",
+                side=side,
+                score=40.0 + (index * 7 + variant) % 60,
+                bucket=buckets[index % len(buckets)],
+                setup_tags=["retest", "band"],
+                key_level=f"AVWAPE {100 + index:.2f}",
+                supports=index % 4,
+                expected_r=0.1 * (index % 9),
+                sector="Technology",
+                industry="Semiconductors",
+                d1_vs_sector=0.5 - (index % 5) * 0.2,
+                d1_vs_industry=-0.3 + (index % 4) * 0.2,
+                last_trade_date="2026-09-25",
+                raw={"setup_family": family, "priority_score": 40.0 + index % 60,
+                     "perm_strength_filter": "yes" if index % 2 else "no",
+                     "perm_dist_sma50_atr": 0.5 + (index % 7) * 0.3},
+            )
+        )
+    return rows
+
+
+def synthetic_swing_context(rows: Sequence[Any]) -> dict[str, Any]:
+    """The swing-table context for `rows`: every 5th name a Long leader, grades for each family."""
+    leaders = []
+    for index, row in enumerate(rows):
+        if index % 5:
+            continue
+        leaders.append({
+            "symbol": row.symbol, "as_of": "2026-09-25", "setup": "leader_pullback",
+            "setup_family": "leader_pullback", "entry_limit": 100.0 + index, "stop": 95.0 + index,
+            "exit": "hold up to 10 sessions, stop under the pullback low", "status": "ready",
+            "promoted": index % 10 == 0, "rs_percentile": 0.9, "reasons": ["ran 40%", "at the 21 EMA"],
+            "strength_filter": "yes", "strength_sma50_atr": 1.2, "market_working": "yes",
+        })
+    families = sorted({str((row.raw or {}).get("setup_family") or "") for row in rows})
+    cells = {f"{side}|{family}": {"n": 120, "sessions": 30, "beat_low_h5": 0.55, "mean_move_atr_h10": 0.4}
+             for side in ("LONG", "SHORT") for family in families}
+    return {
+        "long_setups": {"as_of": "2026-09-25", "market_working": "yes", "market_rule": "trader regime",
+                        "rows": leaders},
+        "sp4": {"schema": "family_side_evidence_v1", "as_of": "2026-09-25", "families": cells},
+        "path": {key: {"mfe_atr": 1.4, "mae_atr": -0.8, "n": 90} for key in cells},
+        "exits": {key: {"n": 90, "current_r": 0.1, "stop_only_r": 0.3, "trail_r": 0.2} for key in cells},
+        "study": {},
+        "sources": {row.symbol: ["momentum_scanner"] for row in rows[::7]},
+    }
+
+
+def _setups_table_ops(panel) -> list[tuple[str, Callable[[], Any]]]:
+    """Rebuild the setups table from fresh rows, then one paint of what is on screen."""
+    variants = [synthetic_setup_rows(SETUPS_TABLE_ROWS, variant=k) for k in range(2)]
+    context = synthetic_swing_context(variants[0])
+    set_context = getattr(panel, "set_swing_context", None)
+    if callable(set_context):
+        set_context(context)
+    ops: list[tuple[str, Callable[[], Any]]] = []
+    for index in range(SETUPS_TABLE_SETS):
+        rows = variants[index % 2]
+        ops.append((f"setups_table.set_rows[{SETUPS_TABLE_ROWS}]", lambda r=rows: panel.set_rows(list(r))))
+        ops.append((f"setups_table.repaint[{SETUPS_TABLE_ROWS}]", lambda: panel.table.viewport().repaint()))
+    return ops
 
 
 def format_bytes(count: int) -> str:
@@ -967,6 +1045,10 @@ def build_panel(name: str):
         from ui.widgets.movers_board import MoversBoard
 
         return MoversBoard(persist=False)
+    if name == "setups_table":
+        from ui.panels.master_avwap_panel import MasterAvwapPanel
+
+        return MasterAvwapPanel()
     raise KeyError(name)
 
 
@@ -987,15 +1069,18 @@ PANEL_NAMES: tuple[str, ...] = (
     "working_lately",
     "m5_chart",
     "movers_board",
+    # p9 swing table (2026-09-26): the Master AVWAP setups table's rebuild and paint.
+    "setups_table",
 )
 
 #: Widgets and builds, not pages: no layout-fit row, and shown at the size they
 #: have on the desk rather than the whole window.
-WIDGET_BENCH_PANELS: tuple[str, ...] = ("working_lately", "m5_chart", "movers_board")
+WIDGET_BENCH_PANELS: tuple[str, ...] = ("working_lately", "m5_chart", "movers_board", "setups_table")
 WIDGET_VIEW_SIZES: dict[str, tuple[int, int]] = {
     "working_lately": (400, 300),
     "m5_chart": (1600, 900),
     "movers_board": (700, 900),
+    "setups_table": (1200, 900),
 }
 
 #: Ops whose call covers many items (`[N]` = N items); the table also prints sync ms per item.
@@ -1106,6 +1191,8 @@ def workload_ops(name: str, panel) -> list[tuple[str, Callable[[], Any]]]:
                 panel.flush_pending_refresh()
 
             ops.append((f"movers_board.update_board[{MOVERS_BOARD_ROWS}]", _set))
+    elif name == "setups_table":
+        ops.extend(_setups_table_ops(panel))
     return ops
 
 

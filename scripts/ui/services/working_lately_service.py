@@ -471,6 +471,22 @@ def _cached(name: str, key: Any, build, *, keep: bool = True) -> Any:
     return value
 
 
+def _peek(name: str) -> Any:
+    """The last built value, or None. Never builds (the swing table reads, never pays)."""
+    hit = _LOOKING_BACK_CACHE.get(name)
+    return None if hit is None else hit[1]
+
+
+def cached_exit_model_review() -> dict[str, Any] | None:
+    """The S13 exit models if the Setup Tracker already built them in this process."""
+    return _peek("exit_model_review")
+
+
+def cached_horizon_index() -> dict | None:
+    """The session-horizon index if the Working-lately build already holds it."""
+    return _peek("horizon_index")
+
+
 def _cached_copy(name: str, key: Any, build, *, keep: bool = True) -> Any:
     """`_cached`, handing out a deep copy so no caller can edit the kept value."""
     return copy.deepcopy(_cached(name, key, build, keep=keep))

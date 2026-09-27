@@ -10,6 +10,7 @@ import avwape_side
 import compression_chip
 import earnings_warning
 from ui import theme
+from ui.models import swing_columns
 from ui.models.setup import SetupRow
 from ui.models.setup_table_model import ROW_ROLE, SetupTableModel
 from swallowed import note_swallowed
@@ -21,6 +22,8 @@ _CHIP_HEIGHT = 22
 _PAD = 10
 #: Gap between two chips sharing one cell (WS-WS).
 _CHIP_GAP = 6
+#: p9: the chip a scan row carries when a Long leader was merged onto it.
+LEADER_CHIP_LABEL = "Leader"
 #: Narrower than this and the second chip is not drawn at all: a 12px sliver of
 #: colour is not a badge, and the tooltip still says the whole thing.
 _MIN_CHIP_WIDTH = 22
@@ -287,6 +290,8 @@ class SetupTableDelegate(QStyledItemDelegate):
         width = size.width()
         key = _COLUMN_KEYS[index.column()] if index.column() < len(_COLUMN_KEYS) else ""
         if key == "bucket":
+            if _merged_leader(index.data(ROW_ROLE)):
+                width += _chip_width(option.font, LEADER_CHIP_LABEL) + _CHIP_GAP
             read = self._wrong_side_read(index.data(ROW_ROLE))
             if read is not None and read.wrong:
                 # `fit_columns` sizes a column by asking this, so a column that
@@ -343,10 +348,15 @@ class SetupTableDelegate(QStyledItemDelegate):
             self._dislike_mark(painter, option, rect, rejected)
         elif key == "side" and is_setup and row.side in {"LONG", "SHORT"}:
             self._chip(painter, option, rect, row.side, "long" if row.side == "LONG" else "short")
-        elif key == "bucket" and is_setup and row.bucket:
+        elif key == "bucket" and is_setup and (row.bucket or _merged_leader(row)):
             bucket_chip = self._chip(
                 painter, option, rect, row.bucket_label, _bucket_token(bucket), study=is_study
-            )
+            ) if row.bucket else None
+            # p9: a Long leader merged onto a scan row is a chip after its own bucket.
+            if _merged_leader(row):
+                bucket_chip = self._chip(
+                    painter, option, rect, LEADER_CHIP_LABEL, "leader", study=is_study, after=bucket_chip,
+                ) or bucket_chip
             # WS-WS (WISHLIST 9): a LONG whose close sits under its AVWAPE, or a
             # SHORT whose close sits over it, is BADGED - after the bucket chip,
             # never over it. Display only: the row is still here, still in the
@@ -512,7 +522,18 @@ def _bucket_token(bucket: str) -> str:
         return "near"
     if "study" in normalized:
         return "study"
+    if normalized == swing_columns.LONG_LEADER_BUCKET:
+        return "leader"
     return "neutral"
+
+
+def _merged_leader(row) -> bool:
+    """A scan row carrying Long-leader facts whose own bucket is something else."""
+    return (
+        isinstance(row, SetupRow)
+        and row.bucket.strip().lower() != swing_columns.LONG_LEADER_BUCKET
+        and swing_columns.leader_info(row) is not None
+    )
 
 
 def _score_token(score: float) -> str:

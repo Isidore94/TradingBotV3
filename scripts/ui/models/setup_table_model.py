@@ -12,6 +12,7 @@ import longs_market_gate
 from sector_exclusion import is_excluded, symbol_is_excluded
 from swing_headline import OUTCOME_KIND_FAVORABLE_DIRECTION, headline_labels
 from ui import theme
+from ui.models import swing_columns
 from ui.models.setup import SetupRow
 
 
@@ -85,6 +86,14 @@ class SetupTableModel(QAbstractTableModel):
         ("plan_shares", "Shares"),
         # P1-6 6d: an armed or fired Pullback alert on this name, read only.
         ("timing", "Timing"),
+        # p9 swing table (trader, 2026-09-26): what today proved, per row. Appended;
+        # `ui.models.swing_columns` formats them from injected payloads (no file here).
+        ("regime_grade", "Regime grade"),
+        ("leader", "Long leader"),
+        ("sp4", "SP4 (shadow)"),
+        ("strength", "Strength (shadow)"),
+        ("study", "Study / note"),
+        ("universe", "Source"),
     )
 
     #: The P1-6 plan columns, hidden together (compact profile, or no plan).
@@ -109,6 +118,12 @@ class SetupTableModel(QAbstractTableModel):
         self._plans: dict[int, dict | None] = {}
         #: P1-6 6d: `entry_timing.build_timing` map, built on the panel's worker.
         self._timing: dict = {}
+        #: p9: the grades-by-regime payload (Working-lately worker) and the swing
+        #: context (`ui.services.swing_context`, the panel's worker). Injected only.
+        self._regime_grades: dict = {}
+        self._swing: dict = {}
+        #: Which swing columns have a value; None = not asked since the last change.
+        self._swing_presence: set[str] | None = None
 
     def rowCount(self, parent: QModelIndex = _NO_PARENT) -> int:
         return 0 if parent.isValid() else len(self._rows)
@@ -139,6 +154,7 @@ class SetupTableModel(QAbstractTableModel):
                 "d1_vs_industry",
                 "family_win_rate",
                 "points",
+                "sp4",
                 *self.PLAN_COLUMNS,
             }:
                 return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -159,14 +175,29 @@ class SetupTableModel(QAbstractTableModel):
                     return QColor(theme.color("long" if value > 0 else "short"))
             if key == "plan_r" and (self.plan_for(row) or {}).get("stale"):
                 return QColor(theme.color("caution"))
+            if key == "leader" and swing_columns.leader_info(row) is not None:
+                return QColor(theme.color("leader"))
+            if key == "strength":
+                read = swing_columns.strength_read(row, self._swing)
+                if read is not None:
+                    return QColor(theme.color("long" if read[0] == "yes" else "caution"))
+            if key in {"sp4", "study"}:
+                return QColor(theme.color("text_secondary"))
             return None
         if role == Qt.ItemDataRole.ToolTipRole:
             if key == "points":
                 return self.points_for(row).tooltip()
             if key == "bucket":
                 cell = self.grade_cell_for(row)
+                extra = [text for text in (
+                    swing_columns.leader_tooltip(row), swing_columns.study_tooltip(row, self._swing)
+                ) if text]
                 if cell is not None:
-                    return _grade_tooltip(cell)
+                    return "\n\n".join([_grade_tooltip(cell), *extra])
+                if extra:
+                    return "\n\n".join([_tooltip(row, key), *extra])
+            if key in swing_columns.SWING_COLUMNS:
+                return self._swing_tooltip(row, key)
             if key == "key_level" or key in self.PLAN_COLUMNS:
                 # P1-6: the plan line rides the key level, which both profiles show.
                 import entry_plan
@@ -194,6 +225,7 @@ class SetupTableModel(QAbstractTableModel):
         self.beginResetModel()
         self._rows = list(rows)
         self._plans = {}
+        self._swing_presence = None
         self.endResetModel()
 
     def set_plan_context(self, levels=None, risk_dollars=None, *, reset: bool = True) -> None:
@@ -270,6 +302,56 @@ class SetupTableModel(QAbstractTableModel):
             for key, value in dict(records or {}).items()
         }
         self.endResetModel()
+
+    def set_regime_grades(self, payload) -> None:
+        """p9: `setup_grades_by_regime` (built OFF this thread). Same payload = no reset."""
+        payload = dict(payload or {})
+        if payload == self._regime_grades:
+            return
+        self.beginResetModel()
+        self._regime_grades = payload
+        self._swing_presence = None
+        self.endResetModel()
+
+    def regime_grades(self) -> dict:
+        return self._regime_grades
+
+    def set_swing_context(self, context) -> None:
+        """p9: the swing-context payload (built OFF this thread). Same payload = no reset."""
+        context = dict(context or {})
+        if context == self._swing:
+            return
+        self.beginResetModel()
+        self._swing = context
+        self._swing_presence = None
+        self.endResetModel()
+
+    def swing_context(self) -> dict:
+        return self._swing
+
+    def has_swing_values(self, key: str) -> bool:
+        """True when any row has something to show in this swing column (one pass per change)."""
+        if self._swing_presence is None:
+            self._swing_presence = swing_columns.columns_with_values(
+                self._rows, self._regime_grades, self._swing
+            )
+        return key in self._swing_presence
+
+    def _swing_tooltip(self, row: SetupRow, key: str) -> str:
+        if key == "regime_grade":
+            return swing_columns.regime_grade_tooltip(row, self._regime_grades, self._swing)
+        if key == "leader":
+            return swing_columns.leader_tooltip(row) or "Not a Long leader row."
+        if key == "sp4":
+            return swing_columns.sp4_tooltip(row, self._swing.get("sp4"))
+        if key == "strength":
+            return (
+                "Strength SHADOW (p9): yes/no and how far the close sits above the 50-day, in ATR. "
+                "Longs only; blank = unknown. Changes nothing live."
+            )
+        if key == "study":
+            return swing_columns.study_tooltip(row, self._swing)
+        return swing_columns.source_tooltip(row, self._swing)
 
     def set_setup_grades(self, payload) -> None:
         """The tracker grades, built OFF this thread by the Working-lately worker."""
@@ -373,6 +455,18 @@ class SetupTableModel(QAbstractTableModel):
             return entry_plan.plan_cells(self.plan_for(row), self._risk_dollars)[key]
         if key == "timing":
             return self.timing_text(row).removeprefix("timing: ")
+        if key == "regime_grade":
+            return swing_columns.regime_grade_text(row, self._regime_grades)
+        if key == "leader":
+            return swing_columns.leader_text(row)
+        if key == "sp4":
+            return swing_columns.sp4_text(row, self._swing.get("sp4"))
+        if key == "strength":
+            return swing_columns.strength_text(row, self._swing)
+        if key == "study":
+            return ", ".join(swing_columns.study_tags(row, self._swing))
+        if key == "universe":
+            return ", ".join(swing_columns.source_badges(row, self._swing))
         return ""
 
     def _sort_value(self, row: SetupRow, key: str) -> Any:
@@ -401,6 +495,18 @@ class SetupTableModel(QAbstractTableModel):
             return float(bound) if bound is not None else -1.0
         if key == "points":
             return float(self.points_for(row).total)
+        if key == "regime_grade":
+            # Best grade first when ascending; no regime typed ties everything.
+            return float(swing_columns.regime_sort_rank(row, self._regime_grades))
+        if key == "sp4":
+            read = swing_columns.sp4_read(row, self._swing.get("sp4"))
+            return read[0] if read is not None else -999999.0
+        if key == "strength":
+            read = swing_columns.strength_read(row, self._swing)
+            return read[1] if read is not None and read[1] is not None else -999999.0
+        if key == "leader":
+            info = swing_columns.leader_info(row)
+            return float(info.get("rank", 0)) if info is not None else 999999.0
         if key in self.PLAN_COLUMNS:
             plan = self.plan_for(row) or {}
             field = {"plan_entry": "entry", "plan_stop": "stop", "plan_tp1": "tp1", "plan_r": "tp1_r"}.get(key)
@@ -641,6 +747,8 @@ def _bucket_color(bucket: str) -> str:
         return theme.color("near")
     if "study" in normalized:
         return theme.color("study")
+    if normalized == swing_columns.LONG_LEADER_BUCKET:
+        return theme.color("leader")
     return theme.color("text_secondary")
 
 

@@ -685,3 +685,16 @@ def test_the_working_lately_bench_times_the_build_not_a_widget():
     for op in ("working_lately.build_payload", "working_lately.read_inputs",
                "working_lately.build_snapshot"):
         assert op in rows and not rows[op]["errors"], rows.get(op)
+
+
+@pytest.mark.qt
+def test_the_setups_table_bench_rebuilds_and_paints(monkeypatch):
+    """p9 swing table: the Master AVWAP setups table's rebuild and paint are timed."""
+    monkeypatch.setattr(desk_bench, "SETUPS_TABLE_ROWS", 20)
+    monkeypatch.setattr(desk_bench, "SETUPS_TABLE_SETS", 2)
+    payload = _run(("setups_table",))
+    assert payload["skipped"] == []
+    rows = {row["op"]: row for row in payload["ops"]}
+    for op in ("setups_table.set_rows[20]", "setups_table.repaint[20]"):
+        assert op in rows and not rows[op]["errors"], rows.get(op)
+        assert rows[op]["samples"] == 2
