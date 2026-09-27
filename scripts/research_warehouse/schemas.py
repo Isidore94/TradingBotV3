@@ -428,6 +428,47 @@ SETUP_MARKET_CONTEXT = _schema(
     _provenance_columns(),
 )
 
+# P10 (2026-09-27): additive gold dataset, one point-in-time regime row per
+# (symbol, session_date, rule_version) from bars completed by that close
+# (research_warehouse.regime_daily). A new rule is a new rule_version row.
+MARKET_REGIME_DAILY = _schema(
+    [
+        pa.field("symbol", pa.string()),
+        pa.field("session_date", pa.date32()),
+        pa.field("rule_version", pa.string()),
+        pa.field("next_session_date", pa.date32()),
+        pa.field("env_d1", pa.string()),
+        pa.field("env_w", pa.string()),
+        pa.field("env_h4", pa.string()),
+        pa.field("env_h1", pa.string()),
+        pa.field("trend20", pa.string()),
+        pa.field("trend50_200", pa.string()),
+        pa.field("vol_rv", pa.string()),
+        pa.field("vol_vix", pa.string()),
+        pa.field("drawdown", pa.string()),
+        pa.field("structural_raw", pa.string()),
+        pa.field("structural", pa.string()),
+        pa.field("structural_rule_version", pa.string()),
+        pa.field("composite", pa.string()),
+        pa.field("composite_key", pa.string()),
+        pa.field("close", pa.float64()),
+        pa.field("sma20", pa.float64()),
+        pa.field("sma50", pa.float64()),
+        pa.field("sma200", pa.float64()),
+        pa.field("rv20", pa.float64()),
+        pa.field("rv20_pct", pa.float64()),
+        pa.field("vix_close", pa.float64()),
+        pa.field("drawdown_pct", pa.float64()),
+        pa.field("ret5_pct", pa.float64()),
+        pa.field("weekly_swing", pa.string()),
+        pa.field("weekly_range_ratio", pa.float64()),
+        pa.field("d1_bar_count", pa.int32()),
+        pa.field("bars_source", pa.string()),
+        pa.field("computed_at", _TS),
+    ],
+    _provenance_columns(),
+)
+
 OUTCOME_PATH = _schema(
     [
         pa.field("occurrence_id", pa.string()),
@@ -689,6 +730,14 @@ DATASETS: dict[str, DatasetSpec] = {
             "entry_at",
             ("year",),
             ("occurrence_id", "timeframe", "bias_definition_id"),
+        ),
+        _spec(
+            "market_regime_daily",
+            LAYER_GOLD,
+            MARKET_REGIME_DAILY,
+            "session_date",
+            ("year",),
+            ("symbol", "session_date", "rule_version"),
         ),
         _spec(
             "outcome_path",
