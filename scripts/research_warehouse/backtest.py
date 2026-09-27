@@ -107,6 +107,8 @@ class Inputs:
     regimes: pd.DataFrame | None = None
     regime_rule_version: str | None = None
     regime_axes: Sequence[str] | None = None
+    #: history_reader.read_quality_flags rows (dataset, symbol, check, flag_date, ...)
+    quality_flags: pd.DataFrame | None = None
     source: dict[str, Any] = field(default_factory=dict)
 
 
@@ -637,17 +639,56 @@ def family_trials(root: Path) -> int:
 
 
 # ---------------------------------------------------------------- one run
-def prepare(inputs: Inputs) -> tuple[dict[str, bs.Ctx], dict[str, int]]:
-    quality: dict[str, int] = {}
+#: Quality flags whose bars are not real trading (flat zero-volume pre-listing filler): dropped.
+EXCLUDED_FLAGS = frozenset({"STALE_REPEAT_BAR"})
+#: Flags kept in the series but counted in the manifest.
+COUNTED_FLAGS = ("UNEXPLAINED_JUMP", "MISSING_SESSION")
+
+
+def _flag_days(flags: pd.DataFrame | None) -> tuple[dict[str, set], dict[str, int]]:
+    """``{symbol: {excluded session dates}}`` and per-check counts of every flag given."""
+    if flags is None or flags.empty:
+        return {}, {}
+    counts = {str(k): int(v) for k, v in flags["check"].value_counts().items()}
+    drop = flags[flags["check"].isin(EXCLUDED_FLAGS)]
+    days: dict[str, set] = {}
+    for sym, group in drop.groupby("symbol"):
+        days[str(sym).upper()] = set(pd.to_datetime(group["flag_date"]).dt.normalize())
+    return days, counts
+
+
+def prepare(inputs: Inputs) -> tuple[dict[str, bs.Ctx], dict[str, Any]]:
+    """Clean bars per symbol; bars flagged `EXCLUDED_FLAGS` are removed before any signal or
+    outcome reads them. The manifest's data_quality carries every count."""
+    quality: dict[str, Any] = {}
     ctxs: dict[str, bs.Ctx] = {}
+    drop_days, flag_counts = _flag_days(inputs.quality_flags)
+    excluded, excluded_symbols = 0, 0
     for sym, frame in inputs.bars.items():
         if frame is None or len(frame) == 0:
             continue
         clean = clean_bars(frame, quality)
+        key = str(sym).upper()
+        if key in drop_days and len(clean):
+            flagged = clean["session_date"].isin(drop_days[key]).to_numpy()
+            if flagged.any():
+                excluded += int(flagged.sum())
+                excluded_symbols += 1
+                clean = clean[~flagged].reset_index(drop=True)
         if len(clean):
-            ctxs[str(sym).upper()] = make_ctx(str(sym).upper(), clean, inputs.earnings.get(sym, ()))
+            ctxs[key] = make_ctx(key, clean, inputs.earnings.get(sym, ()))
     quality["symbols"] = len(ctxs)
+    quality["flagged_bars_excluded"] = {"checks": sorted(EXCLUDED_FLAGS), "bars": excluded,
+                                        "symbols": excluded_symbols}
+    quality["flags_by_check"] = flag_counts
+    quality["flags_kept_counted"] = {c: flag_counts.get(c, 0) for c in COUNTED_FLAGS}
     return ctxs, quality
+
+
+def data_range(ctxs: Mapping[str, bs.Ctx]) -> list[str | None]:
+    first = min((c.dates[0] for c in ctxs.values() if len(c)), default=None)
+    last = max((c.dates[-1] for c in ctxs.values() if len(c)), default=None)
+    return [str(first) if first is not None else None, str(last) if last is not None else None]
 
 
 def run_backtest(inputs: Inputs, *, root: Path, setups: Sequence[bs.Setup] | None = None,
@@ -952,6 +993,7 @@ def run_search(inputs: Inputs, *, root: Path, side: str, base: str = "trend", ho
         "schema": SEARCH_SCHEMA, "run_id": run_id, "kind": "search",
         "generated_at": (now or datetime.now(timezone.utc)).isoformat(timespec="seconds"),
         "git": git_state(), "params": params, "data_quality": quality, "source": inputs.source,
+        "data_range": data_range(ctxs),
         "trial_id": trial["trial_id"], "survivorship": SURVIVORSHIP,
         "timings": {"total_s": round(time.perf_counter() - t_start, 3)},
     }
@@ -1019,6 +1061,7 @@ def load_lake_inputs(start: date | None = None, end: date | None = None, symbols
     bars = history_reader.read_d1(list(symbols) if symbols else None, None, end, store=store)
     earnings = history_reader.read_earnings_dates(list(bars), store=store)
     regimes = regime_daily.read_regimes(BENCHMARK, rule_version, store=store, as_of="close")
+    flags = history_reader.read_quality_flags("bar_d1_history", list(bars), store=store)
     version = rule_version or (_rule_version(regimes) if regimes is not None and not regimes.empty else None)
     providers: dict[str, int] = {}
     for frame in bars.values():
@@ -1026,7 +1069,7 @@ def load_lake_inputs(start: date | None = None, end: date | None = None, symbols
             key = str(frame["provider"].iloc[-1])
             providers[key] = providers.get(key, 0) + 1
     return Inputs(bars=bars, earnings=earnings, regimes=regimes, regime_rule_version=version,
-                  regime_axes=tuple(regime_daily.AXES),
+                  regime_axes=tuple(regime_daily.AXES), quality_flags=flags,
                   source={"bars": "history_reader.read_d1", "earnings": "history_reader.read_earnings_dates",
                           "regimes": f"regime_daily.read_regimes({BENCHMARK}, as_of=close)",
                           "symbols_by_latest_provider": providers,

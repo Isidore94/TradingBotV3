@@ -509,3 +509,34 @@ def test_thin_earnings_coverage_is_still_no_earnings_data(tmp_path):
     assert result["summary"]["unmeasured_setups"]["favourite_zone_long"] ==         "no earnings data yet (1 of 8 stocks have earnings dates)"
     full = bt.run_backtest(bt.Inputs(bars=bars, earnings=earnings), root=tmp_path, min_avg_volume=0, run_id="full")
     assert full["summary"]["unmeasured_setups"] == {}
+
+
+def test_stale_repeat_bars_are_excluded_and_other_flags_counted(tmp_path):
+    """STALE_REPEAT_BAR filler never becomes a signal or an outcome bar; jumps and missing
+    sessions stay in the series and are counted in the manifest."""
+    bars, earnings, days = universe(n_names=8, n_bars=420, seed=4)
+    stale = days[:300]  # N01's first 300 sessions are pre-listing filler
+    flags = pd.DataFrame(
+        [{"dataset": "bar_d1_history", "symbol": "N01", "check": "STALE_REPEAT_BAR", "flag_date": d,
+          "interval_start": None, "detail": ""} for d in stale]
+        + [{"dataset": "bar_d1_history", "symbol": "N02", "check": "UNEXPLAINED_JUMP", "flag_date": days[200],
+            "interval_start": None, "detail": ""},
+           {"dataset": "bar_d1_history", "symbol": "N03", "check": "MISSING_SESSION", "flag_date": days[100],
+            "interval_start": None, "detail": ""}])
+    result = bt.run_backtest(bt.Inputs(bars=bars, earnings=earnings, quality_flags=flags), root=tmp_path,
+                             min_avg_volume=0, run_id="q", setups=bs.by_key(["rising_20_50_baseline"]))
+    quality = result["manifest"]["data_quality"]
+    assert quality["flagged_bars_excluded"] == {"checks": ["STALE_REPEAT_BAR"], "bars": 300, "symbols": 1}
+    assert quality["flags_kept_counted"] == {"UNEXPLAINED_JUMP": 1, "MISSING_SESSION": 1}
+    cand = pd.read_parquet(tmp_path / "backtests" / "q" / "candidates.parquet")
+    assert (cand[cand.symbol == "N01"].signal_date > pd.Timestamp(stale[-1])).all()
+    assert len(cand[cand.symbol == "N02"]) > 0
+    ctxs, _ = bt.prepare(bt.Inputs(bars=bars, earnings=earnings, quality_flags=flags))
+    assert len(ctxs["N01"]) == 120 and len(ctxs["N02"]) == 420
+
+
+def test_search_manifest_records_the_data_range(tmp_path):
+    bars, earnings, days = universe(n_names=8, n_bars=420, seed=4)
+    result = bt.run_search(bt.Inputs(bars=bars, earnings=earnings), root=tmp_path, side=bs.SHORT, base="all",
+                           max_k=1, split=days[300], min_train=1, min_test=1, run_id="dr")
+    assert result["manifest"]["data_range"] == [str(days[0]), str(days[-1])]
