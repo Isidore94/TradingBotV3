@@ -205,7 +205,10 @@ class YahooClient:
         self.requests = 0
 
     def _download(self, tickers, *, attempts: int | None = None, **kwargs):
-        import yfinance as yf
+        try:
+            from scripts import yahoo_download
+        except ImportError:  # pragma: no cover - scripts/ directly on sys.path
+            import yahoo_download  # type: ignore
 
         last: Exception | None = None
         tries = max(1, int(attempts or self.retries))
@@ -214,7 +217,8 @@ class YahooClient:
                 self.sleep(self.pause)
             self.requests += 1
             try:
-                data = yf.download(
+                # The one in-process door to yfinance.download (RULES: shared dict).
+                data = yahoo_download.download(
                     tickers,
                     auto_adjust=False,
                     actions=True,
