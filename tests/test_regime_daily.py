@@ -382,3 +382,19 @@ def test_the_night_slot_failure_leaves_the_lake(tmp_path):
                                      intraday_loader=broken)
     assert result["status"] == "failed" and "lake unchanged" in result["reason"]
     assert store.read_rows(rd.DATASET) == []
+
+
+def test_a_missing_lake_root_raises_instead_of_reading_as_no_regimes(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        rd.read_regimes("SPY", store=ResearchStore(tmp_path / "no_such_lake"))
+
+
+def test_the_default_loaders_read_bars_from_the_store_they_write_to(tmp_path, monkeypatch):
+    from research_warehouse import history_reader
+
+    seen = []
+    monkeypatch.setattr(history_reader, "read_d1", lambda *a, store=None, **k: seen.append(("d1", store)) or {})
+    monkeypatch.setattr(history_reader, "read_intraday", lambda *a, store=None, **k: seen.append(("intra", store)) or {})
+    store = ResearchStore(tmp_path / "lake")
+    rd.run_build(store, apply=False, now=NOW)
+    assert seen and all(got is store for _kind, got in seen)

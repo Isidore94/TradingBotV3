@@ -33,6 +33,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
@@ -545,16 +546,16 @@ def new_rows(store, rows: Sequence[Mapping[str, Any]]) -> list[dict]:
     return [dict(row) for row in rows if (row["symbol"], row["session_date"], row["rule_version"]) not in have]
 
 
-def _default_d1_loader(symbols, start, end):
+def _default_d1_loader(symbols, start, end, *, store=None):
     from research_warehouse import history_reader
 
-    return history_reader.read_d1(list(symbols), start, end)
+    return history_reader.read_d1(list(symbols), start, end, store=store)
 
 
-def _default_intraday_loader(timeframe, symbols, start, end):
+def _default_intraday_loader(timeframe, symbols, start, end, *, store=None):
     from research_warehouse import history_reader
 
-    return history_reader.read_intraday(timeframe, list(symbols), start, end)
+    return history_reader.read_intraday(timeframe, list(symbols), start, end, store=store)
 
 
 def run_build(
@@ -578,8 +579,11 @@ def run_build(
         return {"status": "DISABLED", "message": "research_store_dir is not configured."}
     stamp = now or datetime.now(timezone.utc)
     last = min(until, last_settled_session(stamp)) if until else last_settled_session(stamp)
-    load_d1 = d1_loader or _default_d1_loader
-    load_intraday = intraday_loader or _default_intraday_loader
+    # Default loaders read bars from the same lake the rows are written to.
+    load_d1 = d1_loader or (lambda symbols, start, end: _default_d1_loader(symbols, start, end, store=store))
+    load_intraday = intraday_loader or (
+        lambda timeframe, symbols, start, end: _default_intraday_loader(timeframe, symbols, start, end, store=store)
+    )
     wanted = [str(symbol).upper() for symbol in symbols]
     d1_by_symbol = load_d1(wanted + [VIX_SYMBOL], HISTORY_START, last) or {}
     intraday: dict[str, dict[str, Any]] = {}
@@ -671,6 +675,9 @@ def read_regimes(
 
         root = get_research_store_dir()
         store = ResearchStore(root) if root is not None else None
+    elif not Path(store.root).exists():
+        # An unreachable lake must fail loudly, never read as "no regimes".
+        raise FileNotFoundError(f"research lake not found at {store.root}")
     rows = store.read_rows(DATASET, symbols=[str(symbol).upper()]) if store is not None else []
     if rows and rule_version is None:
         present = {str(row.get("rule_version")) for row in rows}
