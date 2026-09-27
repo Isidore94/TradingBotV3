@@ -671,6 +671,51 @@ def long_setup_cells(history_rows: Iterable[Mapping[str, Any]]) -> list[dict[str
     return cells
 
 
+#: p9 Long leaders promotion tiers (`long_setups.setup_tier`), in display order, with their words.
+LONG_SETUP_TIER_LABELS = {"strength_under_avwape": "strong + under AVWAPE", "strength": "strong only",
+                          "": "the rest"}
+
+
+def long_setup_tier_cells(history_rows: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """p9: each leader-pullback tier's shadow grade over the settled Long leaders history.
+
+    A filled limit with a known SPY return counts: ``wins`` = beat SPY over the 10 sessions,
+    ``mean_vs_spy`` = the mean of (return - SPY). A no-fill, an unsettled row, an unknown SPY or a
+    row recorded before the tier existed is left out. Display only.
+    """
+    import long_setups
+
+    tallies: dict[str, list[float]] = {tier: [] for tier in LONG_SETUP_TIER_LABELS}
+    for row in history_rows or ():
+        tier = row.get("setup_tier")
+        if row.get("setup") != long_setups.LEADER_PULLBACK or tier not in tallies or row.get("outcome") != "filled":
+            continue
+        side_return, spy_return = _float(row.get("return_pct")), _float(row.get("spy_return_pct"))
+        if side_return is not None and spy_return is not None:
+            tallies[tier].append(side_return - spy_return)
+    return {tier: {"n": len(values), "wins": sum(1 for value in values if value > 0),
+                   "mean_vs_spy": sum(values) / len(values) if values else None}
+            for tier, values in tallies.items()}
+
+
+def long_setup_tier_line(cells: Mapping[str, Mapping[str, Any]] | None) -> str:
+    """``strong + under AVWAPE (shadow): n 5, beat SPY 60%, avg vs SPY +1.20% · strong only: ...``."""
+    import long_setups
+
+    cells = cells or {}
+    head = f"{LONG_SETUP_TIER_LABELS['strength_under_avwape']} (shadow)"
+    if not any(int((cells.get(tier) or {}).get("n") or 0) for tier in LONG_SETUP_TIER_LABELS):
+        return f"{head}: no graded Long leaders yet."
+    parts = []
+    for tier, label in LONG_SETUP_TIER_LABELS.items():
+        cell = cells.get(tier) or {}
+        n = int(cell.get("n") or 0)
+        text = (f"n {n}, beat SPY {_pct(int(cell.get('wins') or 0) / n)}, avg vs SPY {cell['mean_vs_spy']:+.2f}%"
+                if n else "n 0")
+        parts.append(f"{head if tier == 'strength_under_avwape' else label}: {text}")
+    return " · ".join(parts) + f" (filled limits, {long_setups.GRADE_SESSIONS} sessions)"
+
+
 def long_setup_line(cell: Mapping[str, Any] | None) -> str:
     """``leader_pullback LONG: raw in SPY-up windows B 64% ... · vs SPY C 55% ...; no fill 3``."""
     cell = dict(cell or {})

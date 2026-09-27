@@ -3399,6 +3399,11 @@ def write_bouncebot_watchlists(longs: Iterable[str], shorts: Iterable[str]) -> b
     return bool(wrote_longs and wrote_shorts)
 
 
+#: Serializes every in-process writer of autolongs.txt / autoshorts.txt (the open-scan write
+#: and the runner-dip append), so no read-modify-write works from a stale read.
+AUTO_LISTS_LOCK = threading.RLock()
+
+
 def write_auto_watchlists(longs: Iterable[str], shorts: Iterable[str]) -> bool:
     """The bot's own morning picks - written every day in both modes so the
     picks accumulate a clean, separately-attributable outcome history.
@@ -3410,12 +3415,39 @@ def write_auto_watchlists(longs: Iterable[str], shorts: Iterable[str]) -> bool:
     """
     longs = [str(s).strip().upper() for s in longs if str(s).strip()]
     shorts = [str(s).strip().upper() for s in shorts if str(s).strip()]
-    wrote_longs = write_watchlist_file(Path(AUTO_LONGS_FILE), longs)
-    wrote_shorts = write_watchlist_file(Path(AUTO_SHORTS_FILE), shorts)
+    with AUTO_LISTS_LOCK:
+        wrote_longs = write_watchlist_file(Path(AUTO_LONGS_FILE), longs)
+        wrote_shorts = write_watchlist_file(Path(AUTO_SHORTS_FILE), shorts)
     if not (wrote_longs and wrote_shorts):
         return False
     _mirror_auto_picks_into_registry(longs, shorts)
     return True
+
+
+def runner_dip_armed_names(*, today: Any = None, path: Path | None = None) -> list[str]:
+    """Today's armed runner-dip names from the scan's runner file; [] when missing or stale."""
+    try:
+        import long_setups_store
+        import runner_dip_watch
+
+        payload = long_setups_store.read_runner_dip_watch(path)
+        return runner_dip_watch.armed_symbols(payload, today=today or datetime.now().date())
+    except Exception:  # noqa: BLE001 - an unreadable file is no armed name
+        logging.debug("Runner dip watch unreadable for the auto longs.", exc_info=True)
+        return []
+
+
+def sync_runner_dip_auto_longs(
+    *, today: Any = None, path: Path | None = None, auto_longs_path: Path | None = None
+) -> list[str]:
+    """Append today's armed runner-dip names to ``autolongs.txt`` so the bounce bot keeps their
+    M5 bars (p9, lead 2026-09-27). Additive only: the typed ``longs.txt`` / ``shorts.txt`` are
+    never touched and nothing is removed; the day-roll clear retires them. Returns what was added."""
+    names = runner_dip_armed_names(today=today, path=path)
+    if not names:
+        return []
+    with AUTO_LISTS_LOCK:  # one read-append-write: an open-scan write waits, never interleaves
+        return append_watchlist_symbols(Path(auto_longs_path or AUTO_LONGS_FILE), names)
 
 
 def candidate_registry_path() -> Path:
@@ -4349,7 +4381,7 @@ def hide_sector_names(
             pick for pick in picks if not isinstance(pick, Mapping) or keep(pick.get("symbol"))
         ]
         out["swing_picks"] = picks[:pick_limit] if pick_limit is not None else picks
-    for key in ("auto_longs", "auto_shorts"):
+    for key in ("auto_longs", "auto_shorts", "runner_dips_armed"):
         if isinstance(out.get(key), (list, tuple)):
             out[key] = [symbol for symbol in out[key] if keep(symbol)]
     staged = out.get("staged_picks")
@@ -4529,6 +4561,10 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         items = [str(item).strip().upper() for item in items if str(item).strip()]
         return ",".join(items) if items else "(none)"
 
+    # Runner-dip names ride autolongs.txt for their M5 bars; they are not bot picks.
+    runner_dips = [str(s).strip().upper() for s in payload.get("runner_dips_armed") or () if str(s).strip()]
+    bot_longs = [s for s in payload.get("auto_longs") or () if str(s).strip().upper() not in set(runner_dips)]
+
     mode_text = str(payload.get("auto_mode") or ("ON" if payload.get("enabled") else "OFF"))
     if mode_text in ("DESK", "AWAY", "EVENING"):
         mode_text = f"AUTO - {mode_text}"
@@ -4631,8 +4667,9 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         "",
         *staged_sections,
         "== BOT PICKS - LONGS (autolongs.txt) ==",
-        _tickers(payload.get("auto_longs", [])),
-        f"TV paste: {_tv_line(payload.get('auto_longs', []))}",
+        _tickers(bot_longs),
+        f"TV paste: {_tv_line(bot_longs)}",
+        *([f"Runner dips armed: {_tickers(runner_dips)}"] if runner_dips else []),
         "",
         "== BOT PICKS - SHORTS (autoshorts.txt) ==",
         _tickers(payload.get("auto_shorts", [])),

@@ -136,6 +136,7 @@ from ui.panels.alert_center.strength_board import StrengthBoardAdoptionMixin
 from ui.panels.alert_center.pullback import PullbackWatchMixin
 from ui.panels.alert_center.h1 import H1RetesterMixin
 from ui.panels.alert_center.any_bounce import AnyBounceWatchMixin
+from ui.panels.alert_center.runner_dip import RunnerDipWatchMixin
 from ui.panels.alert_center.wall import WallGateMixin
 from ui.panels.alert_center import gates
 from ui.panels.alert_center.gates import (  # noqa: F401 - re-exported for callers and tests
@@ -253,6 +254,7 @@ class AlertCenterPanel(
     AnyBounceWatchMixin,
     H1RetesterMixin,
     PullbackWatchMixin,
+    RunnerDipWatchMixin,
     QFrame,
 ):
     """The sit-back-and-wait surface, split into two stacked feeds.
@@ -609,6 +611,11 @@ class AlertCenterPanel(
         #: Break-state map last sent on `focusBreakStatesChanged`; None = never sent.
         self._focus_break_emitted: dict[str, str] | None = None
         self._focus_gate_held = 0
+        #: p9 runner dip watch: (symbol, day) already fired, and the one-line armed status.
+        self._runner_dips_fired: set[tuple[str, str]] = set()
+        #: symbol -> the exchange-time start of the last M5 bar judged for it.
+        self._runner_dip_checked: dict[str, datetime] = {}
+        self._runner_dip_status = ""
         # Phase 2 guidance: scoreboard + AI policy -> queue ordering and
         # chart annotations (review_guidance.py). Advisory only; with no
         # documents on disk every score is 0 and the queue stays FIFO.
@@ -732,6 +739,14 @@ class AlertCenterPanel(
         self.longs_off_banner = QLabel("")
         self.longs_off_banner.setObjectName("AlertLongsOffBanner")
         self.longs_off_banner.setVisible(False)
+        # p9: "Runner dips: N armed (names)" - the mini watchlist, one cheap line.
+        self.runner_dips_label = QLabel("")
+        self.runner_dips_label.setObjectName("MutedLabel")
+        self.runner_dips_label.setToolTip(
+            "Strong names near the earnings VWAP. One fires when it closes under that VWAP "
+            "and squeezes on M5 (shadow: every fire is graded)."
+        )
+        self.runner_dips_label.setVisible(False)
 
         clear_button = QPushButton("Clear")
         clear_button.clicked.connect(self.clear_feed)
@@ -1074,6 +1089,8 @@ class AlertCenterPanel(
         self._d1_watch_timer.timeout.connect(self._poll_focus_d1_interest)
         # The longs-off verdict: the worker reads it once a day; this tick only picks it up.
         self._d1_watch_timer.timeout.connect(self._poll_longs_gate)
+        # p9 runner dips: armed strong names under the earnings VWAP squeezing on M5.
+        self._d1_watch_timer.timeout.connect(self._poll_runner_dips)
         start_staggered(self._d1_watch_timer, 77_000)
         # A3: the fade check. Deliberately NOT on the 60s tick above - it walks
         # every Focus entry and asks a calendar, which has no business inside a
@@ -1135,6 +1152,7 @@ class AlertCenterPanel(
             self.first30_input,
             self.longs_off_input,
             self.longs_off_banner,
+            self.runner_dips_label,
             None,  # the stretch
             self.ignored_button,
             clear_button,

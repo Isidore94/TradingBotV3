@@ -604,6 +604,7 @@ class AutopilotService(QObject):
             # near-HOD pause alerts and the daily pick scorecard measure the
             # trader's normal days too (alerts only - no file writes when OFF).
             self._maybe_clear_stale_auto_lists(now)
+            self._maybe_sync_runner_dip_names(now)
             self._maybe_add_near_extreme_names(now)
             self._maybe_score_picks_daily(now)
             if not self._enabled:
@@ -710,6 +711,44 @@ class AutopilotService(QObject):
             self._log("New session - cleared autolongs.txt / autoshorts.txt for today's open scan.")
         except Exception:
             logging.exception("Auto watchlist day-roll clear failed")
+
+    def _maybe_sync_runner_dip_names(self, now: datetime) -> None:
+        """Keep today's armed runner-dip names in autolongs.txt so the bot holds their M5 bars.
+
+        Runs after the day-roll clear. One worker at a time does the stats, the read and the append
+        (under `core.AUTO_LISTS_LOCK`, shared with the open-scan writer), and only when the day, the
+        runner file or autolongs.txt changed; strict OFF writes nothing. No file IO on this thread.
+        """
+        if not self._enabled and not self._shadow_research_allowed():
+            return
+        running = getattr(self, "_runner_dip_sync_thread", None)
+        if running is not None and running.is_alive():
+            return
+        from project_paths import RUNNER_DIP_WATCH_FILE
+
+        def stamp(path) -> tuple[int, int]:
+            try:
+                stat = Path(path).stat()
+            except OSError:
+                return (0, 0)
+            return (stat.st_mtime_ns, stat.st_size)
+
+        def worker() -> None:
+            key = (now.date(), stamp(RUNNER_DIP_WATCH_FILE), stamp(AUTO_LONGS_FILE))
+            if getattr(self, "_runner_dip_sync_key", None) == key:
+                return
+            try:
+                added = core.sync_runner_dip_auto_longs(today=now.date())
+            except Exception:
+                logging.exception("Runner dip names not synced to autolongs.txt")
+                return
+            self._runner_dip_sync_key = key
+            if added:
+                self._log(f"Runner dips armed: added to autolongs.txt for M5 bars: {', '.join(added)}.")
+
+        thread = threading.Thread(target=worker, name="autopilot-runner-dips", daemon=True)
+        self._runner_dip_sync_thread = thread
+        thread.start()
 
     def _maybe_reset_daytrade_watchlists(self, now: datetime) -> None:
         """Wipe longs.txt / shorts.txt once their session has closed.
@@ -1418,7 +1457,8 @@ class AutopilotService(QObject):
                         lease_minutes=90,
                     )
                     auto_target = Path(AUTO_LONGS_FILE) if side == "long" else Path(AUTO_SHORTS_FILE)
-                    auto_added = core.append_watchlist_symbols(auto_target, matches)
+                    with core.AUTO_LISTS_LOCK:
+                        auto_added = core.append_watchlist_symbols(auto_target, matches)
                     self._append_pick_rows(
                         [{"side": side, "symbol": symbol, "source": "suggestion", "why": f"near {extreme}"} for symbol in auto_added or matches]
                     )
@@ -2078,6 +2118,8 @@ class AutopilotService(QObject):
                 "scorecard_line": self._scorecard_line,
                 "outcome_coverage_line": self._outcome_coverage_line,
                 "auto_longs": self._read_auto_watchlist(AUTO_LONGS_FILE),
+                # p9: armed runner-dip names ride autolongs.txt; the report lists them apart.
+                "runner_dips_armed": core.runner_dip_armed_names(),
                 "auto_shorts": self._read_auto_watchlist(AUTO_SHORTS_FILE),
                 # Since R2, AWAY and EVENING STAGE their picks rather than
                 # writing them to longs/shorts.txt. Without this the phone
