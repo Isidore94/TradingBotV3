@@ -425,3 +425,60 @@ def test_liquidity_floor_matches_the_live_scan():
 
     assert bt.MIN_AVG_VOLUME == DEFAULT_MIN_AVG_VOLUME
     assert bs.AVWAPE_SESSIONS == long_setups.AVWAPE_SESSIONS
+
+
+# ---------------------------------------------------------------- the real readers, end to end
+def test_cli_run_reads_the_lake_through_the_history_and_regime_readers(tmp_path, capsys):
+    """bar_d1_history + earnings_date + market_regime_daily in a tmp lake -> `cli backtest run`."""
+    from datetime import datetime, timezone
+
+    from research_warehouse import cli, regime_daily, schemas
+    from research_warehouse import exchange_calendar as xcal
+    from research_warehouse.store import ResearchStore
+
+    utc = timezone.utc
+    stamp = datetime(2026, 9, 27, tzinfo=utc)
+    sessions = [s.session_date for s in xcal.sessions_between(date(2018, 1, 2), date(2020, 3, 31))]
+    lake = ResearchStore.open(tmp_path / "lake")
+    bars, earnings, weekdays = universe(n_names=6, n_bars=len(sessions), seed=9)
+    rows, earn_rows = [], []
+    for sym, frame in bars.items():
+        for day, rec in zip(sessions, frame.to_dict("records"), strict=True):
+            rows.append({
+                "symbol": sym, "session_id": f"XNYS-{day.isoformat()}", "session_date": day,
+                "open": rec["open"], "high": rec["high"], "low": rec["low"], "close": rec["close"],
+                "volume": int(rec["volume"]), "adjustment_version": "yahoo_split_v1", "corporate_action_id": None,
+                "provider": "YAHOO", "quality": "COMPLETE", "is_complete": True,
+                "event_at": datetime.combine(day, datetime.min.time(), utc), "observed_at": stamp,
+                "capture_mode": "BACKFILL", "revision_id": "r1", "supersedes_revision_id": "",
+                "schema_version": schemas.SCHEMA_VERSION, "run_id": "t"})
+        for day in earnings.get(sym, ()):
+            earn_rows.append({"symbol": sym, "earnings_date": sessions[weekdays.index(day)], "time_of_day": "AMC",
+                              "earnings_at": None, "eps_estimate": None, "eps_reported": None, "surprise_pct": None,
+                              "source": "yahoo", "observed_at": stamp, "capture_mode": "BACKFILL",
+                              "schema_version": schemas.SCHEMA_VERSION, "run_id": "t"})
+    lake.publish("bar_d1_history", rows)
+    lake.publish("earnings_date", earn_rows)
+    spy_rows = [{"symbol": "SPY", "session_date": d, **{k: r[k] for k in ("open", "high", "low", "close", "volume")}}
+                for d, r in zip(sessions, bars["SPY"].to_dict("records"), strict=True)]
+    vix = [{"session_date": d, "open": 18.0, "high": 18.0, "low": 18.0, "close": 18.0} for d in sessions]
+    regime_rows = regime_daily.build_rows("SPY", spy_rows, vix=vix, computed_at=datetime(2020, 4, 1, tzinfo=utc))
+    assert regime_rows
+    lake.publish(regime_daily.DATASET, regime_rows)
+    out = tmp_path / "out"
+    assert cli.main(["backtest", "run", "--root", str(out), "--lake", str(tmp_path / "lake"),
+                     "--setups", "rising_20_50_baseline,falling_20_50_baseline,favourite_zone_long",
+                     "--split-date", "2019-07-01", "--run-id", "e2e"]) == 0
+    printed = capsys.readouterr().out
+    assert "Survivorship" in printed and "rising_20_50_baseline" in printed
+    manifest = json.loads((out / "backtests" / "e2e" / "manifest.json").read_text())
+    assert manifest["regime_rule_version"] == regime_daily.RULE_VERSION
+    assert "trend20" in manifest["regime_axes"] and "composite" in manifest["regime_axes"]
+    assert manifest["universe"]["with_earnings_dates"] == 6
+    cand = pd.read_parquet(out / "backtests" / "e2e" / "candidates.parquet")
+    first_regime = pd.Timestamp(regime_rows[0]["session_date"])
+    painted = cand[cand.signal_date >= first_regime]
+    assert len(painted) and (painted.rg_trend20 != bt.NO_LABEL).all()
+    assert (cand[cand.signal_date < first_regime].rg_trend20 == bt.NO_LABEL).all()
+    assert trial_ledger.load(out)[0]["trial_id"] == "backtest_e2e"
+    assert not trial_ledger.load(tmp_path / "lake"), "the read lake gets no ledger row"

@@ -1035,7 +1035,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     search = sub.add_parser("search", help="grid-search feature conditions: pick on train, judge on test")
     report = sub.add_parser("report", help="print a run's or search's summary")
     for p in (run, search):
-        p.add_argument("--root", default="", help="research store root (default: the configured lake)")
+        p.add_argument("--root", default="", help="where the run and its ledger row go (default: the configured lake)")
+        p.add_argument("--lake", default="", help="lake to READ bars and regimes from (default: the configured lake)")
         p.add_argument("--start", default="", help="first signal date YYYY-MM-DD")
         p.add_argument("--end", default="", help="last signal date YYYY-MM-DD")
         p.add_argument("--split-date", default=DEFAULT_SPLIT.isoformat(), help="first TEST session")
@@ -1060,10 +1061,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(format_report(summary, manifest))
         return 0
     root = _root(args.root)
+    from research_warehouse.store import ResearchStore
+
+    lake = ResearchStore(_root(args.lake))  # a plain read handle: no layout creation, no lock
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()] or None
     if symbols and BENCHMARK not in symbols:
         symbols.append(BENCHMARK)
-    inputs = load_lake_inputs(_date(args.start), _date(args.end), symbols, args.rule_version or None)
+    t0 = time.perf_counter()
+    inputs = load_lake_inputs(_date(args.start), _date(args.end), symbols, args.rule_version or None, store=lake)
+    inputs.source["read_s"] = round(time.perf_counter() - t0, 1)
+    inputs.source["lake"] = str(lake.root)
     common = {"root": root, "start": _date(args.start), "end": _date(args.end),
               "split": date.fromisoformat(args.split_date), "run_id": args.run_id or None}
     if args.command == "run":
