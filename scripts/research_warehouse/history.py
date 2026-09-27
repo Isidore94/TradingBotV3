@@ -895,6 +895,8 @@ def run_intraday(
                     supersedes=prior.revision_id if prior else "", observed_at=stamp, run_id=run_id,
                 )
                 outcome = "REPULLED" if prior else "OK"
+                if prior is not None:
+                    built = carry_forward(store, dataset, symbol, prior, built, observed_at=stamp, run_id=run_id) + built
             else:
                 built = intraday_rows(symbol, frame, minutes=minutes, revision_id=state.revision_id, observed_at=stamp, run_id=run_id)
                 if rebased(state, built, "interval_start"):
@@ -927,6 +929,54 @@ def run_intraday(
     if report.failed_batches:
         report.status = "PARTIAL"
     return report
+
+
+CARRIED_ADJUSTMENT = f"{ADJUSTMENT_VERSION}+carried"
+CAPTURE_RECONSTRUCTED = "RECONSTRUCTED"
+
+
+def carry_forward(store, dataset, symbol, prior: SeriesState, built: list[dict], *, observed_at, run_id) -> list[dict]:
+    """Bars older than the provider's window, re-based into the new revision.
+
+    The provider only serves the last 730 (H1) / 60 (M30) days, so a split
+    re-pull would otherwise shrink the readable history. Older bars of the old
+    revision are copied into the new one with prices divided (volume
+    multiplied) by the measured basis ratio, marked RECONSTRUCTED and
+    ``yahoo_split_v1+carried``. The old revision's rows are never touched.
+    """
+    ratios = []
+    for row in built:
+        old = prior.closes.get(row["interval_start"])
+        new = _num(row.get("close"))
+        if old and new:
+            ratios.append(old / new)
+    if not ratios or not built:
+        return []
+    ratios.sort()
+    ratio = ratios[len(ratios) // 2]
+    first_new = min(row["interval_start"] for row in built)
+    table = reader._scan(store, dataset, symbols=[symbol], hi=first_new.date())
+    if not table.num_rows:
+        return []
+    out = []
+    for row in table.to_pylist():
+        if row["revision_id"] != prior.revision_id or row["interval_start"] >= first_new:
+            continue
+        carried = dict(row)
+        for name in ("open", "high", "low", "close"):
+            carried[name] = row[name] / ratio if row[name] is not None else None
+        carried["volume"] = None if row["volume"] is None else int(round(row["volume"] * ratio))
+        carried.update(
+            adjustment_version=CARRIED_ADJUSTMENT,
+            capture_mode=CAPTURE_RECONSTRUCTED,
+            observed_at=observed_at,
+            revision_id=built[0]["revision_id"],
+            supersedes_revision_id=prior.revision_id,
+            run_id=run_id,
+            source_hash=_source_hash(symbol, row["interval_start"], [carried["close"], carried["volume"]]),
+        )
+        out.append(carried)
+    return out
 
 
 def derive_h4(store, revisions: dict, *, lo, now, run_id, lock, report) -> None:

@@ -170,6 +170,30 @@ def test_h1_backfill_derives_h4_and_handles_the_half_day(store):
     assert again.rows_quarantined.get("bar_h1", 0) == 0
 
 
+def test_an_intraday_split_carries_older_bars_into_the_new_revision(store):
+    old_day = [f"2026-10-01 {h}:30" for h in range(9, 16)]
+    recent = [f"2026-11-30 {h}:30" for h in range(9, 16)]
+    client = FakeClient()
+    client.bars["1h"] = {"SPY": pd.concat([_intraday(old_day, 100.0), _intraday(recent, 100.0)])}
+    hist.run_intraday(store, ["SPY"], "H1", client=client, now=DEC1, log=lambda *_: None)
+
+    # The provider's window has moved past October and the basis halved (2:1 split).
+    client.bars["1h"] = {"SPY": _intraday(recent, 50.0)}
+    report = hist.run_intraday(store, ["SPY"], "H1", client=client, now=DEC1, mode="topup", log=lambda *_: None)
+
+    assert report.repulled == ["SPY"]
+    frame = hr.read_intraday("H1", ["SPY"], store=store, now=DEC1)["SPY"]
+    assert len(frame) == 14 and frame["revision_id"].nunique() == 1
+    assert set(frame["close"]) == {50.0}  # October re-based, not dropped
+    raw = store.read_table("bar_h1").to_pandas()
+    carried = raw[raw["capture_mode"] == "RECONSTRUCTED"]
+    assert len(carried) == 7 and set(carried["adjustment_version"]) == {"yahoo_split_v1+carried"}
+    assert set(carried["volume"]) == {200}
+    assert (raw["close"] == 100.0).sum() == 14  # the old revision is untouched
+    h4 = hr.read_intraday("H4", ["SPY"], store=store, now=DEC1)["SPY"]
+    assert len(h4) == 4 and set(h4["close"]) == {50.0}
+
+
 def test_m30_goes_to_its_own_dataset(store):
     client = FakeClient()
     client.bars["30m"] = {"QQQ": _intraday(["2026-11-30 09:30", "2026-11-30 10:00"])}
