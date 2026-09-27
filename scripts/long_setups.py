@@ -507,15 +507,10 @@ def earnings_reaction_index(bars: Sequence[Mapping[str, Any]], earnings_day: Any
     return max((first, first + 1), key=lambda k: (abs(bars[k]["open"] - bars[k - 1]["close"]), -k))
 
 
-def earnings_avwap(bars: Sequence[Mapping[str, Any]], *, earnings_dates: Iterable[Any] | None = None,
-                   gap_date: Any = None) -> dict[str, Any]:
-    """``{avwape, avwape_z, under_avwape}``: the VWAP anchored the session before the latest
-    earnings reaction `AVWAPE_SESSIONS` back, (close - it) / sigma and yes / no / unknown.
-
-    The reaction comes from ``earnings_dates`` (the long-lab study's way); only a name with no
-    dates falls back to the scan's ``gap_date``. No reaction in the window = unknown.
-    """
-    unknown = {"avwape": None, "avwape_z": None, "under_avwape": UNKNOWN}
+def earnings_anchor_index(bars: Sequence[Mapping[str, Any]], *, earnings_dates: Iterable[Any] | None = None,
+                          gap_date: Any = None) -> int | None:
+    """The earnings AVWAP's anchor bar: the session before the latest earnings reaction
+    `AVWAPE_SESSIONS` back (`earnings_avwap`'s rule); None when there is none."""
     last = len(bars) - 1
     days = [day for day in (_text(value)[:10] for value in earnings_dates or ()) if day]
     if days:
@@ -525,8 +520,23 @@ def earnings_avwap(bars: Sequence[Mapping[str, Any]], *, earnings_dates: Iterabl
         reactions = {index for index, bar in enumerate(bars) if gap and bar["date"] == gap}
     past = sorted(index for index in reactions if index + 1 <= last)
     if not past or past[-1] < 1 or not AVWAPE_SESSIONS[0] <= last - past[-1] <= AVWAPE_SESSIONS[1]:
+        return None
+    return past[-1] - 1
+
+
+def earnings_avwap(bars: Sequence[Mapping[str, Any]], *, earnings_dates: Iterable[Any] | None = None,
+                   gap_date: Any = None) -> dict[str, Any]:
+    """``{avwape, avwape_z, under_avwape}``: the VWAP anchored the session before the latest
+    earnings reaction `AVWAPE_SESSIONS` back, (close - it) / sigma and yes / no / unknown.
+
+    The reaction comes from ``earnings_dates`` (the long-lab study's way); only a name with no
+    dates falls back to the scan's ``gap_date``. No reaction in the window = unknown.
+    """
+    unknown = {"avwape": None, "avwape_z": None, "under_avwape": UNKNOWN}
+    anchor = earnings_anchor_index(bars, earnings_dates=earnings_dates, gap_date=gap_date)
+    if anchor is None:
         return unknown
-    bands = avwap_bands(bars, past[-1] - 1)
+    bands = avwap_bands(bars, anchor)
     if bands is None or not bands[1] > 0:
         return unknown
     level, sigma = bands
