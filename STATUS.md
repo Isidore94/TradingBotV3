@@ -2,12 +2,13 @@
 
 Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `git log`.
 
-**Updated:** 2026-09-27 (GUI redesign and Windows startup delivery on the trader's word)
+**Updated:** 2026-09-27 12:40 PT (p10 research lake + SPY regimes + backtester merged)
 
 - **Live on `main`:** round 1, round 2 Phase A (`81272d42`), Phase B + S (`2d59aace`),
   S10a + S7 (`3802c0d7`), p9 phase 1 regime frame (`849390a2`), p9 phase 2 long
   setups + momentum universe + longs off + S9/P14 (`55bbeb26`), p9 phase 3 favourite-zone
-  LONG gutted for Long leaders (`d382986e`), p9 phase 4 swing table, strength + under AVWAPE promotion + runner dip watch (`79e8d658`); gates #257-#298.
+  LONG gutted for Long leaders (`d382986e`), p9 phase 4 swing table, strength + under AVWAPE promotion + runner dip watch (`79e8d658`), p10 research lake history + SPY/QQQ/IWM
+  auto regimes 2019+ + setups-by-regime backtester (`1b56f34f`, research only); gates #257-#299.
 - **GUI/startup delivery:** approved 4K GUI design in gui.md; Journal, Research,
   Day Review, supporting pages and Desk polish; Windows font-startup fix.
   All 924 test files verified in fresh processes: 13,446 pass, 14 skip; source
