@@ -110,6 +110,8 @@ class Inputs:
     regimes: pd.DataFrame | None = None
     regime_rule_version: str | None = None
     regime_axes: Sequence[str] | None = None
+    #: EPS surprise % per symbol and earnings date (history_reader.read_earnings_events)
+    surprises: Mapping[str, Mapping[date, float]] = field(default_factory=dict)
     #: history_reader.read_quality_flags rows (dataset, symbol, check, flag_date, ...)
     quality_flags: pd.DataFrame | None = None
     source: dict[str, Any] = field(default_factory=dict)
@@ -148,13 +150,15 @@ def clean_bars(frame: pd.DataFrame, quality: dict[str, int]) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
-def make_ctx(symbol: str, frame: pd.DataFrame, earnings: Sequence[date] = ()) -> bs.Ctx:
+def make_ctx(symbol: str, frame: pd.DataFrame, earnings: Sequence[date] = (),
+             surprises: Mapping[date, float] | None = None) -> bs.Ctx:
     return bs.Ctx(
         symbol=symbol,
         dates=frame["session_date"].to_numpy(dtype="datetime64[D]"),
         open=frame["open"].to_numpy(dtype=float), high=frame["high"].to_numpy(dtype=float),
         low=frame["low"].to_numpy(dtype=float), close=frame["close"].to_numpy(dtype=float),
-        volume=frame["volume"].to_numpy(dtype=float), earnings=tuple(earnings or ()))
+        volume=frame["volume"].to_numpy(dtype=float), earnings=tuple(earnings or ()),
+        surprises=dict(surprises or {}))
 
 
 def is_stock(symbol: str) -> bool:
@@ -679,7 +683,7 @@ def prepare(inputs: Inputs) -> tuple[dict[str, bs.Ctx], dict[str, Any]]:
                 excluded_symbols += 1
                 clean = clean[~flagged].reset_index(drop=True)
         if len(clean):
-            ctxs[key] = make_ctx(key, clean, inputs.earnings.get(sym, ()))
+            ctxs[key] = make_ctx(key, clean, inputs.earnings.get(sym, ()), inputs.surprises.get(sym))
     quality["symbols"] = len(ctxs)
     quality["flagged_bars_excluded"] = {"checks": sorted(EXCLUDED_FLAGS), "bars": excluded,
                                         "symbols": excluded_symbols}
@@ -1065,13 +1069,18 @@ def load_lake_inputs(start: date | None = None, end: date | None = None, symbols
     earnings = history_reader.read_earnings_dates(list(bars), store=store)
     regimes = regime_daily.read_regimes(BENCHMARK, rule_version, store=store, as_of="close")
     flags = history_reader.read_quality_flags("bar_d1_history", list(bars), store=store)
+    events = history_reader.read_earnings_events(list(bars), store=store)
+    surprises: dict[str, dict[date, float]] = {}
+    for sym, day, value in zip(events["symbol"], events["earnings_date"], events["surprise_pct"], strict=True):
+        if value is not None and math.isfinite(float(value)):
+            surprises.setdefault(str(sym), {})[_to_day(day)] = float(value)
     version = rule_version or (_rule_version(regimes) if regimes is not None and not regimes.empty else None)
     providers: dict[str, int] = {}
     for frame in bars.values():
         if "provider" in frame.columns and len(frame):
             key = str(frame["provider"].iloc[-1])
             providers[key] = providers.get(key, 0) + 1
-    return Inputs(bars=bars, earnings=earnings, regimes=regimes, regime_rule_version=version,
+    return Inputs(bars=bars, earnings=earnings, surprises=surprises, regimes=regimes, regime_rule_version=version,
                   regime_axes=tuple(regime_daily.AXES), quality_flags=flags,
                   source={"bars": "history_reader.read_d1", "earnings": "history_reader.read_earnings_dates",
                           "regimes": f"regime_daily.read_regimes({BENCHMARK}, as_of=close)",

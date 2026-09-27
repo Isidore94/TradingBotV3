@@ -1,5 +1,7 @@
 # Changelog
 
+- 2026-09-27 p11 setup research (research only, unmerged): four shadow setups in the backtest registry (strong_deep_pullback, laggard_thrust, earnings_miss_short, weakest_near_60d_high), EPS surprise plumbing, theme ETFs out of the stock universe, and setup_study (costs, week bootstrap, concentration, placebos). Nothing live changes.
+
 - 2026-09-27 GUI/startup delivery: integrate the approved 4K layouts and GDI startup fix with current runner-dip work; retain hidden/armed label states; make GUI test imports self-contained and retire Tag Week test workers before destroying widgets. All 924 files verified in fresh processes (13,446 pass, 14 skip); source/frozen selftests 105/105. Long combined Qt test-worker crashes remain a harness limitation.
 
 - 2026-09-27 Startup: default Windows Qt to the GDI font backend before QApplication, avoiding the measured DirectWrite font-database stall; explicit Qt platform overrides remain intact.

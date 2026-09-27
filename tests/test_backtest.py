@@ -73,10 +73,20 @@ def universe(n_names: int = 24, n_bars: int = 560, seed: int = 11):
     return bars, earnings, days
 
 
+def _surprises(bars, earnings):
+    """EPS surprise % per earnings date: a miss (-10) on a gap down, a beat (+10) on a gap up."""
+    out = {}
+    for sym, dates in earnings.items():
+        frame = bars[sym].set_index("session_date")
+        prev = frame["close"].shift(1)
+        out[sym] = {d: (-10.0 if frame.at[d, "open"] < prev.at[d] else 10.0) for d in dates}
+    return out
+
+
 @pytest.fixture(scope="module")
 def world():
     bars, earnings, days = universe()
-    inputs = bt.Inputs(bars=bars, earnings=earnings)
+    inputs = bt.Inputs(bars=bars, earnings=earnings, surprises=_surprises(bars, earnings))
     ctxs, _ = bt.prepare(inputs)
     bt.rank_rs(ctxs)
     return bars, earnings, days, ctxs
@@ -110,7 +120,7 @@ def test_every_setup_is_point_in_time(world, setup):
 def _ctx_args(ctx):
     return {"symbol": ctx.symbol, "dates": ctx.dates, "open": ctx.open, "high": ctx.high, "low": ctx.low,
             "close": ctx.close, "volume": ctx.volume, "earnings": ctx.earnings,
-            "rs_share": ctx.rs_share, "rs_decile": ctx.rs_decile}
+            "rs_share": ctx.rs_share, "rs_decile": ctx.rs_decile, "surprises": ctx.surprises}
 
 
 def test_rs_share_matches_the_live_percentile(world):
@@ -490,7 +500,7 @@ def test_earnings_setups_are_unmeasured_without_earnings_dates(tmp_path):
     result = bt.run_backtest(bt.Inputs(bars=bars, earnings={}), root=tmp_path, min_avg_volume=0, run_id="ne")
     needs = {s.key for s in bs.REGISTRY if s.needs_earnings}
     assert needs == {"strength_under_avwape", "favourite_zone_long", "favourite_zone_short",
-                     "weak_rally_to_avwape", "post_earnings_drift"}
+                     "weak_rally_to_avwape", "post_earnings_drift", "earnings_miss_short"}
     summary = result["summary"]
     assert set(summary["unmeasured_setups"]) == needs
     assert all(v.startswith(bt.NO_EARNINGS) for v in summary["unmeasured_setups"].values())
@@ -549,3 +559,87 @@ def test_theme_etfs_in_the_lake_are_not_stocks():
         assert not bt.is_stock(etf), etf
     for stock in ("JHG", "LC", "CRML", "AAPL"):
         assert bt.is_stock(stock), stock
+
+
+# ---------------------------------------------------------------- p11 setups
+def test_strong_deep_pullback_is_a_top_decile_name_12_to_30pct_off_its_60d_high(world):
+    *_, ctxs = world
+    hits = 0
+    for sym in ("N00", "N03", "N05", "N08", "N13", "N17"):
+        ctx = ctxs[sym]
+        mask, feats = bs.strong_deep_pullback(ctx)
+        closes, highs = ctx.close, ctx.high
+        sma200 = pd.Series(closes).rolling(200).mean().to_numpy()
+        high60 = pd.Series(highs).rolling(60).max().to_numpy()
+        depth = 1 - closes / high60
+        brute = (ctx.rs_share >= 0.9) & (closes > sma200) & (depth >= 0.12) & (depth < 0.30)
+        np.testing.assert_array_equal(mask, np.nan_to_num(brute, nan=0).astype(bool))
+        np.testing.assert_allclose(feats["pct_off_60d_high"][mask], depth[mask] * 100)
+        hits += int(mask.sum())
+    assert hits > 0
+
+
+def test_surprises_reach_each_name_and_default_to_none():
+    bars, earnings, _ = universe(n_names=3, n_bars=300)
+    ctxs, _ = bt.prepare(bt.Inputs(bars=bars, earnings=earnings, surprises={"N01": {earnings["N01"][0]: -7.5}}))
+    assert dict(ctxs["N01"].surprises) == {earnings["N01"][0]: -7.5}
+    assert dict(ctxs["N00"].surprises) == {}
+
+
+def _miss_ctx(surprise):
+    """A name that gaps down 2 ATR on its earnings date (bar 230) and stays under its 20-day."""
+    n = 260
+    days = _days(n)
+    close = np.full(n, 100.0) + np.sin(np.arange(n)) * 0.5
+    close[230:] = 90.0 - np.arange(n - 230) * 0.2
+    opens = np.r_[close[0], close[:-1]]
+    opens[230] = 91.0
+    high, low = np.maximum(opens, close) + 0.6, np.minimum(opens, close) - 0.6
+    ctx = bs.Ctx("M", np.array(days, dtype="datetime64[D]"), opens, high, low, close, np.full(n, 2e6),
+                 earnings=(days[230],), rs_share=np.full(n, 0.3), surprises={} if surprise is None else {days[230]: surprise})
+    return ctx
+
+
+def test_earnings_miss_short_flags_the_session_after_a_missed_gap_down():
+    mask, feats = bs.earnings_miss_short(_miss_ctx(-12.0))
+    assert np.nonzero(mask)[0].tolist() == [231]
+    assert feats["surprise_pct"][231] == -12.0
+    assert feats["gap_atr"][231] <= -1.0
+    for other in (None, 12.0, -2.0):  # no surprise known, a beat, a small miss
+        assert not bs.earnings_miss_short(_miss_ctx(other))[0].any()
+    ctx = _miss_ctx(-12.0)
+    for i in (230, 231, 240):  # truncation never changes the answer
+        assert bs.earnings_miss_short(ctx.truncated(i))[0][-1] == mask[i]
+
+
+def _brute_trend_facts(ctx):
+    c = pd.Series(ctx.close)
+    vol = pd.Series(ctx.volume)
+    return {"s100": c.rolling(100).mean().to_numpy(), "s200": c.rolling(200).mean().to_numpy(),
+            "ret20": (c / c.shift(20) - 1).to_numpy(),
+            "vr": (vol.rolling(5).mean() / vol.rolling(50).mean()).to_numpy(),
+            "depth": (1 - c / pd.Series(ctx.high).rolling(60).max()).to_numpy()}
+
+
+def test_laggard_thrust_is_a_weak_rs_name_reclaiming_its_trend_on_volume(world):
+    *_, ctxs = world
+    for sym in ("N00", "N03", "N05", "N08", "N13", "N17"):
+        ctx = ctxs[sym]
+        f = _brute_trend_facts(ctx)
+        brute = (ctx.close > f["s100"]) & (ctx.close > f["s200"]) & (ctx.rs_share < 0.2) \
+            & (f["ret20"] >= 0.10) & (f["vr"] >= 1.3)
+        mask, _ = bs.laggard_thrust(ctx)
+        np.testing.assert_array_equal(mask, np.nan_to_num(brute, nan=0).astype(bool))
+
+
+def test_weakest_near_60d_high_is_a_bottom_decile_downtrend_name_near_its_high(world):
+    *_, ctxs = world
+    hits = 0
+    for sym in ("N00", "N03", "N05", "N08", "N13", "N17", "N21"):
+        ctx = ctxs[sym]
+        f = _brute_trend_facts(ctx)
+        brute = (ctx.close < f["s100"]) & (ctx.close < f["s200"]) & (ctx.rs_share < 0.1) & (f["depth"] < 0.05)
+        mask, _ = bs.weakest_near_60d_high(ctx)
+        np.testing.assert_array_equal(mask, np.nan_to_num(brute, nan=0).astype(bool))
+        hits += int(mask.sum())
+    assert hits >= 0

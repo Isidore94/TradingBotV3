@@ -17,7 +17,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 
@@ -31,6 +31,21 @@ HIGH_52W_BARS = 252
 #: Bars handed to the live leader-pullback function (long_lab.LIVE_WINDOW_BARS).
 LIVE_WINDOW_BARS = 400
 SLACK = 1e-6  # prefilters are supersets: floating sums differ in the last bits
+#: strong_deep_pullback (p11 study, 2026-09-27): RS share floor and depth band off the 60-session high.
+DEEP_PULLBACK_RS_MIN = 0.9
+DEEP_PULLBACK_DEPTH = (0.12, 0.30)
+DEEP_PULLBACK_HIGH_BARS = 60
+#: earnings_miss_short: gap of at most -1 ATR(14) on a miss of at least 5%, the surprise dated
+#: within this many calendar days before the reaction bar.
+MISS_GAP_MAX_ATR = -1.0
+MISS_SURPRISE_MAX_PCT = -5.0
+SURPRISE_MATCH_DAYS = 4
+#: laggard_thrust / weakest_near_60d_high: the two grid-search themes picked on 2018-2023 (p11).
+LAGGARD_RS_MAX = 0.2
+LAGGARD_RET20_MIN = 0.10
+LAGGARD_VOLUME_RATIO_MIN = 1.3
+WEAKEST_RS_MAX = 0.1
+WEAKEST_DEPTH_MAX = 0.05
 
 
 # ---------------------------------------------------------------- causal helpers
@@ -93,6 +108,8 @@ class Ctx:
     earnings: Sequence[date] = ()
     rs_share: np.ndarray | None = None
     rs_decile: np.ndarray | None = None
+    #: EPS surprise % per earnings date (known at the report); empty when unknown.
+    surprises: Mapping[date, float] = field(default_factory=dict)
     cache: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -110,7 +127,7 @@ class Ctx:
         k = end + 1
         return Ctx(self.symbol, self.dates[:k], self.open[:k], self.high[:k], self.low[:k],
                    self.close[:k], self.volume[:k], self.earnings,
-                   self.rs_share[:k].copy(), self.rs_decile[:k].copy())
+                   self.rs_share[:k].copy(), self.rs_decile[:k].copy(), surprises=self.surprises)
 
     def _memo(self, key: str, build: Callable[[], Any]) -> Any:
         if key not in self.cache:
@@ -412,6 +429,36 @@ def post_earnings_drift_live(ctx: Ctx) -> Result:
     return mask, {"gap_atr": gap_atr_f, "sessions_after_gap": after_f}
 
 
+def strong_deep_pullback(ctx: Ctx) -> Result:
+    """p11 study: a 63-day RS top-decile name (share >= 0.9) closing over its 200-day SMA and
+    12-30% under its highest high of the last 60 sessions. Leaders that correct hard revert up."""
+    high = ctx.max_high(DEEP_PULLBACK_HIGH_BARS)
+    with np.errstate(all="ignore"):
+        depth = 1.0 - ctx.close / high
+    s200 = ctx.sma(200)
+    mask = finite(high, s200) & (ctx.rs_share >= DEEP_PULLBACK_RS_MIN) & (ctx.close > s200) \
+        & (depth >= DEEP_PULLBACK_DEPTH[0]) & (depth < DEEP_PULLBACK_DEPTH[1])
+    return mask, {"pct_off_60d_high": depth * 100.0}
+
+
+def _volume_ratio(ctx: Ctx) -> np.ndarray:
+    """Mean volume of the last 5 sessions over the last 50 (unknown when any volume is missing)."""
+    def build():
+        with np.errstate(all="ignore"):
+            return rolling(ctx.volume, 5, np.mean) / rolling(ctx.volume, 50, np.mean)
+    return ctx._memo("vr5_50", build)
+
+
+def laggard_thrust(ctx: Ctx) -> Result:
+    """p11 search theme: a bottom-quintile 63-day RS name (share < 0.2) back over its 100- and
+    200-day SMAs, up 10%+ in 20 sessions on 5-day volume >= 1.3x its 50-day mean."""
+    s100, s200 = ctx.sma(100), ctx.sma(200)
+    ret20, vr = ctx.ret(20), _volume_ratio(ctx)
+    mask = finite(s100, s200, ret20, vr) & (ctx.close > s100) & (ctx.close > s200) \
+        & (ctx.rs_share < LAGGARD_RS_MAX) & (ret20 >= LAGGARD_RET20_MIN) & (vr >= LAGGARD_VOLUME_RATIO_MIN)
+    return mask, {"ret20_pct": ret20 * 100.0, "volume_ratio": vr}
+
+
 def rising_20_50_baseline(ctx: Ctx) -> Result:
     """Baseline (long_lab rule d): close above a rising 20-day and a rising 50-day SMA
     (rising = above its value 5 sessions earlier)."""
@@ -451,6 +498,48 @@ def low_52w_breakdown(ctx: Ctx) -> Result:
         return mask, {"pct_under_52w_low": (1.0 - ctx.close / prior) * 100.0}
 
 
+def earnings_miss_short(ctx: Ctx) -> Result:
+    """p11 study: the session after an earnings reaction that gapped DOWN >= 1 ATR(14) on an EPS
+    miss of 5%+ (surprise dated 0-4 days before the reaction bar), closing under its 20-day SMA.
+    The surprise is known at the report, before the reaction bar opens."""
+    n = len(ctx)
+    mask = np.zeros(n, dtype=bool)
+    surprise_f, gap_f = np.full(n, np.nan), np.full(n, np.nan)
+    known = sorted((np.datetime64(d, "D"), float(v)) for d, v in (ctx.surprises or {}).items()
+                   if v is not None and math.isfinite(float(v)))
+    if not known or not len(ctx.reactions):
+        return mask, {"surprise_pct": surprise_f, "gap_atr": gap_f}
+    days = np.array([d for d, _ in known], dtype="datetime64[D]")
+    vals = np.array([v for _, v in known])
+    gaps, s20 = ctx.gap_atr(), ctx.sma(20)
+    for r in ctx.reactions.tolist():
+        i = r + 1
+        if i >= n:
+            continue
+        pos = int(np.searchsorted(days, ctx.dates[r], side="right")) - 1
+        if pos < 0 or (ctx.dates[r] - days[pos]).astype(int) > SURPRISE_MATCH_DAYS:
+            continue
+        gap, surprise = gaps[r], vals[pos]
+        if not (math.isfinite(gap) and gap <= MISS_GAP_MAX_ATR and surprise <= MISS_SURPRISE_MAX_PCT):
+            continue
+        if math.isfinite(s20[i]) and ctx.close[i] < s20[i]:
+            mask[i] = True
+            surprise_f[i], gap_f[i] = surprise, gap
+    return mask, {"surprise_pct": surprise_f, "gap_atr": gap_f}
+
+
+def weakest_near_60d_high(ctx: Ctx) -> Result:
+    """p11 search theme: a bottom-decile 63-day RS name (share < 0.1) under its 100- and 200-day
+    SMAs that has rallied to within 5% of its highest high of the last 60 sessions."""
+    s100, s200 = ctx.sma(100), ctx.sma(200)
+    high = ctx.max_high(DEEP_PULLBACK_HIGH_BARS)
+    with np.errstate(all="ignore"):
+        depth = 1.0 - ctx.close / high
+    mask = finite(s100, s200, high) & (ctx.close < s100) & (ctx.close < s200) \
+        & (ctx.rs_share < WEAKEST_RS_MAX) & (depth < WEAKEST_DEPTH_MAX)
+    return mask, {"pct_off_60d_high": depth * 100.0}
+
+
 def falling_20_50_baseline(ctx: Ctx) -> Result:
     """Baseline: close below a falling 20-day and a falling 50-day SMA."""
     s20, s50 = ctx.sma(20), ctx.sma(50)
@@ -487,12 +576,20 @@ REGISTRY: tuple[Setup, ...] = (
     Setup("post_earnings_drift", LONG, "earnings_drift", "1", post_earnings_drift_live, approx=True, needs_earnings=True,
           note="live long_setups.post_earnings_drift; gap size in ATR(14) of the prior bar"),
     Setup("rising_20_50_baseline", LONG, "baseline", "1", rising_20_50_baseline),
+    Setup("strong_deep_pullback", LONG, "pullback", "1", strong_deep_pullback,
+          note="p11 study 2026-09-27: RS top decile over the 200d, 12-30% off the 60d high"),
+    Setup("laggard_thrust", LONG, "breakout", "1", laggard_thrust,
+          note="p11 grid-search theme picked on 2018-2023; thin (about 100 trades a period)"),
     Setup("favourite_zone_short", SHORT, "earnings_avwap", "1", favourite_zone_short, approx=True, needs_earnings=True,
           note="mirror of the favourite-zone long after an earnings gap down"),
     Setup("weak_rally_to_avwape", SHORT, "earnings_avwap", "1", weak_rally_to_avwape,
           needs_earnings=True),
     Setup("low_52w_breakdown", SHORT, "breakout", "1", low_52w_breakdown),
     Setup("falling_20_50_baseline", SHORT, "baseline", "1", falling_20_50_baseline),
+    Setup("earnings_miss_short", SHORT, "earnings_drift", "1", earnings_miss_short, needs_earnings=True,
+          note="p11 study 2026-09-27: day after a >= 1 ATR gap down on a 5%+ EPS miss, under the 20d"),
+    Setup("weakest_near_60d_high", SHORT, "counter_trend", "1", weakest_near_60d_high,
+          note="p11 grid-search theme picked on 2018-2023; train carried by 2020"),
 )
 
 
