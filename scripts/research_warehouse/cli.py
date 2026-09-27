@@ -2139,6 +2139,192 @@ def run_backfill_market_context(
         return {"status": "REFUSED", "applied": True, "reason": str(exc)}
 
 
+
+# ---------------------------------------------------------------------------
+# P10 provider history: backfill, top-up, quality, coverage (2026-09-27)
+# ---------------------------------------------------------------------------
+HISTORY_LOCK_WAIT_SECONDS = 1800
+HISTORY_KINDS = ("d1", "h1", "m30", "earnings")
+
+
+def history_lock(lock_path: Path | None = None, *, wait_seconds: float = HISTORY_LOCK_WAIT_SECONDS, sleep=None):
+    """A factory for the build's single-flight lock, held only around each seal.
+
+    History runs are long and mostly network; holding the lock for hours would
+    make the nightly build refuse. So each publish takes it briefly, waiting
+    for a running build instead of racing it.
+    """
+    import time as _time
+
+    pause = sleep or _time.sleep
+
+    @contextmanager
+    def _held():
+        waited = 0.0
+        while True:
+            try:
+                handle = single_flight(lock_path)
+                handle.__enter__()
+            except SingleFlightError:
+                if waited >= wait_seconds:
+                    raise
+                pause(30)
+                waited += 30
+                continue
+            try:
+                yield
+            finally:
+                handle.__exit__(None, None, None)
+            return
+
+    return _held
+
+
+def _history_symbols(store: ResearchStore, raw: str) -> list[str]:
+    from . import history
+
+    if raw:
+        return [piece.strip().upper() for piece in raw.split(",") if piece.strip()]
+    return history.history_universe(store)
+
+
+def run_history_backfill(store, *, kinds=HISTORY_KINDS, symbols: str = "", client=None, lock_path=None, log=print) -> dict:
+    """Pull provider history for every symbol that has none yet (resumable)."""
+    from . import history
+
+    if store is None:
+        return {"status": "DISABLED", "message": "research_store_dir is not configured."}
+    names = _history_symbols(store, symbols)
+    client = client or history.YahooClient()
+    lock = history_lock(lock_path)
+    out: dict = {"status": "OK", "symbols": len(names)}
+    for kind in kinds:
+        if kind == "d1":
+            report = history.run_d1(store, names, client=client, lock=lock, log=log)
+        elif kind in {"h1", "m30"}:
+            report = history.run_intraday(store, names, kind.upper(), client=client, lock=lock, log=log)
+        elif kind == "earnings":
+            report = history.run_earnings(store, names, client=client, lock=lock, log=log)
+        else:
+            return {"status": "ERROR", "message": f"unknown kind {kind!r}; known: {', '.join(HISTORY_KINDS)}"}
+        out[kind] = vars(report)
+        if report.status != "OK":
+            out["status"] = "PARTIAL"
+    return out
+
+
+def run_history_topup(store, *, symbols: str = "", client=None, lock_path=None, log=print) -> dict:
+    """The daily top-up: D1 (+ split re-pulls, + new names), H1/H4, M30,
+    weekly earnings, then the series checks and the coverage summary."""
+    from . import history
+
+    if store is None:
+        return {"status": "DISABLED", "message": "research_store_dir is not configured."}
+    names = _history_symbols(store, symbols)
+    report = history.run_topup(
+        store, client=client or history.YahooClient(), symbols=names, lock=history_lock(lock_path), log=log
+    )
+    failed = sum(int(report.get(kind, {}).get("failed_batches", 0) or 0) for kind in ("d1", "h1", "m30"))
+    report["status"] = "PARTIAL" if failed else "OK"
+    return report
+
+
+def format_history_coverage(report: dict, *, limit: int = 40) -> str:
+    lines = [
+        f"symbols {report['symbols']} (provider history {report['history_symbols']}, "
+        f"legacy bar_d1 only {report['legacy_only_symbols']}), years {report['years_covered']}",
+    ]
+    for name, stats in report["datasets"].items():
+        quarantined = report["quarantined_rows"].get(name, 0)
+        lines.append(f"  {name:22s} rows {stats['rows']:>10,}  files {stats['files']:>5}  quarantined {quarantined:,}")
+    lines.append(f"earnings: {report['earnings_symbols']} symbols, {report['earnings_dates']} dates")
+    lines.append(f"flags: {report['flags']}")
+    lines.append(report["survivorship"])
+    lines.append("symbol     first       last        sessions  missing  stale  jumps  source")
+    worst = sorted(
+        report["per_symbol"].items(),
+        key=lambda item: (-(item[1]["missing_sessions"] + item[1]["stale"] + item[1]["jumps"]), item[0]),
+    )
+    for symbol, row in worst[:limit]:
+        lines.append(
+            f"{symbol:10s} {row['first']}  {row['last']}  {row['sessions']:>8}  {row['missing_sessions']:>7}"
+            f"  {row['stale']:>5}  {row['jumps']:>5}  {row['source']}"
+        )
+    return "\n".join(lines)
+def _regime_modules():
+    try:
+        from . import regime_daily, regime_report
+    except ImportError:  # pragma: no cover - scripts/ directly on sys.path
+        import regime_daily  # type: ignore
+        import regime_report  # type: ignore
+    return regime_daily, regime_report
+
+
+def run_build_regimes(
+    store: ResearchStore | None,
+    *,
+    apply: bool = False,
+    symbols=None,
+    until: date | None = None,
+    now: datetime | None = None,
+    lock_path: Path | None = None,
+    d1_loader=None,
+    intraday_loader=None,
+) -> dict:
+    """Compute missing ``market_regime_daily`` rows; publish them only with ``apply`` (single-flight)."""
+    regime_daily, _report = _regime_modules()
+    kwargs = dict(
+        symbols=tuple(symbols or regime_daily.SYMBOLS), until=until, now=now,
+        d1_loader=d1_loader, intraday_loader=intraday_loader,
+    )
+    if store is None:
+        return {"status": "DISABLED", "message": "research_store_dir is not configured."}
+    if not apply:
+        return regime_daily.run_build(store, apply=False, **kwargs)
+    try:
+        with single_flight(lock_path):
+            report = regime_daily.run_build(store, apply=True, **kwargs)
+            _record_job("COMPLETED", {"job": regime_daily.DATASET, "rows": report.get("rows_published", 0)})
+            return report
+    except SingleFlightError as exc:
+        return {"status": "REFUSED", "applied": True, "reason": str(exc)}
+
+
+def run_regime_report(
+    store: ResearchStore | None,
+    *,
+    symbol: str = "SPY",
+    out: Path,
+    rule_version: str | None = None,
+    journal: Path | None = None,
+    d1_loader=None,
+) -> dict:
+    """Write the regime report JSON for one symbol. Read-only on the lake and the journal (a copy is read)."""
+    regime_daily, regime_report = _regime_modules()
+    if store is None:
+        return {"status": "DISABLED", "message": "research_store_dir is not configured."}
+    frame = regime_daily.read_regimes(symbol, rule_version, store=store)
+    if frame.empty:
+        return {"status": "EMPTY", "message": f"no {regime_daily.DATASET} rows for {symbol}"}
+    if d1_loader is None:
+        try:
+            from .history_reader import read_d1
+        except ImportError:  # pragma: no cover
+            from history_reader import read_d1  # type: ignore
+
+        d1 = read_d1([symbol], frame["session_date"].min(), None, store=store).get(symbol)
+    else:
+        d1 = d1_loader([symbol], frame["session_date"].min(), None).get(symbol)
+    if journal is None:
+        journal = Path(config._paths().JOURNAL_DB_FILE)
+    trader_rows = regime_report.read_trader_segments(journal)
+    report = regime_report.build_report(frame, d1, symbol=symbol, trader_rows=trader_rows)
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+    return {"status": "OK", "out": str(out), "sessions": report["span"]["sessions"], "span": report["span"]}
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["backtest"]:  # read-mostly research tool: its own parser, no lake lock
@@ -2224,6 +2410,21 @@ def main(argv=None) -> int:
     bench.add_argument("--apply", action="store_true", help="publish; without it only the plan is printed")
     bench.add_argument("--bars-dir", default="", help="durable D1 store; default the desk's daily_bars")
     bench.add_argument("--root", default="", help="lake root to read (dry run only); default the configured lake")
+    hist_back = sub.add_parser(
+        "history-backfill",
+        help="P10: pull 2018+ Yahoo D1, 730d H1 (+H4), 60d M30 and earnings dates into the lake (resumable)",
+    )
+    hist_back.add_argument("--kinds", default=",".join(HISTORY_KINDS), help="comma list of d1,h1,m30,earnings")
+    hist_back.add_argument("--symbols", default="", help="comma list; default the history universe")
+    hist_top = sub.add_parser("history-topup", help="P10: the daily history top-up (idempotent)")
+    hist_top.add_argument("--symbols", default="", help="comma list; default the history universe")
+    hist_quality = sub.add_parser("history-quality", help="P10: series checks over the D1 history (new flags only)")
+    hist_quality.add_argument("--symbols", default="", help="comma list; default every history symbol")
+    hist_cov = sub.add_parser("history-coverage", help="P10: per-symbol coverage report (read-only)")
+    hist_cov.add_argument("--symbols", default="", help="comma list; default every symbol")
+    hist_cov.add_argument("--json", action="store_true")
+    hist_cov.add_argument("--limit", type=int, default=40, help="rows of the per-symbol table (worst first)")
+
     ctx = sub.add_parser(
         "backfill-market-context",
         help="record current-definition setup_market_context for past occurrences; DRY RUN unless --apply",
@@ -2238,7 +2439,49 @@ def main(argv=None) -> int:
         help="dry run only: preview with this durable D1 store when bar_d1 has no SPY yet",
     )
 
+    regimes = sub.add_parser(
+        "build-regimes",
+        help="append missing market_regime_daily rows (SPY/QQQ/IWM); DRY RUN unless --apply",
+    )
+    regimes.add_argument("--apply", action="store_true", help="publish; without it only counts are printed")
+    regimes.add_argument("--symbols", default="", help="comma list; default SPY,QQQ,IWM")
+    regimes.add_argument("--until", default="", help="YYYY-MM-DD last session; default the last settled one")
+    regimes.add_argument("--root", default="", help="lake root to read (dry run only); default the configured lake")
+    regime_rep = sub.add_parser("regime-report", help="read-only: the regime report JSON for one symbol")
+    regime_rep.add_argument("--symbol", default="SPY")
+    regime_rep.add_argument("--out", required=True)
+    regime_rep.add_argument("--rule-version", default="")
+    regime_rep.add_argument("--journal", default="", help="journal sqlite to COPY for typed segments")
+    regime_rep.add_argument("--root", default="", help="lake root to read; default the configured lake")
+
     args = parser.parse_args(argv)
+    if args.command in {"build-regimes", "regime-report"}:
+        if args.command == "build-regimes" and args.root and args.apply:
+            parser.error("--root is for dry runs; --apply writes only the configured lake")
+        if args.root:
+            regime_store = ResearchStore(Path(args.root))
+        elif args.command == "build-regimes" and args.apply:
+            regime_store = ResearchStore.open()
+        else:
+            root = config.get_research_store_dir()
+            regime_store = ResearchStore(root) if root is not None else None
+        if args.command == "build-regimes":
+            report = run_build_regimes(
+                regime_store,
+                apply=bool(args.apply),
+                symbols=[s.strip().upper() for s in args.symbols.split(",") if s.strip()] or None,
+                until=date.fromisoformat(args.until) if args.until else None,
+            )
+        else:
+            report = run_regime_report(
+                regime_store,
+                symbol=args.symbol.upper(),
+                out=Path(args.out),
+                rule_version=args.rule_version or None,
+                journal=Path(args.journal) if args.journal else None,
+            )
+        print(json.dumps(report, indent=2, default=str))
+        return 0 if report.get("status") in {"OK", "DISABLED"} else 1
     if args.command in {"backfill-benchmark-d1", "backfill-market-context"} and args.root:
         if args.apply:
             parser.error("--root is for dry runs; --apply writes only the configured lake")
@@ -2246,6 +2489,28 @@ def main(argv=None) -> int:
         store = ResearchStore(Path(args.root))
     else:
         store = ResearchStore.open()
+    if args.command in {"history-backfill", "history-topup", "history-quality", "history-coverage"}:
+        from . import history
+
+        if store is None:
+            print(json.dumps({"status": "DISABLED", "message": "research_store_dir is not configured."}))
+            return 0
+        if args.command == "history-backfill":
+            kinds = tuple(piece.strip().lower() for piece in args.kinds.split(",") if piece.strip())
+            report = run_history_backfill(store, kinds=kinds, symbols=args.symbols)
+        elif args.command == "history-topup":
+            report = run_history_topup(store, symbols=args.symbols)
+        elif args.command == "history-quality":
+            names = [p.strip().upper() for p in args.symbols.split(",") if p.strip()] or None
+            report = vars(history.run_quality(store, symbols=names, lock=history_lock()))
+        else:
+            names = [p.strip().upper() for p in args.symbols.split(",") if p.strip()] or None
+            report = history.coverage_report(store, symbols=names)
+            if not args.json:
+                print(format_history_coverage(report, limit=args.limit))
+                return 0
+        print(json.dumps(report, indent=2, default=str))
+        return 0 if report.get("status", "OK") in {"OK", "DISABLED"} else 1
     if args.command == "backfill-benchmark-d1":
         report = run_backfill_benchmark_d1(
             store, apply=bool(args.apply), bars_dir=Path(args.bars_dir) if args.bars_dir else None

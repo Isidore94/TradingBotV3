@@ -218,7 +218,7 @@ def _loaders(vix_days=None):
     days = _days()
 
     def d1_loader(symbols, start, end):
-        out = {s: [r for r in _d1(s, seed=len(s)) if start <= r["session_date"] <= end] for s in symbols if s != "^VIX"}
+        out = {s: [r for r in _d1(s, seed=len(s)) if (start or date.min) <= r["session_date"] <= (end or date.max)] for s in symbols if s != "^VIX"}
         out["^VIX"] = _vix(vix_days or days)
         return out
 
@@ -261,3 +261,124 @@ def test_the_newest_sessions_wait_for_vix_and_never_before_the_close(tmp_path):
     report = rd.run_build(store, apply=False, now=midday, symbols=("SPY",), d1_loader=_loaders()[0],
                           intraday_loader=intraday_loader)
     assert report["last_session"] == days[-2].isoformat() and report["new_rows"] == 0
+
+
+def test_reader_shaped_frames_are_accepted_and_stub_bars_dropped():
+    import pandas as pd
+
+    frame = pd.DataFrame(_d1()[:5])
+    assert [b["session_date"] for b in rd.daily_bars(frame)] == _days()[:5]
+    h1 = pd.DataFrame(_h1(_days()[:1]))
+    h1["interval_start"] = pd.to_datetime(h1["interval_start"], utc=True).dt.tz_convert("America/New_York")
+    h1["is_stub"] = [False] * 6 + [True]
+    bars = rd.intraday_bars(h1)
+    assert len(bars) == 6 and all(b["session_date"] == _days()[0] for b in bars)
+
+
+# ---------------------------------------------------------------- report
+def test_forward_facts_and_segments():
+    from research_warehouse import regime_report as rr
+
+    days = _days()[:30]
+    d1 = [{"session_date": d, "open": 100 + i, "high": 101 + i, "low": 99 + i, "close": 100 + i}
+          for i, d in enumerate(days)]
+    fwd = rr.forward_facts(d1)
+    assert fwd[days[0]]["fwd_1"] == pytest.approx(0.01)
+    assert fwd[days[0]]["fwd_20"] == pytest.approx(0.20)
+    assert fwd[days[0]]["fwd_mdd"] == 0.0  # every later low is above the close
+    assert fwd[days[-1]]["fwd_1"] is None and fwd[days[10]]["fwd_mdd"] is None
+    pairs = [(days[i], lab) for i, lab in enumerate(["a", "a", "b", "a", "a", "a"])]
+    out = rr.axis_report(pairs, fwd)
+    assert [s["sessions"] for s in out["timeline"]] == [2, 1, 3]
+    assert out["transitions"] == {"a": {"b": 1}, "b": {"a": 1}}
+    assert out["labels"]["a"]["segments"] == 2 and out["labels"]["a"]["segment_sessions_max"] == 3
+
+
+def test_trader_agreement_counts_known_sessions_only():
+    from research_warehouse import regime_report as rr
+
+    days = _days()[:6]
+    typed = [{"segment_id": 1, "start_date": days[2].isoformat(), "regime": "bull_run"}]
+    pairs = list(zip(days, ["range", "range", "bull_run", "unknown", "range", "bull_run"], strict=True))
+    out = rr.trader_agreement(pairs, typed)
+    assert out["sessions_compared"] == 3 and out["sessions_agree"] == 2
+    assert out["confusion_trader_by_auto"] == {"bull_run": {"bull_run": 2, "unknown": 1, "range": 1}}
+    assert rr.trader_agreement(pairs, [])["status"] == "no typed segments"
+
+
+def test_trader_segments_are_read_from_a_copy(tmp_path):
+    import sqlite3
+
+    from research_warehouse import regime_report as rr
+
+    db = tmp_path / "journal.sqlite3"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE structural_regime (segment_id INTEGER, start_date TEXT, regime TEXT)")
+    conn.execute("INSERT INTO structural_regime VALUES (1, '2026-03-01', 'bull_run')")
+    conn.commit()
+    conn.close()
+    before = db.read_bytes()
+    assert rr.read_trader_segments(db) == [{"segment_id": 1, "start_date": "2026-03-01", "regime": "bull_run"}]
+    assert db.read_bytes() == before
+    assert rr.read_trader_segments(tmp_path / "missing.sqlite3") == []
+
+
+def test_regime_report_cli_path_writes_every_axis(tmp_path):
+    import json
+
+    from research_warehouse import cli
+
+    store = ResearchStore(tmp_path / "lake")
+    d1_loader, intraday_loader = _loaders()
+    cli.run_build_regimes(store, apply=True, now=NOW, lock_path=tmp_path / "lock",
+                          d1_loader=d1_loader, intraday_loader=intraday_loader)
+    out = tmp_path / "report.json"
+    result = cli.run_regime_report(store, symbol="SPY", out=out, journal=tmp_path / "none.sqlite3",
+                                   d1_loader=d1_loader)
+    assert result["status"] == "OK"
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert set(report["axes"]) == set(rd.AXES)
+    assert report["span"]["sessions"] == len(_days()) - rd.WARMUP_SESSIONS + 1
+    assert report["trader_agreement"]["status"] == "no typed segments"
+    # The described (unconfirmed) prefills are reported apart; the fixture ends in 2019.
+    assert [s["regime"] for s in report["described_agreement"]["segments_typed"]] == [
+        "bull_run", "weekly_hh_then_compression", "bear_channel_lower_highs"]
+    assert report["described_agreement"]["sessions_compared"] == 0
+    assert report["baseline"]["fwd_1"]["n"] == report["span"]["sessions"] - 1
+
+
+# ---------------------------------------------------------------- night slot
+def test_the_night_slot_sits_after_the_history_topup_and_is_deterministic():
+    from ai_jobs import runner
+
+    slots = runner.default_slots()
+    names = [slot.name for slot in slots]
+    slot = slots[names.index("market_regime_daily")]
+    assert slot.goal == "market_read" and slot.uses_model is False
+    assert names[names.index("market_regime_daily") - 1] == "lake_history_topup"
+
+
+def test_the_night_slot_appends_once(tmp_path):
+    from ai_jobs.market_regime_daily import run_market_regime_daily
+
+    store = ResearchStore(tmp_path / "lake")
+    d1_loader, intraday_loader = _loaders()
+    kwargs = dict(store=store, now=NOW, lock_path=tmp_path / "lock", d1_loader=d1_loader,
+                  intraday_loader=intraday_loader)
+    first = run_market_regime_daily(**kwargs)
+    assert first["status"] == "ok" and first["reason"].startswith(f"{3 * (len(_days()) - rd.WARMUP_SESSIONS + 1)} regime rows")
+    second = run_market_regime_daily(**kwargs)
+    assert second["status"] == "ok" and second["reason"].startswith("0 regime rows") and second["outputs"] == []
+
+
+def test_the_night_slot_failure_leaves_the_lake(tmp_path):
+    from ai_jobs.market_regime_daily import run_market_regime_daily
+
+    def broken(*_a, **_k):
+        raise OSError("lake offline")
+
+    store = ResearchStore(tmp_path / "lake")
+    result = run_market_regime_daily(store=store, now=NOW, lock_path=tmp_path / "lock", d1_loader=broken,
+                                     intraday_loader=broken)
+    assert result["status"] == "failed" and "lake unchanged" in result["reason"]
+    assert store.read_rows(rd.DATASET) == []
