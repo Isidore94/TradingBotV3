@@ -340,6 +340,10 @@ def test_regime_report_cli_path_writes_every_axis(tmp_path):
     assert set(report["axes"]) == set(rd.AXES)
     assert report["span"]["sessions"] == len(_days()) - rd.WARMUP_SESSIONS + 1
     assert report["trader_agreement"]["status"] == "no typed segments"
+    # The described (unconfirmed) prefills are reported apart; the fixture ends in 2019.
+    assert [s["regime"] for s in report["described_agreement"]["segments_typed"]] == [
+        "bull_run", "weekly_hh_then_compression", "bear_channel_lower_highs"]
+    assert report["described_agreement"]["sessions_compared"] == 0
     assert report["baseline"]["fwd_1"]["n"] == report["span"]["sessions"] - 1
 
 

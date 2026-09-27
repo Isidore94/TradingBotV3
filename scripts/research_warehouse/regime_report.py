@@ -209,6 +209,15 @@ def build_report(
         report["axes"][axis] = axis_report(pairs, fwd)
     structural = [(day, str(row.get("structural") or rd.UNKNOWN)) for day, row in zip(days, rows, strict=True)]
     report["trader_agreement"] = trader_agreement(structural, trader_rows)
+    # The three regimes the trader described on 2026-09-26 (offered as prefills, not yet
+    # confirmed in the journal), reported separately so they never pass for typed rows.
+    from structural_regime import PREFILLS
+
+    described = [
+        {"segment_id": index + 1, "start_date": p.start_date, "regime": p.regime, "structure_note": p.structure_note}
+        for index, p in enumerate(PREFILLS)
+    ]
+    report["described_agreement"] = trader_agreement(structural, described)
     return report
 
 
