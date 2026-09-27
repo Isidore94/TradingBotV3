@@ -14,7 +14,7 @@ pullback + strength + a close under the earnings AVWAP): n 112, beat SPY 58%, +5
   the earnings AVWAP. At most `ARMED_MAX` names, by RS. Unarmed members are listed, never fire.
 * Fire (`evaluate`): on today's completed regular-session M5 bars, the last close is under the
   earnings AVWAP AND the last `SQUEEZE_BOX_BARS` bars span at most `SQUEEZE_RANGE_ATR` x the
-  `SQUEEZE_ATR_BARS`-bar M5 ATR (the `m5_signal_engines.compression_break_events` box, copied
+  `SQUEEZE_ATR_BARS`-bar M5 ATR (the S6 compression-break box in `m5_signal_engines`, copied
   and pinned by a parity test). Missing bars = unknown = no fire. Once per name per session
   (the caller holds that set).
 * Grading (shadow, `grade_fires`): each fire vs SPY at 1 / 5 / 10 sessions on completed daily
@@ -301,7 +301,7 @@ def _regular(bars: Sequence[Any], *, now: datetime, tz) -> list[tuple[datetime, 
 def squeeze_box(regular: Sequence[tuple[datetime, tuple]]) -> tuple[float, float, float] | None:
     """(box high, box low, M5 ATR) over the last `SQUEEZE_BOX_BARS` bars when they squeeze, else None.
 
-    `compression_break_events`' box for a bar right after these: the box bars all on the last
+    The S6 compression-break box for a bar right after these: the box bars all on the last
     bar's day, the ATR the mean true range of the last `SQUEEZE_ATR_BARS` bars (21 bars needed).
     """
     count = len(regular)
