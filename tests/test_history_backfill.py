@@ -170,6 +170,30 @@ def test_h1_backfill_derives_h4_and_handles_the_half_day(store):
     assert again.rows_quarantined.get("bar_h1", 0) == 0
 
 
+def test_an_intraday_split_carries_older_bars_into_the_new_revision(store):
+    old_day = [f"2026-10-01 {h}:30" for h in range(9, 16)]
+    recent = [f"2026-11-30 {h}:30" for h in range(9, 16)]
+    client = FakeClient()
+    client.bars["1h"] = {"SPY": pd.concat([_intraday(old_day, 100.0), _intraday(recent, 100.0)])}
+    hist.run_intraday(store, ["SPY"], "H1", client=client, now=DEC1, log=lambda *_: None)
+
+    # The provider's window has moved past October and the basis halved (2:1 split).
+    client.bars["1h"] = {"SPY": _intraday(recent, 50.0)}
+    report = hist.run_intraday(store, ["SPY"], "H1", client=client, now=DEC1, mode="topup", log=lambda *_: None)
+
+    assert report.repulled == ["SPY"]
+    frame = hr.read_intraday("H1", ["SPY"], store=store, now=DEC1)["SPY"]
+    assert len(frame) == 14 and frame["revision_id"].nunique() == 1
+    assert set(frame["close"]) == {50.0}  # October re-based, not dropped
+    raw = store.read_table("bar_h1").to_pandas()
+    carried = raw[raw["capture_mode"] == "RECONSTRUCTED"]
+    assert len(carried) == 7 and set(carried["adjustment_version"]) == {"yahoo_split_v1+carried"}
+    assert set(carried["volume"]) == {200}
+    assert (raw["close"] == 100.0).sum() == 14  # the old revision is untouched
+    h4 = hr.read_intraday("H4", ["SPY"], store=store, now=DEC1)["SPY"]
+    assert len(h4) == 4 and set(h4["close"]) == {50.0}
+
+
 def test_m30_goes_to_its_own_dataset(store):
     client = FakeClient()
     client.bars["30m"] = {"QQQ": _intraday(["2026-11-30 09:30", "2026-11-30 10:00"])}
@@ -201,6 +225,39 @@ def test_earnings_dates_timing_gaps_etf_skip_and_resume(store):
     client.calls.clear()
     hist.run_earnings(store, ["AAPL", "MSFT"], client=client, now=SATURDAY + timedelta(days=2), log=lambda *_: None)
     assert client.calls == []  # refreshed within a week: resumed, not re-asked
+
+
+def test_a_date_listed_twice_by_the_provider_is_stored_once(store):
+    client = FakeClient()
+    client.earnings["AAPL"] = pd.DataFrame(
+        {"EPS Estimate": [1.0, 1.0]},
+        index=pd.DatetimeIndex([pd.Timestamp("2026-07-30 16:00", tz=ET), pd.Timestamp("2026-07-30 16:05", tz=ET)]),
+    )
+    hist.run_earnings(store, ["AAPL"], client=client, now=SATURDAY, log=lambda *_: None)
+    assert store.read_table("earnings_date").num_rows == 1
+
+
+def test_a_crash_before_the_seal_leaves_earnings_owed_not_done(store):
+    class Crashing(FakeClient):
+        def fetch_earnings(self, symbol, *, limit=hist.EARNINGS_LIMIT):
+            if symbol == "CCC":
+                raise RuntimeError("power loss")
+            return super().fetch_earnings(symbol, limit=limit)
+
+    client = Crashing()
+    for name in ("AAA", "BBB"):
+        client.earnings[name] = pd.DataFrame(
+            {"EPS Estimate": [1.0]}, index=pd.DatetimeIndex([pd.Timestamp("2026-07-30 16:00", tz=ET)])
+        )
+    with pytest.raises(RuntimeError):
+        hist.run_earnings(store, ["AAA", "BBB", "CCC"], client=client, now=SATURDAY, log=lambda *_: None)
+    assert store.read_table("earnings_date").num_rows == 0
+
+    retry = FakeClient()
+    retry.earnings = client.earnings
+    hist.run_earnings(store, ["AAA", "BBB"], client=retry, now=SATURDAY, log=lambda *_: None)
+    assert ("earnings", "AAA") in retry.calls  # still owed after the crash
+    assert store.read_table("earnings_date").num_rows == 2
 
 
 def test_quality_flags_missing_stale_and_unexplained_jump_once(store):
