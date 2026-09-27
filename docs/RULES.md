@@ -26,6 +26,7 @@ in the same commit.
 - Permutation verdicts (`permutation_verdicts.json`, `weak_variant` / `promotion_candidate`) rank and annotate only: a chip, a citation and a same-grade family demotion in the setups table; never hidden, and never read by a detector, score, alert, Focus, the queue or `review_policy.json`. Anything past the candidate chip (P1-4 4e) is ask-first.
 - `setup_research` narration is a bounded view selected by size (`stats.n`, then name), never by an R statistic; every reader says `narrated K of N`.
 - `bar_d1` always carries `BENCHMARK_SYMBOLS` (SPY/QQQ/IWM), members or not. A `setup_market_context` fix is a new `bias_definition_id`, never a rewrite; old rows stay and readers take the newest definition per occurrence/timeframe (`newest_context_rows`).
+- `market_regime_daily` (P10, trader 2026-09-27): one row per (symbol, session_date, rule_version) from bars completed by that close only, so a label is for trading the NEXT session (join on `next_session_date`, or `read_regimes(as_of="next_open")`). Missing input = `unknown`; thresholds are named constants in `regime_daily.py`; a changed rule is a new `rule_version`, old rows are never rewritten. Only the `market_regime_daily` night slot appends (idempotent, single-flight); the newest 2 sessions wait for their ^VIX/H1 bars. It never writes `MARKET_REGIME_TABLE_FILE` and feeds no detector, score or alert.
 - The like-link payload uses `match_basis`; `LikeLink.from_payload` is its sole strict reader, and the dataset is `bronze_like_occurrence_link`.
 
 ## Alert Center and review
