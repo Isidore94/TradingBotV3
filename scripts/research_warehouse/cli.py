@@ -2140,8 +2140,14 @@ def run_backfill_market_context(
 
 
 def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["backtest"]:  # read-mostly research tool: its own parser, no lake lock
+        from research_warehouse import backtest
+
+        return backtest.main(argv[1:])
     parser = argparse.ArgumentParser(prog="research_warehouse", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("backtest", help="D1 setup backtester: run | search | report (see backtest --help)")
     build = sub.add_parser("build", help="seal the spool, wrap bronze, snapshot, derive")
     build.add_argument("--session-date", default="")
     build.add_argument("--run-id", default="")
