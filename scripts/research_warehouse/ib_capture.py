@@ -52,6 +52,16 @@ BAR_SIZES = {
 # useRTH=0 request returns premarket and postmarket bars too (LD-03).
 ETH_CLOSE_HOUR = 20
 RTH_CLOSE_HOUR = 16
+#: The transport's own code for "TWS never finished the request".
+TIMEOUT_ERROR_CODE = -1
+
+
+def is_informational(code) -> bool:
+    """IB notices (2100-2199: data-farm status, soft warnings), not request failures."""
+    try:
+        return 2100 <= int(code) <= 2199
+    except (TypeError, ValueError):
+        return False
 
 
 def historical_request(symbol: str, day: date, *, timeframe: str = "M5", use_rth: bool = False, duration: str = "1 D") -> dict:
@@ -269,6 +279,7 @@ def build_ib_transport(spec: CaptureConnectionSpec):  # pragma: no cover - requi
     unverified.
     """
     spec.validate()
+    import contextlib
     import threading
 
     from ibapi.client import EClient
@@ -296,6 +307,8 @@ def build_ib_transport(spec: CaptureConnectionSpec):  # pragma: no cover - requi
                 event.set()
 
         def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):  # noqa: N802
+            if is_informational(errorCode):
+                return  # 2100-2199 notices (farm status, warnings) do not end a request
             if reqId is not None and reqId > 0:
                 with self._lock:
                     self._errors[reqId] = (errorCode, errorString)
@@ -324,11 +337,17 @@ def build_ib_transport(spec: CaptureConnectionSpec):  # pragma: no cover - requi
                 self._done[req_id] = threading.Event()
                 self._bars[req_id] = []
             self.reqHistoricalData(reqId=req_id, contract=contract, chartOptions=[], **kwargs)
-            self._done[req_id].wait(timeout=timeout)
+            finished = self._done[req_id].wait(timeout=timeout)
+            if not finished:
+                with contextlib.suppress(Exception):
+                    self.cancelHistoricalData(req_id)
             with self._lock:
                 bars = self._bars.pop(req_id, [])
                 error = self._errors.pop(req_id, None)
                 self._done.pop(req_id, None)
+            if not finished and error is None:
+                # A timed-out request's bars are a partial answer: report it, never store it.
+                return [], (TIMEOUT_ERROR_CODE, f"no historicalDataEnd within {timeout:.0f}s")
             return bars, error
 
     client = _CaptureClient()

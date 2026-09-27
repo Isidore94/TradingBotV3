@@ -10,8 +10,12 @@ The contract every reader keeps: ONE consistent series per symbol.
   ``supersedes_revision_id`` is never read). A symbol with no history rows falls
   back to the legacy ``bar_d1`` rows, and the ``provider`` / ``source_dataset``
   columns say so. Providers are never mixed inside one symbol's series.
-* Intraday (H1, M30 native; H4 derived from H1) is completed bars only, with
-  ``interval_start`` tz-aware in America/New_York.
+* Intraday is completed bars only, with ``interval_start`` tz-aware in
+  America/New_York. Each symbol has ONE intraday basis provider for M30, H1
+  and H4 alike: the provider whose native intraday series spans the longest
+  (IBKR on a tie). Yahoo basis: native H1 and M30, H4 derived from H1. IBKR
+  basis: native M30 (5 years), H1 and H4 derived from that M30. The other
+  provider's rows stay stored as a cross-check, never mixed in.
 * Earnings dates are the recorded ones; a symbol with none is absent, never
   guessed.
 """
@@ -37,11 +41,15 @@ LEGACY_D1_DATASET = "bar_d1"
 INTRADAY_DATASETS = {"H1": "bar_h1", "M30": "bar_m30"}
 DERIVED_DATASET = "bar_derived_history"
 H4_CONTRACT_ID = "h4_rth_0930_1330_v1"
+#: H1 built from two RTH M30 bars: 09:30-10:30 ... 15:30-16:00 (half days clipped).
+H1_FROM_M30_CONTRACT_ID = "h1_from_m30_rth_v1"
 CORPORATE_ACTION_DATASET = "corporate_action"
 EARNINGS_DATASET = "earnings_date"
 QUALITY_FLAG_DATASET = "history_quality_flag"
 #: First provider present wins for a symbol; anything else sorts after these.
 PROVIDER_PREFERENCE = ("YAHOO", "IBKR")
+#: Intraday basis tie-break: IBKR first (its M30 is the only 5-year intraday).
+INTRADAY_PROVIDER_PREFERENCE = ("IBKR", "YAHOO")
 MARKET_TZ = "America/New_York"
 
 D1_COLUMNS = [
@@ -130,6 +138,7 @@ def _scan(
     hi: date | None = None,
     extra_filter=None,
     partition_prefix: str = "",
+    columns: list[str] | None = None,
 ) -> pa.Table:
     """Manifest-resolved rows, narrowed in Arrow before pandas sees them."""
     spec = dataset_spec(dataset)
@@ -139,7 +148,8 @@ def _scan(
         if entry.partition.startswith(partition_prefix) and _partition_in_range(entry.partition, lo, hi)
     ]
     if not entries:
-        return spec.schema.empty_table()
+        table = spec.schema.empty_table()
+        return table.select(columns) if columns else table
     paths = []
     for entry in entries:
         path = store.root / entry.file_path
@@ -166,7 +176,7 @@ def _scan(
                 clause = pads.field(column) < scalar if upper else pads.field(column) >= scalar
             predicate = clause if predicate is None else predicate & clause
     dataset_obj = pads.dataset(paths, schema=spec.schema, format="parquet")
-    return dataset_obj.to_table(filter=predicate)
+    return dataset_obj.to_table(filter=predicate, columns=columns)
 
 
 def _provider_rank(provider: str) -> int:
@@ -253,6 +263,79 @@ def _to_market_time(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def intraday_basis(symbols=None, *, store: ResearchStore | None = None) -> dict[str, str]:
+    """Each symbol's intraday basis provider: the longest native intraday span.
+
+    Span is last minus first ``interval_start`` over ``bar_m30`` and ``bar_h1``
+    together, per provider; a tie goes to IBKR. A symbol with no native
+    intraday rows is absent.
+    """
+    lake = _open(store)
+    wanted = _norm_symbols(symbols)
+    if wanted == []:
+        return {}
+    spans: dict[tuple[str, str], list] = {}
+    for dataset in INTRADAY_DATASETS.values():
+        table = _scan(lake, dataset, symbols=wanted, columns=["symbol", "provider", "interval_start"])
+        if not table.num_rows:
+            continue
+        grouped = table.group_by(["symbol", "provider"]).aggregate(
+            [("interval_start", "min"), ("interval_start", "max")]
+        )
+        for symbol, provider, lo, hi in zip(
+            grouped.column("symbol").to_pylist(),
+            grouped.column("provider").to_pylist(),
+            grouped.column("interval_start_min").to_pylist(),
+            grouped.column("interval_start_max").to_pylist(),
+            strict=False,
+        ):
+            key = (str(symbol), str(provider or ""))
+            old = spans.get(key)
+            spans[key] = [lo, hi] if old is None else [min(old[0], lo), max(old[1], hi)]
+    best: dict[str, tuple] = {}
+    order = INTRADAY_PROVIDER_PREFERENCE
+    for (symbol, provider), (lo, hi) in spans.items():
+        name = provider.upper()
+        tie = order.index(name) if name in order else len(order)
+        rank = (-(hi - lo).total_seconds(), tie, provider)
+        if symbol not in best or rank < best[symbol][0]:
+            best[symbol] = (rank, provider)
+    return {symbol: provider for symbol, (_rank, provider) in sorted(best.items())}
+
+
+def _pick_provider(frame: pd.DataFrame, basis: str | None) -> pd.DataFrame:
+    """Rows of the basis provider only (maybe none); without a basis, the D1 preference order."""
+    names = frame["provider"].fillna("")
+    if basis is not None:
+        return frame[names == basis]
+    providers = sorted(names.unique(), key=lambda name: (_provider_rank(name), name))
+    return frame[names == providers[0]]
+
+
+def _derived_series(frame: pd.DataFrame, basis: str | None) -> pd.DataFrame:
+    frame = _pick_provider(frame, basis)
+    if frame.empty:
+        return frame
+    # The newest derivation names the current source revision.
+    current = frame.sort_values("computed_at").iloc[-1]["source_revision_id"]
+    frame = frame[frame["source_revision_id"] == current]
+    frame = frame.sort_values(["interval_start", "computed_at"]).drop_duplicates("interval_start", keep="first")
+    frame = frame.rename(columns={"source_revision_id": "revision_id"})
+    return frame[INTRADAY_COLUMNS + ["is_stub", "constituent_count"]].reset_index(drop=True)
+
+
+def _scan_derived(lake, timeframe: str, contract: str, *, symbols, lo, hi) -> pd.DataFrame:
+    return _scan(
+        lake,
+        DERIVED_DATASET,
+        symbols=symbols,
+        lo=lo,
+        hi=hi,
+        extra_filter=pads.field("aggregation_contract_id") == contract,
+        partition_prefix=f"timeframe={timeframe}/",
+    ).to_pandas()
+
+
 def read_intraday(
     timeframe: str,
     symbols=None,
@@ -264,48 +347,47 @@ def read_intraday(
 ) -> dict[str, pd.DataFrame]:
     """Completed H1 / H4 / M30 bars per symbol, ``interval_start`` in ET.
 
-    ``start``/``end`` are inclusive exchange dates. H4 is derived from H1 under
-    contract ``H4_CONTRACT_ID`` (09:30-13:30 and 13:30-16:00 ET).
+    ``start``/``end`` are inclusive exchange dates. Every timeframe of a symbol
+    comes from its :func:`intraday_basis` provider. H4 is contract
+    ``H4_CONTRACT_ID`` (09:30-13:30 and 13:30-16:00 ET); an IBKR-basis H1 is
+    contract ``H1_FROM_M30_CONTRACT_ID``.
     """
     frame_name = str(timeframe or "").strip().upper()
+    if frame_name not in {*INTRADAY_DATASETS, "H4"}:
+        raise ValueError(f"unsupported timeframe {timeframe!r}; use H1, H4 or M30")
     lake = _open(store)
     wanted = _norm_symbols(symbols)
     lo, hi = _as_day(start), _as_day(end)
     out: dict[str, pd.DataFrame] = {}
-    if wanted == [] and frame_name in {*INTRADAY_DATASETS, "H4"}:
+    if wanted == []:
         return out
+    basis = intraday_basis(wanted, store=lake)
     if frame_name in INTRADAY_DATASETS:
         table = _scan(lake, INTRADAY_DATASETS[frame_name], symbols=wanted, lo=lo, hi=hi).to_pandas()
-        if table.empty:
-            return out
-        table = _completed(table, now)
-        for symbol, frame in table.groupby("symbol", sort=True):
-            series = _one_series(frame, "interval_start")
-            out[str(symbol)] = series[INTRADAY_COLUMNS].copy()
-    elif frame_name == "H4":
-        table = _scan(
-            lake,
-            DERIVED_DATASET,
-            symbols=wanted,
-            lo=lo,
-            hi=hi,
-            extra_filter=pads.field("aggregation_contract_id") == H4_CONTRACT_ID,
-            partition_prefix="timeframe=H4/",
-        ).to_pandas()
-        if table.empty:
-            return out
-        table = _completed(table, now)
-        for symbol, frame in table.groupby("symbol", sort=True):
-            providers = sorted(frame["provider"].fillna("").unique(), key=lambda name: (_provider_rank(name), name))
-            frame = frame[frame["provider"].fillna("") == providers[0]]
-            # The newest derivation names the current source revision of H1.
-            current = frame.sort_values("computed_at").iloc[-1]["source_revision_id"]
-            frame = frame[frame["source_revision_id"] == current]
-            frame = frame.sort_values(["interval_start", "computed_at"]).drop_duplicates("interval_start", keep="first")
-            frame = frame.rename(columns={"source_revision_id": "revision_id"})
-            out[str(symbol)] = frame[INTRADAY_COLUMNS + ["is_stub", "constituent_count"]].reset_index(drop=True)
+        if not table.empty:
+            table = _completed(table, now)
+            for symbol, frame in table.groupby("symbol", sort=True):
+                name = str(symbol)
+                if frame_name == "H1" and basis.get(name) == "IBKR":
+                    continue  # an IBKR-basis H1 is the M30-derived one, below
+                chosen = _pick_provider(frame, basis.get(name))
+                if not chosen.empty:
+                    out[name] = _one_series(chosen, "interval_start")[INTRADAY_COLUMNS].copy()
+        if frame_name == "H1":
+            ib_names = [s for s, provider in basis.items() if provider == "IBKR"]
+            if ib_names:
+                derived = _scan_derived(lake, "H1", H1_FROM_M30_CONTRACT_ID, symbols=ib_names, lo=lo, hi=hi)
+                if not derived.empty:
+                    derived = _completed(derived, now)
+                    for symbol, frame in derived.groupby("symbol", sort=True):
+                        out[str(symbol)] = _derived_series(frame, "IBKR")
     else:
-        raise ValueError(f"unsupported timeframe {timeframe!r}; use H1, H4 or M30")
+        table = _scan_derived(lake, "H4", H4_CONTRACT_ID, symbols=wanted, lo=lo, hi=hi)
+        if table.empty:
+            return out
+        table = _completed(table, now)
+        for symbol, frame in table.groupby("symbol", sort=True):
+            out[str(symbol)] = _derived_series(frame, basis.get(str(symbol)))
     for symbol, frame in out.items():
         frame = _to_market_time(frame.reset_index(drop=True))
         if lo is not None:
@@ -352,10 +434,12 @@ def read_quality_flags(dataset=None, symbols=None, *, store: ResearchStore | Non
 
 __all__ = [
     "D1_COLUMNS",
+    "H1_FROM_M30_CONTRACT_ID",
     "H4_CONTRACT_ID",
     "INTRADAY_COLUMNS",
     "LakeNotConfigured",
     "available_symbols",
+    "intraday_basis",
     "read_corporate_actions",
     "read_d1",
     "read_earnings_dates",

@@ -2229,6 +2229,44 @@ def run_history_topup(store, *, symbols: str = "", client=None, lock_path=None, 
     return report
 
 
+#: The IB pull waits this long for a running build before a seal gives up.
+HISTORY_IB_LOCK_WAIT_SECONDS = 4 * 3600
+
+
+def run_history_ib_backfill(
+    store,
+    *,
+    symbols: str = "",
+    start: date | None = None,
+    max_hours: float | None = None,
+    dry_run: bool = False,
+    fetcher=None,
+    lock_path=None,
+    log=print,
+    **kwargs,
+) -> dict:
+    """Five-year IB M30 (+ derived H1/H4) for the history universe; never in market hours."""
+    from . import history_ib
+
+    if store is None:
+        return {"status": "DISABLED", "message": "research_store_dir is not configured."}
+    names = _history_symbols(store, symbols)
+    begin = start or history_ib.IB_START
+    if dry_run:
+        return history_ib.plan(store, names, start=begin, now=kwargs.get("now"))
+    own = fetcher is None
+    fetcher = fetcher or history_ib.IbHistoryFetcher()
+    try:
+        report = history_ib.run_ib_backfill(
+            store, names, fetcher=fetcher, start=begin, max_hours=max_hours,
+            lock=history_lock(lock_path, wait_seconds=HISTORY_IB_LOCK_WAIT_SECONDS), log=log, **kwargs,
+        )
+    finally:
+        if own:
+            fetcher.close()
+    return {"status": report.status, **vars(report)}
+
+
 def format_history_coverage(report: dict, *, limit: int = 40) -> str:
     lines = [
         f"symbols {report['symbols']} (provider history {report['history_symbols']}, "
@@ -2241,6 +2279,12 @@ def format_history_coverage(report: dict, *, limit: int = 40) -> str:
     lines.append(f"flags: {report['flags']}")
     for name, lag in (report.get("intraday_lagging") or {}).items():
         lines.append(f"{name}: {lag['count']} symbols end before SPY (cut-short pulls; the top-up catches them up)")
+    ib = report.get("ib_intraday")
+    if ib:
+        lines.append(
+            f"IB intraday (M30 -> H1/H4): {ib['symbols']} symbols, {ib['bars']:,} M30 bars, "
+            f"{ib['first']} .. {ib['last']}, ledger windows {ib['windows']}"
+        )
     lines.append(report["survivorship"])
     lines.append("symbol     first       last        sessions  missing  stale  jumps  source")
     worst = sorted(
@@ -2418,6 +2462,14 @@ def main(argv=None) -> int:
     )
     hist_back.add_argument("--kinds", default=",".join(HISTORY_KINDS), help="comma list of d1,h1,m30,earnings")
     hist_back.add_argument("--symbols", default="", help="comma list; default the history universe")
+    hist_ib = sub.add_parser(
+        "history-ib-backfill",
+        help="P10: 5-year IB M30 (+ derived H1/H4) on client 1011; pauses in US market hours; resumable",
+    )
+    hist_ib.add_argument("--symbols", default="", help="comma list; default the history universe")
+    hist_ib.add_argument("--start", default="", help="YYYY-MM-DD first day; default 2021-09-27")
+    hist_ib.add_argument("--max-hours", type=float, default=None, help="stop (sealed, resumable) after this long")
+    hist_ib.add_argument("--dry-run", action="store_true", help="print the windows owed and the time estimate only")
     hist_top = sub.add_parser("history-topup", help="P10: the daily history top-up (idempotent)")
     hist_top.add_argument("--symbols", default="", help="comma list; default the history universe")
     hist_quality = sub.add_parser("history-quality", help="P10: series checks over the D1 history (new flags only)")
@@ -2491,13 +2543,22 @@ def main(argv=None) -> int:
         store = ResearchStore(Path(args.root))
     else:
         store = ResearchStore.open()
-    if args.command in {"history-backfill", "history-topup", "history-quality", "history-coverage"}:
+    if args.command in {"history-backfill", "history-ib-backfill", "history-topup", "history-quality", "history-coverage"}:
         from . import history
 
         if store is None:
             print(json.dumps({"status": "DISABLED", "message": "research_store_dir is not configured."}))
             return 0
-        if args.command == "history-backfill":
+        if args.command == "history-ib-backfill":
+            report = run_history_ib_backfill(
+                store,
+                symbols=args.symbols,
+                start=date.fromisoformat(args.start) if args.start else None,
+                max_hours=args.max_hours,
+                dry_run=bool(args.dry_run),
+                log=lambda message: print(f"{utc_now():%Y-%m-%d %H:%M:%S}Z {message}", flush=True),
+            )
+        elif args.command == "history-backfill":
             kinds = tuple(piece.strip().lower() for piece in args.kinds.split(",") if piece.strip())
             report = run_history_backfill(store, kinds=kinds, symbols=args.symbols)
         elif args.command == "history-topup":

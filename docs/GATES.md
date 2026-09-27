@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #300 IB intraday history (p10): `python -m scripts.research_warehouse.cli history-coverage` shows the "IB intraday" line growing to ~1,680 symbols from 2021-09-27, the pull's log never shows a request between 06:15 and 13:15 PT on a trading day, and the desk's own IB scans see no pacing errors while it runs [lead]
 - #299 Lake history (p10): after the first night on this code the ledger has a `lake_history_topup` row that is ok, and `python -m scripts.research_warehouse.cli history-coverage` shows SPY's last date = the last completed session and rising `bar_h1` / `bar_m30` rows [lead]
 - Startup font backend (codex/startup-speed): at the next authorized source launch, time first usable Desk and check text, icons, chart labels and light/dark readability on the trader's 4K panel; scratch native construction passed in 9.8/10.9 s, not a full live launch [trader + lead].
 - #298 Runner dip watch (p9): on the first market session after the scan, with SPY working, the Alert Center reads "Runner dips: N armed (names)" (Friday 2026-09-25 would arm GTLB, DOCU, ANF, CRM, SSL, CMBT, FRO, TEAM, NIQ, AMPL, CBZ, NTSK, MPC, ACVA, VLO), those names are in autolongs.txt, and a fire shows as a red "runner dip" row; after 10 sessions read the Long leaders line that starts "Runner dips (shadow" [trader]

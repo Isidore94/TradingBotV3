@@ -1217,6 +1217,10 @@ def coverage_report(store: ResearchStore, *, symbols=None) -> dict:
         if "SPY" in newest.index:
             lagging_intraday[name] = sorted(str(s) for s in newest[newest < newest["SPY"]].index)
     history_symbols =[s for s, row in per_symbol.items() if row["source"] == reader.D1_DATASET]
+    try:  # package import
+        from . import history_ib
+    except ImportError:  # pragma: no cover - scripts/ directly on sys.path
+        import history_ib  # type: ignore
     return {
         "symbols": len(per_symbol),
         "history_symbols": len(history_symbols),
@@ -1229,6 +1233,7 @@ def coverage_report(store: ResearchStore, *, symbols=None) -> dict:
         "flags": {check: int((flags["check"] == check).sum()) for check in sorted(set(flags["check"]))},
         "survivorship": SURVIVORSHIP_NOTE,
         "intraday_lagging": {name: {"count": len(v), "symbols": v[:50]} for name, v in lagging_intraday.items()},
+        "ib_intraday": history_ib.ib_coverage(store),
         "per_symbol": per_symbol,
     }
 
