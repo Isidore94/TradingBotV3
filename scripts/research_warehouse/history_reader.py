@@ -421,11 +421,24 @@ def read_corporate_actions(symbols=None, *, store: ResearchStore | None = None) 
 
 
 def read_quality_flags(dataset=None, symbols=None, *, store: ResearchStore | None = None) -> pd.DataFrame:
-    """Series-quality findings, so a backtest can exclude or inspect flagged bars."""
+    """Series-quality findings, so a backtest can exclude or inspect flagged bars.
+
+    A ``MISSING_SESSION`` flag on a date the exchange calendar now says was
+    closed (written before the calendar knew, e.g. 2025-01-09) is skipped, not
+    deleted: the stored flag stays as history.
+    """
+    try:  # package import
+        from . import exchange_calendar as xcal
+    except ImportError:  # pragma: no cover - scripts/ directly on sys.path
+        import exchange_calendar as xcal  # type: ignore
+
     lake = _open(store)
     frame = _scan(lake, QUALITY_FLAG_DATASET, symbols=_norm_symbols(symbols)).to_pandas()
     if dataset is not None and not frame.empty:
         frame = frame[frame["dataset"] == dataset]
+    if not frame.empty:
+        closed = frame["flag_date"].map(lambda day: day is not None and not xcal.is_trading_day(day))
+        frame = frame[~((frame["check"] == "MISSING_SESSION") & closed)]
     columns = ["dataset", "symbol", "check", "flag_date", "interval_start", "detail"]
     if frame.empty:
         return pd.DataFrame(columns=columns)

@@ -294,14 +294,30 @@ def test_missing_and_partial_sessions_are_flagged_once_the_pull_is_whole(store):
     }
 
 
-def test_a_day_spy_also_lacks_is_a_closure_not_a_missing_session(store):
-    # 2025-01-09 (a national day of mourning) is a session in the calendar but the market was shut.
-    days = [d for d in _days(date(2025, 1, 6), date(2025, 1, 10)) if d != date(2025, 1, 9)]
+def test_a_day_spy_also_lacks_is_flagged_on_spy_only(store):
+    days = [d for d in _days(date(2025, 1, 6), date(2025, 1, 10)) if d != date(2025, 1, 8)]
     now = datetime(2025, 1, 11, 12, tzinfo=UTC)
     fetcher = FakeFetcher({"SPY": session_bars(days), "AAPL": session_bars(days)})
     _run(store, ["SPY", "AAPL"], fetcher, start=date(2025, 1, 6), now=now)
     flags = hr.read_quality_flags("bar_m30", store=store)
-    assert list(zip(flags["symbol"], flags["flag_date"], strict=True)) == [("SPY", date(2025, 1, 9))]
+    assert list(zip(flags["symbol"], flags["flag_date"], strict=True)) == [("SPY", date(2025, 1, 8))]
+
+
+def test_2025_01_09_is_a_closure_never_flagged_and_an_old_flag_is_skipped_on_read(store):
+    assert xcal.trading_session(date(2025, 1, 9)) is None  # national day of mourning (Carter)
+    assert xcal.trading_session(date(2025, 1, 8)) is not None
+    days = _days(date(2025, 1, 6), date(2025, 1, 10))
+    assert date(2025, 1, 9) not in days
+    now = datetime(2025, 1, 11, 12, tzinfo=UTC)
+    _run(store, ["SPY"], FakeFetcher({"SPY": session_bars(days)}), start=date(2025, 1, 6), now=now)
+    assert hr.read_quality_flags("bar_m30", store=store).empty
+    # A flag written before the calendar knew stays stored but is not served.
+    old = hist.flag_row("bar_m30", "SPY", hist.FLAG_MISSING_SESSION, date(2025, 1, 9), "no IBKR M30 bar for an exchange session", detected_at=now, run_id="old")
+    real = hist.flag_row("bar_m30", "SPY", hist.FLAG_MISSING_SESSION, date(2025, 1, 8), "no IBKR M30 bar for an exchange session", detected_at=now, run_id="old")
+    store.publish("history_quality_flag", [old, real])
+    flags = hr.read_quality_flags(store=store)
+    assert list(flags["flag_date"]) == [date(2025, 1, 8)]
+    assert hr._scan(store, "history_quality_flag").num_rows == 2
 
 
 def test_windows_before_the_listing_are_inferred_empty_without_a_request(store):

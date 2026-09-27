@@ -150,6 +150,12 @@ def _observed(day: date, *, allow_friday: bool = True) -> date:
     return day
 
 
+#: One-off full closures no rule produces (NYSE and Nasdaq both shut).
+SPECIAL_CLOSURES = {
+    date(2025, 1, 9): "National Day of Mourning for President Carter",
+}
+
+
 @functools.lru_cache(maxsize=None)
 def holidays(year: int) -> dict:
     """Full-closure dates for one year, keyed by date with their names.
@@ -183,6 +189,9 @@ def holidays(year: int) -> dict:
     add(_nth_weekday(year, 9, 0, 1), "Labor Day")
     add(_nth_weekday(year, 11, 3, 4), "Thanksgiving Day")
     add(_observed(date(year, 12, 25)), "Christmas Day")
+    for day, name in SPECIAL_CLOSURES.items():
+        if day.year == year:
+            add(day, name)
     return dates
 
 
