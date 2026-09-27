@@ -194,6 +194,23 @@ def test_an_intraday_split_carries_older_bars_into_the_new_revision(store):
     assert len(h4) == 4 and set(h4["close"]) == {50.0}
 
 
+def test_a_lagging_series_is_caught_up_into_its_revision_not_duplicated(store):
+    july = [f"2026-07-17 {h}:30" for h in range(9, 16)]
+    client = FakeClient()
+    client.bars["1h"] = {"EQR": _intraday(july)}  # the provider cut the series short
+    hist.run_intraday(store, ["EQR"], "H1", client=client, now=DEC1, log=lambda *_: None)
+
+    again = hist.run_intraday(store, ["EQR"], "H1", client=client, now=DEC1, mode="topup", log=lambda *_: None)
+    assert again.rows_published.get("bar_h1", 0) == 0
+    assert store.read_table("bar_h1").to_pandas()["revision_id"].nunique() == 1
+
+    client.bars["1h"] = {"EQR": _intraday(july + [f"2026-11-30 {h}:30" for h in range(9, 16)])}
+    caught = hist.run_intraday(store, ["EQR"], "H1", client=client, now=DEC1, mode="topup", log=lambda *_: None)
+    assert caught.rows_published["bar_h1"] == 7
+    raw = store.read_table("bar_h1").to_pandas()
+    assert raw["revision_id"].nunique() == 1 and len(raw) == 14
+
+
 def test_m30_goes_to_its_own_dataset(store):
     client = FakeClient()
     client.bars["30m"] = {"QQQ": _intraday(["2026-11-30 09:30", "2026-11-30 10:00"])}

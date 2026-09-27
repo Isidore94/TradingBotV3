@@ -2239,6 +2239,8 @@ def format_history_coverage(report: dict, *, limit: int = 40) -> str:
         lines.append(f"  {name:22s} rows {stats['rows']:>10,}  files {stats['files']:>5}  quarantined {quarantined:,}")
     lines.append(f"earnings: {report['earnings_symbols']} symbols, {report['earnings_dates']} dates")
     lines.append(f"flags: {report['flags']}")
+    for name, lag in (report.get("intraday_lagging") or {}).items():
+        lines.append(f"{name}: {lag['count']} symbols end before SPY (cut-short pulls; the top-up catches them up)")
     lines.append(report["survivorship"])
     lines.append("symbol     first       last        sessions  missing  stale  jumps  source")
     worst = sorted(
