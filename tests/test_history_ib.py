@@ -290,6 +290,16 @@ def test_missing_and_partial_sessions_are_flagged_once_the_pull_is_whole(store):
     }
 
 
+def test_a_day_spy_also_lacks_is_a_closure_not_a_missing_session(store):
+    # 2025-01-09 (a national day of mourning) is a session in the calendar but the market was shut.
+    days = [d for d in _days(date(2025, 1, 6), date(2025, 1, 10)) if d != date(2025, 1, 9)]
+    now = datetime(2025, 1, 11, 12, tzinfo=UTC)
+    fetcher = FakeFetcher({"SPY": session_bars(days), "AAPL": session_bars(days)})
+    _run(store, ["SPY", "AAPL"], fetcher, start=date(2025, 1, 6), now=now)
+    flags = hr.read_quality_flags("bar_m30", store=store)
+    assert list(zip(flags["symbol"], flags["flag_date"], strict=True)) == [("SPY", date(2025, 1, 9))]
+
+
 def test_windows_before_the_listing_are_inferred_empty_without_a_request(store):
     start = date(2024, 9, 23)
     now = SATURDAY

@@ -303,8 +303,12 @@ def derive_h1_rows(m30: list[dict], *, provider, source_revision_id, computed_at
     return out
 
 
-def session_flags(symbol, m30: list[dict], *, detected_at, run_id) -> list[dict]:
-    """Sessions with no M30 bar, or fewer than a full session's, between the first and last bar."""
+def session_flags(symbol, m30: list[dict], *, detected_at, run_id, reference_days: set | None = None) -> list[dict]:
+    """Sessions with no M30 bar, or fewer than a full session's, between the first and last bar.
+
+    With ``reference_days`` (SPY's IB sessions) a day SPY has no bars either is
+    not flagged: that is a market closure the calendar lacks (2025-01-09), not a gap.
+    """
     if not m30:
         return []
     counts: dict[date, int] = {}
@@ -316,6 +320,8 @@ def session_flags(symbol, m30: list[dict], *, detected_at, run_id) -> list[dict]
         day = session.session_date
         expected = session.expected_bars(30)
         have = counts.get(day, 0)
+        if have == 0 and reference_days and day not in reference_days:
+            continue
         if have == 0:
             flags.append(hist.flag_row("bar_m30", symbol, hist.FLAG_MISSING_SESSION, day, "no IBKR M30 bar for an exchange session", detected_at=detected_at, run_id=run_id))
         elif have < expected:
@@ -735,6 +741,8 @@ def derive_and_flag(store, symbols, *, now, run_id, lock=contextlib.nullcontext,
     names = sorted(series)
     done = hist.existing_keys(store, "bar_derived_history", names, ["symbol", "timeframe", "interval_start", "source_revision_id"])
     yahoo = _yahoo_h1_closes(store, names)
+    spy = series.get("SPY") or _current_ib_m30(store, ["SPY"]).get("SPY") or []
+    reference = {row["interval_start"].astimezone(xcal.EXCHANGE_TZ).date() for row in spy}
     derived, flags = [], []
     for symbol, rows in series.items():
         revision = rows[0]["revision_id"]
@@ -744,7 +752,8 @@ def derive_and_flag(store, symbols, *, now, run_id, lock=contextlib.nullcontext,
             if (symbol, bar["timeframe"], bar["interval_start"], revision) not in done:
                 derived.append(bar)
         if flag_symbols is None or symbol in flag_symbols:
-            flags.extend(session_flags(symbol, rows, detected_at=now, run_id=run_id))
+            days = None if symbol == "SPY" else reference
+            flags.extend(session_flags(symbol, rows, detected_at=now, run_id=run_id, reference_days=days))
         flags.extend(mismatch_flags(symbol, h1, yahoo.get(symbol, {}), detected_at=now, run_id=run_id))
     report.add("bar_derived_history", hist._publish(store, "bar_derived_history", derived, lock=lock, job_id=run_id))
     known = hist.existing_keys(store, "history_quality_flag", names, ["dataset", "symbol", "check", "flag_date"])
