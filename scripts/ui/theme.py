@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Mapping
+
+
+def configure_platform() -> None:
+    """Use GDI fonts on Windows without overriding an explicit Qt platform."""
+    if sys.platform == "win32" and not os.environ.get("QT_QPA_PLATFORM"):
+        os.environ["QT_QPA_PLATFORM"] = "windows:fontengine=gdi"
 
 
 THEMES: dict[str, dict[str, str]] = {

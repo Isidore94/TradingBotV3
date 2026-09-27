@@ -1,5 +1,7 @@
 # Changelog
 
+- 2026-09-27 Startup (codex/startup-speed, unmerged): default Windows Qt to the GDI font backend before QApplication, avoiding the measured DirectWrite font-database stall; explicit Qt platform overrides remain intact.
+
 One line per change, newest first. The commit message holds the detail. Keep
 about 40 lines and delete the oldest. The full old changelog and inventory are in
 `notes/CHANGELOG.md`, local only.

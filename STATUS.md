@@ -2,14 +2,21 @@
 
 Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `git log`.
 
-**Updated:** 2026-09-26 18:20 PT (p9 phase 4 merged; desk still down)
+**Updated:** 2026-09-27 (startup fix in flight)
+
+- **In flight (2026-09-27):** `codex/startup-speed` avoids a reproduced Windows
+  DirectWrite font-loader stall. Native scratch construction: original blocked
+  for minutes; GDI 9.8/10.9 s. 13,334 full-suite tests (exit 0), 52 area checks,
+  105 selftests and Ruff pass. Live launch check owed; not merged or live. Separate GUI
+  redesign remains in `codex/gui-design`. No desk restart performed by this task.
 
 - **Live on `main`:** round 1, round 2 Phase A (`81272d42`), Phase B + S (`2d59aace`),
   S10a + S7 (`3802c0d7`), p9 phase 1 regime frame (`849390a2`), p9 phase 2 long
   setups + momentum universe + longs off + S9/P14 (`55bbeb26`), p9 phase 3 favourite-zone
   LONG gutted for Long leaders (`d382986e`), p9 phase 4 swing table; gates #257-#296.
-- **Desk:** DOWN. Restarted 20:50 PT on `81272d42`, then closed cleanly 21:51 PT on the
-  trader's word; restart only on the trader's word.
+- **Desk:** source main observed running at 08:24 PT on 2026-09-27; its 08:19
+  launch paused about four minutes before Auto Pilot initialized. This task
+  has not restarted it; restart only on the trader's word.
 - **Perf:** 09-24 baseline GUI blocked 1305 s, full GC 306 ms/min, young 156; on the new
   code (idle evening) full GC 4.7 ms/min, young 13.5. Monday: `desk_perf_report.py --day
   2026-09-28 --compare 2026-09-24`.

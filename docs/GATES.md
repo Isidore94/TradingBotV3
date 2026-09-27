@@ -3,6 +3,8 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- Startup font backend (codex/startup-speed): at the next authorized source launch, time first usable Desk and check text, icons, chart labels and light/dark readability on the trader's 4K panel; scratch native construction passed in 9.8/10.9 s, not a full live launch [trader + lead].
+
 - #296 Swing table (p9): on the next desk start the Master AVWAP table shows the Long leaders chip, the regime line (regime + day, longs verdict, SPY M5..W) and the new columns (Regime grade in compact; Long leader, SP4 shadow, Strength shadow, Study / note, Source in the full view when they have values); the Best swing switch ranks promoted Long leaders and the proven shorts first [trader]
 - #295 Favourite zone SHORT-only (p9 gut): after the next scan no LONG row is in the Favourite, Near or High Conviction bucket (setups table, phone push, digest); the favourite SHORT rows look as before; the Long leaders (Setup Tracker section, auto-populate longs, the push's "Long leaders" line) fill the long slots [trader]
 - #294 Strength shadow (p9): after 10 sessions compare the strength shadow's kept vs dropped longs (Setup Tracker line "strength filter (shadow)", from `strength_filter` in the session-horizon file) [lead]
