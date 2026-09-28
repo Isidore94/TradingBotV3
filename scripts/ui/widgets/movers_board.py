@@ -52,9 +52,11 @@ from swallowed import note_swallowed
 
 #: Same floor as the Strength page it sits above (alert column budget: 360 px).
 MIN_BOARD_WIDTH = 170
-#: Rows each table shows without scrolling: the main table, and each dip table.
+#: Rows each table keeps at its smallest: the main table, and each dip table.
+#: The Dip boxes are always shown, so their floor stays one row and the Movers
+#: board never pushes the chart pane above it smaller than the feed.
 VISIBLE_ROWS = 6
-DIP_VISIBLE_ROWS = 4
+DIP_VISIBLE_ROWS = 1
 #: Width that one numeric column needs; narrower tables show fewer columns.
 COLUMN_MIN_PX = 48
 SYMBOL_COLUMN_PX = 88
