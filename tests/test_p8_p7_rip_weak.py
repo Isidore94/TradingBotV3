@@ -273,7 +273,7 @@ def test_rally_shows_rip_tables_under_pop_with_a_rally_banner(app):
     widget.update_board(_rally_widget_board())
     widget.flush_pending_refresh()
     assert not widget.strong.isHidden() and not widget.weak.isHidden()
-    assert widget.dip_hint.isHidden()
+    assert not widget.strong.table.isHidden() and not widget.weak.table.isHidden()
     assert _names(widget.strong) == ["LEAD"]
     assert _names(widget.weak) == ["SINK", "LAG"]
     assert widget.strong.title_label.text().startswith("Rip-strong")
@@ -325,7 +325,8 @@ def test_no_turn_hint_names_the_rally_too(app):
     widget.update_board({"state": {"state": "up_day"}, "pop": {}, "dip": {}, "rip": {},
                          "mine": {}})
     widget.flush_pending_refresh()
-    assert "rally" in widget.dip_hint.text()
+    assert "rally" in widget.strong.empty_label.text()
+    assert widget.strong.table.isHidden() and widget.weak.table.isHidden()
 
 
 def test_plus_focus_on_a_rip_only_row_goes_through_the_gate(tmp_path, app):

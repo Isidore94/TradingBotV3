@@ -105,7 +105,7 @@ def test_pullback_lights_both_dip_tables_under_pop_and_auto_switches_once(app):
     assert "PULLBACK" in widget.banner.text() and "-0.42%" in widget.banner.text()
     assert _symbols(widget) == ["AAA", "BBB", "ZZZ"]
     assert not widget.strong.isHidden() and not widget.weak.isHidden()
-    assert widget.dip_hint.isHidden()
+    assert not widget.strong.table.isHidden() and not widget.weak.table.isHidden()
     assert _section_symbols(widget.strong) == ["HOLD"]
     assert _section_symbols(widget.weak) == ["SINK"]
     assert widget.strong.title_label.text().startswith("Dip-strong")
@@ -205,9 +205,14 @@ def test_unknown_state_banner_and_dip_hint(app):
     widget.update_board({"state": {"state": "unknown"}, "pop": {}, "dip": {}, "mine": {}})
     widget.flush_pending_refresh()
     assert "unknown" in widget.banner.text()
-    assert widget.strong.isHidden() and widget.weak.isHidden()
-    assert "no SPY pullback or bounce" in widget.dip_hint.text()
-    assert not widget.dip_hint.isHidden()
+    # Pop mode keeps the Dip boxes and their titles; only the tables wait for a turn.
+    assert not widget.strong.isHidden() and not widget.weak.isHidden()
+    assert widget.strong.table.isHidden() and widget.weak.table.isHidden()
+    assert widget.strong.title_label.text().startswith("Dip-strong")
+    assert widget.weak.title_label.text().startswith("Dip-weak")
+    assert "no SPY pullback or bounce" in widget.strong.empty_label.text()
+    assert widget.main.title_label.text().startswith("Pop")
+    assert not widget.main.title_label.isHidden()
 
 
 def test_row_click_emits_symbol_and_side(app):
