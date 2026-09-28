@@ -1,5 +1,7 @@
 # Changelog
 
+- 2026-09-28 Night AI: a model slot can say it will load no model tonight (plan_review with an empty plan), and then the 30-minute firings skip the Ollama probe; it had cold-loaded the 12B model 18 times a night for nothing. The Saturday summary now reads every slice (default cap 0, was 24 of 60); its window reserve is 260 min.
+
 - 2026-09-28 Swing list: every daytime D1 scan (07:30, 10:00, 12:45) now also writes the after-close style list (High Conviction, expected R) to `master_avwap_focus_preview.json`, and the swing list and Away report show it ("daytime preview" / `focus_preview`) instead of the plain report; the close scan's focus feed still wins after the close. Bounce bot, D1 watchlist and near-HOD adds still read the close-only feed.
 
 - 2026-09-28 Movers: Dip-strong now measures from the top of SPY's last big M5 bounce (it had fallen back to the 06:30 high when the drop was choppy); every ranked Movers list needs market cap >= $1B and 20-day average volume >= 1M shares.

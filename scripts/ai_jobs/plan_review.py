@@ -378,6 +378,16 @@ def _already_tonight(session: str, inputs_hash: str) -> bool:
 # ---------------------------------------------------------------------------
 # the slot
 # ---------------------------------------------------------------------------
+def model_wanted(*, session_date: str = "", **_ignored: Any) -> bool:
+    """False while the plan has no line to cite, so the runner loads no model to probe."""
+    import trading_plan
+
+    plan = trading_plan.read_plan(create=False, snapshot=False)
+    if plan.get("error"):
+        return True
+    return bool((plan.get("parsed") or {}).get("lines"))
+
+
 def run_plan_review(
     *,
     session_date: str = "",

@@ -154,6 +154,42 @@ def test_no_model_slot_due_means_no_probe(tmp_path, night):
     assert not [r for r in _rows(led) if r["job"] == "ollama_probe"]
 
 
+def test_a_model_slot_that_wants_no_model_tonight_is_run_without_a_probe(tmp_path, night):
+    """plan_review with an empty plan: the slot still runs, but no model is loaded to probe it."""
+    import dataclasses
+
+    from ai_jobs import runner
+
+    led = tmp_path / "ledger.jsonl"
+    probes: list[int] = []
+    seen: list[dict] = []
+    slot = dataclasses.replace(
+        _slot("plan_review", lambda **k: seen.append(k) or {"reason": "no lines"}, uses_model=True,
+              model_free_kwargs={"ask": False}),
+        model_wanted=lambda **k: False,
+    )
+    runner.run_slots([slot], now=OVERNIGHT, ledger_path=led, probe=lambda: probes.append(1) or (True, "ok"))
+
+    assert probes == []
+    assert seen and "ask" not in seen[0], "the slot runs as itself, not as its model-free half"
+    assert not [r for r in _rows(led) if r["job"] == "ollama_probe"]
+
+
+def test_a_crashing_model_wanted_check_still_probes(tmp_path, night):
+    import dataclasses
+
+    from ai_jobs import runner
+
+    def boom(**kwargs):
+        raise OSError("share asleep")
+
+    led = tmp_path / "ledger.jsonl"
+    probes: list[int] = []
+    slot = dataclasses.replace(_slot("a", lambda **k: {}, uses_model=True), model_wanted=boom)
+    runner.run_slots([slot], now=OVERNIGHT, ledger_path=led, probe=lambda: probes.append(1) or (True, "ok"))
+    assert probes == [1]
+
+
 def test_probe_local_model_answers_in_one_plain_sentence(monkeypatch):
     import ai_summary
     from ai_jobs import ollama_probe
@@ -663,12 +699,15 @@ def test_a_capped_summary_reads_only_the_cap_and_says_so():
     assert "daily.auto_report" in calls, "the small source keeps its one slice"
 
 
-def test_the_slice_cap_is_a_setting_with_a_default_of_24():
+def test_the_slice_cap_is_a_setting_that_defaults_to_no_cap():
+    """Trader 2026-09-28: the Saturday summary reads every slice (24 of 60 left 36 unread)."""
     from ai_jobs import map_reduce
 
-    assert map_reduce.max_slices(lambda key, default=None: default) == 24
+    assert map_reduce.max_slices(lambda key, default=None: default) == 0
     assert map_reduce.max_slices(lambda key, default=None: 10) == 10
-    assert map_reduce.max_slices(lambda key, default=None: "junk") == 24
+    assert map_reduce.max_slices(lambda key, default=None: "junk") == 0
+    kept, capped = map_reduce.cap_chunks(list(range(60)), map_reduce.DEFAULT_MAX_SLICES)
+    assert (len(kept), capped) == (60, 0)
 
 
 # ---------------------------------------------------------------------------

@@ -124,9 +124,10 @@ def _summary_dir(session_date: str) -> Path:
 #: budget ran 567s, and the chunked path plans 46 slices over 17 sources at
 #: ~220s each, so about 170 minutes. Reserving the single-shot figure for the
 #: chunked run is how a job that needs three hours gets launched with twenty
-#: minutes of window left and runs straight into the open.
+#: minutes of window left and runs straight into the open. Uncapped (2026-09-28)
+#: it reads every slice: 60 slices at ~3.5 min plus the reduce is ~225 minutes.
 SUMMARY_RESERVE_MINUTES = 20.0
-SUMMARY_RESERVE_MINUTES_CHUNKED = 200.0
+SUMMARY_RESERVE_MINUTES_CHUNKED = 260.0
 
 
 def summary_reserve_minutes() -> float:
