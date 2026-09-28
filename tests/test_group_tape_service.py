@@ -36,6 +36,15 @@ _app = QApplication.instance() or QApplication([])
 SESSION_OPEN = datetime(2026, 8, 27, 6, 30)
 
 
+@pytest.fixture(autouse=True)
+def _desk_rrs_engine(monkeypatch):
+    """These fixtures are one session of bars: the desk engine's tape.
+
+    The rolling tape (5-day fetch, hourly ATR) is pinned in test_rrs_intraday_units.py.
+    """
+    monkeypatch.setenv("TRADINGBOTV3_RRS_ENGINE", "desk")
+
+
 def _frame(closes, *, start=SESSION_OPEN, spread=0.4):
     """A real pandas frame, because `_frame_rows` is the real reader."""
     import pandas as pd

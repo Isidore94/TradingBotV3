@@ -23,7 +23,7 @@ from swallowed import note_swallowed
 # Session caches: classification/board joins and per-symbol daily strength are
 # stable within a session; keyed by file mtimes so a fresh scan invalidates.
 _industry_context_cache: dict[str, Any] = {}
-_daily_strength_cache: dict[str, tuple[float, dict]] = {}
+_daily_strength_cache: dict[str, tuple[tuple[float, float, bool], dict]] = {}
 
 # yfinance classification sector names -> SPDR sector-board names.
 _SECTOR_ALIASES = {
@@ -700,13 +700,40 @@ def save_industry_intraday_snapshot(
     return payload
 
 
-def _daily_strength_for_symbol(symbol: str, spy_returns: dict[int, float | None]) -> dict:
-    """D1 excess returns vs SPY + weekly 8EMA streak from the durable bar store."""
+def _daily_rolling_strength(frame, spy_bars: list[dict] | None) -> dict[str, float | None]:
+    """d1_rs_5d / d1_rs_20d as rolling daily RRS vs SPY (rrs_config.DAILY_5D / DAILY_20D)."""
+    import rrs_config
+    from daily_rrs import daily_rolling_rrs, frame_to_bars
+
+    bars = frame_to_bars(frame)
+    result: dict[str, float | None] = {}
+    for key, config in (("d1_rs_5d", rrs_config.DAILY_5D), ("d1_rs_20d", rrs_config.DAILY_20D)):
+        read = daily_rolling_rrs(bars, spy_bars or [], config)
+        result[key] = None if read is None else read.rolling
+    return result
+
+
+def _daily_strength_for_symbol(
+    symbol: str,
+    spy_returns: dict[int, float | None],
+    spy_bars: list[dict] | None = None,
+) -> dict:
+    """D1 strength vs SPY + weekly 8EMA streak from the durable bar store.
+
+    Rolling engine: rolling daily RRS (None when unknown). Desk engine: plain
+    percent excess return over 5 / 20 sessions.
+    """
+    import rrs_config
     from setup_playbook_study import _load_daily_frame, compute_weekly_streak_series
 
     frame = _load_daily_frame(symbol)
     if frame is None or len(frame) < 25:
         return {}
+    if rrs_config.use_rolling():
+        result: dict[str, Any] = _daily_rolling_strength(frame, spy_bars)
+        streaks = compute_weekly_streak_series(frame)
+        result["weekly_streak"] = int(streaks[-1]) if len(streaks) else 0
+        return result
     closes = frame["close"].to_numpy(dtype=float)
 
     def _return_pct(sessions: int) -> float | None:
@@ -726,9 +753,13 @@ def _daily_strength_for_symbol(symbol: str, spy_returns: dict[int, float | None]
 
 def daily_strength_map(symbols) -> dict[str, dict]:
     """symbol -> {d1_rs_5d, d1_rs_20d, weekly_streak}, cached per bar-file mtime."""
+    import rrs_config
+    from daily_rrs import frame_to_bars
     from setup_playbook_study import _load_daily_frame
 
     spy_frame = _load_daily_frame("SPY")
+    rolling = rrs_config.use_rolling()
+    spy_bars = frame_to_bars(spy_frame) if rolling else None
     spy_returns: dict[int, float | None] = {5: None, 20: None}
     if spy_frame is not None and len(spy_frame) > 21:
         spy_closes = spy_frame["close"].to_numpy(dtype=float)
@@ -738,18 +769,21 @@ def daily_strength_map(symbols) -> dict[str, dict]:
 
     from master_avwap_lib.legacy import MASTER_AVWAP_DAILY_BARS_DIR
 
+    spy_path = Path(MASTER_AVWAP_DAILY_BARS_DIR) / "SPY.parquet"
+    spy_mtime = spy_path.stat().st_mtime if spy_path.exists() else 0.0
     result: dict[str, dict] = {}
     for symbol in {str(s or "").strip().upper() for s in symbols or []}:
         if not symbol:
             continue
         bar_path = Path(MASTER_AVWAP_DAILY_BARS_DIR) / f"{symbol}.parquet"
         mtime = bar_path.stat().st_mtime if bar_path.exists() else 0.0
+        cache_key = (mtime, spy_mtime, rolling)
         cached = _daily_strength_cache.get(symbol)
-        if cached is not None and cached[0] == mtime:
+        if cached is not None and cached[0] == cache_key:
             result[symbol] = cached[1]
             continue
-        values = _daily_strength_for_symbol(symbol, spy_returns)
-        _daily_strength_cache[symbol] = (mtime, values)
+        values = _daily_strength_for_symbol(symbol, spy_returns, spy_bars)
+        _daily_strength_cache[symbol] = (cache_key, values)
         result[symbol] = values
     return result
 

@@ -145,6 +145,7 @@ def alert_segments(fields: dict[str, Any], *, now: datetime | None = None) -> li
         market_environment=str(fields.get("market_environment") or ""),
         session_rvol=_as_float(fields.get("session_rvol")),
         rrs_spy=_as_float(fields.get("rrs_spy")),
+        rrs_engine=str(fields.get("rrs_engine") or ""),
     )
     segments = []
     for dimension, key_fn in DIMENSIONS.items():

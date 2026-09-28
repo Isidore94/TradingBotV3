@@ -68,7 +68,8 @@ def _resolve_launcher(spec: str) -> Callable[..., Any]:
 def _state(bot: Any) -> dict[str, Any]:
     return {
         "connection_status": bool(getattr(bot, "connection_status", False)),
-        "rrs_threshold": float(getattr(bot, "rrs_threshold", 2.0)),
+        "rrs_threshold": float(getattr(bot, "rrs_threshold", 2.0)),  # desk engine (old scale)
+        "rolling_rrs_threshold": float(getattr(bot, "rolling_rrs_threshold", 1.0)),  # rolling engine
         "rrs_timeframe_key": str(getattr(bot, "rrs_timeframe_key", "5m")),
         "market_environment_user_override": bool(
             getattr(bot, "market_environment_user_override", False)
@@ -237,6 +238,10 @@ class BounceProcessProxy:
     @property
     def rrs_threshold(self) -> float:
         return float(self._get("rrs_threshold"))
+
+    @property
+    def rolling_rrs_threshold(self) -> float:
+        return float(self._get("rolling_rrs_threshold"))
 
     @property
     def rrs_timeframe_key(self) -> str:

@@ -9,6 +9,8 @@ SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import pytest  # noqa: E402
+
 from market_state import M5Bar  # noqa: E402
 from relative_strength import (  # noqa: E402
     CandidateInput,
@@ -20,6 +22,12 @@ from relative_strength import (  # noqa: E402
 )
 
 START = datetime(2026, 7, 10, 10, 0)
+
+
+@pytest.fixture(autouse=True)
+def _desk_engine(monkeypatch):
+    """This file pins rs_engine_v1 (desk); rs_engine_v2 is pinned in test_rrs_daily_rolling.py."""
+    monkeypatch.setenv("TRADINGBOTV3_RRS_ENGINE", "desk")
 
 
 def bars(closes, *, skip=(), start=START):

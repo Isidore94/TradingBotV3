@@ -2,26 +2,24 @@
 
 Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `git log`.
 
-**Updated:** 2026-09-27 12:40 PT (p10 research lake + SPY regimes + backtester merged)
+**Updated:** 2026-09-28 22:40 PT (rolling RRS merged, trader's word, no live day)
 
 - **Live on `main`:** round 1, round 2 Phase A (`81272d42`), Phase B + S (`2d59aace`),
   S10a + S7 (`3802c0d7`), p9 phase 1 regime frame (`849390a2`), p9 phase 2 long
   setups + momentum universe + longs off + S9/P14 (`55bbeb26`), p9 phase 3 favourite-zone
   LONG gutted for Long leaders (`d382986e`), p9 phase 4 swing table, strength + under AVWAPE promotion + runner dip watch (`79e8d658`), p10 research lake history + SPY/QQQ/IWM
-  auto regimes 2019+ + setups-by-regime backtester (`1b56f34f`, research only); gates #257-#299.
+  auto regimes 2019+ + setups-by-regime backtester (`1b56f34f`, research only); rolling RRS everywhere, cutoff 1.0,
+  `TRADINGBOTV3_RRS_ENGINE=desk` = old formulas; gates #257-#300.
 - **GUI/startup delivery:** approved 4K GUI design in gui.md; Journal, Research,
   Day Review, supporting pages and Desk polish; Windows font-startup fix.
   All 924 test files verified in fresh processes: 13,446 pass, 14 skip; source
   and frozen selftests 105/105, smoke 7/7, Ruff clean. Long combined Qt test runs
   still hit worker-lifetime crashes; isolated coverage passed, not a harness fix.
-- **Desk:** not restarted by this delivery. Next launch uses main. Live 4K/resource
-  checks and actual first-usable timing remain owed in docs/GATES.md.
-- **Perf:** 09-24 baseline GUI blocked 1305 s, full GC 306 ms/min, young 156; on the new
-  code (idle evening) full GC 4.7 ms/min, young 13.5. Monday: `desk_perf_report.py --day
-  2026-09-28 --compare 2026-09-24`.
+- **Desk:** next launch uses main; live 4K/resource and first-usable checks are in GATES.
 - **Night window:** the night AI starts 22:00 PT. No builders, merges or test runs
   22:00-02:00 PT.
-- **Owed:** TLT/USO/HYG daily bars (scan-side, ask first); halted-name refetch; movers
+- **Owed:** rolling-RRS leftovers still on % (industry board, autopilot open-scan RS,
+  setup_group_context, D1 group strength; bounce CSV lacks `rrs_engine`, ask first); TLT/USO/HYG daily bars (scan-side, ask first); halted-name refetch; movers
   summary into the night AI; phone-brief rule line; pre-Aug entry_at (outcome code, ask
   first); review of the per-trade Mentor Save (`182f3e08`); weekly-options facet needs a
   theta store (only 43 of 6,462 theta picks ever got an option quote: IB option data).
@@ -29,7 +27,7 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
   "narration absent", empty-evidence enrichment carries no tags, no event 2004). #264:
   tokens on 12 model rows; the digest lines exist but describe the goal-less 09-24 night
   (B1b); Health rows need a desk session. Econ brief still rejected (P4b).
-- **Next action:** Monday: check gates #297-#298 (runner dips armed, a fire in the Alert Center); `desk_perf_report.py --day 2026-09-28 --compare 2026-09-24`,
+- **Next action:** Monday: gate #300 (rolling RRS); gates #297-#298 (runner dips armed, a fire in the Alert Center); `desk_perf_report.py --day 2026-09-28 --compare 2026-09-24`,
   gates #258-#287. Left: B10, B2, C4a, Phase C.
 - **Trader actions owed:** set Risk per trade ($) in Settings > General; fill
   `trading_plan.md`; run the permutation backfill before Saturday; confirm setup tags

@@ -72,6 +72,7 @@ _PROVEN_RE = re.compile(r"\bPROVEN\b")
 # implicitly weighing when they act on a chart. Everything else stays behind
 # the event_id join.
 _CONTEXT_FIELDS = (
+    "rrs_engine",  # scale of the rrs_* numbers; absent = desk (pre-2026-09-28)
     "rrs_spy",
     "rrs_sector",
     "rrs_industry",

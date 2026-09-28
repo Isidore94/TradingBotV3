@@ -37,6 +37,8 @@ from datetime import date, datetime
 from typing import Any, Mapping, Sequence
 
 from completed_bars import align_to, bar_time, completed_m5_bars
+from indicators.rolling_rrs import RollingRrsConfig, rolling_from_series, rrs_point_series
+import rrs_config
 
 #: The 11 SPDR sector ETFs, keyed by Yahoo's sector key. A copy of
 #: ``legacy.DEFAULT_SECTOR_ETF_MAP`` rather than an import: the tape must not
@@ -276,3 +278,66 @@ def minimum_bars_for(label: str) -> int:
     empty tape with no explanation.
     """
     return RRS_WINDOWS[label] + 2
+
+
+# ------------------------------------------------------------ rolling engine
+#
+# rrs_config's rolling RRS: every read is a one-hour move over the hourly ATR,
+# so the chips roll the same series over 6 / 12 / 18 reads (30 / 60 / 90
+# minutes of reads). The hourly ATR needs earlier sessions, so the bars given
+# may span several days; only today's reads are rolled.
+
+#: Window label -> point reads rolled into the chip.
+ROLLING_READS: dict[str, int] = {"30": 6, "60": 12, "90": 18}
+
+
+def rolling_rrs_windows(
+    symbol_bars: Sequence[Any],
+    spy_bars: Sequence[Any],
+    *,
+    now: datetime,
+    session_date: date | None = None,
+) -> dict[str, float | None]:
+    """The 30 / 60 / 90 chips on the rolling RRS; None where a chip cannot read yet."""
+    if session_date is None:
+        session_date = now.date()
+    out: dict[str, float | None] = {label: None for label in ROLLING_READS}
+    aligned_symbol, aligned_spy = align_bars(
+        completed_m5_bars(symbol_bars or (), now=now),
+        completed_m5_bars(spy_bars or (), now=now),
+        now=now,
+    )
+    if not aligned_symbol:
+        return out
+    today = []
+    for bar in aligned_symbol:
+        stamp = bar_time(bar)
+        today.append(stamp is not None and align_to(stamp, now).date() == session_date)
+    if not today[-1]:
+        return out
+    series = rrs_point_series(aligned_symbol, aligned_spy, rrs_config.INTRADAY)
+    for label, reads in ROLLING_READS.items():
+        start = max(0, len(series) - reads)
+        chunk = [
+            series[index] if today[index] else (None, None) for index in range(start, len(series))
+        ]
+        config = RollingRrsConfig(
+            length=rrs_config.INTRADAY.length,
+            roll=reads,
+            min_reads=rrs_config.INTRADAY.required_reads(),
+        )
+        result = rolling_from_series(chunk, config)
+        out[label] = result.rolling if result is not None else None
+    return out
+
+
+def rolling_minimum_bars_for(label: str) -> int:
+    """Completed bars TODAY before a rolling chip can answer (all three chips alike).
+
+    The first read needs a full hour of today's bars (``length + 1``), then the
+    roll needs ``min_reads`` reads. The hourly ATR also needs 20 finished hours
+    from earlier sessions.
+    """
+    if label not in ROLLING_READS:
+        raise KeyError(label)
+    return rrs_config.INTRADAY.length + rrs_config.INTRADAY.required_reads()
