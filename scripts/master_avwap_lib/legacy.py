@@ -50,6 +50,8 @@ from gui_text_highlighter import (
     set_highlighted_text,
     tree_tags_for_values,
 )
+import rrs_config
+from daily_rrs import daily_rolling_rrs, latest_point as daily_rrs_latest_point
 from .setup_tagging import derive_setup_tag_payload
 from . import daily_bar_cache  # WS-FC1: the daily-bar cache's write guard
 from . import selection_policy as selection_policy_lib
@@ -28178,6 +28180,26 @@ INDUSTRY_RELATIVE_STRENGTH_ROTATION_RELAX_THRESHOLD = 3.0
 # and weekly (5d) excess - consistent RS/RW, not a one-day pop (2026-07-08).
 INDUSTRY_RS_CONSISTENT_BONUS = 6
 
+
+def _daily_rs_scale() -> float:
+    """Multiplier on the D1 / industry RS thresholds above.
+
+    They were written for the desk's percent-excess score, where 1.0 is the
+    RS/RW line. Under the rolling engine that line is ``rrs_config.cutoff()``
+    in daily RRS units, and every other threshold keeps its ratio to it.
+    """
+    if rrs_config.use_rolling():
+        return rrs_config.cutoff() / DAILY_RELATIVE_STRENGTH_THRESHOLD
+    return 1.0
+
+
+def _daily_rrs_config(lookback_days: int):
+    """rrs_config.DAILY_5D, with the move length changed if a caller asks for another."""
+    import dataclasses
+
+    base = rrs_config.DAILY_5D
+    return base if int(lookback_days) == base.length else dataclasses.replace(base, length=int(lookback_days))
+
 HTF_TREND_SCORING_FLAG = "htf_trend_scoring_enabled"
 HTF_TREND_SCORE_BONUS = 6
 HTF_TREND_SMA_PERIODS = (20, 50, 100, 200)
@@ -28664,7 +28686,15 @@ def assess_daily_relative_strength(
     side,
     spy_benchmark: dict | None,
     lookback_days: int = DAILY_RELATIVE_STRENGTH_LOOKBACK_DAYS,
+    *,
+    spy_daily_rows: list[dict] | None = None,
 ) -> dict:
+    """D1 RS vs SPY and its side bonus.
+
+    Rolling engine: the score is the rolling daily RRS (``rrs_config.DAILY_5D``)
+    of ``daily_rows`` vs ``spy_daily_rows``, None when either is too short.
+    Desk engine: 0.35 x 1-day + 0.65 x 5-day percent excess vs ``spy_benchmark``.
+    """
     result = {
         "daily_relative_strength_score": None,
         "daily_relative_strength_bonus": 0,
@@ -28674,6 +28704,10 @@ def assess_daily_relative_strength(
         "spy_one_day_return_pct": _coerce_float((spy_benchmark or {}).get("one_day_return_pct")),
         "spy_five_day_return_pct": _coerce_float((spy_benchmark or {}).get("five_day_return_pct")),
     }
+    if rrs_config.use_rolling():
+        return _assess_daily_relative_strength_rolling(
+            result, daily_rows, last_trade_date, side, spy_daily_rows, lookback_days
+        )
     if not daily_rows or not last_trade_date or not isinstance(spy_benchmark, dict):
         return result
     target = last_trade_date.isoformat() if isinstance(last_trade_date, date) else str(last_trade_date)
@@ -28729,6 +28763,48 @@ def assess_daily_relative_strength(
     result.update(
         {
             "daily_relative_strength_score": round(float(rs_score), 3),
+            "daily_relative_strength_bonus": int(directional_bonus),
+            "daily_relative_strength_note": note,
+        }
+    )
+    return result
+
+
+def _assess_daily_relative_strength_rolling(
+    result: dict,
+    daily_rows,
+    last_trade_date,
+    side,
+    spy_daily_rows: list[dict] | None,
+    lookback_days: int,
+) -> dict:
+    """``assess_daily_relative_strength`` under the rolling engine."""
+    if not daily_rows or not last_trade_date:
+        return result
+    target = last_trade_date.isoformat() if isinstance(last_trade_date, date) else str(last_trade_date)
+    relevant = [row for row in daily_rows if str(row.get("date") or "") <= target]
+    result["symbol_one_day_return_pct"] = _trailing_return_pct(relevant, 1)
+    result["symbol_five_day_return_pct"] = _trailing_return_pct(relevant, int(lookback_days))
+    read = daily_rolling_rrs(relevant, spy_daily_rows or [], _daily_rrs_config(lookback_days), through=target)
+    if read is None:
+        return result
+    rs_score = float(read.rolling)
+    cutoff = DAILY_RELATIVE_STRENGTH_THRESHOLD * _daily_rs_scale()
+    normalized_side = normalize_side(side)
+    directional_bonus = 0
+    if normalized_side == "LONG" and rs_score >= cutoff:
+        directional_bonus = DAILY_RELATIVE_STRENGTH_BONUS
+    elif normalized_side == "SHORT" and rs_score <= -cutoff:
+        directional_bonus = DAILY_RELATIVE_STRENGTH_WEAKNESS_BONUS
+    reading = f"rolling RRS={rs_score:+.2f} ({int(lookback_days)}d moves / daily ATR, mean of {len(read.reads)})"
+    if directional_bonus:
+        direction_text = "stronger than SPY" if normalized_side == "LONG" else "weaker than SPY"
+        note = f"D1 {direction_text}: {reading} (+{directional_bonus})"
+    else:
+        note = f"D1 vs SPY neutral: {reading}"
+    result.update(
+        {
+            "daily_relative_strength_score": round(rs_score, 3),
             "daily_relative_strength_bonus": int(directional_bonus),
             "daily_relative_strength_note": note,
         }
@@ -30935,6 +31011,7 @@ def build_industry_strength_rows(
     spy_benchmark: dict | None,
     *,
     industry_context_by_symbol: dict | None = None,
+    spy_daily_rows: list[dict] | None = None,
 ) -> list[dict]:
     rows: list[dict] = []
     if not isinstance(industry_daily_frames_by_etf, dict) or not industry_daily_frames_by_etf:
@@ -30966,7 +31043,9 @@ def build_industry_strength_rows(
             last_trade_date = date.fromisoformat(daily_rows[-1]["date"])
         except (ValueError, KeyError, TypeError):
             continue
-        rs = assess_daily_relative_strength(daily_rows, last_trade_date, "LONG", spy_benchmark)
+        rs = assess_daily_relative_strength(
+            daily_rows, last_trade_date, "LONG", spy_benchmark, spy_daily_rows=spy_daily_rows
+        )
         rs_score = _coerce_float(rs.get("daily_relative_strength_score"))
         if rs_score is None:
             continue
@@ -31004,6 +31083,7 @@ def build_universe_strength_rows(
     industry_daily_frames_by_etf: dict | None = None,
     daily_rows_cache: dict | None = None,
     industry_rows_by_etf: dict | None = None,
+    spy_daily_rows: list[dict] | None = None,
 ) -> list[dict]:
     """One strength row per *scanned* symbol — the whole universe, not just the
     symbols that produced a flagged setup. Feeds the market-prep strongest/weakest
@@ -31054,7 +31134,9 @@ def build_universe_strength_rows(
             except (ValueError, KeyError, TypeError):
                 continue
         side = normalize_side(sides_by_symbol.get(sym) or "")
-        rs = assess_daily_relative_strength(daily_rows, last_trade_date, side, spy_benchmark)
+        rs = assess_daily_relative_strength(
+            daily_rows, last_trade_date, side, spy_benchmark, spy_daily_rows=spy_daily_rows
+        )
         row = {
             "symbol": sym,
             "side": side,
@@ -31090,6 +31172,22 @@ def build_universe_strength_rows(
                 industry_13w = _trailing_return_pct(industry_rows, MARKET_PREP_RETURN_13W_SESSIONS)
                 symbol_one_day = row.get("symbol_one_day_return_pct")
                 symbol_five_day = row.get("symbol_five_day_return_pct")
+                if rrs_config.use_rolling():
+                    row.update(
+                        {
+                            "industry_one_day_return_pct": industry_one_day,
+                            "industry_five_day_return_pct": industry_five_day,
+                            "industry_13w_return_pct": industry_13w,
+                            **_rolling_industry_strength(daily_rows, industry_rows, last_trade_date),
+                            "return_13w_vs_industry_pct": (
+                                None
+                                if row.get("return_13w_pct") is None or industry_13w is None
+                                else round(float(row.get("return_13w_pct")) - float(industry_13w), 3)
+                            ),
+                        }
+                    )
+                    rows.append(row)
+                    continue
                 row.update(
                     {
                         "industry_one_day_return_pct": industry_one_day,
@@ -31125,6 +31223,20 @@ def build_universe_strength_rows(
     return rows
 
 
+def _rolling_industry_strength(daily_rows, industry_rows, last_trade_date) -> dict:
+    """Stock vs its industry ETF as daily RRS: rolling 5d read, plus the latest 1d and 5d point reads."""
+    config = rrs_config.DAILY_5D
+    target = last_trade_date.isoformat() if isinstance(last_trade_date, date) else str(last_trade_date)
+    read = daily_rolling_rrs(daily_rows, industry_rows, config, through=target)
+    one = daily_rrs_latest_point(daily_rows, industry_rows, 1, config, through=target)
+    five = daily_rrs_latest_point(daily_rows, industry_rows, config.length, config, through=target)
+    return {
+        "rs_vs_industry": None if read is None else round(float(read.rolling), 3),
+        "rs_vs_industry_1d": None if one is None else round(float(one), 3),
+        "rs_vs_industry_5d": None if five is None else round(float(five), 3),
+    }
+
+
 def assess_industry_relative_strength(
     universe_row: dict | None,
     side: str,
@@ -31153,9 +31265,12 @@ def assess_industry_relative_strength(
         return result
 
     normalized_side = normalize_side(side)
+    scale = _daily_rs_scale()
+    stock_threshold = INDUSTRY_RELATIVE_STRENGTH_THRESHOLD * scale
+    industry_threshold = INDUSTRY_RELATIVE_STRENGTH_INDUSTRY_THRESHOLD * scale
     if normalized_side == "SHORT":
-        stock_leads = rs_vs_industry <= -INDUSTRY_RELATIVE_STRENGTH_THRESHOLD
-        industry_aligned = industry_rs is None or industry_rs <= -INDUSTRY_RELATIVE_STRENGTH_INDUSTRY_THRESHOLD
+        stock_leads = rs_vs_industry <= -stock_threshold
+        industry_aligned = industry_rs is None or industry_rs <= -industry_threshold
         horizons_consistent = (
             rs_vs_industry_1d is not None
             and rs_vs_industry_5d is not None
@@ -31165,8 +31280,8 @@ def assess_industry_relative_strength(
         stock_text = "weaker than"
         industry_text = "industry weak vs SPY"
     else:
-        stock_leads = rs_vs_industry >= INDUSTRY_RELATIVE_STRENGTH_THRESHOLD
-        industry_aligned = industry_rs is None or industry_rs >= INDUSTRY_RELATIVE_STRENGTH_INDUSTRY_THRESHOLD
+        stock_leads = rs_vs_industry >= stock_threshold
+        industry_aligned = industry_rs is None or industry_rs >= industry_threshold
         horizons_consistent = (
             rs_vs_industry_1d is not None
             and rs_vs_industry_5d is not None
@@ -31180,7 +31295,10 @@ def assess_industry_relative_strength(
         f"D1 {stock_text} {industry_etf}: rs_ind={rs_vs_industry:+.2f}",
     ]
     if rs_vs_industry_1d is not None and rs_vs_industry_5d is not None:
-        note_bits.append(f"1d={rs_vs_industry_1d:+.2f}% 5d={rs_vs_industry_5d:+.2f}%")
+        if rrs_config.use_rolling():
+            note_bits.append(f"1d={rs_vs_industry_1d:+.2f} 5d={rs_vs_industry_5d:+.2f} RRS")
+        else:
+            note_bits.append(f"1d={rs_vs_industry_1d:+.2f}% 5d={rs_vs_industry_5d:+.2f}%")
     if industry_rs is not None:
         note_bits.append(f"{industry_text} rs={industry_rs:+.2f}")
 
@@ -31202,8 +31320,8 @@ def assess_industry_relative_strength(
     elif (
         normalized_side == "LONG"
         and industry_rs is not None
-        and industry_rs >= INDUSTRY_RELATIVE_STRENGTH_ROTATION_RELAX_THRESHOLD
-        and rs_vs_industry > -INDUSTRY_RELATIVE_STRENGTH_THRESHOLD
+        and industry_rs >= INDUSTRY_RELATIVE_STRENGTH_ROTATION_RELAX_THRESHOLD * scale
+        and rs_vs_industry > -stock_threshold
     ):
         note_bits.append("super-strong industry; mild lag kept as rotation context")
 
@@ -35594,6 +35712,7 @@ def build_market_prep_payload(
     industry_context_by_symbol: dict | None = None,
     industry_daily_frames_by_etf: dict | None = None,
     industry_strength_rows: list[dict] | None = None,
+    spy_daily_rows: list[dict] | None = None,
 ) -> dict:
     reference_date = reference_date or datetime.now().date()
     previous_session_date = previous_session_date or _market_prep_previous_session_before(reference_date)
@@ -35613,6 +35732,7 @@ def build_market_prep_payload(
                 sides_by_symbol=sides_by_symbol,
                 industry_context_by_symbol=industry_context_by_symbol,
                 industry_daily_frames_by_etf=industry_daily_frames_by_etf,
+                spy_daily_rows=spy_daily_rows,
             )
         else:
             universe_strength_rows = []
@@ -35622,6 +35742,7 @@ def build_market_prep_payload(
             industry_daily_frames_by_etf,
             spy_benchmark,
             industry_context_by_symbol=industry_context_by_symbol,
+            spy_daily_rows=spy_daily_rows,
         )
 
     recent_earnings_entries = collect_market_prep_recent_earnings(
