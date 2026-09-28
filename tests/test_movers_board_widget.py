@@ -128,24 +128,33 @@ def test_dip_boxes_read_the_swing_lists_and_name_their_own_anchor(app):
     board["swing"] = {"long": [_row("LEAD", dip_score=1.1, since_start_pct=1.5)],
                       "short": [_row("LAG", dip_score=-0.9, since_start_pct=-1.2, held=True)]}
     board["swing_anchor"] = {
-        "long": {"dt": "2026-09-22T10:25:00-04:00", "time": "10:25", "price": 398.0},
-        "short": {"dt": "2026-09-22T09:55:00-04:00", "time": "09:55", "price": 404.5},
+        "long": {"dt": "2026-09-22T12:25:00-04:00", "time": "12:25", "price": 404.5,
+                 "kind": "swing"},
+        "short": {"dt": "2026-09-22T10:55:00-04:00", "time": "10:55", "price": 398.0,
+                  "kind": "swing"},
     }
     widget.update_board(board)
     widget.flush_pending_refresh()
     assert _section_symbols(widget.strong) == ["LEAD"]
     assert _section_symbols(widget.weak) == ["LAG"]
     strong, weak = widget.strong.title_label.text(), widget.weak.title_label.text()
-    assert strong.startswith("Dip-strong") and "low" in strong and "not lit" not in strong
-    assert weak.startswith("Dip-weak") and "high" in weak
+    # Longs from the high the dip fell from, shorts from the low the rip rose from.
+    assert strong.startswith("Dip-strong") and strong.endswith(" high") and "not lit" not in strong
+    assert weak.startswith("Dip-weak") and weak.endswith(" low")
     assert strong != weak  # each box names its own swing
-    # No anchor yet: the box says so and stays empty.
+    # No major move yet: the high / low of day, said so.
+    board["swing_anchor"]["long"]["kind"] = "hod"
+    board["swing_anchor"]["short"]["kind"] = "lod"
+    widget.update_board(board)
+    widget.flush_pending_refresh()
+    assert "high of day so far" in widget.strong.title_label.text()
+    assert "low of day so far" in widget.weak.title_label.text()
+    # No SPY bars at all: the boxes say so and stay empty.
     board["swing"] = {"long": [], "short": []}
     board["swing_anchor"] = {"long": None, "short": None}
     widget.update_board(board)
     widget.flush_pending_refresh()
-    assert "no M5 dip yet" in widget.strong.title_label.text()
-    assert "no M5 rip yet" in widget.weak.title_label.text()
+    assert "no SPY bars" in widget.strong.title_label.text()
 
 
 def test_dip_weak_rows_are_shorts_for_click_and_plus_focus(app):

@@ -15,9 +15,10 @@ Rules kept here:
   "—"), an unmeasurable ATR drops the row from the ranked lists, missing SPY
   bars make the market state "unknown" and light nothing.
 - Dip boxes (trader, 2026-09-28): Dip-strong measures every name against SPY
-  from SPY's last major M5 dip, Dip-weak from its last major rip. A major move
-  is a completed run of SWING_HA_RUN same-colour Heikin-Ashi candles on SPY's
-  completed M5 bars, so the anchors shift as new runs complete. A name once on
+  from the high SPY's last major M5 dip fell from, Dip-weak from the low its
+  last major rip rose from (else the high / low of day so far). A major move
+  is a run of SWING_HA_RUN same-colour Heikin-Ashi candles on SPY's completed
+  M5 bars, so the anchors shift as new runs form. A name once on
   a box today stays on it while it still qualifies (`held_by_side`). These
   `swing` lists feed the boxes only; the P8 notices, outcome logs and M5 watch
   feed still read the pullback/bounce/rally `dip`/`rip` lists.
@@ -501,11 +502,13 @@ def swing_anchors(
 ) -> dict[str, dict[str, Any] | None]:
     """Where each Dip box measures from, off SPY's completed M5 bars (normalised).
 
-    Heikin-Ashi runs over the whole series; only runs inside today count. The
-    last completed run of SWING_HA_RUN+ RED candles is the last major dip: its
-    lowest low is the long anchor. The last completed GREEN run is the last major
-    rip: its highest high is the short anchor. A run still going is not complete
-    (the anchor may not be the last bar). None when there is no such run today."""
+    A major move is a run of SWING_HA_RUN+ same-colour Heikin-Ashi candles today
+    (it counts while still running). Longs measure from the HIGH the last major
+    dip fell from: the highest high from the start of the major rip before it
+    (else the open) to the end of that dip. Shorts mirror it: the LOW the last
+    major rip rose from. No major dip yet: longs use the high of day so far
+    (`kind` "hod"); no major rip yet: shorts use the low of day ("lod"). Ties
+    take the later bar. None only when SPY has no bars today."""
     empty: dict[str, dict[str, Any] | None] = {"long": None, "short": None}
     if not spy_bars:
         return empty
@@ -518,32 +521,33 @@ def swing_anchors(
     first = next((i for i, b in enumerate(bars) if b["dt"].date() == day), None)
     if first is None:
         return empty
-    runs: list[tuple[str, int, int]] = []  # (colour, start, end) inside today
+    runs: list[tuple[str, int, int]] = []  # (colour, start, end) of major runs today
     start = first
     for index in range(first + 1, len(bars) + 1):
         if index == len(bars) or colors[index] != colors[start]:
-            if colors[start] in (GREEN, RED):
+            if colors[start] in (GREEN, RED) and index - start >= SWING_HA_RUN:
                 runs.append((colors[start], start, index - 1))
             start = index
-    last_index = len(bars) - 1
-    out = dict(empty)
-    for colour, side in ((RED, "long"), (GREEN, "short")):
-        done = [(s, e) for c, s, e in runs
-                if c == colour and e < last_index and e - s + 1 >= SWING_HA_RUN]
-        if not done:
-            continue
-        s, e = done[-1]
-        span = range(s, e + 1)
-        if side == "long":
-            at = min(span, key=lambda i: (bars[i]["low"], -i))
-            price = bars[at]["low"]
+
+    def anchor(side: str) -> dict[str, Any]:
+        move, before = (RED, GREEN) if side == "long" else (GREEN, RED)
+        last = next((r for r in reversed(runs) if r[0] == move), None)
+        if last is None:
+            window, kind = range(first, len(bars)), ("hod" if side == "long" else "lod")
         else:
-            at = max(span, key=lambda i: (bars[i]["high"], i))
+            prior = next((r for r in reversed(runs) if r[0] == before and r[1] < last[1]), None)
+            window, kind = range(prior[1] if prior else first, last[2] + 1), "swing"
+        if side == "long":
+            at = max(window, key=lambda i: (bars[i]["high"], i))
             price = bars[at]["high"]
+        else:
+            at = min(window, key=lambda i: (bars[i]["low"], -i))
+            price = bars[at]["low"]
         stamp = bars[at]["dt"]
-        out[side] = {"dt": stamp.isoformat(timespec="seconds"),
-                     "time": stamp.strftime("%H:%M"), "price": price, "_dt": stamp}
-    return out
+        return {"dt": stamp.isoformat(timespec="seconds"), "time": stamp.strftime("%H:%M"),
+                "price": price, "kind": kind, "_dt": stamp}
+
+    return {"long": anchor("long"), "short": anchor("short")}
 
 
 def excess_since(

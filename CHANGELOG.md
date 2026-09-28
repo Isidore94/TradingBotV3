@@ -1,6 +1,6 @@
 # Changelog
 
-- 2026-09-28 Movers Dip boxes: Dip-strong measures from SPY's last major M5 dip and Dip-weak from its last major rip (a completed run of 6+ Heikin-Ashi candles), shifting as new runs complete; a name listed earlier today stays while it still qualifies. Notices and outcome logs unchanged.
+- 2026-09-28 Movers Dip boxes: Dip-strong measures from the high SPY's last big M5 drop fell from and Dip-weak from the low its last big bounce rose from (6+ Heikin-Ashi candles in a row; else the high / low of day), so the two boxes keep separate start points; a name listed earlier today stays while it still qualifies. Notices and outcome logs unchanged.
 
 - 2026-09-28 Movers: Pop + Dip is always three boxes, top to bottom: Movers (half the height), Dip-strong and Dip-weak (a quarter each); unlit Dip boxes sit empty with "(not lit)" in the title.
 
