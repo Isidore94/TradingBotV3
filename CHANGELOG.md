@@ -1,5 +1,7 @@
 # Changelog
 
+- 2026-09-28 Indicators: rolling RRS can take one-hour candles for both symbols so the hourly ATR spans H.S.'s full 50 hours (ATR50(H) = 50 one-hour candles); only candles closed before the move began count. Without them it cuts hours from the M5 bars as before.
+
 - 2026-09-28 Indicators: rolling RRS now defaults to H.S.'s hourly ATR (1-hour move / mean in-session hourly range over the last 50 hours, gaps excluded, move never spans the overnight gap); `atr_mode="bar"` keeps desk-RRS parity. The desk scale reads ~4.4x the hourly one.
 
 - 2026-09-28 Indicators: add pure rolling Real Relative Strength vs SPY (`indicators/rolling_rrs.py`, H.S. RealDayTrading post): mean of the last 12 desk-RRS point reads plus hold-on-dips / drive-on-rips splits; point reads parity-tested against `group_rrs.real_relative_strength`. Not wired into any scan, score or alert yet.

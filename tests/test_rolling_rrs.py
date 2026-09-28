@@ -218,3 +218,49 @@ def test_unknown_atr_mode_is_refused():
     stock = _bars(_path(50.0, [0.05] * 40))
     with pytest.raises(ValueError):
         rolling_rrs(stock, stock, RollingRrsConfig(atr_mode="daily"))
+
+
+def _candles(count, *, full_range, first=START, extra=()):
+    """``count`` one-hour candles ending at ``first``, oldest first, plus ``extra``."""
+    out = []
+    for back in range(count, 0, -1):
+        out.append({"dt": first - timedelta(hours=back), "high": 10.0 + full_range, "low": 10.0, "close": 10.0})
+    return out + list(extra)
+
+
+def _today_worked_example():
+    spy = _bars(_path(370.0, [0.0] * 11 + [-2.0 / 12] * 12), half_range=0.25, wobble=False)
+    stock = _bars(_path(100.0, [0.0] * 11 + [-0.2 / 12] * 12), half_range=0.10, wobble=False)
+    return stock, spy
+
+
+def test_fifty_hourly_candles_feed_the_atr_without_m5_history():
+    stock, spy = _today_worked_example()  # today only: no M5 history at all
+    assert hourly_rrs_series(stock, spy)[-1] == (None, None)
+    rrs, power = hourly_rrs_series(
+        stock, spy, symbol_hour_bars=_candles(50, full_range=0.20), spy_hour_bars=_candles(50, full_range=0.50)
+    )[-1]
+    assert power == pytest.approx(-4.0)
+    assert rrs == pytest.approx(3.0)
+
+
+def test_a_candle_still_open_when_the_move_began_is_not_used():
+    stock, spy = _today_worked_example()
+    # The move begins at the close of the 07:25 bar. 06:30-07:30 has closed; 07:30-08:30 has not.
+    closed = {"dt": START, "high": 10.5, "low": 10.0, "close": 10.0}
+    spike = {"dt": START + timedelta(hours=1), "high": 99.0, "low": 10.0, "close": 10.0}
+    result = rolling_rrs(
+        stock,
+        spy,
+        RollingRrsConfig(min_reads=1),
+        symbol_hour_bars=_candles(50, full_range=0.20),
+        spy_hour_bars=_candles(49, full_range=0.50, extra=[closed, spike]),
+    )
+    assert result is not None
+    assert result.point == pytest.approx(3.0)
+
+
+def test_candles_for_one_side_only_are_ignored():
+    stock, spy = _today_worked_example()
+    series = hourly_rrs_series(stock, spy, symbol_hour_bars=_candles(50, full_range=0.20))
+    assert series[-1] == (None, None)

@@ -4,8 +4,10 @@ A point read is "stock power minus SPY power": each one's move over the last
 hour divided by its own average hourly range. If SPY moved 4x its hourly ATR,
 the stock is expected to move 4x its own; RRS is the excess, in the stock's
 hourly ATR. The move must sit inside one session (no gap), and the hourly ATR
-is the mean high-low range of the last ``atr_hours`` in-session hour blocks
-that finished before the move began (gaps excluded, H.S.'s 50 hours).
+is the mean high-low range of the last ``atr_hours`` one-hour candles that
+finished before the move began (H.S.'s ATR50(H), gaps excluded). Pass real
+hourly candles for both symbols when the M5 series is too short for 50 hours;
+otherwise hours are cut from the M5 bars, from each session's first bar.
 
 ``atr_mode="bar"`` instead reproduces the desk's existing RRS exactly
 (``group_rrs.real_relative_strength``: a Wilder ATR of single bars). It reads
@@ -26,7 +28,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from completed_bars import bar_time
+from datetime import timedelta
+
+from completed_bars import align_to, bar_time
 
 FEATURE_VERSION = "rolling_rrs_v2"
 
@@ -167,6 +171,39 @@ def _hourly_atrs(
     return out
 
 
+def _candle_atrs(
+    bars: Sequence[Any],
+    hour_bars: Sequence[Any],
+    atr_hours: int,
+    min_atr_hours: int,
+    bar_minutes: int,
+) -> list[float | None]:
+    """Hourly ATR from one-hour candles that had closed by the end of each M5 bar."""
+    candles = []
+    for candle in hour_bars or ():
+        stamp = bar_time(candle)
+        high, low = _value(candle, "high"), _value(candle, "low")
+        if stamp is not None:
+            candles.append((stamp, None if high is None or low is None else high - low))
+    candles.sort(key=lambda item: item[0])
+    out: list[float | None] = [None] * len(bars)
+    done: list[float | None] = []
+    cursor = 0
+    for index, bar in enumerate(bars):
+        stamp = bar_time(bar)
+        if stamp is None:
+            continue
+        bar_end = stamp + timedelta(minutes=bar_minutes)
+        while cursor < len(candles) and align_to(candles[cursor][0], bar_end) + timedelta(hours=1) <= bar_end:
+            done.append(candles[cursor][1])
+            cursor += 1
+        recent = done[-atr_hours:]
+        if len(recent) >= max(1, min_atr_hours) and None not in recent:
+            atr = sum(recent) / len(recent)  # type: ignore[arg-type]
+            out[index] = atr if atr > 0 else None
+    return out
+
+
 def hourly_rrs_series(
     symbol_bars: Sequence[Any],
     spy_bars: Sequence[Any],
@@ -174,8 +211,15 @@ def hourly_rrs_series(
     *,
     atr_hours: int = 50,
     min_atr_hours: int = 20,
+    symbol_hour_bars: Sequence[Any] | None = None,
+    spy_hour_bars: Sequence[Any] | None = None,
+    bar_minutes: int = 5,
 ) -> list[tuple[float | None, float | None]]:
-    """H.S.'s (rrs, power) ending at every bar; (None, None) where it cannot be read."""
+    """H.S.'s (rrs, power) ending at every bar; (None, None) where it cannot be read.
+
+    Hourly candles are used only when given for BOTH symbols, so the two ATRs
+    are always measured the same way.
+    """
     symbol_bars = list(symbol_bars or ())
     spy_bars = list(spy_bars or ())
     count = min(len(symbol_bars), len(spy_bars))
@@ -185,8 +229,12 @@ def hourly_rrs_series(
     keys = _session_keys(symbol_bars)
     if keys != _session_keys(spy_bars):
         return out
-    sym_atr = _hourly_atrs(symbol_bars, keys, length, atr_hours, min_atr_hours)
-    spy_atr = _hourly_atrs(spy_bars, keys, length, atr_hours, min_atr_hours)
+    if symbol_hour_bars and spy_hour_bars:
+        sym_atr = _candle_atrs(symbol_bars, symbol_hour_bars, atr_hours, min_atr_hours, bar_minutes)
+        spy_atr = _candle_atrs(spy_bars, spy_hour_bars, atr_hours, min_atr_hours, bar_minutes)
+    else:
+        sym_atr = _hourly_atrs(symbol_bars, keys, length, atr_hours, min_atr_hours)
+        spy_atr = _hourly_atrs(spy_bars, keys, length, atr_hours, min_atr_hours)
     for end in range(length, count):
         begin = end - length
         if keys[begin] is None or keys[begin] != keys[end]:
@@ -207,8 +255,14 @@ def rolling_rrs(
     symbol_bars: Sequence[Any],
     spy_bars: Sequence[Any],
     config: RollingRrsConfig | None = None,
+    *,
+    symbol_hour_bars: Sequence[Any] | None = None,
+    spy_hour_bars: Sequence[Any] | None = None,
 ) -> RollingRrs | None:
-    """Rolling RRS at the last bar, or None when too few point reads exist."""
+    """Rolling RRS at the last bar, or None when too few point reads exist.
+
+    Hour bars feed the hourly ATR (hourly mode only); see ``hourly_rrs_series``.
+    """
     config = config or RollingRrsConfig()
     if config.atr_mode == "bar":
         series = rrs_series(symbol_bars, spy_bars, config.length)
@@ -219,6 +273,8 @@ def rolling_rrs(
             config.length,
             atr_hours=config.atr_hours,
             min_atr_hours=config.min_atr_hours,
+            symbol_hour_bars=symbol_hour_bars,
+            spy_hour_bars=spy_hour_bars,
         )
     else:
         raise ValueError(f"unknown atr_mode: {config.atr_mode!r}")
