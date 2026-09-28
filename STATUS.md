@@ -2,7 +2,7 @@
 
 Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `git log`.
 
-**Updated:** 2026-09-28 12:00 PT (Movers three boxes + swing-anchored Dip lists merged, trader's word)
+**Updated:** 2026-09-28 12:00 PT (Movers boxes, Dip anchors, $1B/1M quality floor merged, trader's word)
 
 - **Live on `main`:** round 1, round 2 Phase A (`81272d42`), Phase B + S (`2d59aace`),
   S10a + S7 (`3802c0d7`), p9 phase 1 regime frame (`849390a2`), p9 phase 2 long
@@ -11,7 +11,7 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
   auto regimes 2019+ + setups-by-regime backtester (`1b56f34f`, research only); rolling RRS everywhere, cutoff 1.0,
   `TRADINGBOTV3_RRS_ENGINE=desk` = old formulas; Movers side tint + D1 SMA trend gate
   (`13b2e2cb`), Yahoo download guard (`56ce3965`),
-  Movers three boxes + HA swing Dip anchors; gates #257-#303.
+  Movers three boxes + HA swing Dip anchors; gates #257-#304.
 - **GUI/startup delivery:** approved 4K GUI design in gui.md; Journal, Research,
   Day Review, supporting pages and Desk polish; Windows font-startup fix.
   Source and frozen selftests 105/105. Long combined Qt test runs still hit

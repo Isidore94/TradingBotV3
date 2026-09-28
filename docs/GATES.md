@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #304 Movers quality floor (2026-09-28): no Pop or Dip row is under a $1B cap or 1M 20-day shares (hover shows "cap $X.XB · 20d vol Y.YM"); names show "cap ?" only for a tick or two after a restart [trader]
 - #303 Dip anchors (2026-09-28): on a day with a drop, a bounce and a new drop, Dip-weak's title keeps the bounce low while Dip-strong's moves to the new high (they differ); before any 6-candle HA move the titles say "high/low of day so far"; a name that made Dip-weak earlier stays while still weak [trader]
 - #302 Yahoo guard (2026-09-28): through the session the log has no "Movers worker stuck" line that repeats past one tick, RVOL fills within ~10 min of a restart, and Pop + Dip shows the Pop, Dip-strong and Dip-weak titles (unlit Dip boxes say "Not lit"); a "YahooDownloadTimeout" line is fine once, not every tick [trader + lead]
 - #301 Movers side + trend gate (2026-09-28): in Pop + Dip the Sym cells are green for longs and red for shorts; within ~10 min of the open no long sits under its D1 100 or 200 SMA and no short above its D1 50 or 100 (check a few in the chart); hover shows the SMA line; D1? tags are rare [trader]
