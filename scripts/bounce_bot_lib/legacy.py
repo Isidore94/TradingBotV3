@@ -10387,7 +10387,10 @@ class BounceBot(EWrapper, EClient):
                 length=IMPULSE_RRS_PROFILE_LENGTH,
             )
         # Cache only (never a fetch): the scan cycle's 5-day M5 bars for this symbol.
-        cached = (getattr(self, "latest_bars", None) or {}).get(f"{symbol}|5 D|5 mins") or []
+        latest = getattr(self, "latest_bars", None) or {}
+        # The Focus fast lane runs before run_rrs_scan refills the "5 D" key; its
+        # own latest_bars[symbol] holds the same 5-day window.
+        cached = latest.get(f"{symbol}|5 D|5 mins") or latest.get(symbol) or []
         history = [bar for bar in cached if bar.dt.date() < current_date]
         profile = self._build_intraday_rrs_profile(
             history + list(today_symbol_bars),

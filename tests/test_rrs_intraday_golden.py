@@ -501,6 +501,18 @@ def test_rolling_impulse_profile_reads_today_with_the_history_behind_it(rolling_
     assert all(item["rrs"] > 0 for item in profile)
 
 
+def test_rolling_impulse_profile_uses_the_fast_lane_cache(rolling_engine, monkeypatch):
+    # The Focus fast lane evaluates before run_rrs_scan refills "SYM|5 D|5 mins";
+    # it leaves only latest_bars[SYM] (the full 5-day window).
+    bot = _scan(monkeypatch)
+    bars = universe()
+    bot.latest_bars = {"STRONG": list(bars["STRONG"])}
+    last_day = SESSION_DATES[-1]
+    today = [bar for bar in bars["STRONG"] if bar.dt.date() == last_day]
+    profile = bot._impulse_rrs_profile("STRONG", today, bars[SPY], last_day)
+    assert len(profile) >= 5
+
+
 def test_rolling_group_strength_tags_its_scale(rolling_engine, monkeypatch):
     bot = make_bot(universe(), monkeypatch=monkeypatch)
     del bot.compute_group_strengths
