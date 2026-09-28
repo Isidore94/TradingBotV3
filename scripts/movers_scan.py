@@ -14,6 +14,14 @@ Rules kept here:
 - Missing data is UNKNOWN: an unmeasurable RVOL is None (neutral weight, shown
   "—"), an unmeasurable ATR drops the row from the ranked lists, missing SPY
   bars make the market state "unknown" and light nothing.
+- Dip boxes (trader, 2026-09-28): Dip-strong measures every name against SPY
+  from the high SPY's last major M5 dip fell from, Dip-weak from the low its
+  last major rip rose from (else the high / low of day so far). A major move
+  is a run of SWING_HA_RUN same-colour Heikin-Ashi candles on SPY's completed
+  M5 bars, so the anchors shift as new runs form. A name once on
+  a box today stays on it while it still qualifies (`held_by_side`). These
+  `swing` lists feed the boxes only; the P8 notices, outcome logs and M5 watch
+  feed still read the pullback/bounce/rally `dip`/`rip` lists.
 - D1 trend gate (trader, 2026-09-28): a long pop/dip/rip row sits above the
   daily 100 and 200 SMA, a short row below the daily 50 and 100. Too little
   daily history is UNKNOWN: the row stays, tagged, never dropped. My names is
@@ -35,6 +43,7 @@ from zoneinfo import ZoneInfo
 
 import strength_scan
 from completed_bars import bar_time, completed_m5_bars
+from indicators.heikin_ashi import GREEN, RED, compute_heikin_ashi
 
 NY_TZ = ZoneInfo("America/New_York")
 SESSION_OPEN = time(9, 30)
@@ -79,6 +88,9 @@ EXT_ATR = 2.0
 #: are completed sessions only; too little history is unknown, never a fail.
 TREND_SMA_LONG = (100, 200)
 TREND_SMA_SHORT = (50, 100)
+#: Dip boxes: a completed run of at least this many same-colour Heikin-Ashi
+#: candles on SPY's M5 is a major move (trader: "more than 5 in a row").
+SWING_HA_RUN = 6
 #: Group tag: this many names of one industry inside a list's top N.
 GROUP_MIN_COUNT = 3
 GROUP_TOP_N = 15
@@ -469,19 +481,11 @@ def measure_symbol(
     since = dip = None
     note = ""
     if state.start_dt is not None:
-        start_close = _close_at(today, state.start_dt)
-        spy_start = _close_at(spy_today, state.start_dt)
-        spy_last = spy_today[-1]["close"] if spy_today else None
-        if start_close is None or spy_start is None or spy_last is None:
+        since, dip, found = excess_since(
+            today, spy_today, state.start_dt, atr=atr, baseline=baseline
+        )
+        if not found:
             note = "no bar at the pullback start"
-        else:
-            since = _pct(last, start_close)
-            spy_since = _pct(spy_last, spy_start)
-            span = [bar for bar in today if bar["dt"] > state.start_dt]
-            if since is not None and spy_since is not None and atr and atr > 0 and span:
-                excess_price = start_close * (since - spy_since) / 100.0
-                span_rvol = recent_rvol(today, baseline, bars=len(span))
-                dip = (excess_price / atr) * rvol_weight(span_rvol)
     if atr is None:
         note = note or "ATR unmeasurable"
     levels = _levels(prior, today, atr)
@@ -491,6 +495,99 @@ def measure_symbol(
         since_start_pct=since, dip_score=dip, session_volume=session_vol,
         passes_floors=passes, stale=stale, note=note, **levels,
     )
+
+
+def swing_anchors(
+    spy_bars: Sequence[Mapping[str, Any]], today_date: date | None = None
+) -> dict[str, dict[str, Any] | None]:
+    """Where each Dip box measures from, off SPY's completed M5 bars (normalised).
+
+    A major move is a run of SWING_HA_RUN+ same-colour Heikin-Ashi candles today
+    (it counts while still running). Longs measure from the HIGH the last major
+    dip fell from: the highest high from the start of the major rip before it
+    (else the open) to the end of that dip. Shorts mirror it: the LOW the last
+    major rip rose from. No major dip yet: longs use the high of day so far
+    (`kind` "hod"); no major rip yet: shorts use the low of day ("lod"). Ties
+    take the later bar. None only when SPY has no bars today."""
+    empty: dict[str, dict[str, Any] | None] = {"long": None, "short": None}
+    if not spy_bars:
+        return empty
+    bars = list(spy_bars)
+    colors = compute_heikin_ashi(
+        [b["open"] for b in bars], [b["high"] for b in bars],
+        [b["low"] for b in bars], [b["close"] for b in bars],
+    ).colors
+    day = today_date or bars[-1]["dt"].date()
+    first = next((i for i, b in enumerate(bars) if b["dt"].date() == day), None)
+    if first is None:
+        return empty
+    runs: list[tuple[str, int, int]] = []  # (colour, start, end) of major runs today
+    start = first
+    for index in range(first + 1, len(bars) + 1):
+        if index == len(bars) or colors[index] != colors[start]:
+            if colors[start] in (GREEN, RED) and index - start >= SWING_HA_RUN:
+                runs.append((colors[start], start, index - 1))
+            start = index
+
+    def anchor(side: str) -> dict[str, Any]:
+        move, before = (RED, GREEN) if side == "long" else (GREEN, RED)
+        last = next((r for r in reversed(runs) if r[0] == move), None)
+        if last is None:
+            window, kind = range(first, len(bars)), ("hod" if side == "long" else "lod")
+        else:
+            prior = next((r for r in reversed(runs) if r[0] == before and r[1] < last[1]), None)
+            window, kind = range(prior[1] if prior else first, last[2] + 1), "swing"
+        if side == "long":
+            at = max(window, key=lambda i: (bars[i]["high"], i))
+            price = bars[at]["high"]
+        else:
+            at = min(window, key=lambda i: (bars[i]["low"], -i))
+            price = bars[at]["low"]
+        stamp = bars[at]["dt"]
+        return {"dt": stamp.isoformat(timespec="seconds"), "time": stamp.strftime("%H:%M"),
+                "price": price, "kind": kind, "_dt": stamp}
+
+    return {"long": anchor("long"), "short": anchor("short")}
+
+
+def excess_since(
+    today: Sequence[Mapping[str, Any]],
+    spy_today: Sequence[Mapping[str, Any]],
+    start_dt: datetime,
+    *,
+    atr: float | None,
+    baseline: Mapping[int, float] | None,
+) -> tuple[float | None, float | None, bool]:
+    """(% since the start bar's close, excess vs SPY in ATRs x RVOL weight, found).
+    `found` is False when the name or SPY has no bar at the start."""
+    start_close = _close_at(today, start_dt)
+    spy_start = _close_at(spy_today, start_dt)
+    spy_last = spy_today[-1]["close"] if spy_today else None
+    if start_close is None or spy_start is None or spy_last is None or not today:
+        return None, None, False
+    since = _pct(today[-1]["close"], start_close)
+    spy_since = _pct(spy_last, spy_start)
+    span = [bar for bar in today if bar["dt"] > start_dt]
+    score = None
+    if since is not None and spy_since is not None and atr and atr > 0 and span:
+        excess_price = start_close * (since - spy_since) / 100.0
+        span_rvol = recent_rvol(today, baseline, bars=len(span))
+        score = (excess_price / atr) * rvol_weight(span_rvol)
+    return since, score, True
+
+
+def update_held(held: Mapping[str, Any], board: Mapping[str, Any], *, session: date) -> dict[str, Any]:
+    """The names each Dip box has listed this session (order kept), for `held_by_side`."""
+    if held.get("session") != session:
+        held = {"session": session, "long": [], "short": []}
+    out = {"session": session, "long": list(held.get("long") or []),
+           "short": list(held.get("short") or [])}
+    for side in ("long", "short"):
+        for row in ((board.get("swing") or {}).get(side)) or []:
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if symbol and symbol not in out[side]:
+                out[side].append(symbol)
+    return out
 
 
 def trend_flags(
@@ -578,7 +675,7 @@ def short_group(industry: str) -> str:
 def apply_group_tags(board: dict[str, Any], industry_by_symbol: Mapping[str, str]) -> dict[str, Any]:
     """Tag rows whose industry has GROUP_MIN_COUNT+ names in a list's top GROUP_TOP_N."""
     groups: dict[str, dict[str, list]] = {}
-    for mode in ("pop", "dip", "rip"):
+    for mode in ("pop", "dip", "rip", "swing"):
         groups[mode] = {}
         for side in ("long", "short"):
             rows = ((board.get(mode) or {}).get(side)) or []
@@ -606,7 +703,7 @@ def apply_persistence(board: dict[str, Any], memory: dict[str, Any], *, session:
         memory = {"session": session, "lists": {}}
     lists = memory["lists"]
     fresh: dict[str, dict[str, tuple[int, int]]] = {}
-    for mode in ("pop", "dip", "rip"):
+    for mode in ("pop", "dip", "rip", "swing"):
         for side in ("long", "short"):
             key = f"{mode}:{side}"
             before = lists.get(key, {})
@@ -634,6 +731,7 @@ def build_movers_board(
     top_n: int = MOVERS_TOP_N,
     earnings: Iterable[str] | None = None,
     daily_closes: Mapping[str, Sequence[Any]] | None = None,
+    held_by_side: Mapping[str, Iterable[str]] | None = None,
 ) -> dict[str, Any]:
     """The whole board as plain dicts (safe to emit across threads).
 
@@ -643,6 +741,8 @@ def build_movers_board(
     Lists: pop/dip/rip/mine, each {"long": rows, "short": rows}; dip is lit by
     a pullback or bounce, rip by a rally (long = Rip-strong, short = Rip-weak).
     The ranked lists drop a row on the wrong side of its D1 SMAs; mine never does.
+    `swing` holds the Dip boxes (see `swing_anchors`); `held_by_side` keeps a name
+    listed earlier today on its box while it still qualifies.
     """
     baselines = baselines or {}
     er_names = {str(s or "").strip().upper() for s in earnings or ()}
@@ -705,6 +805,37 @@ def build_movers_board(
     # Rip lists, lit by a rally: same score since the rally start bar.
     rip_long, rip_short = (turn_long, turn_short) if state.rally else ([], [])
 
+    # Dip boxes: each side against SPY from its own swing anchor.
+    anchors = swing_anchors(spy, today_date)
+    spy_today = split_today(spy, today_date)[1]
+    swing: dict[str, list[dict[str, Any]]] = {"long": [], "short": []}
+    for side, anchor in anchors.items():
+        if anchor is None:
+            continue
+        keep = {str(s or "").strip().upper() for s in (held_by_side or {}).get(side, ()) or ()}
+        scored = []
+        for symbol, row in rows.items():
+            if not rankable(row):
+                continue
+            if (row.trend_long if side == "long" else row.trend_short) is False:
+                continue
+            today_bars = split_today(normalised[symbol], today_date)[1]
+            since, score, _found = excess_since(
+                today_bars, spy_today, anchor["_dt"], atr=row.atr,
+                baseline=baselines.get(symbol),
+            )
+            if score is None or (score < 0 if side == "long" else score >= 0):
+                continue
+            scored.append((symbol, row, since, score))
+        scored.sort(key=lambda t: ((-t[3] if side == "long" else t[3]), t[0]))
+        top = scored[:top_n]
+        extra = [t for t in scored[top_n:] if t[0] in keep]
+        for symbol, row, since, score in top + extra:
+            data = row.to_dict()
+            data.update(since_start_pct=since, dip_score=score, held=symbol not in
+                        {t[0] for t in top})
+            swing[side].append(data)
+
     mine: dict[str, list[dict[str, Any]]] = {"long": [], "short": []}
     for side in ("long", "short"):
         for raw in (focus_by_side or {}).get(side, ()) or ():
@@ -730,6 +861,9 @@ def build_movers_board(
                 "short": [r.to_dict() for r in dip_short[:top_n]]},
         "rip": {"long": [r.to_dict() for r in rip_long[:top_n]],
                 "short": [r.to_dict() for r in rip_short[:top_n]]},
+        "swing": swing,
+        "swing_anchor": {side: ({k: v for k, v in anchor.items() if k != "_dt"}
+                                if anchor else None) for side, anchor in anchors.items()},
         "mine": mine,
         "measured": sum(1 for r in rows.values() if r.pop_score is not None),
         "daily_measured": sum(1 for r in rows.values() if r.daily_bars),

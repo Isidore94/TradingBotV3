@@ -398,6 +398,7 @@ class MoversService(QObject):
         self._baseline_tried: dict[str, datetime] = {}
         self._daily_closes: dict[str, list[float]] = {}
         self._daily_tried: dict[str, datetime] = {}
+        self._swing_held: dict[str, Any] = {}  # names each Dip box listed today
         self.bot_universe_size: int | None = None
         # Wall time of the last tick and of its options chase (None = chase off).
         self._perf_clock: Callable[[], float] = time.perf_counter
@@ -687,9 +688,12 @@ class MoversService(QObject):
             series, spy, now=now, baselines=self._baselines,
             focus_by_side=focus, local_tz=local_tz, earnings=self._earnings,
             daily_closes=self._daily_closes,
+            held_by_side=self._held_today(now),
         )
         movers_scan.apply_group_tags(board, self._industry)
         session = now.astimezone(movers_scan.NY_TZ).date()
+        if final:
+            self._swing_held = movers_scan.update_held(self._swing_held, board, session=session)
         memory = movers_scan.apply_persistence(
             board, self._persistence if final else dict(self._persistence), session=session
         )
@@ -873,6 +877,13 @@ class MoversService(QObject):
             # Only a fetch that returned bars moves the clock; failures keep the last bars.
             self._yahoo_bars.update(fetched)
             self._gap_at = now
+
+    def _held_today(self, now: datetime) -> dict[str, list[str]]:
+        """Today's held Dip-box names; yesterday's never carry over."""
+        session = now.astimezone(movers_scan.NY_TZ).date()
+        if self._swing_held.get("session") != session:
+            return {"long": [], "short": []}
+        return {side: list(self._swing_held.get(side) or []) for side in ("long", "short")}
 
     def _liquidity(self, symbol: str, bot_bars) -> float:
         """Price x volume of the latest session we hold for the name; 0 when unknown."""

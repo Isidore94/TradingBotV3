@@ -196,6 +196,18 @@ def test_daily_trend_gate_fetches_closes_once_and_drops_the_wrong_side():
     assert [r["symbol"] for r in emitted[-1]["pop"]["long"]] == ["AAA"]
 
 
+def test_the_service_remembers_todays_dip_box_names_for_the_next_tick():
+    popping = _naive_la_bars([100.0] * 11 + [100.5, 101.0, 101.5])
+    bot = FakeBot(["AAA"], {"AAA": popping, "SPY": _naive_la_bars([400.0] * 14)})
+    service = _service(bot, FakeDownloader({s: _history_frame() for s in ("QQQ", "AAA", "SPY")}))
+    service._run_once(service._focus_snapshot())
+    assert service._swing_held.get("session") == NOW.date()
+    service._swing_held["short"] = ["OLD"]
+    assert service._held_today(NOW)["short"] == ["OLD"]
+    tomorrow = NOW + timedelta(days=1)
+    assert service._held_today(tomorrow) == {"long": [], "short": []}
+
+
 def test_daily_trend_gate_unknown_when_the_download_fails():
     popping = _naive_la_bars([100.0] * 11 + [100.5, 101.0, 101.5])
     bot = FakeBot(["AAA"], {"AAA": popping, "SPY": _naive_la_bars([400.0] * 14)})
