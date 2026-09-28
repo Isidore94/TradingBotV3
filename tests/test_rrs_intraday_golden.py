@@ -293,10 +293,60 @@ def record(monkeypatch):
     }
 
 
+EXPECTED_KEYS = ["payloads", "scores", "focus_gate", "alignment", "impulse", "group_strength"]
+
+
+def recording_inputs():
+    """Everything the synthetic universe and the probes are built from."""
+    return {
+        "recipe": {symbol: list(values) for symbol, values in RECIPE.items()},
+        "session_dates": [day.isoformat() for day in SESSION_DATES],
+        "session_open": f"{SESSION_OPEN_HOUR:02d}:{SESSION_OPEN_MINUTE:02d}",
+        "bars_per_session": BARS_PER_SESSION,
+        "burst": [BURST_BARS, BURST_ALPHA],
+        "noise_pct": NOISE_PCT,
+        "longs": LONGS,
+        "shorts": SHORTS,
+        "gui_timeframe_key": GUI_TIMEFRAME_KEY,
+        "probe_levels": PROBE_LEVELS,
+        "focus_probes": list(FOCUS_PROBES),
+        "alignment_probes": list(ALIGNMENT_PROBES),
+    }
+
+
+def contract_fields():
+    """The Milestone 3 fixture contract (tests/conftest.py) for this recording."""
+    import hashlib
+
+    inputs = recording_inputs()
+    canonical = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {
+        "schema": "rrs_intraday_golden_v1",
+        "feature_version": "bounce_intraday_rrs_desk_v1",
+        "recording_inputs": inputs,
+        "raw_input_keys": ["recording_inputs"],
+        "raw_input_sha256": hashlib.sha256(canonical).hexdigest(),
+        "acquired_at": "2026-09-28T04:30:00-07:00",
+        "as_of": "2026-06-05T12:55:00-07:00",
+        "universe_version": "rrs_intraday_synthetic_v1",
+        "provider_assumptions": "Synthetic 5-minute bars, no provider call; market-local session open pinned to 06:30.",
+        "expected_keys": EXPECTED_KEYS,
+        "numeric_tolerance": 1e-9,
+        "intentional_difference": "",
+    }
+
+
 def _load_fixture():
+    from conftest import load_fixture_contract
+
     if not FIXTURE_PATH.exists():  # pragma: no cover
         pytest.fail(f"golden fixture missing: {FIXTURE_PATH}")
-    return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+    return load_fixture_contract(FIXTURE_PATH).data
+
+
+def test_the_fixture_inputs_are_the_ones_this_file_builds():
+    fixture = _load_fixture()
+    assert fixture["recording_inputs"] == json.loads(json.dumps(recording_inputs()))
 
 
 def assert_close(actual, expected, path="$"):
@@ -338,7 +388,7 @@ def test_record_the_golden_fixture(monkeypatch):
     )
     recorded = record(monkeypatch)
     recorded["generated_from_commit"] = commit
-    recorded["universe_version"] = "rrs_intraday_synthetic_v1"
+    recorded.update(contract_fields())
     FIXTURE_PATH.parent.mkdir(parents=True, exist_ok=True)
     FIXTURE_PATH.write_text(json.dumps(recorded, indent=1, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -351,7 +401,7 @@ def test_desk_engine_reproduces_the_golden(monkeypatch):
     monkeypatch.setenv("TRADINGBOTV3_RRS_ENGINE", "desk")
     fixture = _load_fixture()
     produced = json.loads(json.dumps(record(monkeypatch)))
-    for key in ("payloads", "scores", "focus_gate", "alignment", "impulse", "group_strength"):
+    for key in EXPECTED_KEYS:
         assert_close(produced[key], fixture[key], key)
 
 

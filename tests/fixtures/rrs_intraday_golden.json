@@ -1,4 +1,5 @@
 {
+ "acquired_at": "2026-09-28T04:30:00-07:00",
  "alignment": {
   "-0.4|long": "counter",
   "-0.4|short": "aligned",
@@ -23,6 +24,16 @@
   "2.5|long": "strong_aligned",
   "2.5|short": "counter"
  },
+ "as_of": "2026-06-05T12:55:00-07:00",
+ "expected_keys": [
+  "payloads",
+  "scores",
+  "focus_gate",
+  "alignment",
+  "impulse",
+  "group_strength"
+ ],
+ "feature_version": "bounce_intraday_rrs_desk_v1",
  "focus_gate": {
   "-1.4": false,
   "-2.76": true,
@@ -2923,6 +2934,8 @@
    "short_ok": false
   }
  },
+ "intentional_difference": "",
+ "numeric_tolerance": 1e-09,
  "payloads": {
   "15m": {
    "environment_scan": {
@@ -3867,6 +3880,111 @@
    "timeframe_key": "5m"
   }
  },
+ "provider_assumptions": "Synthetic 5-minute bars, no provider call; market-local session open pinned to 06:30.",
+ "raw_input_keys": [
+  "recording_inputs"
+ ],
+ "raw_input_sha256": "9b686aa25af61a021fa6445a5b4ce02fb87201bbdac75ed76aa27b6d15a68198",
+ "recording_inputs": {
+  "alignment_probes": [
+   -2.5,
+   -2.0,
+   -1.99,
+   -1.0,
+   -0.4,
+   0.0,
+   0.4,
+   1.0,
+   1.99,
+   2.0,
+   2.5
+  ],
+  "bars_per_session": 78,
+  "burst": [
+   18,
+   1.2
+  ],
+  "focus_probes": [
+   0.5,
+   1.2,
+   1.4,
+   1.5,
+   2.0,
+   2.74,
+   2.76,
+   3.5,
+   -1.4,
+   -2.76,
+   -3.5
+  ],
+  "gui_timeframe_key": "5m",
+  "longs": [
+   "STRONG",
+   "BURST",
+   "FLAT"
+  ],
+  "noise_pct": 0.0012,
+  "probe_levels": {
+   "ema_20": 1.0,
+   "vwap": 1.0
+  },
+  "recipe": {
+   "BURST": [
+    104,
+    60.0,
+    1.0,
+    0.0
+   ],
+   "FLAT": [
+    105,
+    45.0,
+    1.0,
+    0.0
+   ],
+   "SMH": [
+    107,
+    270.0,
+    1.0,
+    0.15
+   ],
+   "SPY": [
+    101,
+    500.0,
+    0.0,
+    0.0
+   ],
+   "STRONG": [
+    102,
+    120.0,
+    1.0,
+    2.0
+   ],
+   "WEAK": [
+    103,
+    80.0,
+    1.0,
+    -2.0
+   ],
+   "XLK": [
+    106,
+    240.0,
+    1.0,
+    0.1
+   ]
+  },
+  "session_dates": [
+   "2026-06-01",
+   "2026-06-02",
+   "2026-06-03",
+   "2026-06-04",
+   "2026-06-05"
+  ],
+  "session_open": "06:30",
+  "shorts": [
+   "WEAK"
+  ]
+ },
+ "schema": "rrs_intraday_golden_v1",
  "scores": {
   "BURST|long": {
    "rrs_industry": "",
