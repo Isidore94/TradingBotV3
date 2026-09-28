@@ -395,6 +395,11 @@ def _row_tooltip(row: dict[str, Any]) -> str:
         parts.append("earnings today / after last close")
     if row.get("earnings_warning"):
         parts.append(str(row["earnings_warning"]))
+    if "quality_ok" in row:
+        cap, volume = row.get("market_cap_m"), row.get("avg_volume_20d")
+        cap_text = "?" if cap is None else f"${float(cap) / 1000:.1f}B"
+        volume_text = "?" if volume is None else f"{float(volume) / 1e6:.1f}M"
+        parts.append(f"cap {cap_text} · 20d vol {volume_text}")
     if "trend_long" in row:
         trend = trend_flag(row)
         want = ("below D1 50/100 SMA" if row.get("_side") == "short"
@@ -1004,8 +1009,8 @@ class MoversBoard(QWidget):
         if swing_anchor is not None:
             self.strong.title_label.setText(_swing_title("long", swing_anchor.get("long")))
             self.weak.title_label.setText(_swing_title("short", swing_anchor.get("short")))
-            tip = ("Dip-strong measures from the high SPY's last big M5 drop fell from; "
-                   "Dip-weak from the low its last big M5 bounce rose from. Big = "
+            tip = ("Dip-strong measures from the top of SPY's last big M5 bounce; "
+                   "Dip-weak from the bottom of its last big M5 drop. Big = "
                    f"{movers_scan.SWING_HA_RUN}+ Heikin-Ashi candles in a row; with none yet, "
                    "the high or low of day. A name listed earlier today stays while it "
                    "still beats (or lags) SPY.")

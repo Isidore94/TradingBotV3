@@ -15,13 +15,17 @@ Rules kept here:
   "—"), an unmeasurable ATR drops the row from the ranked lists, missing SPY
   bars make the market state "unknown" and light nothing.
 - Dip boxes (trader, 2026-09-28): Dip-strong measures every name against SPY
-  from the high SPY's last major M5 dip fell from, Dip-weak from the low its
-  last major rip rose from (else the high / low of day so far). A major move
+  from SPY's highest high since its last major M5 rip began (the top of that
+  rip, where any dip since fell from), Dip-weak from its lowest low since the
+  last major dip began (else the high / low of day so far). A major move
   is a run of SWING_HA_RUN same-colour Heikin-Ashi candles on SPY's completed
   M5 bars, so the anchors shift as new runs form. A name once on
   a box today stays on it while it still qualifies (`held_by_side`). These
   `swing` lists feed the boxes only; the P8 notices, outcome logs and M5 watch
   feed still read the pullback/bounce/rally `dip`/`rip` lists.
+- Quality floor (trader, 2026-09-28: "we get a lot of riff raff"): a ranked
+  row needs market cap >= $1B and a 20-session mean share volume >= 1M (the
+  universe builder's numbers). Unknown stays; My names is never filtered.
 - D1 trend gate (trader, 2026-09-28): a long pop/dip/rip row sits above the
   daily 100 and 200 SMA, a short row below the daily 50 and 100. Too little
   daily history is UNKNOWN: the row stays, tagged, never dropped. My names is
@@ -91,6 +95,9 @@ TREND_SMA_SHORT = (50, 100)
 #: Dip boxes: a completed run of at least this many same-colour Heikin-Ashi
 #: candles on SPY's M5 is a major move (trader: "more than 5 in a row").
 SWING_HA_RUN = 6
+#: Quality floor for every ranked list (trader, 2026-09-28).
+MIN_MARKET_CAP_M = 1000.0
+MIN_AVG_VOLUME_20D = 1_000_000.0
 #: Group tag: this many names of one industry inside a list's top N.
 GROUP_MIN_COUNT = 3
 GROUP_TOP_N = 15
@@ -415,6 +422,10 @@ class MoverRow:
     ext_down: bool = False
     er: bool = False  # reports today or reported after the last close
     group: str = ""  # short industry label when 3+ share a list's top 15
+    # Quality floor: None = cap or 20-day volume unknown.
+    market_cap_m: float | None = None
+    avg_volume_20d: float | None = None
+    quality_ok: bool | None = None
     # D1 trend gate against TREND_SMA_*: None = not enough daily history.
     trend_long: bool | None = None
     trend_short: bool | None = None
@@ -503,12 +514,12 @@ def swing_anchors(
     """Where each Dip box measures from, off SPY's completed M5 bars (normalised).
 
     A major move is a run of SWING_HA_RUN+ same-colour Heikin-Ashi candles today
-    (it counts while still running). Longs measure from the HIGH the last major
-    dip fell from: the highest high from the start of the major rip before it
-    (else the open) to the end of that dip. Shorts mirror it: the LOW the last
-    major rip rose from. No major dip yet: longs use the high of day so far
-    (`kind` "hod"); no major rip yet: shorts use the low of day ("lod"). Ties
-    take the later bar. None only when SPY has no bars today."""
+    (it counts while still running). Longs measure from the highest high since
+    the last major rip began: its top, which is where any dip since fell from.
+    Shorts mirror it: the lowest low since the last major dip began. No major
+    rip yet: longs use the high of day so far (`kind` "hod"); no major dip yet:
+    shorts use the low of day ("lod"). Ties take the later bar. None only when
+    SPY has no bars today."""
     empty: dict[str, dict[str, Any] | None] = {"long": None, "short": None}
     if not spy_bars:
         return empty
@@ -530,13 +541,12 @@ def swing_anchors(
             start = index
 
     def anchor(side: str) -> dict[str, Any]:
-        move, before = (RED, GREEN) if side == "long" else (GREEN, RED)
+        move = GREEN if side == "long" else RED
         last = next((r for r in reversed(runs) if r[0] == move), None)
         if last is None:
             window, kind = range(first, len(bars)), ("hod" if side == "long" else "lod")
         else:
-            prior = next((r for r in reversed(runs) if r[0] == before and r[1] < last[1]), None)
-            window, kind = range(prior[1] if prior else first, last[2] + 1), "swing"
+            window, kind = range(last[1], len(bars)), "swing"
         if side == "long":
             at = max(window, key=lambda i: (bars[i]["high"], i))
             price = bars[at]["high"]
@@ -588,6 +598,16 @@ def update_held(held: Mapping[str, Any], board: Mapping[str, Any], *, session: d
             if symbol and symbol not in out[side]:
                 out[side].append(symbol)
     return out
+
+
+def quality_ok(market_cap_m: float | None, avg_volume_20d: float | None) -> bool | None:
+    """The quality floor: False on a known miss, True when both pass, else None."""
+    cap, volume = _finite(market_cap_m), _finite(avg_volume_20d)
+    if (cap is not None and cap < MIN_MARKET_CAP_M) or (
+        volume is not None and volume < MIN_AVG_VOLUME_20D
+    ):
+        return False
+    return True if cap is not None and volume is not None else None
 
 
 def trend_flags(
@@ -732,6 +752,7 @@ def build_movers_board(
     earnings: Iterable[str] | None = None,
     daily_closes: Mapping[str, Sequence[Any]] | None = None,
     held_by_side: Mapping[str, Iterable[str]] | None = None,
+    fundamentals: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The whole board as plain dicts (safe to emit across threads).
 
@@ -742,7 +763,8 @@ def build_movers_board(
     a pullback or bounce, rip by a rally (long = Rip-strong, short = Rip-weak).
     The ranked lists drop a row on the wrong side of its D1 SMAs; mine never does.
     `swing` holds the Dip boxes (see `swing_anchors`); `held_by_side` keeps a name
-    listed earlier today on its box while it still qualifies.
+    listed earlier today on its box while it still qualifies. `fundamentals` is
+    symbol -> {"market_cap_m", "avg_volume_20d"} for the quality floor.
     """
     baselines = baselines or {}
     er_names = {str(s or "").strip().upper() for s in earnings or ()}
@@ -773,9 +795,17 @@ def build_movers_board(
         rows[symbol] = replace(
             rows[symbol], trend_long=long_ok, trend_short=short_ok, daily_bars=count
         )
+        facts = (fundamentals or {}).get(symbol) or {}
+        cap, volume = _finite(facts.get("market_cap_m")), _finite(facts.get("avg_volume_20d"))
+        rows[symbol] = replace(
+            rows[symbol], market_cap_m=cap, avg_volume_20d=volume,
+            quality_ok=quality_ok(cap, volume),
+        )
 
     def rankable(row: MoverRow) -> bool:
-        return row.passes_floors and not row.stale and row.atr is not None
+        # The quality floor: a known miss never ranks; unknown does.
+        return (row.passes_floors and not row.stale and row.atr is not None
+                and row.quality_ok is not False)
 
     # The D1 trend gate: a known miss leaves the ranked lists; unknown stays.
     pop_long = sorted(
