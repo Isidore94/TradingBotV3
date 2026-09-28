@@ -959,6 +959,23 @@ def _long_setup_scan_atrs(feature_rows, completed_through) -> dict:
     }
 
 
+def _spy_daily_rows_for_rrs(ib, daily_frames_by_symbol) -> list[dict] | None:
+    """SPY daily rows for the rolling daily RRS; None under the desk engine or when unavailable."""
+    import rrs_config
+
+    if not rrs_config.use_rolling():
+        return None
+    frame = (daily_frames_by_symbol or {}).get("SPY")
+    if frame is None or getattr(frame, "empty", True):
+        try:
+            frame = fetch_daily_bars(ib, "SPY", MARKET_PREP_INDUSTRY_LOOKBACK_DAYS)
+        except Exception as exc:  # the RS scores go unknown; the scan goes on
+            logging.warning("SPY daily bars for rolling RRS unavailable: %s", exc)
+            return None
+    rows = _daily_frame_to_rows(frame)
+    return rows or None
+
+
 def _run_master_impl(
     longs_path: Path | None = None,
     shorts_path: Path | None = None,
@@ -2446,6 +2463,7 @@ def _run_master_impl(
     daily_rows_cache = build_daily_rows_cache(daily_frames_by_symbol)
     industry_rows_by_etf = build_daily_rows_cache(industry_daily_frames_by_etf)
     industry_rows_by_etf = {etf: entry["rows"] for etf, entry in industry_rows_by_etf.items()}
+    spy_daily_rows = _spy_daily_rows_for_rrs(ib, daily_frames_by_symbol)
     universe_strength_rows = build_universe_strength_rows(
         daily_frames_by_symbol,
         spy_benchmark,
@@ -2454,11 +2472,13 @@ def _run_master_impl(
         industry_daily_frames_by_etf=industry_daily_frames_by_etf,
         daily_rows_cache=daily_rows_cache,
         industry_rows_by_etf=industry_rows_by_etf,
+        spy_daily_rows=spy_daily_rows,
     )
     industry_strength_rows = build_industry_strength_rows(
         industry_daily_frames_by_etf,
         spy_benchmark,
         industry_context_by_symbol=industry_context_by_symbol,
+        spy_daily_rows=spy_daily_rows,
     )
     enrich_priority_rows_with_industry_relative_strength(
         priority_rows,
@@ -2964,6 +2984,7 @@ def _run_master_impl(
         industry_context_by_symbol=industry_context_by_symbol,
         industry_daily_frames_by_etf=industry_daily_frames_by_etf,
         industry_strength_rows=industry_strength_rows,
+        spy_daily_rows=spy_daily_rows,
     )
     write_market_prep_files(market_prep_payload)
     run_result["market_prep_payload"] = market_prep_payload

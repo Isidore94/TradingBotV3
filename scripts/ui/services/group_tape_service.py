@@ -38,6 +38,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 import autopilot_core as core
 import group_rrs
+import rrs_config
 from completed_bars import bar_time
 from ui.timer_utils import start_staggered, stop_staggered
 
@@ -54,12 +55,19 @@ _TICK_INTERVAL_MS = 30_000
 #: 12th single-ticker call). ONE batched request per tick, and never a retry
 #: inside the tick - the next tick is the retry.
 _FETCH_PERIOD = "1d"
+#: The rolling RRS needs ~20 finished hours before today for its hourly ATR.
+_ROLLING_FETCH_PERIOD = "5d"
 _FETCH_INTERVAL = "5m"
 #: How long `shutdown` will wait for an in-flight fetch. Bounded deliberately:
 #: an unbounded join here is a hang waiting for a slow Yahoo day, which is the
 #: lesson `_GuiGcController` and the 2026-08-26 shutdown freeze both paid for.
 #: The worker is a daemon doing a pure read, so abandoning it is safe.
 SHUTDOWN_JOIN_SECONDS = 2.0
+
+
+def fetch_period() -> str:
+    """Today only on the desk engine; five days on the rolling engine."""
+    return _ROLLING_FETCH_PERIOD if rrs_config.use_rolling() else _FETCH_PERIOD
 
 
 class GroupTapeService(QObject):
@@ -292,7 +300,7 @@ def build_group_tape(
             wanted.append(etf)
 
     downloader = downloader or core._default_downloader
-    data = downloader(wanted, period=_FETCH_PERIOD, interval=_FETCH_INTERVAL)
+    data = downloader(wanted, period=fetch_period(), interval=_FETCH_INTERVAL)
 
     bars_by_symbol: dict[str, list[dict[str, Any]]] = {}
     for symbol in wanted:
@@ -324,14 +332,13 @@ def build_group_tape(
         label: {"sectors": [], "industries": []} for label in group_rrs.RRS_WINDOWS
     }
     measured = 0
+    windows_for = group_rrs.rolling_rrs_windows if rrs_config.use_rolling() else group_rrs.rrs_windows
     for kind, entries in (
         ("sectors", [(key, etf) for key, etf in sorted(sector_etfs.items())]),
         ("industries", [(etf, etf) for etf in industry_etfs]),
     ):
         for group_key, etf in entries:
-            windows = group_rrs.rrs_windows(
-                bars_by_symbol.get(etf) or [], spy_bars, now=moment
-            )
+            windows = windows_for(bars_by_symbol.get(etf) or [], spy_bars, now=moment)
             if any(value is not None for value in windows.values()):
                 measured += 1
             for label, value in windows.items():
@@ -366,7 +373,10 @@ def _status_line(
         if groups.get(label, {}).get("sectors") or groups.get(label, {}).get("industries")
     ]
     if not ready:
-        need = min(group_rrs.minimum_bars_for(label) for label in group_rrs.RRS_WINDOWS)
+        minimum = (
+            group_rrs.rolling_minimum_bars_for if rrs_config.use_rolling() else group_rrs.minimum_bars_for
+        )
+        need = min(minimum(label) for label in group_rrs.RRS_WINDOWS)
         text = (
             f"Not enough completed bars yet - the 30-minute read needs {need} "
             "of them, and none is invented before that."

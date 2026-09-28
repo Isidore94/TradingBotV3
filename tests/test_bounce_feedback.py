@@ -138,7 +138,9 @@ def _flat_h1_bars(*, direction="long"):
 
 
 class BounceFeedbackTests(unittest.TestCase):
+    @patch.dict("os.environ", {"TRADINGBOTV3_RRS_ENGINE": "desk"})
     def test_bounce_candidate_industry_rrs_bonus_is_directional(self):
+        # Desk-scale numbers (3.0 -> +6); the rolling scale is pinned in test_rrs_intraday_units.py.
         bot = bounce_bot.BounceBot.__new__(bounce_bot.BounceBot)
         levels = {"vwap": {}}
 
