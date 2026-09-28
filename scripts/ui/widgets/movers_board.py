@@ -117,6 +117,17 @@ def symbol_text(row: dict[str, Any]) -> str:
     return " ".join(parts)
 
 
+def _swing_title(side: str, anchor: dict[str, Any] | None) -> str:
+    """A Dip box title naming its own SPY swing (local clock), or that none exists yet."""
+    if side == "long":
+        if not anchor:
+            return "Dip-strong · no M5 dip yet today"
+        return f"Dip-strong · beating SPY since the {_local_clock(anchor.get('dt')) or anchor.get('time')} M5 low"
+    if not anchor:
+        return "Dip-weak · no M5 rip yet today"
+    return f"Dip-weak · lagging SPY since the {_local_clock(anchor.get('dt')) or anchor.get('time')} M5 high"
+
+
 def trend_flag(row: dict[str, Any]) -> bool | None:
     """The D1 trend verdict for the row's side; None when unknown or untagged."""
     return row.get("trend_short") if row.get("_side") == "short" else row.get("trend_long")
@@ -204,7 +215,9 @@ def rows_for(board: dict[str, Any] | None, mode: str, side: str) -> list[dict[st
     board = board or {}
     if mode in ("strong", "weak"):
         side = "long" if mode == "strong" else "short"
-        key = "rip" if (board.get("state") or {}).get("rally") else "dip"
+        # The swing-anchored lists when the board has them, else the turn's lists.
+        key = "swing" if "swing" in board else (
+            "rip" if (board.get("state") or {}).get("rally") else "dip")
         return [dict(row, _side=side) for row in (((board.get(key) or {}).get(side)) or [])]
     if mode == "pop":
         both = [dict(row, _side=s) for s in ("long", "short")
@@ -985,7 +998,14 @@ class MoversBoard(QWidget):
         when = _local_clock(state.get("start_dt")) or state.get("extreme_time") or ""
         turn = f"since the {when} {'high' if pullback else 'low'}" if when else "since the turn"
         word = "Rip" if state.get("rally") else "Dip" if pullback else "Bounce"
-        if dip_live:
+        swing_anchor = (self._board or {}).get("swing_anchor") if "swing" in (self._board or {}) else None
+        if swing_anchor is not None:
+            self.strong.title_label.setText(_swing_title("long", swing_anchor.get("long")))
+            self.weak.title_label.setText(_swing_title("short", swing_anchor.get("short")))
+            tip = (f"Each box measures from SPY's last major M5 move: {movers_scan.SWING_HA_RUN} "
+                   "or more Heikin-Ashi candles in a row. A name listed earlier today stays "
+                   "while it still beats (or lags) SPY.")
+        elif dip_live:
             self.strong.title_label.setText(f"{word}-strong ● · beating SPY {turn}")
             self.weak.title_label.setText(f"{word}-weak ● · lagging SPY {turn}")
             tip = ""
@@ -1084,6 +1104,13 @@ class MoversBoard(QWidget):
             return ""
         if not self._board:
             return "No Movers read yet. It refreshes every 5-minute bar in market hours."
+        if "swing" in (self._board or {}):
+            if name == "strong":
+                return "" if (self._board.get("swing_anchor") or {}).get("long") is None else (
+                    "No name is beating SPY since the low.")
+            if name == "weak":
+                return "" if (self._board.get("swing_anchor") or {}).get("short") is None else (
+                    "No name is lagging SPY since the high.")
         if name in ("strong", "weak") and not self._dip_live():
             return ""  # the box title says it is not lit
         if name == "strong":

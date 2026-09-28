@@ -1,5 +1,7 @@
 # Changelog
 
+- 2026-09-28 Movers Dip boxes: Dip-strong measures from SPY's last major M5 dip and Dip-weak from its last major rip (a completed run of 6+ Heikin-Ashi candles), shifting as new runs complete; a name listed earlier today stays while it still qualifies. Notices and outcome logs unchanged.
+
 - 2026-09-28 Movers: Pop + Dip is always three boxes, top to bottom: Movers (half the height), Dip-strong and Dip-weak (a quarter each); unlit Dip boxes sit empty with "(not lit)" in the title.
 
 - 2026-09-28 Yahoo hang: every yf.download in the desk process (including direct callers) now shares the one lock, and a call stuck in yfinance's wait gives up after 240 s; the Strength Board had spun forever holding the lock and froze Movers. Movers: Pop + Dip always shows titled Pop, Dip-strong and Dip-weak boxes; the Dip tables fill only in a SPY turn.
