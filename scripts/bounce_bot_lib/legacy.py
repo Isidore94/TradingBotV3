@@ -97,6 +97,8 @@ import outcome_semantics
 import m5_setup_key_stamp
 from market_internals import format_internals_line, internals_context_fields
 from completed_bars import is_completed_bar as _is_completed_bar
+import rrs_config
+from indicators.rolling_rrs import rolling_from_series, rrs_point_series
 from durability_retry import fetch_with_bounded_retry
 from vold_recorder import (
     CONTRACT_CANDIDATES as VOLD_CONTRACT_CANDIDATES,
@@ -362,6 +364,8 @@ GROUP_STRENGTH_TIMEFRAMES = {
     "H1": {"bar_size": "1 hour", "duration": "5 D"},
     "M5": {"bar_size": "5 mins", "duration": "5 D"},
 }
+# Group strength timeframes the rolling engine rolls from the M5 cache (candle minutes).
+GROUP_STRENGTH_ROLLING_MINUTES = {"M5": 5, "H1": 60}
 ENVIRONMENT_FOCUS_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-]+$")
 DEFAULT_SECTOR_ETF_MAP = {
     "communication-services": "XLC",
@@ -1446,14 +1450,16 @@ def _bounce_rrs_alignment(row: dict, field: str = "rrs_spy") -> str:
     rrs_value = _bounce_perf_float(row.get(field))
     if rrs_value is None:
         return "unknown"
+    # The row's own scale: desk rows (untagged) at 2.0, rolling rows at 1.0.
+    strong = 2.0 * rrs_row_scale(row)
     if direction == "long":
-        if rrs_value >= 2.0:
+        if rrs_value >= strong:
             return "strong_aligned"
         if rrs_value > 0:
             return "aligned"
         return "counter"
     if direction == "short":
-        if rrs_value <= -2.0:
+        if rrs_value <= -strong:
             return "strong_aligned"
         if rrs_value < 0:
             return "aligned"
@@ -1684,6 +1690,7 @@ def build_intraday_bounce_performance_rows(
         "bounce_types",
         "score",
         "risk_per_share",
+        "rrs_engine",
         "rrs_spy",
         "rrs_sector",
         "rrs_industry",
@@ -2697,6 +2704,83 @@ def real_relative_strength(symbol_bars, spy_bars, length=RRS_LENGTH):
     return rrs, power_index
 
 
+# Rolling RRS (rrs_config): a regular session of M5 bars. A roll shorter than
+# this uses only the current session's reads.
+RRS_SESSION_BARS = 78
+
+
+def rrs_scale():
+    """Factor for a desk-scale RRS constant: DESK_TO_ROLLING on the rolling engine, 1.0 on desk."""
+    return rrs_config.DESK_TO_ROLLING if rrs_config.use_rolling() else 1.0
+
+
+def rrs_row_scale(row):
+    """Factor for a STORED row: its own ``rrs_engine`` tag decides; untagged rows are desk scale."""
+    engine = str((row or {}).get("rrs_engine") or "").strip().lower() if isinstance(row, dict) else ""
+    return rrs_config.DESK_TO_ROLLING if engine == rrs_config.ENGINE_ROLLING else 1.0
+
+
+def rrs_point_series_m5(symbol_bars, reference_bars):
+    """Rolling-engine point (rrs, power) per bar for two ALIGNED M5 series."""
+    return rrs_point_series(symbol_bars, reference_bars, rrs_config.INTRADAY)
+
+
+def _candle_close_index(bars, candle_minutes, last=None):
+    """Index of the last M5 bar at or before ``last`` that closes a ``candle_minutes`` candle.
+
+    Candles count from the session open, as ``_aggregate_bars_timeframe`` buckets them.
+    """
+    if not bars:
+        return None
+    last = len(bars) - 1 if last is None else min(last, len(bars) - 1)
+    if candle_minutes <= 5:
+        return last if last >= 0 else None
+    for index in range(last, -1, -1):
+        dt = bars[index].dt
+        minutes = int((dt - get_market_session_open_naive(reference=dt)).total_seconds() // 60) + 5
+        if minutes > 0 and minutes % int(candle_minutes) == 0:
+            return index
+    return None
+
+
+def rolling_rrs_at(series, bars, candle_minutes=5, last=None):
+    """RollingRrs at the last completed ``candle_minutes`` candle at or before ``last``, or None.
+
+    ``series`` is ``rrs_point_series_m5`` over the aligned M5 ``bars``.
+    """
+    config = rrs_config.intraday_config(candle_minutes)
+    close = _candle_close_index(bars, candle_minutes, last)
+    if close is None or close >= len(series):
+        return None
+    window = max(1, config.roll) * max(1, config.sample_every)
+    start = max(0, close + 1 - window)
+    chunk = list(series[start : close + 1])
+    if window <= RRS_SESSION_BARS:
+        day = bars[close].dt.date()
+        chunk = [
+            pair if bars[start + offset].dt.date() == day else (None, None)
+            for offset, pair in enumerate(chunk)
+        ]
+    return rolling_from_series(chunk, config)
+
+
+def relative_strength_pair(symbol_bars, spy_bars, length=RRS_LENGTH, candle_minutes=5):
+    """(rrs, power) on the active engine, or (None, None).
+
+    Desk: ``real_relative_strength`` on the bars given. Rolling: the bars must be
+    ALIGNED M5 bars; the result is the rolling read at the last completed
+    ``candle_minutes`` candle and its SPY power.
+    """
+    if not rrs_config.use_rolling():
+        return real_relative_strength(symbol_bars, spy_bars, length=length)
+    if not symbol_bars or not spy_bars:
+        return None, None
+    result = rolling_rrs_at(rrs_point_series_m5(symbol_bars, spy_bars), symbol_bars, candle_minutes)
+    if result is None:
+        return None, None
+    return result.rolling, result.power
+
+
 def _spy_vwap_regime_stats(today_bars, prev_close):
     """The VWAP-position regime read plus the measurements behind it, or None.
 
@@ -2999,7 +3083,8 @@ class BounceBot(EWrapper, EClient):
 
         # RRS settings (thread-safe for GUI updates)
         self.rrs_lock = threading.Lock()
-        self.rrs_threshold = RRS_DEFAULT_THRESHOLD
+        self.rrs_threshold = RRS_DEFAULT_THRESHOLD  # desk engine (old scale)
+        self.rolling_rrs_threshold = rrs_config.ROLLING_RRS_CUTOFF  # rolling engine
         self.rrs_length = RRS_LENGTH
         self.rrs_timeframe_key = "5m"
         self.rrs_bar_size = RRS_TIMEFRAMES[self.rrs_timeframe_key]["bar_size"]
@@ -3951,6 +4036,8 @@ class BounceBot(EWrapper, EClient):
             session_rvol = None
         return {
             "rrs_timeframe": payload.get("timeframe_key", ""),
+            # Which RRS scale the rrs_* numbers are on; untagged (older) rows are desk scale.
+            "rrs_engine": rrs_config.engine(),
             "rrs_spy": spy_rrs.get("rrs", ""),
             "rrs_spy_signal": spy_rrs.get("signal", ""),
             "rrs_sector": sector_rrs.get("rrs", ""),
@@ -4132,12 +4219,14 @@ class BounceBot(EWrapper, EClient):
         if any(name in level_names for name in ("prev_day_high", "prev_day_low")):
             score += 8
         rrs_spy = context.get("rrs_spy")
+        # Points per RRS unit follow the engine's scale, so the cutoff earns the same points.
+        points_per_rrs = 2.0 / rrs_scale()
         try:
             rrs_value = float(rrs_spy)
             if direction == "long" and rrs_value > 0:
-                score += min(12, max(0, rrs_value * 2))
+                score += min(12, max(0, rrs_value * points_per_rrs))
             elif direction == "short" and rrs_value < 0:
-                score += min(12, max(0, abs(rrs_value) * 2))
+                score += min(12, max(0, abs(rrs_value) * points_per_rrs))
         except (TypeError, ValueError):
             pass
         if context.get("rrs_sector") != "":
@@ -4145,9 +4234,9 @@ class BounceBot(EWrapper, EClient):
         try:
             industry_rrs = float(context.get("rrs_industry"))
             if direction == "long" and industry_rrs > 0:
-                score += min(BOUNCE_INDUSTRY_RRS_BONUS_CAP, max(4, industry_rrs * 2))
+                score += min(BOUNCE_INDUSTRY_RRS_BONUS_CAP, max(4, industry_rrs * points_per_rrs))
             elif direction == "short" and industry_rrs < 0:
-                score += min(BOUNCE_INDUSTRY_RRS_BONUS_CAP, max(4, abs(industry_rrs) * 2))
+                score += min(BOUNCE_INDUSTRY_RRS_BONUS_CAP, max(4, abs(industry_rrs) * points_per_rrs))
         except (TypeError, ValueError):
             pass
         return round(float(score), 2)
@@ -4330,6 +4419,9 @@ class BounceBot(EWrapper, EClient):
             "atr": self._to_float_or_blank(atr),
             "threshold": self._to_float_or_blank(threshold),
             "rrs_timeframe": context.get("rrs_timeframe", ""),
+            # Not a CSV column (a new column rewrites the whole candidate file);
+            # the durable copy is context_json["rrs_engine"].
+            "rrs_engine": context.get("rrs_engine", ""),
             "rrs_spy": context.get("rrs_spy", ""),
             "rrs_sector": context.get("rrs_sector", ""),
             "rrs_industry": context.get("rrs_industry", ""),
@@ -7061,7 +7153,8 @@ class BounceBot(EWrapper, EClient):
         if not self._is_move_significant(entry):
             return False
         return (
-            abs(rrs_value) >= max(MASTER_AVWAP_FOCUS_MIN_ABS_RRS, float(threshold) + 0.75)
+            abs(rrs_value)
+            >= max(MASTER_AVWAP_FOCUS_MIN_ABS_RRS * rrs_scale(), float(threshold) + 0.75 * rrs_scale())
             and abs(move_ratio) >= MASTER_AVWAP_FOCUS_MIN_MOVE_RATIO
             and abs(excess_move_ratio) >= MASTER_AVWAP_FOCUS_MIN_EXCESS_MOVE_RATIO
         )
@@ -7149,9 +7242,19 @@ class BounceBot(EWrapper, EClient):
             )
             logging.info(summary_msg)
 
+    def active_rrs_threshold(self):
+        """The RS/RW cutoff of the active engine; each engine keeps its own number."""
+        if rrs_config.use_rolling():
+            return float(getattr(self, "rolling_rrs_threshold", rrs_config.ROLLING_RRS_CUTOFF))
+        return float(self.rrs_threshold)
+
     def set_rrs_threshold(self, value):
+        """Set the ACTIVE engine's cutoff; the other engine's number is left alone."""
         with self.rrs_lock:
-            self.rrs_threshold = float(value)
+            if rrs_config.use_rolling():
+                self.rolling_rrs_threshold = float(value)
+            else:
+                self.rrs_threshold = float(value)
 
     def set_rrs_timeframe(self, key):
         if key not in RRS_TIMEFRAMES:
@@ -7164,7 +7267,7 @@ class BounceBot(EWrapper, EClient):
     def get_rrs_settings(self):
         with self.rrs_lock:
             return (
-                self.rrs_threshold,
+                self.active_rrs_threshold(),
                 self.rrs_bar_size,
                 self.rrs_duration,
                 self.rrs_length,
@@ -9523,6 +9626,9 @@ class BounceBot(EWrapper, EClient):
                 return None
             return value if direction == "long" else -value
 
+        # Ranking weights below were tuned on desk-scale RRS; express RRS in desk units.
+        rrs_unit = rrs_scale()
+
         def finalize_candidate(symbol, direction, profile, overall_summary, context_summary, compression_summary):
             if overall_summary["windows"] <= 0:
                 return None
@@ -9584,13 +9690,13 @@ class BounceBot(EWrapper, EClient):
             context_score = (
                 context_summary["hits"] * 160.0
                 + context_summary["hit_rate"] * 110.0
-                + (abs(context_summary["avg_rrs"]) * 18.0 if context_summary["avg_rrs"] is not None else 0.0)
-                + (abs(context_summary["best_rrs"]) * 8.0 if context_summary["best_rrs"] is not None else 0.0)
+                + (abs(context_summary["avg_rrs"]) / rrs_unit * 18.0 if context_summary["avg_rrs"] is not None else 0.0)
+                + (abs(context_summary["best_rrs"]) / rrs_unit * 8.0 if context_summary["best_rrs"] is not None else 0.0)
                 + (abs(context_summary["avg_excess"]) * 10.0 if context_summary["avg_excess"] is not None else 0.0)
                 + compression_summary["hits"] * 55.0
                 + compression_summary["hit_rate"] * 35.0
-                + (abs(compression_summary["avg_rrs"]) * 6.0 if compression_summary["avg_rrs"] is not None else 0.0)
-                + (abs(compression_summary["best_rrs"]) * 3.0 if compression_summary["best_rrs"] is not None else 0.0)
+                + (abs(compression_summary["avg_rrs"]) / rrs_unit * 6.0 if compression_summary["avg_rrs"] is not None else 0.0)
+                + (abs(compression_summary["best_rrs"]) / rrs_unit * 3.0 if compression_summary["best_rrs"] is not None else 0.0)
                 + (abs(compression_summary["avg_excess"]) * 4.0 if compression_summary["avg_excess"] is not None else 0.0)
                 + recent_profile_hits * 75.0
                 + recent_profile_hit_rate * 50.0
@@ -9601,8 +9707,8 @@ class BounceBot(EWrapper, EClient):
             overall_score = (
                 overall_summary["hits"] * 120.0
                 + overall_summary["hit_rate"] * 85.0
-                + (abs(overall_summary["avg_rrs"]) * 95.0 if overall_summary["avg_rrs"] is not None else 0.0)
-                + (abs(overall_summary["best_rrs"]) * 16.0 if overall_summary["best_rrs"] is not None else 0.0)
+                + (abs(overall_summary["avg_rrs"]) / rrs_unit * 95.0 if overall_summary["avg_rrs"] is not None else 0.0)
+                + (abs(overall_summary["best_rrs"]) / rrs_unit * 16.0 if overall_summary["best_rrs"] is not None else 0.0)
                 + (abs(overall_summary["avg_excess"]) * 18.0 if overall_summary["avg_excess"] is not None else 0.0)
                 + context_summary["hits"] * 28.0
                 + context_summary["hit_rate"] * 18.0
@@ -10151,7 +10257,7 @@ class BounceBot(EWrapper, EClient):
         signed_rrs = rrs_value if direction == "long" else -rrs_value
         signed_move = move_ratio if direction == "long" else -move_ratio
         signed_excess = excess_move_ratio if direction == "long" else -excess_move_ratio
-        min_rrs = max(0.0, abs(float(threshold or RRS_DEFAULT_THRESHOLD)) * ENVIRONMENT_CONTEXT_MIN_RRS_FRACTION)
+        min_rrs = max(0.0, abs(float(threshold or rrs_config.cutoff())) * ENVIRONMENT_CONTEXT_MIN_RRS_FRACTION)
         if signed_rrs < min_rrs or signed_excess < MIN_EXCESS_MOVE_RATIO_FOR_SIGNAL:
             return False
 
@@ -10171,7 +10277,7 @@ class BounceBot(EWrapper, EClient):
 
         threshold = abs(float(threshold or 0.0))
         if threshold <= 0.0:
-            threshold = float(RRS_DEFAULT_THRESHOLD)
+            threshold = float(rrs_config.cutoff())
 
         def clamp(value, limit=3.0):
             return max(-limit, min(limit, value))
@@ -10221,18 +10327,32 @@ class BounceBot(EWrapper, EClient):
             return None
         return move / atr
 
-    def _build_intraday_rrs_profile(self, symbol_bars, spy_bars, length=IMPULSE_RRS_PROFILE_LENGTH):
+    def _build_intraday_rrs_profile(self, symbol_bars, spy_bars, length=IMPULSE_RRS_PROFILE_LENGTH, from_date=None):
+        """Per-bar RRS profile; ``from_date`` skips bars before that date (earlier bars still feed each read)."""
         if not symbol_bars or not spy_bars:
             return []
         aligned_sym, aligned_spy = _align_bars_with_map(symbol_bars, {bar.dt: bar for bar in spy_bars})
         if len(aligned_sym) < length + 2 or len(aligned_spy) < length + 2:
             return []
 
+        rolling = rrs_config.use_rolling()
+        # Rolling engine: one point series, rolled at every bar (``length`` still sets the move ratios).
+        series = rrs_point_series_m5(aligned_sym, aligned_spy) if rolling else None
         profile = []
         for idx in range(length + 1, len(aligned_sym)):
-            sym_slice = aligned_sym[:idx + 1]
-            spy_slice = aligned_spy[:idx + 1]
-            rrs_value, power_index = real_relative_strength(sym_slice, spy_slice, length=length)
+            if from_date is not None and aligned_sym[idx].dt.date() < from_date:
+                continue
+            if rolling:
+                read = rolling_rrs_at(series, aligned_sym, 5, last=idx)
+                if read is None:
+                    continue
+                rrs_value, power_index = read.rolling, read.power
+                sym_slice = aligned_sym[:idx + 1]
+                spy_slice = aligned_spy[:idx + 1]
+            else:
+                sym_slice = aligned_sym[:idx + 1]
+                spy_slice = aligned_spy[:idx + 1]
+                rrs_value, power_index = real_relative_strength(sym_slice, spy_slice, length=length)
             if rrs_value is None:
                 continue
             sym_move_ratio = self._calc_move_ratio(sym_slice, length)
@@ -10251,6 +10371,29 @@ class BounceBot(EWrapper, EClient):
                 }
             )
         return profile
+
+    def _impulse_rrs_profile(self, symbol, today_symbol_bars, spy_5m, current_date):
+        """Today's RRS profile for the impulse regime filter.
+
+        Desk: today's bars only, 6-bar RRS. Rolling: the hourly ATR needs the
+        earlier sessions, so the cached M5 history is prepended and the profile
+        is cut back to today.
+        """
+        if not rrs_config.use_rolling():
+            today_spy_bars = [bar for bar in spy_5m if bar.dt.date() == current_date]
+            return self._build_intraday_rrs_profile(
+                today_symbol_bars,
+                today_spy_bars,
+                length=IMPULSE_RRS_PROFILE_LENGTH,
+            )
+        history = [bar for bar in (self.get_cached_5m_bars(symbol) or []) if bar.dt.date() < current_date]
+        profile = self._build_intraday_rrs_profile(
+            history + list(today_symbol_bars),
+            spy_5m,
+            length=IMPULSE_RRS_PROFILE_LENGTH,
+            from_date=current_date,
+        )
+        return [item for item in profile if item.get("dt") and item["dt"].date() == current_date]
 
     def _impulse_regime_transition_ok(self, symbol, direction, profile):
         if len(profile) < (IMPULSE_RRS_RECENT_PHASE_BARS + 2):
@@ -10277,13 +10420,14 @@ class BounceBot(EWrapper, EClient):
         )
         if not favored_env:
             excess_ratio_req = IMPULSE_RRS_UNFAVORED_EXCESS_RATIO
+        counter_rrs = IMPULSE_RRS_COUNTER_RRS * rrs_scale()
 
         if direction == "long":
             best_trend_ratio = max((item.get("move_ratio") for item in pre_phase if item.get("move_ratio") is not None), default=None)
             best_excess_ratio = max((item.get("excess_move_ratio") for item in pre_phase if item.get("excess_move_ratio") is not None), default=None)
             counter_rrs_count = sum(
                 1 for item in recent_phase
-                if (item.get("rrs") is not None and item.get("rrs") <= -IMPULSE_RRS_COUNTER_RRS)
+                if (item.get("rrs") is not None and item.get("rrs") <= -counter_rrs)
             )
             counter_move_count = sum(
                 1 for item in recent_phase
@@ -10296,7 +10440,7 @@ class BounceBot(EWrapper, EClient):
             best_excess_ratio = min((item.get("excess_move_ratio") for item in pre_phase if item.get("excess_move_ratio") is not None), default=None)
             counter_rrs_count = sum(
                 1 for item in recent_phase
-                if (item.get("rrs") is not None and item.get("rrs") >= IMPULSE_RRS_COUNTER_RRS)
+                if (item.get("rrs") is not None and item.get("rrs") >= counter_rrs)
             )
             counter_move_count = sum(
                 1 for item in recent_phase
@@ -11062,6 +11206,8 @@ class BounceBot(EWrapper, EClient):
                 self.gui_callback("RRS scan: SPY data unavailable.", "rrs_status")
             return
 
+        rolling = rrs_config.use_rolling()
+        spy_5m_by_dt = {bar.dt: bar for bar in spy_5m}
         spy_by_dt = {}
         spy_move_ratio = {}
         for timeframe_key in timeframe_keys:
@@ -11120,6 +11266,16 @@ class BounceBot(EWrapper, EClient):
                 reference_bars_by_dt[cache_key] = cached
             return cached
 
+        def _rolling_reads_vs(symbol_5m, reference_by_dt, keys):
+            """Rolling (rrs, power) of one symbol vs one reference ETF, per timeframe key."""
+            aligned_symbol, aligned_reference = _align_bars_with_map(symbol_5m, reference_by_dt)
+            series = rrs_point_series_m5(aligned_symbol, aligned_reference)
+            reads = {}
+            for key in keys:
+                read = rolling_rrs_at(series, aligned_symbol, timeframe_minutes[key])
+                reads[key] = (read.rolling, read.power) if read else (None, None)
+            return reads
+
         for symbol in all_symbols:
             sym_5m = self.get_cached_5m_bars(symbol)
             if not sym_5m:
@@ -11133,11 +11289,19 @@ class BounceBot(EWrapper, EClient):
             sym_bars_by_timeframe = {}
             measured_timeframes = []
             symbol_direction = None
+            if rolling:
+                # One M5 point series per symbol; each timeframe rolls it at its own candle closes.
+                aligned_sym_5m, aligned_spy_5m = _align_bars_with_map(sym_5m, spy_5m_by_dt)
+                spy_series = rrs_point_series_m5(aligned_sym_5m, aligned_spy_5m)
             for timeframe_key in timeframe_keys:
                 minutes = timeframe_minutes[timeframe_key]
                 sym_bars = sym_5m if minutes == 5 else _aggregate_bars_timeframe(sym_5m, minutes)
-                aligned_sym, aligned_spy = _align_bars_with_map(sym_bars, spy_by_dt[timeframe_key])
-                rrs_value, power_index = real_relative_strength(aligned_sym, aligned_spy, length=length)
+                if rolling:
+                    read = rolling_rrs_at(spy_series, aligned_sym_5m, minutes)
+                    rrs_value, power_index = (read.rolling, read.power) if read else (None, None)
+                else:
+                    aligned_sym, aligned_spy = _align_bars_with_map(sym_bars, spy_by_dt[timeframe_key])
+                    rrs_value, power_index = real_relative_strength(aligned_sym, aligned_spy, length=length)
                 if rrs_value is None:
                     continue
                 sym_bars_by_timeframe[timeframe_key] = sym_bars
@@ -11192,12 +11356,19 @@ class BounceBot(EWrapper, EClient):
             sector_etf = resolve_sector_etf(sector_key, self.sector_etf_map)
             sec_5m = self.get_cached_5m_bars(sector_etf)
             if sec_5m:
+                sec_reads = (
+                    _rolling_reads_vs(sym_5m, _reference_by_dt(sector_etf, "5m", sec_5m), measured_timeframes)
+                    if rolling else None
+                )
                 for timeframe_key in measured_timeframes:
-                    sec_by_dt = _reference_by_dt(sector_etf, timeframe_key, sec_5m)
-                    aligned_sym_sec, aligned_sec = _align_bars_with_map(
-                        sym_bars_by_timeframe[timeframe_key], sec_by_dt
-                    )
-                    sec_rrs, sec_power = real_relative_strength(aligned_sym_sec, aligned_sec, length=length)
+                    if rolling:
+                        sec_rrs, sec_power = sec_reads[timeframe_key]
+                    else:
+                        sec_by_dt = _reference_by_dt(sector_etf, timeframe_key, sec_5m)
+                        aligned_sym_sec, aligned_sec = _align_bars_with_map(
+                            sym_bars_by_timeframe[timeframe_key], sec_by_dt
+                        )
+                        sec_rrs, sec_power = real_relative_strength(aligned_sym_sec, aligned_sec, length=length)
                     if sec_rrs is not None:
                         # Every scanned symbol, not just threshold-crossers (see
                         # rrs_sector_all below): the alert-time snapshot must be
@@ -11216,12 +11387,19 @@ class BounceBot(EWrapper, EClient):
             )
             ind_5m = self.get_cached_5m_bars(industry_ref)
             if ind_5m:
+                ind_reads = (
+                    _rolling_reads_vs(sym_5m, _reference_by_dt(industry_ref, "5m", ind_5m), measured_timeframes)
+                    if rolling else None
+                )
                 for timeframe_key in measured_timeframes:
-                    ind_by_dt = _reference_by_dt(industry_ref, timeframe_key, ind_5m)
-                    aligned_sym_ind, aligned_ind = _align_bars_with_map(
-                        sym_bars_by_timeframe[timeframe_key], ind_by_dt
-                    )
-                    ind_rrs, ind_power = real_relative_strength(aligned_sym_ind, aligned_ind, length=length)
+                    if rolling:
+                        ind_rrs, ind_power = ind_reads[timeframe_key]
+                    else:
+                        ind_by_dt = _reference_by_dt(industry_ref, timeframe_key, ind_5m)
+                        aligned_sym_ind, aligned_ind = _align_bars_with_map(
+                            sym_bars_by_timeframe[timeframe_key], ind_by_dt
+                        )
+                        ind_rrs, ind_power = real_relative_strength(aligned_sym_ind, aligned_ind, length=length)
                     if ind_rrs is not None:
                         industry_all[timeframe_key][symbol] = (ind_rrs, ind_power, industry_ref)
                         if symbol_direction == "long" and ind_rrs >= threshold:
@@ -11369,32 +11547,44 @@ class BounceBot(EWrapper, EClient):
         industry_refs = self.industry_map_data.get("yahoo_industryKey_to_ref", {})
         industry_etfs = sorted({(v.get("etf") or "").strip().upper() for v in industry_refs.values() if isinstance(v, dict) and (v.get("etf") or "").strip()})
         for tf_key, tf in GROUP_STRENGTH_TIMEFRAMES.items():
-            spy = self._get_cached_bars("SPY", tf["duration"], tf["bar_size"])
+            # Rolling engine: M5 and H1 are rolled from the M5 cache (H1 at hour closes); D1 stays desk.
+            rolling_minutes = GROUP_STRENGTH_ROLLING_MINUTES.get(tf_key) if rrs_config.use_rolling() else None
+            duration, bar_size = (
+                ("5 D", "5 mins") if rolling_minutes else (tf["duration"], tf["bar_size"])
+            )
+            spy = self._get_cached_bars("SPY", duration, bar_size)
             if not spy:
                 continue
             spy_by_dt = {bar.dt: bar for bar in spy}
+
+            def _group_read(bars, spy_by_dt=spy_by_dt, rolling_minutes=rolling_minutes):
+                aligned_etf, aligned_spy = _align_bars_with_map(bars, spy_by_dt)
+                if rolling_minutes:
+                    return relative_strength_pair(aligned_etf, aligned_spy, candle_minutes=rolling_minutes)
+                return real_relative_strength(aligned_etf, aligned_spy, length=self.rrs_length)
+
             sectors = []
             for sector_key, etf in sorted(self.sector_etf_map.items()):
-                bars = self._get_cached_bars(etf, tf["duration"], tf["bar_size"])
+                bars = self._get_cached_bars(etf, duration, bar_size)
                 if not bars:
                     continue
-                aligned_etf, aligned_spy = _align_bars_with_map(bars, spy_by_dt)
-                rrs, power = real_relative_strength(aligned_etf, aligned_spy, length=self.rrs_length)
+                rrs, power = _group_read(bars)
                 if rrs is not None:
                     sectors.append({"group_key": sector_key, "etf": etf, "rrs": rrs, "power_index": power})
             industries = []
             for etf in industry_etfs:
-                bars = self._get_cached_bars(etf, tf["duration"], tf["bar_size"])
+                bars = self._get_cached_bars(etf, duration, bar_size)
                 if not bars:
                     continue
-                aligned_etf, aligned_spy = _align_bars_with_map(bars, spy_by_dt)
-                rrs, power = real_relative_strength(aligned_etf, aligned_spy, length=self.rrs_length)
+                rrs, power = _group_read(bars)
                 if rrs is not None:
                     industries.append({"group_key": etf, "etf": etf, "rrs": rrs, "power_index": power})
             results[tf_key] = {
                 "sectors": sorted(sectors, key=lambda x: x["rrs"], reverse=True),
                 "industries": sorted(industries, key=lambda x: x["rrs"], reverse=True),
             }
+            if rolling_minutes:
+                results[tf_key]["rrs_engine"] = rrs_config.ENGINE_ROLLING
         self.latest_group_extremes = results
         self._log_group_strength_extremes(results)
         return results
@@ -12050,11 +12240,8 @@ class BounceBot(EWrapper, EClient):
             spy_5m = self.latest_bars.get("SPY") or self.get_cached_5m_bars("SPY")
             if spy_5m:
                 today_symbol_bars = _dedupe_bars(_bars_to_ib(today_df.to_dict("records")))
-                today_spy_bars = [bar for bar in spy_5m if bar.dt.date() == current_date]
-                intraday_rrs_profile = self._build_intraday_rrs_profile(
-                    today_symbol_bars,
-                    today_spy_bars,
-                    length=IMPULSE_RRS_PROFILE_LENGTH,
+                intraday_rrs_profile = self._impulse_rrs_profile(
+                    symbol, today_symbol_bars, spy_5m, current_date
                 )
         except Exception as exc:
             logging.debug(f"{symbol}: Failed building intraday RS/RW profile for impulse filter: {exc}")

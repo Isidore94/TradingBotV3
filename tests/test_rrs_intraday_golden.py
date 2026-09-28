@@ -313,7 +313,7 @@ def assert_close(actual, expected, path="$"):
         return
     if isinstance(expected, list):
         assert isinstance(actual, list) and len(actual) == len(expected), f"{path}: length"
-        for index, (left, right) in enumerate(zip(actual, expected)):
+        for index, (left, right) in enumerate(zip(actual, expected, strict=True)):
             assert_close(left, right, f"{path}[{index}]")
         return
     assert actual == expected, f"{path}: {actual!r} != {expected!r}"
@@ -365,3 +365,96 @@ def test_the_golden_universe_is_not_degenerate():
     assert set(fixture["focus_gate"].values()) == {True, False}
     assert any(item["profile"] for item in fixture["impulse"].values())
     assert fixture["group_strength"]["M5"]["sectors"]
+
+
+# --- the rolling engine on the same universe: facts, not a recording ---------
+
+
+@pytest.fixture
+def rolling_engine(monkeypatch):
+    monkeypatch.setenv("TRADINGBOTV3_RRS_ENGINE", "rolling_hourly")
+
+
+def _scan(monkeypatch, last_day_bars=BARS_PER_SESSION):
+    bot = make_bot(universe(last_day_bars), monkeypatch=monkeypatch)
+    bot.run_rrs_scan()
+    return bot
+
+
+def _signals(payload, key="results"):
+    return {row[1]: row[0] for row in payload[key]}
+
+
+def test_rolling_scan_names_the_strong_and_weak_stocks(rolling_engine, monkeypatch):
+    bot = _scan(monkeypatch)
+    for key in CYCLE_TIMEFRAMES:
+        payload = bot.rrs_payload_for(key)
+        assert payload["threshold"] == 1.0
+        assert _signals(payload) == {"STRONG": "RS", "WEAK": "RW"}, key
+        reads = {symbol: value[0] for symbol, value in payload["rrs_all"].items()}
+        assert reads["STRONG"] > reads["FLAT"] > reads["WEAK"], key
+        assert abs(reads["FLAT"]) < 1.0, key
+
+
+def test_rolling_scan_lets_a_burst_decay(rolling_engine, monkeypatch):
+    """BURST ran for 90 minutes then went flat: RS early, not RS at the close."""
+    early = _scan(monkeypatch, last_day_bars=20).rrs_payload_for("5m")
+    assert early["rrs_all"]["BURST"][0] >= 1.0
+    late = _scan(monkeypatch).rrs_payload_for("5m")
+    assert abs(late["rrs_all"]["BURST"][0]) < 1.0
+    assert "BURST" not in _signals(late)
+
+
+def test_rolling_first_read_is_no_earlier_than_70_minutes_after_the_open(rolling_engine, monkeypatch):
+    session_open = datetime(2026, 6, 5, SESSION_OPEN_HOUR, SESSION_OPEN_MINUTE)
+    first = None
+    for count in range(1, 30):
+        if _scan(monkeypatch, last_day_bars=count).rrs_payload_for("5m")["rrs_all"]:
+            first = count
+            break
+    assert first is not None
+    last_bar_open = session_open + timedelta(minutes=5 * (first - 1))
+    assert last_bar_open >= session_open + timedelta(minutes=70)
+
+
+def test_rolling_sector_and_industry_reads_are_rolling_too(rolling_engine, monkeypatch):
+    payload = _scan(monkeypatch).rrs_payload_for("5m")
+    assert _signals(payload, "results_sector") == {"STRONG": "RS", "WEAK": "RW"}
+    assert _signals(payload, "results_industry") == {"STRONG": "RS", "WEAK": "RW"}
+    for scope in ("rrs_sector_all", "rrs_industry_all"):
+        assert abs(payload[scope]["FLAT"][0]) < 1.0
+
+
+def test_rolling_score_bonus_rewards_the_aligned_leader(rolling_engine, monkeypatch):
+    bot = _scan(monkeypatch)
+    bot.latest_rrs_payload = bot.rrs_payload_for("5m")
+
+    def score(symbol, direction):
+        context = bot._build_bounce_context_snapshot(symbol, direction)
+        assert context["rrs_engine"] == "rolling_hourly"
+        return bot._score_bounce_candidate_snapshot(direction, PROBE_LEVELS, context)
+
+    assert score("STRONG", "long") > score("FLAT", "long")
+    assert score("WEAK", "short") > score("FLAT", "short")
+
+
+def test_rolling_impulse_profile_reads_today_with_the_history_behind_it(rolling_engine, monkeypatch):
+    bot = _scan(monkeypatch)
+    bars = universe()
+    last_day = SESSION_DATES[-1]
+    today = [bar for bar in bars["STRONG"] if bar.dt.date() == last_day]
+    profile = bot._impulse_rrs_profile("STRONG", today, bars[SPY], last_day)
+    assert profile
+    assert all(item["dt"].date() == last_day for item in profile)
+    session_open = datetime(2026, 6, 5, SESSION_OPEN_HOUR, SESSION_OPEN_MINUTE)
+    assert profile[0]["dt"] >= session_open + timedelta(minutes=70)
+    assert all(item["rrs"] > 0 for item in profile)
+
+
+def test_rolling_group_strength_tags_its_scale(rolling_engine, monkeypatch):
+    bot = make_bot(universe(), monkeypatch=monkeypatch)
+    del bot.compute_group_strengths
+    groups = bounce_bot.BounceBot.compute_group_strengths(bot)
+    for key in ("M5", "H1"):
+        assert groups[key]["rrs_engine"] == "rolling_hourly"
+        assert groups[key]["sectors"] and groups[key]["industries"]
