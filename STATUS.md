@@ -2,7 +2,7 @@
 
 Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `git log`.
 
-**Updated:** 2026-09-28 08:40 PT (movers side tint + D1 trend gate merged, trader's word)
+**Updated:** 2026-09-28 09:05 PT (Yahoo download guard + titled Movers boxes merged, trader's word)
 
 - **Live on `main`:** round 1, round 2 Phase A (`81272d42`), Phase B + S (`2d59aace`),
   S10a + S7 (`3802c0d7`), p9 phase 1 regime frame (`849390a2`), p9 phase 2 long
@@ -10,7 +10,7 @@ Overwrite this file; don't append to it. Keep it under 3 KB. History lives in `g
   LONG gutted for Long leaders (`d382986e`), p9 phase 4 swing table, strength + under AVWAPE promotion + runner dip watch (`79e8d658`), p10 research lake history + SPY/QQQ/IWM
   auto regimes 2019+ + setups-by-regime backtester (`1b56f34f`, research only); rolling RRS everywhere, cutoff 1.0,
   `TRADINGBOTV3_RRS_ENGINE=desk` = old formulas; Movers side tint + D1 SMA trend gate
-  (`13b2e2cb`); gates #257-#301.
+  (`13b2e2cb`), Yahoo download guard (`56ce3965`); gates #257-#302.
 - **GUI/startup delivery:** approved 4K GUI design in gui.md; Journal, Research,
   Day Review, supporting pages and Desk polish; Windows font-startup fix.
   Source and frozen selftests 105/105. Long combined Qt test runs still hit
