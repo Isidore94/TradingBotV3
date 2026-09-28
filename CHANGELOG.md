@@ -1,5 +1,7 @@
 # Changelog
 
+- 2026-09-28 Indicators: rolling RRS now defaults to H.S.'s hourly ATR (1-hour move / mean in-session hourly range over the last 50 hours, gaps excluded, move never spans the overnight gap); `atr_mode="bar"` keeps desk-RRS parity. The desk scale reads ~4.4x the hourly one.
+
 - 2026-09-28 Indicators: add pure rolling Real Relative Strength vs SPY (`indicators/rolling_rrs.py`, H.S. RealDayTrading post): mean of the last 12 desk-RRS point reads plus hold-on-dips / drive-on-rips splits; point reads parity-tested against `group_rrs.real_relative_strength`. Not wired into any scan, score or alert yet.
 
 - 2026-09-27 GUI/startup delivery: integrate the approved 4K layouts and GDI startup fix with current runner-dip work; retain hidden/armed label states; make GUI test imports self-contained and retire Tag Week test workers before destroying widgets. All 924 files verified in fresh processes (13,446 pass, 14 skip); source/frozen selftests 105/105. Long combined Qt test-worker crashes remain a harness limitation.
