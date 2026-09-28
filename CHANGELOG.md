@@ -1,5 +1,7 @@
 # Changelog
 
+- 2026-09-28 Movers: Pop + Dip is always three boxes, top to bottom: Movers (half the height), Dip-strong and Dip-weak (a quarter each); unlit Dip boxes sit empty with "(not lit)" in the title.
+
 - 2026-09-28 Yahoo hang: every yf.download in the desk process (including direct callers) now shares the one lock, and a call stuck in yfinance's wait gives up after 240 s; the Strength Board had spun forever holding the lock and froze Movers. Movers: Pop + Dip always shows titled Pop, Dip-strong and Dip-weak boxes; the Dip tables fill only in a SPY turn.
 
 - 2026-09-28 Movers: Pop and Dip rows show their side (green long, red short Sym tint; new names a stronger tint). Trend gate on the ranked lists: longs above the D1 100 and 200 SMA, shorts below the D1 50 and 100; unknown history stays tagged D1?; My names is never filtered.

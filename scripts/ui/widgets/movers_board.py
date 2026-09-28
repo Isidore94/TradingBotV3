@@ -1,9 +1,10 @@
 """The Movers board: what is popping now, and who is strong or weak in a SPY turn.
 
 Sits at the top of the Alert Center's lower-right column (trader, 2026-09-23).
-Two modes. Pop stacks three tables (trader, 2026-09-24): Pop (longs and shorts
-together), then the strong and weak tables for the live SPY turn: Dip-* in a
-pullback, Bounce-* in a bounce, Rip-* in a rally. My
+Two modes. Pop stacks three boxes (trader, 2026-09-24; always all three,
+2026-09-28): Movers on top (longs and shorts together, half the height), then
+Dip-strong and Dip-weak (a quarter each) for the live SPY turn: Dip-* in a
+pullback, Bounce-* in a bounce, Rip-* in a rally; unlit, they sit empty. My
 names is one table with a Long/Short toggle. A SPY state banner tops both.
 Sym cells carry the side colour in the mixed Pop table (long green, short red);
 names new to a list get a stronger tint. A row whose D1 trend is unknown is
@@ -956,14 +957,12 @@ class MoversBoard(QWidget):
         hidden = self.hidden_keys()
         pop_mode = self._mode == "pop"
         dip_live = pop_mode and self._dip_live()
-        # Pop mode always shows the Dip boxes under their own titles; the tables
-        # fill only while SPY is in a pullback, bounce or rally.
+        # Pop mode always shows three boxes: Movers, Dip-strong, Dip-weak. The
+        # Dip tables fill only while SPY is in a pullback, bounce or rally.
         for section in (self.strong, self.weak):
             if section.isHidden() != (not pop_mode):
                 section.setVisible(pop_mode)
-            if section.table.isHidden() != (not dip_live):
-                section.table.setVisible(dip_live)
-        main_title = "Pop · biggest 15-minute moves now" if pop_mode else ""
+        main_title = "Movers · biggest 15-minute moves now" if pop_mode else ""
         if self.main.title_label.text() != main_title:
             self.main.title_label.setText(main_title)
         if self.main.title_label.isHidden() != (not pop_mode):
@@ -977,10 +976,8 @@ class MoversBoard(QWidget):
             section.set_rows(rows, columns_mode, "short" if name == "weak" else self._side)
             section.empty_label.setText(self._empty_text(rows, name))
             section.empty_label.setVisible(not rows)
-            # Height follows the row counts, so no table idles half empty.
-            floor = VISIBLE_ROWS if section is self.main else DIP_VISIBLE_ROWS
-            stretch = 0 if section.table.isHidden() else max(len(rows), floor) + 2
-            self.layout().setStretchFactor(section, stretch)
+            # Fixed shares: Movers half the height, each Dip box a quarter.
+            self.layout().setStretchFactor(section, 2 if section is self.main else 1)
         state = self._state()
         pullback = bool(state.get("pullback"))
         when = _local_clock(state.get("start_dt")) or state.get("extreme_time") or ""
@@ -990,8 +987,8 @@ class MoversBoard(QWidget):
             self.strong.title_label.setText(f"{word}-strong ● · beating SPY {turn}")
             self.weak.title_label.setText(f"{word}-weak ● · lagging SPY {turn}")
         else:
-            self.strong.title_label.setText("Dip-strong · beating SPY in a pullback")
-            self.weak.title_label.setText("Dip-weak · lagging SPY in a pullback")
+            self.strong.title_label.setText("Dip-strong · beating SPY in a pullback (not lit)")
+            self.weak.title_label.setText("Dip-weak · lagging SPY in a pullback (not lit)")
         hidden_count = len(self._hidden_in_view())
         if self.unhide_button.isHidden() != (hidden_count == 0):
             self.unhide_button.setVisible(hidden_count > 0)

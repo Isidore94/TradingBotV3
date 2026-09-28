@@ -326,7 +326,7 @@ def test_no_turn_hint_names_the_rally_too(app):
                          "mine": {}})
     widget.flush_pending_refresh()
     assert "rally" in widget.strong.empty_label.text()
-    assert widget.strong.table.isHidden() and widget.weak.table.isHidden()
+    assert not widget.strong.isHidden() and not widget.weak.isHidden()
 
 
 def test_plus_focus_on_a_rip_only_row_goes_through_the_gate(tmp_path, app):
