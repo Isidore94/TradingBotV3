@@ -212,7 +212,8 @@ def test_unknown_state_banner_and_dip_hint(app):
     assert "not lit" in widget.strong.title_label.text()
     assert widget.strong.title_label.text().startswith("Dip-strong")
     assert widget.weak.title_label.text().startswith("Dip-weak")
-    assert "no SPY pullback or bounce" in widget.strong.empty_label.text()
+    assert "No SPY pullback, bounce or rally" in widget.strong.title_label.toolTip()
+    assert widget.strong.empty_label.isHidden()
     assert widget.main.title_label.text().startswith("Movers")
     layout = widget.layout()
     assert layout.stretch(layout.indexOf(widget.main)) == 2

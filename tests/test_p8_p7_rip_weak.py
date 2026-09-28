@@ -325,7 +325,7 @@ def test_no_turn_hint_names_the_rally_too(app):
     widget.update_board({"state": {"state": "up_day"}, "pop": {}, "dip": {}, "rip": {},
                          "mine": {}})
     widget.flush_pending_refresh()
-    assert "rally" in widget.strong.empty_label.text()
+    assert "rally" in widget.strong.title_label.toolTip()
     assert not widget.strong.isHidden() and not widget.weak.isHidden()
 
 
