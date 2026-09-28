@@ -1,5 +1,7 @@
 # Changelog
 
+- 2026-09-28 Movers: Pop and Dip rows show their side (green long, red short Sym tint; new names a stronger tint). Trend gate on the ranked lists: longs above the D1 100 and 200 SMA, shorts below the D1 50 and 100; unknown history stays tagged D1?; My names is never filtered.
+
 - 2026-09-28 Relative strength: every RS/RW read (bounce bot 5m/15m/1h scan, alerts, gates and scores, group tape, Strength board, D1 swing-scan RS and industry RS, RS Window daily 5d/20d, rs_engine v2) moves to H.S.'s rolling RRS with a 1.0 cutoff; old-scale constants halve via `rrs_config.DESK_TO_ROLLING`; `TRADINGBOTV3_RRS_ENGINE=desk` restores the old formulas. Golden fixtures pin the desk path byte-for-byte.
 
 - 2026-09-28 Indicators: rolling RRS can take one-hour candles for both symbols so the hourly ATR spans H.S.'s full 50 hours (ATR50(H) = 50 one-hour candles); only candles closed before the move began count. Without them it cuts hours from the M5 bars as before.

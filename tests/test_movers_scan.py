@@ -440,6 +440,51 @@ def test_earnings_flags_today_bmo_and_yesterday_amc_only():
     assert flags == {"AAA", "BBB", "DDD", "EEE"}
 
 
+# ------------------------------------------------------------------ D1 trend gate
+def test_trend_flags_known_unknown_and_missing():
+    closes = [100.0] * 200
+    assert ms.trend_flags(101.0, closes) == (True, False, 200)
+    assert ms.trend_flags(99.0, closes) == (False, True, 200)
+    # 120 closes: the 100 SMA is known, the 200 is not. A known miss is still a
+    # miss; a known pass with a missing 200 is unknown.
+    assert ms.trend_flags(99.0, [100.0] * 120) == (False, True, 120)
+    assert ms.trend_flags(101.0, [100.0] * 120) == (None, False, 120)
+    assert ms.trend_flags(101.0, []) == (None, None, 0)
+    assert ms.trend_flags(None, closes) == (None, None, 200)
+
+
+def test_ranked_lists_drop_the_wrong_side_of_the_d1_smas_and_keep_unknown():
+    n = 20
+    up = _series(_pop([101.0, 102.0, 103.0], n=n))
+    down = _series(_pop([99.0, 98.0, 97.0], n=n))
+    symbols = {"GOOD": up, "BAD": up, "GRAY": up, "SGOOD": down, "SBAD": down}
+    daily = {"GOOD": [90.0] * 200, "BAD": [110.0] * 200,
+             "SGOOD": [110.0] * 200, "SBAD": [90.0] * 200}
+    board = ms.build_movers_board(
+        symbols, _flat_spy(n), now=_now(n), baselines={s: FLAT_BASELINE for s in symbols},
+        focus_by_side={"long": ["BAD"]}, local_tz=LA, daily_closes=daily,
+    )
+    assert [r["symbol"] for r in board["pop"]["long"]] == ["GOOD", "GRAY"]
+    assert [r["symbol"] for r in board["pop"]["short"]] == ["SGOOD"]
+    gray = board["pop"]["long"][1]
+    assert gray["trend_long"] is None and gray["daily_bars"] == 0
+    good = board["pop"]["long"][0]
+    assert good["trend_long"] is True and good["trend_short"] is False
+    # My names is the trader's list: tagged, never filtered.
+    mine = board["mine"]["long"]
+    assert [r["symbol"] for r in mine] == ["BAD"] and mine[0]["trend_long"] is False
+    assert board["daily_measured"] == 4
+
+
+def test_board_without_daily_closes_filters_nothing():
+    n = 20
+    board = _board({"AAA": _series(_pop([101.0, 102.0, 103.0], n=n))}, n=n,
+                   baselines={"AAA": FLAT_BASELINE})
+    assert [r["symbol"] for r in board["pop"]["long"]] == ["AAA"]
+    assert board["pop"]["long"][0]["trend_long"] is None
+    assert board["daily_measured"] == 0
+
+
 def test_board_marks_er_rows():
     board = _board({"AAA": _series(_pop([101.0, 102.0, 103.0]))}, earnings={"AAA"})
     assert board["pop"]["long"][0]["er"] is True

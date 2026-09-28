@@ -14,6 +14,10 @@ Rules kept here:
 - Missing data is UNKNOWN: an unmeasurable RVOL is None (neutral weight, shown
   "—"), an unmeasurable ATR drops the row from the ranked lists, missing SPY
   bars make the market state "unknown" and light nothing.
+- D1 trend gate (trader, 2026-09-28): a long pop/dip/rip row sits above the
+  daily 100 and 200 SMA, a short row below the daily 50 and 100. Too little
+  daily history is UNKNOWN: the row stays, tagged, never dropped. My names is
+  the trader's own list: tagged, never filtered.
 
 The RVOL baseline helpers (`build_rvol_baseline`, `recent_rvol`) are pure and
 importable on their own so other tools can share them.
@@ -70,6 +74,11 @@ RVOL_BASELINE_MIN_SESSIONS = 5
 MOVERS_TOP_N = 15
 #: "ext": more than this many ATRs from session VWAP (information only).
 EXT_ATR = 2.0
+#: D1 trend gate (trader, 2026-09-28: "a lot of these charts are shit"): a long
+#: row must sit above these daily SMAs, a short row below them. Daily closes
+#: are completed sessions only; too little history is unknown, never a fail.
+TREND_SMA_LONG = (100, 200)
+TREND_SMA_SHORT = (50, 100)
 #: Group tag: this many names of one industry inside a list's top N.
 GROUP_MIN_COUNT = 3
 GROUP_TOP_N = 15
@@ -394,6 +403,10 @@ class MoverRow:
     ext_down: bool = False
     er: bool = False  # reports today or reported after the last close
     group: str = ""  # short industry label when 3+ share a list's top 15
+    # D1 trend gate against TREND_SMA_*: None = not enough daily history.
+    trend_long: bool | None = None
+    trend_short: bool | None = None
+    daily_bars: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -478,6 +491,31 @@ def measure_symbol(
         since_start_pct=since, dip_score=dip, session_volume=session_vol,
         passes_floors=passes, stale=stale, note=note, **levels,
     )
+
+
+def trend_flags(
+    last: float | None, daily_closes: Sequence[Any] | None
+) -> tuple[bool | None, bool | None, int]:
+    """(long ok, short ok, daily closes used). Long: `last` above every
+    TREND_SMA_LONG daily SMA; short: below every TREND_SMA_SHORT one. A known
+    miss is False even when a longer SMA is unmeasurable; otherwise an
+    unmeasurable SMA makes the side None (unknown)."""
+    closes = [c for c in (_finite(x) for x in daily_closes or ()) if c is not None]
+    price = _finite(last)
+    if price is None or not closes:
+        return None, None, len(closes)
+
+    def check(periods: Sequence[int], above: bool) -> bool | None:
+        verdict: bool | None = True
+        for period in periods:
+            level = strength_scan.sma(closes, period)
+            if level is None:
+                verdict = None
+            elif (price <= level) if above else (price >= level):
+                return False
+        return verdict
+
+    return check(TREND_SMA_LONG, True), check(TREND_SMA_SHORT, False), len(closes)
 
 
 def _levels(prior: Sequence[Mapping[str, Any]], today: Sequence[Mapping[str, Any]],
@@ -595,13 +633,16 @@ def build_movers_board(
     local_tz: tzinfo | None = None,
     top_n: int = MOVERS_TOP_N,
     earnings: Iterable[str] | None = None,
+    daily_closes: Mapping[str, Sequence[Any]] | None = None,
 ) -> dict[str, Any]:
     """The whole board as plain dicts (safe to emit across threads).
 
     `focus_by_side` is {"long": [...], "short": [...]} of the trader's Focus
-    names; `earnings` the names to tag ER. Lists: pop/dip/rip/mine, each
-    {"long": rows, "short": rows}; dip is lit by a pullback or bounce, rip by a
-    rally (long = Rip-strong, short = Rip-weak).
+    names; `earnings` the names to tag ER; `daily_closes` completed daily
+    closes per symbol for the D1 trend gate (a name without them is unknown).
+    Lists: pop/dip/rip/mine, each {"long": rows, "short": rows}; dip is lit by
+    a pullback or bounce, rip by a rally (long = Rip-strong, short = Rip-weak).
+    The ranked lists drop a row on the wrong side of its D1 SMAs; mine never does.
     """
     baselines = baselines or {}
     er_names = {str(s or "").strip().upper() for s in earnings or ()}
@@ -626,30 +667,37 @@ def build_movers_board(
         )
         if symbol in er_names:
             rows[symbol] = replace(rows[symbol], er=True)
+        long_ok, short_ok, count = trend_flags(
+            rows[symbol].last, (daily_closes or {}).get(symbol)
+        )
+        rows[symbol] = replace(
+            rows[symbol], trend_long=long_ok, trend_short=short_ok, daily_bars=count
+        )
 
     def rankable(row: MoverRow) -> bool:
         return row.passes_floors and not row.stale and row.atr is not None
 
+    # The D1 trend gate: a known miss leaves the ranked lists; unknown stays.
     pop_long = sorted(
         (r for r in rows.values() if rankable(r) and r.pop_score is not None
-         and r.pop_score >= POP_MIN_ATR_MOVE),
+         and r.pop_score >= POP_MIN_ATR_MOVE and r.trend_long is not False),
         key=lambda r: (-r.pop_score, r.symbol),
     )
     pop_short = sorted(
         (r for r in rows.values() if rankable(r) and r.pop_score is not None
-         and r.pop_score <= -POP_MIN_ATR_MOVE),
+         and r.pop_score <= -POP_MIN_ATR_MOVE and r.trend_short is not False),
         key=lambda r: (r.pop_score, r.symbol),
     )
     # Dip lists, lit by a pullback or a bounce: long = beating SPY since the
     # turn (strong), short = lagging it (weak).
     turn_long = sorted(
         (r for r in rows.values() if rankable(r) and r.dip_score is not None
-         and r.dip_score >= 0),
+         and r.dip_score >= 0 and r.trend_long is not False),
         key=lambda r: (-r.dip_score, r.symbol),
     )
     turn_short = sorted(
         (r for r in rows.values() if rankable(r) and r.dip_score is not None
-         and r.dip_score < 0),
+         and r.dip_score < 0 and r.trend_short is not False),
         key=lambda r: (r.dip_score, r.symbol),
     )
     dip_on = state.pullback or state.bounce
@@ -684,6 +732,7 @@ def build_movers_board(
                 "short": [r.to_dict() for r in rip_short[:top_n]]},
         "mine": mine,
         "measured": sum(1 for r in rows.values() if r.pop_score is not None),
+        "daily_measured": sum(1 for r in rows.values() if r.daily_bars),
         "offered": len(normalised),
     }
 

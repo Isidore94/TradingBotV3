@@ -14,7 +14,8 @@ Each tick (once per 5-minute bar, 20 s after the boundary, regular hours only):
    its own 5-minute cadence, otherwise it gap-fills;
 3. fetches a ~20-session 5m history once per symbol per day for the RVOL
    baseline (batched yfinance, kept in memory);
-4. builds the board with `movers_scan.build_movers_board`, adds group tags
+4. fetches each name's daily closes once per session (the D1 trend gate),
+   builds the board with `movers_scan.build_movers_board`, adds group tags
    (shared classification cache), ER tags (local earnings calendar, read once
    per session) and list persistence, and emits it;
 5. feeds the dip/rip outcome tracker and the Pop outcome tracker and appends
@@ -130,6 +131,11 @@ GAP_FILL_PERIOD = "5d"
 GAP_EMPTY_BACKOFF_TICKS = 3
 #: A symbol whose baseline download returned nothing is retried after this long.
 BASELINE_RETRY_MINUTES = 15
+#: D1 trend gate: daily closes per name, once per session (1y holds the 200
+#: SMA), most liquid first, this many names per tick; a failed name retries.
+DAILY_TREND_PERIOD = "1y"
+DAILY_TREND_MAX_PER_TICK = 250
+DAILY_TREND_RETRY_MINUTES = 30
 #: Gap between two proxy RPCs, so Qt-thread RPCs are not starved of its lock.
 RPC_GAP_SECONDS = 0.01
 #: A worker running longer than this is called stuck in the status line.
@@ -236,6 +242,39 @@ def fetch_yahoo_bars(
             rows = core._frame_rows(frame)
             if rows:
                 out[symbol] = rows
+    return out
+
+
+def fetch_daily_closes(
+    symbols: Iterable[str], *, downloader, now: datetime, chunk_size: int | None = None
+) -> dict[str, list[float]]:
+    """Batched daily closes for the D1 trend gate, completed sessions only
+    (today's forming bar is dropped). A failed chunk contributes nothing."""
+    import autopilot_core as core
+    from ui.services.strength_board_service import _completed_daily_rows
+
+    pool = [s for s in dict.fromkeys(str(x or "").strip().upper() for x in symbols) if s]
+    size = max(1, int(chunk_size or core.AUTOPILOT_OPEN_SCAN_CHUNK_SIZE))
+    out: dict[str, list[float]] = {}
+    for start in range(0, len(pool), size):
+        chunk = pool[start : start + size]
+        try:
+            data = downloader(chunk, period=DAILY_TREND_PERIOD, interval="1d")
+        except Exception as exc:
+            logging.warning("Movers daily chunk %s..%s failed: %s", chunk[0], chunk[-1], exc)
+            continue
+        for symbol in chunk:
+            try:
+                frame = data[symbol] if len(chunk) > 1 else data
+            except Exception:
+                continue
+            closes = [
+                float(row["close"])
+                for row in _completed_daily_rows(core._frame_rows(frame), now=now)
+                if row.get("close") is not None
+            ]
+            if closes:
+                out[symbol] = closes
     return out
 
 
@@ -357,6 +396,8 @@ class MoversService(QObject):
         self._baselines: dict[str, dict[int, float] | None] = {}
         self._baseline_day: date | None = None
         self._baseline_tried: dict[str, datetime] = {}
+        self._daily_closes: dict[str, list[float]] = {}
+        self._daily_tried: dict[str, datetime] = {}
         self.bot_universe_size: int | None = None
         # Wall time of the last tick and of its options chase (None = chase off).
         self._perf_clock: Callable[[], float] = time.perf_counter
@@ -541,6 +582,8 @@ class MoversService(QObject):
         if self._baseline_day != today:
             self._baselines = {}
             self._baseline_tried = {}
+            self._daily_closes = {}
+            self._daily_tried = {}
             self._baseline_day = today
 
         scanned = self._scanner_candidates(today)
@@ -599,6 +642,21 @@ class MoversService(QObject):
                     self._baselines[symbol] = movers_scan.build_rvol_baseline(
                         history[symbol], before=today, local_tz=local_tz
                     )
+        retry_daily = timedelta(minutes=DAILY_TREND_RETRY_MINUTES)
+        need_daily = [
+            s for s in series
+            if s not in self._daily_closes
+            and (s not in self._daily_tried or now - self._daily_tried[s] >= retry_daily)
+        ]
+        if need_daily:
+            need_daily = sorted(
+                need_daily, key=lambda s: (-self._liquidity(s, bot_bars), s)
+            )[:DAILY_TREND_MAX_PER_TICK]
+            closes = fetch_daily_closes(need_daily, downloader=downloader, now=now)
+            for symbol in need_daily:
+                self._daily_tried[symbol] = now
+                if symbol in closes:
+                    self._daily_closes[symbol] = closes[symbol]
         self._publish(series, spy, now, focus, local_tz, final=True)
         self._run_options_chase(series, now)
 
@@ -628,6 +686,7 @@ class MoversService(QObject):
         board = movers_scan.build_movers_board(
             series, spy, now=now, baselines=self._baselines,
             focus_by_side=focus, local_tz=local_tz, earnings=self._earnings,
+            daily_closes=self._daily_closes,
         )
         movers_scan.apply_group_tags(board, self._industry)
         session = now.astimezone(movers_scan.NY_TZ).date()
