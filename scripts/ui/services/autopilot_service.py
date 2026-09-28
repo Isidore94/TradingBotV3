@@ -1523,17 +1523,18 @@ class AutopilotService(QObject):
         return symbols
 
     @staticmethod
-    def _load_swing_feed() -> dict[str, Any]:
+    def _load_swing_feed(*, include_preview: bool = True) -> dict[str, Any]:
         try:
             from ui.services.data_feed import load_latest_setup_rows_with_meta
 
-            return load_latest_setup_rows_with_meta()
+            return load_latest_setup_rows_with_meta(include_preview=include_preview)
         except Exception:
             return {"rows": [], "data_date": None, "source": "none", "is_stale": True}
 
     @staticmethod
     def _load_swing_rows() -> list:
-        return list(AutopilotService._load_swing_feed().get("rows") or [])
+        # Near-HOD watchlist adds keep the priority report; the daytime preview is display only.
+        return list(AutopilotService._load_swing_feed(include_preview=False).get("rows") or [])
 
     # ------------------------------------------------------------------
     # After-close wrap-up: universe rebuild + learning refresh + scorecard

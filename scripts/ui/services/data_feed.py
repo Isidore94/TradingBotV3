@@ -4,12 +4,13 @@ import dataclasses
 import json
 import logging
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
 from project_paths import (
     MASTER_AVWAP_FOCUS_FILE,
+    MASTER_AVWAP_FOCUS_PREVIEW_FILE,
     MASTER_AVWAP_PRIORITY_SETUPS_FILE,
     SETUP_POINTS_SCAN_PROJECTION_FILE,
 )
@@ -256,6 +257,7 @@ def load_setup_rows_from_priority_report(path: Path = MASTER_AVWAP_PRIORITY_SETU
 
 
 _PRIORITY_GENERATED_RE = re.compile(r"Generated at\s+(\d{4}-\d{2}-\d{2})")
+_PRIORITY_GENERATED_AT_RE = re.compile(r"Generated at\s+(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})")
 _PRIORITY_STAMP_RE = re.compile(r"\b(?:scan_stamp|run_id|scan_id)=(?P<stamp>[^\s]+)", re.I)
 _POINTS_PROJECTION_CACHE: dict[str, Any] = {"rows": (), "run_date": "", "run_id": "", "valid": False}
 
@@ -303,6 +305,53 @@ def read_priority_report_date(path: Path = MASTER_AVWAP_PRIORITY_SETUPS_FILE) ->
     return None
 
 
+def read_priority_report_generated_at(path: Path = MASTER_AVWAP_PRIORITY_SETUPS_FILE) -> datetime | None:
+    """Parse the full 'Generated at' timestamp from the priority report header."""
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for _ in range(10):
+                line = handle.readline()
+                if not line:
+                    break
+                match = _PRIORITY_GENERATED_AT_RE.search(line)
+                if match:
+                    return datetime.fromisoformat(match.group(1).replace(" ", "T"))
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _payload_generated_at(payload: Any) -> datetime | None:
+    if not isinstance(payload, dict):
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(payload.get("generated_at") or "").strip())
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=None)
+
+
+_FOCUS_PREVIEW_MAX_LAG = timedelta(minutes=10)
+
+
+def _focus_preview_rows_if_current() -> tuple[list[SetupRow], str | None]:
+    """Rows from the daytime focus preview when it came from the newest priority report.
+
+    The scan writes the report and then, seconds later, the preview. A preview
+    older than the report, or long after it, belongs to some other scan.
+    """
+    payload = _read_json(MASTER_AVWAP_FOCUS_PREVIEW_FILE)
+    preview_at = _payload_generated_at(payload)
+    report_at = read_priority_report_generated_at(MASTER_AVWAP_PRIORITY_SETUPS_FILE)
+    if preview_at is None or report_at is None:
+        return [], None
+    if not timedelta(0) <= preview_at - report_at <= _FOCUS_PREVIEW_MAX_LAG:
+        return [], None
+    return _rows_from_focus_payload(payload), _payload_data_date(payload)
+
+
 def _weekday_gap(start: date, end: date) -> int:
     if start >= end:
         return 0
@@ -325,14 +374,13 @@ def _is_stale(data_date: str | None, *, today: date | None = None) -> bool:
     return _weekday_gap(parsed, today or date.today()) > _STALE_WEEKDAY_GAP
 
 
-def load_latest_setup_rows_with_meta() -> dict[str, Any]:
+def load_latest_setup_rows_with_meta(*, include_preview: bool = True) -> dict[str, Any]:
     """Return the freshest available setup rows plus the date/source behind them.
 
-    The focus feed is the richer source but it is only rewritten in the
-    final-hour/after-close window, so a pre-market scan leaves it stale while a
-    fresh priority report exists. Prefer the focus feed only when it is at least
-    as new as the priority report; otherwise fall back to the fresh report so
-    the panel never silently shows days-old setups.
+    Order: the close scan's focus feed when it is at least as new as the
+    priority report; else the daytime scan's focus preview when it came from
+    the newest report (``include_preview``); else the priority report; else
+    whatever the focus feed still holds.
     """
     focus_payload = _read_json(MASTER_AVWAP_FOCUS_FILE)
     focus_rows = _rows_from_focus_payload(focus_payload)
@@ -350,6 +398,17 @@ def load_latest_setup_rows_with_meta() -> dict[str, Any]:
             "source": "focus",
             "is_stale": _is_stale(focus_date),
         }
+
+    if include_preview:
+        preview_rows, preview_date = _focus_preview_rows_if_current()
+        if preview_rows:
+            enrich_setup_rows_for_display(preview_rows, supplemental_rows=preview_rows)
+            return {
+                "rows": preview_rows,
+                "data_date": preview_date,
+                "source": "focus_preview",
+                "is_stale": _is_stale(preview_date),
+            }
 
     priority_rows = load_setup_rows_from_priority_report()
     if priority_rows:

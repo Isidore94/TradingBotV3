@@ -37,6 +37,7 @@ from project_paths import (
     ALERT_REVIEW_EVENTS_FILE,
     CLAIMED_PICKS_FILE,
     MASTER_AVWAP_FOCUS_FILE,
+    MASTER_AVWAP_FOCUS_PREVIEW_FILE,
     MASTER_AVWAP_PRIORITY_SETUPS_FILE,
     get_local_setting,
     save_local_setting,
@@ -81,6 +82,9 @@ from swallowed import note_swallowed
 #: "the claims file has never been read", which is not the same answer as "the
 #: file is not there" (a real, cacheable stamp of None).
 _CLAIMS_UNREAD = object()
+
+# The files the setups table is loaded from; a change to any one reloads it.
+_SETUP_FEED_PATHS = (MASTER_AVWAP_FOCUS_FILE, MASTER_AVWAP_FOCUS_PREVIEW_FILE, MASTER_AVWAP_PRIORITY_SETUPS_FILE)
 
 CHIP_ALL = "all"
 #: p9 (trader, 2026-09-26): the Long leaders chip, first and on by default.
@@ -1535,7 +1539,7 @@ class MasterAvwapPanel(SwingTableMixin, QWidget):
 
     def _configure_report_watcher(self) -> None:
         self.watcher = QFileSystemWatcher(self)
-        for path in (MASTER_AVWAP_FOCUS_FILE, MASTER_AVWAP_PRIORITY_SETUPS_FILE):
+        for path in _SETUP_FEED_PATHS:
             if Path(path).exists():
                 self.watcher.addPath(str(path))
         self.watcher.fileChanged.connect(lambda _path: self.refresh_from_reports(emit_empty=False))
@@ -1552,7 +1556,7 @@ class MasterAvwapPanel(SwingTableMixin, QWidget):
     def _current_report_signatures(self) -> dict[str, tuple[int, int] | None]:
         return {
             str(path): self._path_signature(Path(path))
-            for path in (MASTER_AVWAP_FOCUS_FILE, MASTER_AVWAP_PRIORITY_SETUPS_FILE)
+            for path in _SETUP_FEED_PATHS
         }
 
     def _poll_report_changes(self) -> None:
@@ -1982,7 +1986,7 @@ class MasterAvwapPanel(SwingTableMixin, QWidget):
         if not data_date:
             self.data_as_of_label.setText("")
         else:
-            source_note = " · priority report" if source == "priority_report" else ""
+            source_note = {"priority_report": " · priority report", "focus_preview": " · daytime preview"}.get(source, "")
             if is_stale:
                 text = f"⚠ Setups as of {data_date} — stale; run an after-close scan to refresh{source_note}"
             else:
@@ -2340,7 +2344,7 @@ class MasterAvwapPanel(SwingTableMixin, QWidget):
 
     def _refresh_watcher_paths(self) -> None:
         watched = set(self.watcher.files())
-        for path in (MASTER_AVWAP_FOCUS_FILE, MASTER_AVWAP_PRIORITY_SETUPS_FILE):
+        for path in _SETUP_FEED_PATHS:
             path_text = str(path)
             if Path(path).exists() and path_text not in watched:
                 self.watcher.addPath(path_text)
