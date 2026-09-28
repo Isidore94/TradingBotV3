@@ -208,6 +208,41 @@ def test_the_service_remembers_todays_dip_box_names_for_the_next_tick():
     assert service._held_today(tomorrow) == {"long": [], "short": []}
 
 
+def test_quality_floor_drops_a_small_cap_after_its_cap_is_fetched():
+    popping = _naive_la_bars([100.0] * 11 + [100.5, 101.0, 101.5])
+    bot = FakeBot(["AAA", "BBB"], {"AAA": popping, "BBB": popping,
+                                   "SPY": _naive_la_bars([400.0] * 14)})
+    frames = {s: _history_frame() for s in ("QQQ", "AAA", "BBB", "SPY")}
+    daily = {s: _daily_frame(50.0) for s in ("AAA", "BBB", "QQQ")}  # 1M shares a day
+    asked = []
+
+    def caps(names):
+        asked.append(list(names))
+        return {"AAA": 5000.0, "BBB": 200.0}
+
+    service = svc.MoversService(
+        bot_provider=lambda: bot, downloader=FakeDownloader(frames, daily=daily),
+        universe_provider=lambda: ["QQQ"], clock=lambda: NOW, autostart=False,
+        cap_provider=caps,
+    )
+    emitted = []
+    service.moversChanged.connect(emitted.append)
+    service._run_once(service._focus_snapshot())
+    longs = [r["symbol"] for r in emitted[-1]["pop"]["long"]]
+    assert "AAA" in longs and "BBB" not in longs
+    assert "BBB" in asked[0]
+    aaa = next(r for r in emitted[-1]["pop"]["long"] if r["symbol"] == "AAA")
+    assert aaa["avg_volume_20d"] == 1_000_000.0 and aaa["quality_ok"] is True
+    # Known caps are not asked for again.
+    service._run_once(service._focus_snapshot())
+    assert all("AAA" not in names and "BBB" not in names for names in asked[1:])
+
+
+def test_an_injected_downloader_never_gets_the_network_cap_provider():
+    service = _service(FakeBot([], {}), FakeDownloader({}))
+    assert service._cap_provider is None
+
+
 def test_daily_trend_gate_unknown_when_the_download_fails():
     popping = _naive_la_bars([100.0] * 11 + [100.5, 101.0, 101.5])
     bot = FakeBot(["AAA"], {"AAA": popping, "SPY": _naive_la_bars([400.0] * 14)})

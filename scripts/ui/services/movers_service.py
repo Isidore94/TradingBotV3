@@ -136,6 +136,11 @@ BASELINE_RETRY_MINUTES = 15
 DAILY_TREND_PERIOD = "1y"
 DAILY_TREND_MAX_PER_TICK = 250
 DAILY_TREND_RETRY_MINUTES = 30
+#: Quality floor: market caps for listed names with none yet, this many per tick,
+#: retried after this long when Yahoo had no answer.
+CAP_FETCH_MAX_PER_TICK = 60
+CAP_RETRY_MINUTES = 60
+CAP_FETCH_PAUSE_SECONDS = 0.12
 #: Gap between two proxy RPCs, so Qt-thread RPCs are not starved of its lock.
 RPC_GAP_SECONDS = 0.01
 #: A worker running longer than this is called stuck in the status line.
@@ -246,10 +251,12 @@ def fetch_yahoo_bars(
 
 
 def fetch_daily_closes(
-    symbols: Iterable[str], *, downloader, now: datetime, chunk_size: int | None = None
+    symbols: Iterable[str], *, downloader, now: datetime, chunk_size: int | None = None,
+    volumes_out: dict[str, float] | None = None,
 ) -> dict[str, list[float]]:
     """Batched daily closes for the D1 trend gate, completed sessions only
-    (today's forming bar is dropped). A failed chunk contributes nothing."""
+    (today's forming bar is dropped). A failed chunk contributes nothing.
+    `volumes_out` gets each name's 20-session mean share volume when all 20 are known."""
     import autopilot_core as core
     from ui.services.strength_board_service import _completed_daily_rows
 
@@ -268,13 +275,43 @@ def fetch_daily_closes(
                 frame = data[symbol] if len(chunk) > 1 else data
             except Exception:
                 continue
-            closes = [
-                float(row["close"])
-                for row in _completed_daily_rows(core._frame_rows(frame), now=now)
-                if row.get("close") is not None
-            ]
+            completed = _completed_daily_rows(core._frame_rows(frame), now=now)
+            closes = [float(row["close"]) for row in completed if row.get("close") is not None]
             if closes:
                 out[symbol] = closes
+            recent = [row.get("volume") for row in completed[-20:]]
+            if volumes_out is not None and len(recent) == 20 and None not in recent:
+                volumes_out[symbol] = sum(float(v) for v in recent) / 20.0
+    return out
+
+
+def default_market_caps(symbols: list[str]) -> dict[str, float | None]:
+    """Market caps in $M: the universe builder's cache first (read only), then
+    yfinance fast_info for the rest, paced. Unknown is None."""
+    import json
+    from pathlib import Path
+
+    cached: dict[str, Any] = {}
+    try:
+        from universe_builder import MARKET_CAP_CACHE
+
+        cached = dict(json.loads(Path(MARKET_CAP_CACHE).read_text(encoding="utf-8")).get("caps") or {})
+    except Exception:  # noqa: BLE001 - no cache means Yahoo for every name
+        cached = {}
+    out: dict[str, float | None] = {}
+    for symbol in symbols:
+        known = cached.get(symbol)
+        if known:
+            out[symbol] = float(known)
+            continue
+        try:
+            import yfinance as yf
+
+            cap = yf.Ticker(symbol).fast_info.get("marketCap")
+            out[symbol] = float(cap) / 1e6 if cap else None
+        except Exception:  # noqa: BLE001 - one name's miss is unknown, not a failure
+            out[symbol] = None
+        time.sleep(CAP_FETCH_PAUSE_SECONDS)
     return out
 
 
@@ -337,8 +374,16 @@ class MoversService(QObject):
         hidden_provider: Callable[[], tuple[str, set[str]]] | None = None,
         sector_hidden: Callable[[str], bool] | None = None,
         options_chase=None,
+        cap_provider: Callable[[list[str]], Mapping[str, float | None]] | None = None,
     ) -> None:
         super().__init__(parent)
+        # Market caps for the quality floor. An injected downloader (a test)
+        # gets no default provider, so nothing reaches the network.
+        self._cap_provider = cap_provider if cap_provider is not None else (
+            default_market_caps if downloader is None else None)
+        self._market_caps: dict[str, float] = {}
+        self._cap_tried: dict[str, datetime] = {}
+        self._avg_volumes: dict[str, float] = {}
         # The options chase (P10): None = off. It runs on this worker after the final board.
         self._options_chase = options_chase
         self._industry_provider = industry_provider or default_industry_map
@@ -653,11 +698,14 @@ class MoversService(QObject):
             need_daily = sorted(
                 need_daily, key=lambda s: (-self._liquidity(s, bot_bars), s)
             )[:DAILY_TREND_MAX_PER_TICK]
-            closes = fetch_daily_closes(need_daily, downloader=downloader, now=now)
+            closes = fetch_daily_closes(
+                need_daily, downloader=downloader, now=now, volumes_out=self._avg_volumes
+            )
             for symbol in need_daily:
                 self._daily_tried[symbol] = now
                 if symbol in closes:
                     self._daily_closes[symbol] = closes[symbol]
+        self._fetch_listed_caps(now)
         self._publish(series, spy, now, focus, local_tz, final=True)
         self._run_options_chase(series, now)
 
@@ -689,6 +737,7 @@ class MoversService(QObject):
             focus_by_side=focus, local_tz=local_tz, earnings=self._earnings,
             daily_closes=self._daily_closes,
             held_by_side=self._held_today(now),
+            fundamentals=self._fundamentals(series),
         )
         movers_scan.apply_group_tags(board, self._industry)
         session = now.astimezone(movers_scan.NY_TZ).date()
@@ -877,6 +926,41 @@ class MoversService(QObject):
             # Only a fetch that returned bars moves the clock; failures keep the last bars.
             self._yahoo_bars.update(fetched)
             self._gap_at = now
+
+    def _fundamentals(self, symbols: Iterable[str]) -> dict[str, dict[str, float | None]]:
+        """Market cap and 20-day volume per symbol, as far as they are known."""
+        return {
+            s: {"market_cap_m": self._market_caps.get(s), "avg_volume_20d": self._avg_volumes.get(s)}
+            for s in symbols
+        }
+
+    def _fetch_listed_caps(self, now: datetime) -> None:
+        """Market caps for names on the last board's ranked lists that have none yet."""
+        if self._cap_provider is None:
+            return
+        retry = timedelta(minutes=CAP_RETRY_MINUTES)
+        need: list[str] = []
+        for mode in ("pop", "dip", "rip", "swing"):
+            for side in ("long", "short"):
+                for row in ((self._board.get(mode) or {}).get(side)) or []:
+                    symbol = str(row.get("symbol") or "").strip().upper()
+                    tried = self._cap_tried.get(symbol)
+                    if (symbol and symbol not in self._market_caps and symbol not in need
+                            and (tried is None or now - tried >= retry)):
+                        need.append(symbol)
+        need = need[:CAP_FETCH_MAX_PER_TICK]
+        if not need:
+            return
+        try:
+            caps = dict(self._cap_provider(need) or {})
+        except Exception:
+            logging.warning("Movers: market caps unavailable", exc_info=True)
+            caps = {}
+        for symbol in need:
+            self._cap_tried[symbol] = now
+            cap = caps.get(symbol)
+            if cap:
+                self._market_caps[symbol] = float(cap)
 
     def _held_today(self, now: datetime) -> dict[str, list[str]]:
         """Today's held Dip-box names; yesterday's never carry over."""
