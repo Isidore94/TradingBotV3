@@ -102,6 +102,14 @@ def main() -> int:
         return warehouse_main(["build", "--run-id", run_id])
 
     _enable_crash_log()
+    # One lock and a deadline for every Yahoo download in the desk process,
+    # including modules that call yf.download directly.
+    try:
+        import yahoo_download
+
+        yahoo_download.install_process_guard()
+    except Exception as exc:  # noqa: BLE001 - the desk still starts without it
+        print(f"TradingBotV3 desk: Yahoo download guard not installed: {exc}")
     # R10.A / Sol blocker 3: one desk per machine. `launch_gui_auto.ps1` already
     # refuses a second one, but only on that path - a double-click, a shortcut,
     # a terminal, a second scheduled task and the frozen exe all arrive here

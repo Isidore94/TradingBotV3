@@ -633,7 +633,7 @@ class MoversBoard(QWidget):
         banner_row.addWidget(self.banner, 1)
 
         # Main table (Pop or My names), then the two dip tables under it.
-        self.main = MoversSection(self)
+        self.main = MoversSection(self, titled=True)
         self.strong = MoversSection(self, titled=True)
         self.weak = MoversSection(self, titled=True)
         self.sections = (self.main, self.strong, self.weak)
@@ -654,11 +654,6 @@ class MoversBoard(QWidget):
                 lambda *_a, s=section: self._on_selection(s)
             )
 
-        self.dip_hint = QLabel("")
-        self.dip_hint.setObjectName("MutedLabel")
-        self.dip_hint.setWordWrap(True)
-        self.dip_hint.setVisible(False)
-
         self.groups_label = QLabel("")
         self.groups_label.setObjectName("MutedLabel")
         self.groups_label.setWordWrap(True)
@@ -676,7 +671,6 @@ class MoversBoard(QWidget):
         layout.addLayout(banner_row)
         layout.addWidget(self.groups_label)
         layout.addWidget(self.main, 1)
-        layout.addWidget(self.dip_hint)
         layout.addWidget(self.strong, 1)
         layout.addWidget(self.weak, 1)
         layout.addWidget(self.status_label)
@@ -962,6 +956,18 @@ class MoversBoard(QWidget):
         hidden = self.hidden_keys()
         pop_mode = self._mode == "pop"
         dip_live = pop_mode and self._dip_live()
+        # Pop mode always shows the Dip boxes under their own titles; the tables
+        # fill only while SPY is in a pullback, bounce or rally.
+        for section in (self.strong, self.weak):
+            if section.isHidden() != (not pop_mode):
+                section.setVisible(pop_mode)
+            if section.table.isHidden() != (not dip_live):
+                section.table.setVisible(dip_live)
+        main_title = "Pop · biggest 15-minute moves now" if pop_mode else ""
+        if self.main.title_label.text() != main_title:
+            self.main.title_label.setText(main_title)
+        if self.main.title_label.isHidden() != (not pop_mode):
+            self.main.title_label.setVisible(pop_mode)
         for section, name in self._lists_in_view():
             rows = [r for r in rows_for(self._board, name, self._side)
                     if hidden_key(r) not in hidden]
@@ -973,24 +979,19 @@ class MoversBoard(QWidget):
             section.empty_label.setVisible(not rows)
             # Height follows the row counts, so no table idles half empty.
             floor = VISIBLE_ROWS if section is self.main else DIP_VISIBLE_ROWS
-            self.layout().setStretchFactor(section, max(len(rows), floor) + 2)
-        for section in (self.strong, self.weak):
-            if section.isHidden() != (not dip_live):
-                section.setVisible(dip_live)
+            stretch = 0 if section.table.isHidden() else max(len(rows), floor) + 2
+            self.layout().setStretchFactor(section, stretch)
         state = self._state()
         pullback = bool(state.get("pullback"))
         when = _local_clock(state.get("start_dt")) or state.get("extreme_time") or ""
         turn = f"since the {when} {'high' if pullback else 'low'}" if when else "since the turn"
         word = "Rip" if state.get("rally") else "Dip" if pullback else "Bounce"
-        self.strong.title_label.setText(f"{word}-strong ● · beating SPY {turn}")
-        self.weak.title_label.setText(f"{word}-weak ● · lagging SPY {turn}")
-        hint = ""
-        if pop_mode and not dip_live and self._board:
-            hint = ("Strong / weak: no SPY pullback or bounce, and no rally, now. "
-                    f"They light at {movers_scan.PULLBACK_MIN_PCT:.2f}% off the high or low.")
-        if self.dip_hint.text() != hint:
-            self.dip_hint.setText(hint)
-        self.dip_hint.setVisible(bool(hint))
+        if dip_live:
+            self.strong.title_label.setText(f"{word}-strong ● · beating SPY {turn}")
+            self.weak.title_label.setText(f"{word}-weak ● · lagging SPY {turn}")
+        else:
+            self.strong.title_label.setText("Dip-strong · beating SPY in a pullback")
+            self.weak.title_label.setText("Dip-weak · lagging SPY in a pullback")
         hidden_count = len(self._hidden_in_view())
         if self.unhide_button.isHidden() != (hidden_count == 0):
             self.unhide_button.setVisible(hidden_count > 0)
@@ -1077,6 +1078,11 @@ class MoversBoard(QWidget):
             return ""
         if not self._board:
             return "No Movers read yet. It refreshes every 5-minute bar in market hours."
+        if name == "weak" and not self._dip_live():
+            return "Not lit."
+        if name == "strong" and not self._dip_live():
+            return ("Not lit: no SPY pullback or bounce, and no rally, now. It fills at "
+                    f"{movers_scan.PULLBACK_MIN_PCT:.2f}% off the high or low.")
         if name == "strong":
             return "No name is beating SPY since the turn."
         if name == "weak":
