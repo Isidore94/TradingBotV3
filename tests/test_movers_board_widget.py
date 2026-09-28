@@ -153,17 +153,51 @@ def test_bounce_titles_the_dip_tables_bounce(app):
     assert "low" in widget.weak.title_label.text()
 
 
-def test_new_names_get_a_tinted_symbol_cell(app):
+def test_pop_symbol_cells_carry_the_side_colour_and_new_names_a_stronger_tint(app):
     from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor
+
+    from ui import theme
 
     widget = _widget(app)
-    widget.update_board(_tagged_board())
+    board = _tagged_board()
+    board["pop"]["short"] = [_row("SINK", rank_change=1, streak=2, pop_score=-1.0)]
+    widget.update_board(board)
     widget.flush_pending_refresh()
     col = [k for k, _h in widget.model._columns].index("symbol")
     background = [widget.model.data(widget.model.index(r, col), Qt.ItemDataRole.BackgroundRole)
+                  for r in range(4)]
+    assert all(color is not None for color in background)
+    assert background[1].alphaF() > background[0].alphaF()  # AMD: first tick on the list
+    assert background[0].rgb() == QColor(theme.color("long")).rgb()
+    assert background[3].rgb() == QColor(theme.color("short")).rgb()  # SINK is a short
+    # A single-side table tints only its new names.
+    widget.model.set_rows(widget.model.rows(), "mine", "long")
+    background = [widget.model.data(widget.model.index(r, col), Qt.ItemDataRole.BackgroundRole)
                   for r in range(3)]
-    assert background[1] is not None  # AMD: first tick on the list
+    assert background[1] is not None
     assert background[0] is None and background[2] is None
+
+
+def test_d1_trend_tags_unknown_and_failing_rows(app):
+    from ui.widgets.movers_board import symbol_text
+
+    widget = _widget(app)
+    board = _tagged_board()
+    for row, flag in zip(board["pop"]["long"], (True, None, True), strict=True):
+        row.update(trend_long=flag, trend_short=False, last=100.0,
+                   daily_bars=0 if flag is None else 200)
+    widget.update_board(board)
+    widget.flush_pending_refresh()
+    assert _cell(widget, 0, "symbol") == "NVDA ER ▲2"
+    assert _cell(widget, 1, "symbol") == "AMD new D1?"
+    # My names keeps a failing row and says so; a short row reads its own side.
+    assert symbol_text({"symbol": "XXX", "_side": "long", "trend_long": False,
+                        "trend_short": True, "last": 100.0}) == "XXX D1✗"
+    assert symbol_text({"symbol": "YYY", "_side": "short", "trend_long": False,
+                        "trend_short": True, "last": 100.0}) == "YYY"
+    assert symbol_text({"symbol": "ZZZ", "_side": "long", "trend_long": None,
+                        "trend_short": None, "last": None}) == "ZZZ"
 
 
 def test_unknown_state_banner_and_dip_hint(app):

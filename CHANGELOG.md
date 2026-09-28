@@ -1,5 +1,7 @@
 # Changelog
 
+- 2026-09-28 Movers: Pop and Dip rows show their side (green long, red short Sym tint; new names a stronger tint). Trend gate on the ranked lists: longs above the D1 100 and 200 SMA, shorts below the D1 50 and 100; unknown history stays tagged D1?; My names is never filtered.
+
 - 2026-09-27 GUI/startup delivery: integrate the approved 4K layouts and GDI startup fix with current runner-dip work; retain hidden/armed label states; make GUI test imports self-contained and retire Tag Week test workers before destroying widgets. All 924 files verified in fresh processes (13,446 pass, 14 skip); source/frozen selftests 105/105. Long combined Qt test-worker crashes remain a harness limitation.
 
 - 2026-09-27 Startup: default Windows Qt to the GDI font backend before QApplication, avoiding the measured DirectWrite font-database stall; explicit Qt platform overrides remain intact.

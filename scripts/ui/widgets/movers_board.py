@@ -5,7 +5,10 @@ Two modes. Pop stacks three tables (trader, 2026-09-24): Pop (longs and shorts
 together), then the strong and weak tables for the live SPY turn: Dip-* in a
 pullback, Bounce-* in a bounce, Rip-* in a rally. My
 names is one table with a Long/Short toggle. A SPY state banner tops both.
-Names new to a list get a tinted Sym cell. Header clicks sort (third click = board order); the trader can hide a
+Sym cells carry the side colour in the mixed Pop table (long green, short red);
+names new to a list get a stronger tint. A row whose D1 trend is unknown is
+tagged "D1?"; a My-names row on the wrong side of its D1 SMAs is tagged "D1✗"
+(the ranked lists drop those). Header clicks sort (third click = board order); the trader can hide a
 row for the day (right-click or Delete) and bring hidden rows back. The "Review" menu holds the Focus pick and
 Faded review doors; "Deep read" shows the old Strength page (Focus strength,
 entry board, RRS snapshot, M5 Strength Board) underneath.
@@ -103,7 +106,17 @@ def symbol_text(row: dict[str, Any]) -> str:
             parts.append(f"▲{change}")
         elif change < 0:
             parts.append(f"▼{-change}")
+    trend = trend_flag(row)
+    if trend is None and "trend_long" in row and row.get("last") is not None:
+        parts.append("D1?")
+    elif trend is False:
+        parts.append("D1✗")
     return " ".join(parts)
+
+
+def trend_flag(row: dict[str, Any]) -> bool | None:
+    """The D1 trend verdict for the row's side; None when unknown or untagged."""
+    return row.get("trend_short") if row.get("_side") == "short" else row.get("trend_long")
 
 
 def _tag_short_earnings(rows: list[dict[str, Any]]) -> None:
@@ -253,6 +266,7 @@ class MoversTableModel(QAbstractTableModel):
         self._rows: list[dict[str, Any]] = []
         self._columns = COLUMNS["pop"]
         self._side = "long"
+        self._mixed = False  # the Pop table holds both sides
 
     def rowCount(self, parent=_NO_PARENT) -> int:  # noqa: N802 - Qt API
         return 0 if parent.isValid() else len(self._rows)
@@ -272,6 +286,7 @@ class MoversTableModel(QAbstractTableModel):
             self._columns = columns
             self.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, len(columns) - 1)
         self._side = side
+        self._mixed = mode == "pop"
         old, new = len(self._rows), len(rows)
         if new < old:
             self.beginRemoveRows(QModelIndex(), new, old - 1)
@@ -323,10 +338,13 @@ class MoversTableModel(QAbstractTableModel):
                 return QColor(theme.color("text_secondary"))
             if key == "opt" and (value or {}).get("status") != options_chase.STATUS_CANDIDATE:
                 return QColor(theme.color("text_secondary"))
-        if role == Qt.ItemDataRole.BackgroundRole and key == "symbol" and is_new(row):
-            color = QColor(theme.color("accent"))
-            color.setAlphaF(0.35)
-            return color
+        if role == Qt.ItemDataRole.BackgroundRole and key == "symbol":
+            # The side colour, so a mixed table reads at a glance; stronger when new.
+            new = is_new(row)
+            if new or self._mixed:
+                color = QColor(theme.color("long" if side == "long" else "short"))
+                color.setAlphaF(0.30 if new else 0.10)
+                return color
         if role == Qt.ItemDataRole.BackgroundRole and key == "rvol" and value is not None:
             # Busier than usual reads warmer: alpha grows from 1x to 3x.
             strength = max(0.0, min(1.0, (float(value) - 1.0) / 2.0))
@@ -359,6 +377,13 @@ def _row_tooltip(row: dict[str, Any]) -> str:
         parts.append("earnings today / after last close")
     if row.get("earnings_warning"):
         parts.append(str(row["earnings_warning"]))
+    if "trend_long" in row:
+        trend = trend_flag(row)
+        want = ("below D1 50/100 SMA" if row.get("_side") == "short"
+                else "above D1 100/200 SMA")
+        verdict = ("yes" if trend else "NO" if trend is False
+                   else f"unknown ({int(row.get('daily_bars') or 0)} daily bars)")
+        parts.append(f"{want}: {verdict}")
     if row.get("stale"):
         parts.append("stale bars")
     if row.get("note"):

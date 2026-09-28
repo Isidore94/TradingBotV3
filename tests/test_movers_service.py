@@ -76,15 +76,31 @@ def _frame(day_closes_by_day, *, volume=100_000.0):
 
 
 class FakeDownloader:
-    def __init__(self, frames):
+    def __init__(self, frames, daily=None):
         self.frames = frames
+        self.daily = daily  # interval "1d" frames; None = the 5m frames answer too
         self.calls: list[tuple[tuple[str, ...], str]] = []
 
     def __call__(self, symbols, *, period, interval):
         self.calls.append((tuple(symbols), period))
+        frames = self.daily if (interval == "1d" and self.daily is not None) else self.frames
         if len(symbols) == 1:
-            return self.frames.get(symbols[0], pd.DataFrame())
-        return {s: self.frames.get(s, pd.DataFrame()) for s in symbols}
+            return frames.get(symbols[0], pd.DataFrame())
+        return {s: frames.get(s, pd.DataFrame()) for s in symbols}
+
+
+def _daily_frame(level, days=210):
+    """`days` completed daily bars at `level`, ending the session before NOW."""
+    stamps = []
+    day = datetime(2026, 9, 21, tzinfo=NY)
+    while len(stamps) < days:
+        if day.weekday() < 5:
+            stamps.append(pd.Timestamp(day))
+        day -= timedelta(days=1)
+    stamps.reverse()
+    rows = [{"Open": level, "High": level + 0.5, "Low": level - 0.5, "Close": level,
+             "Volume": 1_000_000.0} for _ in stamps]
+    return pd.DataFrame(rows, index=pd.DatetimeIndex(stamps))
 
 
 def _history_frame():
@@ -151,6 +167,47 @@ def test_small_bot_universe_adds_the_yahoo_sweep_and_caches_baselines():
     assert all(period != svc.YAHOO_BASELINE_PERIOD for _s, period in downloader.calls)
     # Five-minute cadence: the second tick a minute later does not re-sweep either.
     assert all(period != svc.YAHOO_TODAY_PERIOD for _s, period in downloader.calls)
+
+
+def test_daily_trend_gate_fetches_closes_once_and_drops_the_wrong_side():
+    popping = _naive_la_bars([100.0] * 11 + [100.5, 101.0, 101.5])
+    bot = FakeBot(["AAA", "BBB"], {"AAA": popping, "BBB": popping,
+                                   "SPY": _naive_la_bars([400.0] * 14)})
+    frames = {s: _history_frame() for s in ("QQQ", "AAA", "BBB", "SPY")}
+    # AAA sits above its D1 SMAs; BBB and the swept QQQ sit below theirs.
+    daily = {"AAA": _daily_frame(50.0), "BBB": _daily_frame(150.0), "QQQ": _daily_frame(150.0)}
+    downloader = FakeDownloader(frames, daily=daily)
+    service = _service(bot, downloader)
+    emitted = []
+    service.moversChanged.connect(emitted.append)
+    service._run_once(service._focus_snapshot())
+
+    board = emitted[-1]
+    assert [r["symbol"] for r in board["pop"]["long"]] == ["AAA"]
+    assert board["daily_measured"] == 3
+    daily_calls = [symbols for symbols, period in downloader.calls
+                   if period == svc.DAILY_TREND_PERIOD]
+    assert len(daily_calls) == 1 and set(daily_calls[0]) == {"AAA", "BBB", "QQQ"}
+
+    # The next tick reuses the closes: no second daily download.
+    downloader.calls.clear()
+    service._run_once(service._focus_snapshot())
+    assert all(period != svc.DAILY_TREND_PERIOD for _s, period in downloader.calls)
+    assert [r["symbol"] for r in emitted[-1]["pop"]["long"]] == ["AAA"]
+
+
+def test_daily_trend_gate_unknown_when_the_download_fails():
+    popping = _naive_la_bars([100.0] * 11 + [100.5, 101.0, 101.5])
+    bot = FakeBot(["AAA"], {"AAA": popping, "SPY": _naive_la_bars([400.0] * 14)})
+    frames = {s: _history_frame() for s in ("QQQ", "AAA", "SPY")}
+    downloader = FakeDownloader(frames, daily={})  # empty daily answer
+    service = _service(bot, downloader)
+    emitted = []
+    service.moversChanged.connect(emitted.append)
+    service._run_once(service._focus_snapshot())
+    row = next(r for r in emitted[-1]["pop"]["long"] if r["symbol"] == "AAA")
+    assert row["trend_long"] is None
+    assert emitted[-1]["daily_measured"] == 0
 
 
 def test_large_bot_universe_skips_the_yahoo_sweep():
