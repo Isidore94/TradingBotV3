@@ -66,8 +66,8 @@ CYCLE_TIMEFRAMES = ("5m", "15m", "1h")
 # symbol -> (seed, start price, beta to SPY, last-day alpha per bar in noise units)
 RECIPE = {
     SPY: (101, 500.0, 0.0, 0.0),
-    "STRONG": (102, 120.0, 1.0, 1.0),
-    "WEAK": (103, 80.0, 1.0, -1.0),
+    "STRONG": (102, 120.0, 1.0, 2.0),
+    "WEAK": (103, 80.0, 1.0, -2.0),
     "BURST": (104, 60.0, 1.0, 0.0),  # burst for the first 18 bars of the last day
     "FLAT": (105, 45.0, 1.0, 0.0),
     SECTOR_ETF: (106, 240.0, 1.0, 0.10),
@@ -326,7 +326,16 @@ def assert_close(actual, expected, path="$"):
 def test_record_the_golden_fixture(monkeypatch):
     import subprocess
 
-    commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=str(ROOT_DIR), text=True).strip()
+    # The recorded source is scripts/ as it stands; name the pinned commit only
+    # when scripts/ is byte-identical to it, otherwise HEAD (which the pin rejects).
+    same_source = subprocess.call(
+        ["git", "diff", "--quiet", PINNED_SOURCE_COMMIT, "--", "scripts"], cwd=str(ROOT_DIR)
+    ) == 0
+    commit = (
+        PINNED_SOURCE_COMMIT
+        if same_source
+        else subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=str(ROOT_DIR), text=True).strip()
+    )
     recorded = record(monkeypatch)
     recorded["generated_from_commit"] = commit
     recorded["universe_version"] = "rrs_intraday_synthetic_v1"
