@@ -139,7 +139,7 @@ def bot_rrs_threshold(bot: Any, fallback: float) -> float:
     name = "rolling_rrs_threshold" if rrs_config.use_rolling() else "rrs_threshold"
     try:
         return float(getattr(bot, name, fallback))
-    except (TypeError, ValueError):
+    except Exception:  # noqa: BLE001 - a child bot without the attribute answers over RPC with an error
         return float(fallback)
 
 

@@ -10386,7 +10386,9 @@ class BounceBot(EWrapper, EClient):
                 today_spy_bars,
                 length=IMPULSE_RRS_PROFILE_LENGTH,
             )
-        history = [bar for bar in (self.get_cached_5m_bars(symbol) or []) if bar.dt.date() < current_date]
+        # Cache only (never a fetch): the scan cycle's 5-day M5 bars for this symbol.
+        cached = (getattr(self, "latest_bars", None) or {}).get(f"{symbol}|5 D|5 mins") or []
+        history = [bar for bar in cached if bar.dt.date() < current_date]
         profile = self._build_intraday_rrs_profile(
             history + list(today_symbol_bars),
             spy_5m,
