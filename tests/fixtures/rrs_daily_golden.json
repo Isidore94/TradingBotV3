@@ -1,0 +1,455 @@
+{
+ "assess_daily": {
+  "BURST|LONG": {
+   "daily_relative_strength_bonus": 0,
+   "daily_relative_strength_note": "D1 vs SPY neutral: rs=-0.07, 1d excess=-0.61%, 5d excess=+0.22%",
+   "daily_relative_strength_score": -0.067,
+   "spy_five_day_return_pct": -0.007,
+   "spy_one_day_return_pct": 0.132,
+   "symbol_five_day_return_pct": 0.216,
+   "symbol_one_day_return_pct": -0.474
+  },
+  "BURST|SHORT": {
+   "daily_relative_strength_bonus": 0,
+   "daily_relative_strength_note": "D1 vs SPY neutral: rs=-0.07, 1d excess=-0.61%, 5d excess=+0.22%",
+   "daily_relative_strength_score": -0.067,
+   "spy_five_day_return_pct": -0.007,
+   "spy_one_day_return_pct": 0.132,
+   "symbol_five_day_return_pct": 0.216,
+   "symbol_one_day_return_pct": -0.474
+  },
+  "FLAT|LONG": {
+   "daily_relative_strength_bonus": 0,
+   "daily_relative_strength_note": "D1 vs SPY neutral: rs=-0.15, 1d excess=-0.31%, 5d excess=-0.06%",
+   "daily_relative_strength_score": -0.149,
+   "spy_five_day_return_pct": -0.007,
+   "spy_one_day_return_pct": 0.132,
+   "symbol_five_day_return_pct": -0.069,
+   "symbol_one_day_return_pct": -0.18
+  },
+  "FLAT|SHORT": {
+   "daily_relative_strength_bonus": 0,
+   "daily_relative_strength_note": "D1 vs SPY neutral: rs=-0.15, 1d excess=-0.31%, 5d excess=-0.06%",
+   "daily_relative_strength_score": -0.149,
+   "spy_five_day_return_pct": -0.007,
+   "spy_one_day_return_pct": 0.132,
+   "symbol_five_day_return_pct": -0.069,
+   "symbol_one_day_return_pct": -0.18
+  },
+  "NEWCO|LONG": {
+   "daily_relative_strength_bonus": 18,
+   "daily_relative_strength_note": "D1 stronger than SPY: rs=+1.28, 1d excess=+0.23%, 5d excess=+1.85% (+18)",
+   "daily_relative_strength_score": 1.28,
+   "spy_five_day_return_pct": -0.007,
+   "spy_one_day_return_pct": 0.132,
+   "symbol_five_day_return_pct": 1.838,
+   "symbol_one_day_return_pct": 0.362
+  },
+  "NEWCO|SHORT": {
+   "daily_relative_strength_bonus": 0,
+   "daily_relative_strength_note": "D1 vs SPY neutral: rs=+1.28, 1d excess=+0.23%, 5d excess=+1.85%",
+   "daily_relative_strength_score": 1.28,
+   "spy_five_day_return_pct": -0.007,
+   "spy_one_day_return_pct": 0.132,
+   "symbol_five_day_return_pct": 1.838,
+   "symbol_one_day_return_pct": 0.362
+  },
+  "STRONG|LONG": {
+   "daily_relative_strength_bonus": 18,
+   "daily_relative_strength_note": "D1 stronger than SPY: rs=+1.76, 1d excess=+0.34%, 5d excess=+2.53% (+18)",
+   "daily_relative_strength_score": 1.762,
+   "spy_five_day_return_pct": -0.007,
+   "spy_one_day_return_pct": 0.132,
+   "symbol_five_day_return_pct": 2.521,
+   "symbol_one_day_return_pct": 0.471
+  },
+  "STRONG|SHORT": {
+   "daily_relative_strength_bonus": 0,
+   "daily_relative_strength_note": "D1 vs SPY neutral: rs=+1.76, 1d excess=+0.34%, 5d excess=+2.53%",
+   "daily_relative_strength_score": 1.762,
+   "spy_five_day_return_pct": -0.007,
+   "spy_one_day_return_pct": 0.132,
+   "symbol_five_day_return_pct": 2.521,
+   "symbol_one_day_return_pct": 0.471
+  },
+  "WEAK|LONG": {
+   "daily_relative_strength_bonus": 0,
+   "daily_relative_strength_note": "D1 vs SPY neutral: rs=-3.74, 1d excess=-1.45%, 5d excess=-4.97%",
+   "daily_relative_strength_score": -3.741,
+   "spy_five_day_return_pct": -0.007,
+   "spy_one_day_return_pct": 0.132,
+   "symbol_five_day_return_pct": -4.981,
+   "symbol_one_day_return_pct": -1.32
+  },
+  "WEAK|SHORT": {
+   "daily_relative_strength_bonus": 18,
+   "daily_relative_strength_note": "D1 weaker than SPY: rs=-3.74, 1d excess=-1.45%, 5d excess=-4.97% (+18)",
+   "daily_relative_strength_score": -3.741,
+   "spy_five_day_return_pct": -0.007,
+   "spy_one_day_return_pct": 0.132,
+   "symbol_five_day_return_pct": -4.981,
+   "symbol_one_day_return_pct": -1.32
+  }
+ },
+ "daily_strength_map": {
+  "BURST": {
+   "d1_rs_20d": 8.443372241579205,
+   "d1_rs_5d": 0.22260359923943485,
+   "weekly_streak": 1
+  },
+  "FLAT": {
+   "d1_rs_20d": -1.2375075533963997,
+   "d1_rs_5d": -0.062269829996131065,
+   "weekly_streak": -1
+  },
+  "NEWCO": {
+   "d1_rs_20d": 6.733155980829908,
+   "d1_rs_5d": 1.84482181130311,
+   "weekly_streak": 0
+  },
+  "STRONG": {
+   "d1_rs_20d": 10.740478792320562,
+   "d1_rs_5d": 2.527444290408065,
+   "weekly_streak": 17
+  },
+  "WEAK": {
+   "d1_rs_20d": -20.67967037098355,
+   "d1_rs_5d": -4.974169755089742,
+   "weekly_streak": -16
+  },
+  "XLE": {
+   "d1_rs_20d": -8.805826266281237,
+   "d1_rs_5d": -1.4009525676652368,
+   "weekly_streak": -16
+  },
+  "XLK": {
+   "d1_rs_20d": 2.9672794148648762,
+   "d1_rs_5d": 0.9257896417791067,
+   "weekly_streak": 17
+  }
+ },
+ "engine": [
+  {
+   "components": {
+    "d1_strength": 0.9,
+    "giveback": 0.9,
+    "persistence": 0.8,
+    "residual": 0.9,
+    "sector_residual": 0.5,
+    "session_residual": 0.9,
+    "setup_quality": 0.5,
+    "trigger": 0.5,
+    "volume_quality": 0.5
+   },
+   "composite": 76.50000000000001,
+   "coverage": 1.0,
+   "data_ok": true,
+   "engine_version": "rs_engine_v1",
+   "penalties": {},
+   "percentile": 0.9,
+   "side_sign": -1,
+   "symbol": "CS",
+   "tier": "DEFIANT"
+  },
+  {
+   "components": {
+    "d1_strength": 0.7,
+    "giveback": 0.7,
+    "persistence": 0.8,
+    "residual": 0.7,
+    "sector_residual": 0.5,
+    "session_residual": 0.7,
+    "setup_quality": 0.5,
+    "trigger": 0.5,
+    "volume_quality": 0.5
+   },
+   "composite": 65.50000000000001,
+   "coverage": 1.0,
+   "data_ok": true,
+   "engine_version": "rs_engine_v1",
+   "penalties": {},
+   "percentile": 0.7,
+   "side_sign": 1,
+   "symbol": "A",
+   "tier": "HOLDING"
+  },
+  {
+   "components": {
+    "d1_strength": 0.4,
+    "giveback": 0.5,
+    "persistence": 0.5,
+    "residual": 0.5,
+    "sector_residual": 0.5,
+    "session_residual": 0.5,
+    "setup_quality": 0.5,
+    "trigger": 0.5,
+    "volume_quality": 0.5
+   },
+   "composite": 49.50000000000001,
+   "coverage": 1.0,
+   "data_ok": true,
+   "engine_version": "rs_engine_v1",
+   "penalties": {},
+   "percentile": 0.5,
+   "side_sign": 1,
+   "symbol": "D",
+   "tier": "FADING"
+  },
+  {
+   "components": {
+    "d1_strength": 0.4,
+    "giveback": 0.3,
+    "persistence": 0.2,
+    "residual": 0.3,
+    "sector_residual": 0.5,
+    "session_residual": 0.3,
+    "setup_quality": 0.5,
+    "trigger": 0.5,
+    "volume_quality": 0.5
+   },
+   "composite": 35.0,
+   "coverage": 1.0,
+   "data_ok": true,
+   "engine_version": "rs_engine_v1",
+   "penalties": {},
+   "percentile": 0.3,
+   "side_sign": 1,
+   "symbol": "B",
+   "tier": "FADING"
+  },
+  {
+   "components": {
+    "d1_strength": 0.1,
+    "giveback": 0.1,
+    "persistence": 0.2,
+    "residual": 0.1,
+    "sector_residual": 0.5,
+    "session_residual": 0.1,
+    "setup_quality": 0.5,
+    "trigger": 0.5,
+    "volume_quality": 0.5
+   },
+   "composite": 23.5,
+   "coverage": 1.0,
+   "data_ok": true,
+   "engine_version": "rs_engine_v1",
+   "penalties": {},
+   "percentile": 0.1,
+   "side_sign": 1,
+   "symbol": "C",
+   "tier": "FADING"
+  }
+ ],
+ "enriched": [
+  {
+   "daily_relative_strength_score": 1.762,
+   "industry_daily_relative_strength_score": 0.58,
+   "industry_relative_strength_bonus": 16,
+   "industry_relative_strength_note": "D1 stronger than XLK: rs_ind=+1.18; 1d=+0.40% 5d=+1.60%; industry strong vs SPY rs=+0.58; daily+weekly aligned (+10+6)",
+   "industry_relative_strength_score": 1.182,
+   "industry_rs_consistent": true,
+   "rs_vs_industry_1d": 0.401,
+   "rs_vs_industry_5d": 1.602,
+   "score": 116.0,
+   "side": "LONG",
+   "symbol": "STRONG"
+  },
+  {
+   "daily_relative_strength_score": 1.762,
+   "industry_daily_relative_strength_score": 0.58,
+   "industry_relative_strength_bonus": 0,
+   "industry_relative_strength_note": "D1 weaker than XLK: rs_ind=+1.18; 1d=+0.40% 5d=+1.60%; industry weak vs SPY rs=+0.58",
+   "industry_relative_strength_score": 1.182,
+   "industry_rs_consistent": false,
+   "rs_vs_industry_1d": 0.401,
+   "rs_vs_industry_5d": 1.602,
+   "score": 100.0,
+   "side": "SHORT",
+   "symbol": "STRONG"
+  },
+  {
+   "daily_relative_strength_score": -3.741,
+   "industry_daily_relative_strength_score": -1.021,
+   "industry_relative_strength_bonus": 0,
+   "industry_relative_strength_note": "D1 stronger than XLE: rs_ind=-2.72; 1d=-1.14% 5d=-3.57%; industry strong vs SPY rs=-1.02",
+   "industry_relative_strength_score": -2.72,
+   "industry_rs_consistent": false,
+   "rs_vs_industry_1d": -1.136,
+   "rs_vs_industry_5d": -3.573,
+   "score": 100.0,
+   "side": "LONG",
+   "symbol": "WEAK"
+  },
+  {
+   "daily_relative_strength_score": -3.741,
+   "industry_daily_relative_strength_score": -1.021,
+   "industry_relative_strength_bonus": 16,
+   "industry_relative_strength_note": "D1 weaker than XLE: rs_ind=-2.72; 1d=-1.14% 5d=-3.57%; industry weak vs SPY rs=-1.02; daily+weekly aligned (+10+6)",
+   "industry_relative_strength_score": -2.72,
+   "industry_rs_consistent": true,
+   "rs_vs_industry_1d": -1.136,
+   "rs_vs_industry_5d": -3.573,
+   "score": 116.0,
+   "side": "SHORT",
+   "symbol": "WEAK"
+  },
+  {
+   "daily_relative_strength_score": -0.067,
+   "industry_daily_relative_strength_score": 0.58,
+   "industry_relative_strength_bonus": 0,
+   "industry_relative_strength_note": "D1 stronger than XLK: rs_ind=-0.65; 1d=-0.54% 5d=-0.70%; industry strong vs SPY rs=+0.58",
+   "industry_relative_strength_score": -0.647,
+   "industry_rs_consistent": false,
+   "rs_vs_industry_1d": -0.544,
+   "rs_vs_industry_5d": -0.703,
+   "score": 100.0,
+   "side": "LONG",
+   "symbol": "BURST"
+  },
+  {
+   "daily_relative_strength_score": -0.067,
+   "industry_daily_relative_strength_score": 0.58,
+   "industry_relative_strength_bonus": 0,
+   "industry_relative_strength_note": "D1 weaker than XLK: rs_ind=-0.65; 1d=-0.54% 5d=-0.70%; industry weak vs SPY rs=+0.58",
+   "industry_relative_strength_score": -0.647,
+   "industry_rs_consistent": false,
+   "rs_vs_industry_1d": -0.544,
+   "rs_vs_industry_5d": -0.703,
+   "score": 100.0,
+   "side": "SHORT",
+   "symbol": "BURST"
+  },
+  {
+   "daily_relative_strength_score": -0.149,
+   "industry_daily_relative_strength_score": -1.021,
+   "industry_relative_strength_bonus": 0,
+   "industry_relative_strength_note": "D1 stronger than XLE: rs_ind=+0.87; 1d=+0.00% 5d=+1.34%; industry strong vs SPY rs=-1.02",
+   "industry_relative_strength_score": 0.872,
+   "industry_rs_consistent": false,
+   "rs_vs_industry_1d": 0.004,
+   "rs_vs_industry_5d": 1.339,
+   "score": 100.0,
+   "side": "LONG",
+   "symbol": "FLAT"
+  },
+  {
+   "daily_relative_strength_score": -0.149,
+   "industry_daily_relative_strength_score": -1.021,
+   "industry_relative_strength_bonus": 0,
+   "industry_relative_strength_note": "D1 weaker than XLE: rs_ind=+0.87; 1d=+0.00% 5d=+1.34%; industry weak vs SPY rs=-1.02",
+   "industry_relative_strength_score": 0.872,
+   "industry_rs_consistent": false,
+   "rs_vs_industry_1d": 0.004,
+   "rs_vs_industry_5d": 1.339,
+   "score": 100.0,
+   "side": "SHORT",
+   "symbol": "FLAT"
+  },
+  {
+   "daily_relative_strength_score": 1.28,
+   "industry_daily_relative_strength_score": 0.58,
+   "industry_relative_strength_bonus": 0,
+   "industry_relative_strength_note": "D1 stronger than XLK: rs_ind=+0.70; 1d=+0.29% 5d=+0.92%; industry strong vs SPY rs=+0.58",
+   "industry_relative_strength_score": 0.7,
+   "industry_rs_consistent": false,
+   "rs_vs_industry_1d": 0.292,
+   "rs_vs_industry_5d": 0.919,
+   "score": 100.0,
+   "side": "LONG",
+   "symbol": "NEWCO"
+  },
+  {
+   "daily_relative_strength_score": 1.28,
+   "industry_daily_relative_strength_score": 0.58,
+   "industry_relative_strength_bonus": 0,
+   "industry_relative_strength_note": "D1 weaker than XLK: rs_ind=+0.70; 1d=+0.29% 5d=+0.92%; industry weak vs SPY rs=+0.58",
+   "industry_relative_strength_score": 0.7,
+   "industry_rs_consistent": false,
+   "rs_vs_industry_1d": 0.292,
+   "rs_vs_industry_5d": 0.919,
+   "score": 100.0,
+   "side": "SHORT",
+   "symbol": "NEWCO"
+  }
+ ],
+ "industry_rows": [
+  {
+   "daily_relative_strength_score": 0.58,
+   "symbol": "XLK",
+   "symbol_five_day_return_pct": 0.919
+  },
+  {
+   "daily_relative_strength_score": -1.021,
+   "symbol": "XLE",
+   "symbol_five_day_return_pct": -1.408
+  }
+ ],
+ "source_commit": "237f3acee783e216c998f5d7ca02018c95841edf",
+ "universe_rows": [
+  {
+   "daily_relative_strength_bonus": 18,
+   "daily_relative_strength_note": "D1 stronger than SPY: rs=+1.76, 1d excess=+0.34%, 5d excess=+2.53% (+18)",
+   "daily_relative_strength_score": 1.762,
+   "industry_etf": "XLK",
+   "rs_vs_industry": 1.182,
+   "rs_vs_industry_1d": 0.401,
+   "rs_vs_industry_5d": 1.602,
+   "side": "LONG",
+   "symbol": "STRONG",
+   "symbol_five_day_return_pct": 2.521,
+   "symbol_one_day_return_pct": 0.471
+  },
+  {
+   "daily_relative_strength_bonus": 0,
+   "daily_relative_strength_note": "D1 vs SPY neutral: rs=-3.74, 1d excess=-1.45%, 5d excess=-4.97%",
+   "daily_relative_strength_score": -3.741,
+   "industry_etf": "XLE",
+   "rs_vs_industry": -2.72,
+   "rs_vs_industry_1d": -1.136,
+   "rs_vs_industry_5d": -3.573,
+   "side": "LONG",
+   "symbol": "WEAK",
+   "symbol_five_day_return_pct": -4.981,
+   "symbol_one_day_return_pct": -1.32
+  },
+  {
+   "daily_relative_strength_bonus": 0,
+   "daily_relative_strength_note": "D1 vs SPY neutral: rs=-0.07, 1d excess=-0.61%, 5d excess=+0.22%",
+   "daily_relative_strength_score": -0.067,
+   "industry_etf": "XLK",
+   "rs_vs_industry": -0.647,
+   "rs_vs_industry_1d": -0.544,
+   "rs_vs_industry_5d": -0.703,
+   "side": "LONG",
+   "symbol": "BURST",
+   "symbol_five_day_return_pct": 0.216,
+   "symbol_one_day_return_pct": -0.474
+  },
+  {
+   "daily_relative_strength_bonus": 0,
+   "daily_relative_strength_note": "D1 vs SPY neutral: rs=-0.15, 1d excess=-0.31%, 5d excess=-0.06%",
+   "daily_relative_strength_score": -0.149,
+   "industry_etf": "XLE",
+   "rs_vs_industry": 0.872,
+   "rs_vs_industry_1d": 0.004,
+   "rs_vs_industry_5d": 1.339,
+   "side": "LONG",
+   "symbol": "FLAT",
+   "symbol_five_day_return_pct": -0.069,
+   "symbol_one_day_return_pct": -0.18
+  },
+  {
+   "daily_relative_strength_bonus": 18,
+   "daily_relative_strength_note": "D1 stronger than SPY: rs=+1.28, 1d excess=+0.23%, 5d excess=+1.85% (+18)",
+   "daily_relative_strength_score": 1.28,
+   "industry_etf": "XLK",
+   "rs_vs_industry": 0.7,
+   "rs_vs_industry_1d": 0.292,
+   "rs_vs_industry_5d": 0.919,
+   "side": "LONG",
+   "symbol": "NEWCO",
+   "symbol_five_day_return_pct": 1.838,
+   "symbol_one_day_return_pct": 0.362
+  }
+ ]
+}
