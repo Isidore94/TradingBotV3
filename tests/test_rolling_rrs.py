@@ -16,7 +16,9 @@ if str(SCRIPTS_DIR) not in sys.path:
 from group_rrs import real_relative_strength  # noqa: E402
 from indicators.rolling_rrs import (  # noqa: E402
     RollingRrsConfig,
+    daily_rrs_series,
     hourly_rrs_series,
+    rolling_from_series,
     rolling_rrs,
     rrs_series,
 )
@@ -217,7 +219,7 @@ def test_hourly_burst_then_flat_fades_slower_on_the_rolling_read():
 def test_unknown_atr_mode_is_refused():
     stock = _bars(_path(50.0, [0.05] * 40))
     with pytest.raises(ValueError):
-        rolling_rrs(stock, stock, RollingRrsConfig(atr_mode="daily"))
+        rolling_rrs(stock, stock, RollingRrsConfig(atr_mode="weekly"))
 
 
 def _candles(count, *, full_range, first=START, extra=()):
@@ -264,3 +266,55 @@ def test_candles_for_one_side_only_are_ignored():
     stock, spy = _today_worked_example()
     series = hourly_rrs_series(stock, spy, symbol_hour_bars=_candles(50, full_range=0.20))
     assert series[-1] == (None, None)
+
+
+# ------------------------------------------------------------------- daily
+
+
+def _daily(closes, *, half_range):
+    return [
+        {"dt": START + timedelta(days=i), "open": c, "high": c + half_range, "low": c - half_range, "close": c}
+        for i, c in enumerate(closes)
+    ]
+
+
+def test_daily_worked_example_reads_three():
+    # Daily ATR: SPY 5.00, stock 2.00 (flat history, true range = high - low).
+    # Over 5 days SPY falls 20.00 (power -4); the stock falls only 2.00.
+    spy = _daily(_path(600.0, [0.0] * 50 + [-4.0] * 5), half_range=2.5)
+    stock = _daily(_path(100.0, [0.0] * 50 + [-0.4] * 5), half_range=1.0)
+    rrs, power = daily_rrs_series(stock, spy, 5)[-1]
+    assert power == pytest.approx(-4.0)
+    assert rrs == pytest.approx(3.0)
+
+
+def test_daily_needs_twenty_days_of_atr():
+    spy = _daily(_path(600.0, [0.5] * 20), half_range=2.5)
+    stock = _daily(_path(100.0, [0.5] * 20), half_range=1.0)
+    assert all(pair == (None, None) for pair in daily_rrs_series(stock, spy, 5))
+    assert daily_rrs_series(stock, spy, 5, min_atr_days=10)[-1][0] is not None
+
+
+def test_daily_mode_rolls_through_the_config():
+    spy = _daily(_path(600.0, [0.0] * 50 + [-4.0] * 5), half_range=2.5)
+    stock = _daily(_path(100.0, [0.0] * 50 + [-0.4] * 5), half_range=1.0)
+    result = rolling_rrs(stock, spy, RollingRrsConfig(atr_mode="daily", length=5, roll=1))
+    assert result is not None and result.atr_mode == "daily"
+    assert result.rolling == pytest.approx(3.0)
+
+
+# ------------------------------------------------------------ sampling
+
+
+def test_sample_every_takes_every_nth_read_ending_at_the_last():
+    series = [(float(i), 1.0) for i in range(40)]
+    result = rolling_from_series(series, RollingRrsConfig(roll=4, sample_every=3))
+    assert result is not None
+    assert result.reads == (30.0, 33.0, 36.0, 39.0)
+    assert result.rolling == pytest.approx(34.5)
+
+
+def test_rolling_from_series_matches_rolling_rrs():
+    stock = _bars(_path(50.0, [0.04 * ((i % 5) - 1) for i in range(50)]))
+    spy = _bars(_path(600.0, [0.05 * ((i % 4) - 1) for i in range(50)]), half_range=0.3)
+    assert rolling_from_series(rrs_series(stock, spy, 12), BAR) == rolling_rrs(stock, spy, BAR)

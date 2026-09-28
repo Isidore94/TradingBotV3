@@ -14,6 +14,10 @@ otherwise hours are cut from the M5 bars, from each session's first bar.
 about 4-5x larger and its ratio to the hourly read varies by stock, so the two
 scales are not interchangeable.
 
+``atr_mode="daily"`` is the same idea on daily candles: the move over
+``length`` days against each symbol's mean daily true range over the last
+``daily_atr_days`` days before the move (gaps count on the daily).
+
 The rolling read is the mean of the last ``roll`` point reads, so one burst bar
 decays instead of flipping RS/RW. ``hold_on_dips`` is the mean read while SPY's
 power was negative (a long leader resists), ``drive_on_rips`` while it was
@@ -40,9 +44,12 @@ class RollingRrsConfig:
     length: int = 12  # bars in each move (12 M5 bars = one hour)
     roll: int = 12  # point reads averaged into the rolling read
     min_reads: int | None = None  # None = all ``roll`` reads required
-    atr_mode: str = "hourly"  # "hourly" (H.S.) or "bar" (desk RRS parity)
+    atr_mode: str = "hourly"  # "hourly" (H.S.), "daily", or "bar" (desk RRS parity)
     atr_hours: int = 50  # hour blocks averaged into the hourly ATR
     min_atr_hours: int = 20  # fewer finished hour blocks = unknown
+    daily_atr_days: int = 50  # daily candles averaged into the daily ATR
+    min_daily_atr_days: int = 20  # fewer = unknown
+    sample_every: int = 1  # average every Nth read (3 = 15m candles from M5 reads)
 
     def required_reads(self) -> int:
         wanted = self.roll if self.min_reads is None else self.min_reads
@@ -251,23 +258,73 @@ def hourly_rrs_series(
     return out
 
 
-def rolling_rrs(
+def daily_rrs_series(
+    symbol_bars: Sequence[Any],
+    spy_bars: Sequence[Any],
+    length: int = 5,
+    *,
+    atr_days: int = 50,
+    min_atr_days: int = 20,
+) -> list[tuple[float | None, float | None]]:
+    """(rrs, power) ending at every daily candle; (None, None) where it cannot be read."""
+    symbol_bars = list(symbol_bars or ())
+    spy_bars = list(spy_bars or ())
+    count = min(len(symbol_bars), len(spy_bars))
+    out: list[tuple[float | None, float | None]] = [(None, None)] * count
+    if count != len(symbol_bars) or count != len(spy_bars) or length < 1:
+        return out
+    sym_tr = _true_ranges(symbol_bars)
+    spy_tr = _true_ranges(spy_bars)
+    for end in range(length, count):
+        begin = end - length
+        s_atr = _mean_recent(sym_tr, begin, atr_days, min_atr_days)
+        m_atr = _mean_recent(spy_tr, begin, atr_days, min_atr_days)
+        sym_last = _value(symbol_bars[end], "close")
+        sym_prior = _value(symbol_bars[begin], "close")
+        spy_last = _value(spy_bars[end], "close")
+        spy_prior = _value(spy_bars[begin], "close")
+        if not s_atr or not m_atr or None in (sym_last, sym_prior, spy_last, spy_prior):
+            continue
+        power = (spy_last - spy_prior) / m_atr
+        out[end] = (sym_last - sym_prior) / s_atr - power, power
+    return out
+
+
+def _true_ranges(bars: Sequence[Any]) -> list[float | None]:
+    """True range of each candle (None for the first and for bad candles)."""
+    out: list[float | None] = [None] * len(bars)
+    for index in range(1, len(bars)):
+        high = _value(bars[index], "high")
+        low = _value(bars[index], "low")
+        prev_close = _value(bars[index - 1], "close")
+        if None not in (high, low, prev_close):
+            out[index] = max(high - low, abs(high - prev_close), abs(low - prev_close))  # type: ignore[operator]
+    return out
+
+
+def _mean_recent(values: list[float | None], last: int, count: int, minimum: int) -> float | None:
+    """Mean of up to ``count`` values ending at index ``last``; None if too few or any bad."""
+    recent = values[max(1, last - count + 1) : last + 1]
+    if len(recent) < max(1, minimum) or None in recent:
+        return None
+    mean = sum(recent) / len(recent)  # type: ignore[arg-type]
+    return mean if mean > 0 else None
+
+
+def rrs_point_series(
     symbol_bars: Sequence[Any],
     spy_bars: Sequence[Any],
     config: RollingRrsConfig | None = None,
     *,
     symbol_hour_bars: Sequence[Any] | None = None,
     spy_hour_bars: Sequence[Any] | None = None,
-) -> RollingRrs | None:
-    """Rolling RRS at the last bar, or None when too few point reads exist.
-
-    Hour bars feed the hourly ATR (hourly mode only); see ``hourly_rrs_series``.
-    """
+) -> list[tuple[float | None, float | None]]:
+    """The point (rrs, power) series for ``config.atr_mode``, one entry per bar."""
     config = config or RollingRrsConfig()
     if config.atr_mode == "bar":
-        series = rrs_series(symbol_bars, spy_bars, config.length)
-    elif config.atr_mode == "hourly":
-        series = hourly_rrs_series(
+        return rrs_series(symbol_bars, spy_bars, config.length)
+    if config.atr_mode == "hourly":
+        return hourly_rrs_series(
             symbol_bars,
             spy_bars,
             config.length,
@@ -276,12 +333,28 @@ def rolling_rrs(
             symbol_hour_bars=symbol_hour_bars,
             spy_hour_bars=spy_hour_bars,
         )
-    else:
-        raise ValueError(f"unknown atr_mode: {config.atr_mode!r}")
-    window = series[-config.roll :] if config.roll > 0 else []
-    if not window or window[-1][0] is None:
+    if config.atr_mode == "daily":
+        return daily_rrs_series(
+            symbol_bars,
+            spy_bars,
+            config.length,
+            atr_days=config.daily_atr_days,
+            min_atr_days=config.min_daily_atr_days,
+        )
+    raise ValueError(f"unknown atr_mode: {config.atr_mode!r}")
+
+
+def rolling_from_series(
+    series: Sequence[tuple[float | None, float | None]],
+    config: RollingRrsConfig | None = None,
+) -> RollingRrs | None:
+    """Roll an existing point series (one computed series can feed several candle sizes)."""
+    config = config or RollingRrsConfig()
+    step = max(1, config.sample_every)
+    sampled = list(series)[::-1][::step][: max(0, config.roll)][::-1]
+    if not sampled or sampled[-1][0] is None:
         return None
-    pairs = [(rrs, power) for rrs, power in window if rrs is not None and power is not None]
+    pairs = [(rrs, power) for rrs, power in sampled if rrs is not None and power is not None]
     if len(pairs) < config.required_reads():
         return None
     reads = tuple(rrs for rrs, _ in pairs)
@@ -298,3 +371,26 @@ def rolling_rrs(
         powers=powers,
         atr_mode=config.atr_mode,
     )
+
+
+def rolling_rrs(
+    symbol_bars: Sequence[Any],
+    spy_bars: Sequence[Any],
+    config: RollingRrsConfig | None = None,
+    *,
+    symbol_hour_bars: Sequence[Any] | None = None,
+    spy_hour_bars: Sequence[Any] | None = None,
+) -> RollingRrs | None:
+    """Rolling RRS at the last bar, or None when too few point reads exist.
+
+    Hour bars feed the hourly ATR (hourly mode only); see ``hourly_rrs_series``.
+    """
+    config = config or RollingRrsConfig()
+    series = rrs_point_series(
+        symbol_bars,
+        spy_bars,
+        config,
+        symbol_hour_bars=symbol_hour_bars,
+        spy_hour_bars=spy_hour_bars,
+    )
+    return rolling_from_series(series, config)
