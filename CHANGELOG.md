@@ -1,5 +1,7 @@
 # Changelog
 
+- 2026-09-28 Relative strength: every RS/RW read (bounce bot 5m/15m/1h scan, alerts, gates and scores, group tape, Strength board, D1 swing-scan RS and industry RS, RS Window daily 5d/20d, rs_engine v2) moves to H.S.'s rolling RRS with a 1.0 cutoff; old-scale constants halve via `rrs_config.DESK_TO_ROLLING`; `TRADINGBOTV3_RRS_ENGINE=desk` restores the old formulas. Golden fixtures pin the desk path byte-for-byte.
+
 - 2026-09-28 Indicators: rolling RRS can take one-hour candles for both symbols so the hourly ATR spans H.S.'s full 50 hours (ATR50(H) = 50 one-hour candles); only candles closed before the move began count. Without them it cuts hours from the M5 bars as before.
 
 - 2026-09-28 Indicators: rolling RRS now defaults to H.S.'s hourly ATR (1-hour move / mean in-session hourly range over the last 50 hours, gaps excluded, move never spans the overnight gap); `atr_mode="bar"` keeps desk-RRS parity. The desk scale reads ~4.4x the hourly one.
