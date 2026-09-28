@@ -10,6 +10,16 @@ identical rankings (tested).
 Raw percent excess is never the only measure: residuals are beta-adjusted and
 volatility-normalized, and every component is stored on the result so ranking
 stays explainable and calibratable out of sample.
+
+Rolling engine (``rrs_config.use_rolling()``, version ``rs_engine_v2``): the
+``residual`` component and the DEFIANT/FADING conviction gate read the
+intraday rolling RRS (``rrs_config.INTRADAY``: one-hour moves over the hourly
+ATR, hours cut from the M5 bars given, so the bars must span ~4 sessions for
+the 20-hour ATR) instead of the reference window's volatility z; the gate is
+|rolling RRS| >= ``rrs_config.cutoff()``. ``d1_strength`` reads
+``CandidateInput.d1_rrs`` (a ``rrs_config.DAILY_5D`` rolling read) instead of
+``d1_excess_return_pct``. An unknown rolling read ranks below every known one and
+can never make an extreme tier. ``TRADINGBOTV3_RRS_ENGINE=desk`` restores v1.
 """
 
 from __future__ import annotations
@@ -17,9 +27,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
+import rrs_config
+from indicators.rolling_rrs import rolling_rrs
 from market_state import M5Bar
 
-ENGINE_VERSION = "rs_engine_v1"
+ENGINE_VERSION_DESK = "rs_engine_v1"
+ENGINE_VERSION_ROLLING = "rs_engine_v2"
+ENGINE_VERSION = ENGINE_VERSION_DESK
+
+
+def engine_version() -> str:
+    """The version the active RRS engine ranks with."""
+    return ENGINE_VERSION_ROLLING if rrs_config.use_rolling() else ENGINE_VERSION_DESK
 
 DEFAULT_WINDOWS_MINUTES = (5, 15, 30, 60)
 
@@ -88,6 +107,7 @@ class CandidateInput:
     setup_quality: float | None = None         # 0..1 higher-timeframe quality
     trigger_proximity: float | None = None     # 0..1, 1 = at trigger and fresh
     d1_excess_return_pct: float | None = None  # blended daily excess vs SPY (raw %, unsigned)
+    d1_rrs: float | None = None                # rolling daily RRS vs SPY (DAILY_5D, unsigned)
     extension_atr: float | None = None         # distance beyond valid entry ref
     earnings_within_days: int | None = None
     structure_ok: bool = True
@@ -107,6 +127,7 @@ class CandidateRank:
     coverage: float = 0.0
     data_ok: bool = True
     engine_version: str = ENGINE_VERSION
+    rolling_rrs: float | None = None  # intraday rolling RRS vs SPY, unsigned (rolling engine only)
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +301,29 @@ def compute_session_features(
 
 
 # ---------------------------------------------------------------------------
+# intraday rolling RRS (rolling engine)
+# ---------------------------------------------------------------------------
+
+def candidate_rolling_rrs(stock_bars: list[M5Bar], spy_bars: list[M5Bar]) -> float | None:
+    """Intraday rolling RRS vs SPY over the exact common completed timestamps; None if unknown."""
+    stock = {b.ts: b for b in stock_bars if b.complete}
+    spy = {b.ts: b for b in spy_bars if b.complete}
+    common = sorted(set(stock) & set(spy))
+    if not common:
+        return None
+
+    def as_dict(bar: M5Bar) -> dict:
+        return {"dt": bar.ts, "open": bar.open, "high": bar.high, "low": bar.low, "close": bar.close}
+
+    read = rolling_rrs(
+        [as_dict(stock[ts]) for ts in common],
+        [as_dict(spy[ts]) for ts in common],
+        rrs_config.INTRADAY,
+    )
+    return None if read is None else read.rolling
+
+
+# ---------------------------------------------------------------------------
 # cohort ranking
 # ---------------------------------------------------------------------------
 
@@ -313,6 +357,7 @@ class RelativeStrengthEngine:
         reference_window_minutes: int = 30,
     ) -> list[CandidateRank]:
         cfg = self.config
+        rolling = rrs_config.use_rolling()
         raw: list[dict] = []
         for cand in candidates:
             windows: dict[int, AlignedWindowFeatures] = {}
@@ -354,13 +399,22 @@ class RelativeStrengthEngine:
             # kept as its own named component so an episode-anchored variant
             # can replace it without reshaping stored records).
             giveback_resistance = ref.aligned_residual_pct
+            rrs_value = candidate_rolling_rrs(cand.stock_bars, spy_bars) if rolling else None
+            if rolling:
+                # Side-signed rolling RRS; an unknown read ranks below every known one.
+                residual = cand.side_sign * rrs_value if rrs_value is not None else float("-inf")
+                d1_value = cand.d1_rrs
+            else:
+                residual = ref.volatility_adjusted_residual
+                d1_value = cand.d1_excess_return_pct
             raw.append(
                 {
                     "cand": cand,
                     "windows": windows,
                     "ref": ref,
                     "session": session,
-                    "residual": ref.volatility_adjusted_residual,
+                    "residual": residual,
+                    "rrs": rrs_value,
                     "giveback": giveback_resistance,
                     "persistence": persistence,
                     "session_residual": (
@@ -374,8 +428,8 @@ class RelativeStrengthEngine:
                     # Higher-timeframe strength is side-signed so D1 weakness
                     # helps a short exactly as D1 strength helps a long.
                     "d1_strength": (
-                        cand.side_sign * cand.d1_excess_return_pct
-                        if cand.d1_excess_return_pct is not None
+                        cand.side_sign * d1_value
+                        if d1_value is not None
                         else 0.0
                     ),
                     "trigger": cand.trigger_proximity if cand.trigger_proximity is not None else 0.0,
@@ -438,6 +492,8 @@ class RelativeStrengthEngine:
                     session_window=r["session"],
                     coverage=r["ref"].coverage,
                     data_ok=data_ok,
+                    engine_version=engine_version(),
+                    rolling_rrs=r["rrs"],
                 )
             )
 
@@ -459,18 +515,27 @@ class RelativeStrengthEngine:
         over_extended = (
             cand.extension_atr is not None and cand.extension_atr > cfg.max_extension_atr
         )
-        # Extreme tiers require absolute conviction (|z| gate) on top of the
-        # relative read, so a quiet cohort produces few or no extremes.
+        # Extreme tiers require absolute conviction on top of the relative
+        # read, so a quiet cohort produces few or no extremes: the reference
+        # window's |z| (desk) or the side-signed rolling RRS vs the cutoff.
+        if rrs_config.use_rolling():
+            rrs_value = raw["rrs"]
+            signed = None if rrs_value is None else cand.side_sign * rrs_value
+            weak_enough = signed is not None and signed <= -rrs_config.cutoff()
+            strong_enough = signed is not None and signed >= rrs_config.cutoff()
+        else:
+            weak_enough = ref.volatility_adjusted_residual <= -cfg.tier_min_abs_z
+            strong_enough = ref.volatility_adjusted_residual >= cfg.tier_min_abs_z
         if (
             ref.aligned_residual_pct < 0
             and raw["persistence"] < 0.5
-            and ref.volatility_adjusted_residual <= -cfg.tier_min_abs_z
+            and weak_enough
         ):
             return "FADING"
         if (
             res.percentile >= cfg.defiant_percentile
             and ref.aligned_residual_pct > 0
-            and ref.volatility_adjusted_residual >= cfg.tier_min_abs_z
+            and strong_enough
         ):
             return "WATCHING" if over_extended else "DEFIANT"
         if res.percentile >= cfg.holding_percentile and ref.aligned_residual_pct >= 0:
@@ -496,6 +561,7 @@ def mirror_candidate(cand: CandidateInput, pivot: float) -> CandidateInput:
         d1_excess_return_pct=(
             -cand.d1_excess_return_pct if cand.d1_excess_return_pct is not None else None
         ),
+        d1_rrs=-cand.d1_rrs if cand.d1_rrs is not None else None,
         extension_atr=cand.extension_atr,
         earnings_within_days=cand.earnings_within_days,
         structure_ok=cand.structure_ok,

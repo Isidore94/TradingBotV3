@@ -13,6 +13,10 @@ SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+# Tests of the desk's percent-excess D1 RS formula run on the desk engine;
+# the rolling daily RRS is pinned in test_rrs_daily_rolling.py.
+DESK_RRS_ENGINE = patch.dict("os.environ", {"TRADINGBOTV3_RRS_ENGINE": "desk"})
+
 import master_avwap  # noqa: E402
 from master_avwap import (  # noqa: E402
     POST_EARNINGS_STOP_FAILURE_CLOSES,
@@ -1132,6 +1136,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(top_only["setup_family"], master_avwap.TOP_PATTERN_FAMILY)
         self.assertFalse(top_only["top_secondary"])
 
+    @DESK_RRS_ENGINE
     def test_daily_relative_strength_prefers_long_strength_and_short_weakness_vs_spy(self):
         dates = pd.bdate_range("2026-06-01", periods=6)
         strong_rows = [
@@ -2283,6 +2288,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         base = 100.0 / (1.0 + strength_pct / 100.0)
         return cls._universe_frame([base] * 7 + [100.0])
 
+    @DESK_RRS_ENGINE
     def test_market_prep_decile_ranks_full_universe_not_just_flagged(self):
         symbols = [
             "AAA", "BBB", "CCC", "DDD", "EEE", "FFF", "GGG", "HHH", "III", "JJJ",
@@ -2305,6 +2311,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(sections["weakest_stocks_bottom_decile"]["symbols"], ["TTT", "SSS"])
         self.assertIn("2 of 20 symbols with RS data", sections["strongest_stocks_top_decile"]["note"])
 
+    @DESK_RRS_ENGINE
     def test_market_prep_decile_breaks_ties_by_symbol(self):
         # 20 symbols -> top decile = 2. "BBB" and "AAA" tie as the two strongest and are
         # inserted B-before-A; the tie must still resolve to alphabetical order.
@@ -2323,6 +2330,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         sections = {section["id"]: section for section in payload["sections"]}
         self.assertEqual(sections["strongest_stocks_top_decile"]["symbols"], ["AAA", "BBB"])
 
+    @DESK_RRS_ENGINE
     def test_market_prep_universe_skips_symbols_without_enough_history(self):
         frames = {
             "AAA": self._strength_frame(8.0),
@@ -2404,6 +2412,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(contexts["NVDA"]["sector_etf"], "XLK")
         self.assertEqual(contexts["JPM"]["industry_etf"], "XLF")
 
+    @DESK_RRS_ENGINE
     def test_universe_strength_rows_compute_stock_vs_industry(self):
         frames = {
             "NVDA": self._strength_frame(10.0),
@@ -2432,6 +2441,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertAlmostEqual(rows[0]["rs_vs_industry"], 7.0, places=3)
         self.assertAlmostEqual(rows[0]["industry_five_day_return_pct"], 3.0, places=3)
 
+    @DESK_RRS_ENGINE
     def test_market_prep_includes_strongest_industries(self):
         industry_frames = {
             "XBI": self._strength_frame(2.0),
@@ -2511,6 +2521,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(priority_rows[0]["industry_relative_strength_bonus"], 0)
         self.assertIn("setup inactive", priority_rows[0]["industry_relative_strength_note"])
 
+    @DESK_RRS_ENGINE
     def test_universe_strength_rows_split_daily_and_weekly_industry_excess(self):
         frames = {"NVDA": self._strength_frame(10.0)}
         industry_frames = {"SMH": self._strength_frame(3.0)}
