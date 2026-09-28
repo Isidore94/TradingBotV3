@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #301 Movers side + trend gate (2026-09-28): in Pop + Dip the Sym cells are green for longs and red for shorts; within ~10 min of the open no long sits under its D1 100 or 200 SMA and no short above its D1 50 or 100 (check a few in the chart); hover shows the SMA line; D1? tags are rare [trader]
 - #300 Rolling RRS (2026-09-28): first session on this code, RS/RW reads appear about 70 minutes after the open (tape chips about 75), the Settings RRS box shows 1.00, the RS lists hold no name that ran once and went flat, and a scan cycle is not slower than before; if anything looks wrong, set `TRADINGBOTV3_RRS_ENGINE=desk` and restart [trader + lead]
 - #299 Lake history (p10): after the first night on this code the ledger has a `lake_history_topup` row that is ok, and `python -m scripts.research_warehouse.cli history-coverage` shows SPY's last date = the last completed session and rising `bar_h1` / `bar_m30` rows [lead]
 - Startup font backend (codex/startup-speed): at the next authorized source launch, time first usable Desk and check text, icons, chart labels and light/dark readability on the trader's 4K panel; scratch native construction passed in 9.8/10.9 s, not a full live launch [trader + lead].
