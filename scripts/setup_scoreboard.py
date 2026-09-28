@@ -80,6 +80,7 @@ CONTEXT_FIELDS = (
     "session_rvol",
     "sector",
     "industry",
+    "rrs_engine",  # scale of the rrs_* numbers; blank = desk (older rows)
     "rrs_spy",
     "rrs_sector",
     "rrs_industry",
