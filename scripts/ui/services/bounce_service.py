@@ -13,6 +13,7 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from m5_shadow_setups import ShadowSetupsCapture
 from market_environment_annotations import record_market_environment_annotation
+import rrs_config
 from project_paths import MARKET_ENVIRONMENT_ANNOTATIONS_FILE
 from technical_integrity import load_technical_integrity_snapshot
 from ui.models.bounce import BounceAlert
@@ -133,6 +134,15 @@ def owned_bounce_thread_snapshot() -> dict[str, Any]:
     }
 
 
+def bot_rrs_threshold(bot: Any, fallback: float) -> float:
+    """The bot's cutoff for the active RRS engine (desk and rolling numbers are kept apart)."""
+    name = "rolling_rrs_threshold" if rrs_config.use_rolling() else "rrs_threshold"
+    try:
+        return float(getattr(bot, name, fallback))
+    except (TypeError, ValueError):
+        return float(fallback)
+
+
 def load_bounce_config() -> dict[str, Any]:
     from bounce_bot import BOUNCE_TYPE_DEFAULTS, BOUNCE_TYPE_LABELS, MARKET_ENVIRONMENTS, RRS_TIMEFRAMES
 
@@ -215,7 +225,8 @@ class BounceService(QObject):
         super().__init__(parent)
         config = load_bounce_config()
         self.bounce_type_settings: dict[str, bool] = dict(config["bounce_type_defaults"])
-        self.rrs_threshold = 2.0
+        # The ACTIVE engine's RS/RW cutoff (rolling 1.0 / desk 2.0); the bot keeps one per engine.
+        self.rrs_threshold = rrs_config.cutoff()
         self.rrs_timeframe_key = "5m"
         # ``None`` is the user's N/A mode: the bot owns the regime through its
         # automatic SPY read.  A concrete value is a session-only annotation
@@ -1295,7 +1306,7 @@ class BounceService(QObject):
             return  # shutdown landed mid saved-state application: mutate nothing
 
         # --- read-only phase: locals only, no service state touched ---------
-        rrs_threshold = float(getattr(bot, "rrs_threshold", self.rrs_threshold))
+        rrs_threshold = bot_rrs_threshold(bot, self.rrs_threshold)
         rrs_timeframe_key = str(getattr(bot, "rrs_timeframe_key", self.rrs_timeframe_key))
         # Keep the user selector independent from the auto read.  The bot has
         # an effective environment even in Auto; only mirror it when a genuine

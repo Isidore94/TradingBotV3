@@ -296,9 +296,10 @@ class SettingsPanel(QFrame):
         tuning_form = QFormLayout()
         tuning_form.setSpacing(8)
         self.rrs_threshold_input = QDoubleSpinBox()
+        # Edits the active RRS engine's cutoff (rolling 1.0, desk 2.0).
         self.rrs_threshold_input.setRange(0.0, 5.0)
-        self.rrs_threshold_input.setDecimals(1)
-        self.rrs_threshold_input.setSingleStep(0.1)
+        self.rrs_threshold_input.setDecimals(2)
+        self.rrs_threshold_input.setSingleStep(0.05)
         self.rrs_threshold_input.setValue(service.rrs_threshold)
         self.rrs_threshold_input.valueChanged.connect(service.set_rrs_threshold)
         tuning_form.addRow("RRS sensitivity", self.rrs_threshold_input)

@@ -62,6 +62,7 @@ from project_paths import (  # noqa: E402
 )
 from evidence_stats import LATELY_SESSIONS, lately_start  # noqa: E402
 from review_events import load_review_events, review_event_store_mtime  # noqa: E402
+import rrs_config  # noqa: E402
 from opportunity_identity import (  # noqa: E402
     IDENTITY_VERSION,
     opportunity_id,
@@ -212,6 +213,7 @@ class Episode:
     market_environment: str = ""
     session_rvol: float | None = None
     rrs_spy: float | None = None
+    rrs_engine: str = ""  # scale of rrs_spy; "" = desk (rows before the rolling RRS)
     # Swing-side context from the setups table (setup_context_fields):
     # the ★/✕ there are the trader's actual swing decisions.
     surface: str = ""
@@ -259,6 +261,7 @@ _CONTEXT_KEYS = (
     "bucket",
     "setup_family",
     "setup_tags",
+    "rrs_engine",
 )
 
 
@@ -390,7 +393,9 @@ def _rrs_alignment(episode: Episode) -> str:
     value = episode.rrs_spy
     if value is None or episode.side not in ("LONG", "SHORT"):
         return "unknown"
-    if abs(value) < 0.5:
+    # 0.5 on the desk scale; rows tagged with the rolling RRS use their own scale.
+    flat_band = 0.5 * (rrs_config.DESK_TO_ROLLING if episode.rrs_engine == rrs_config.ENGINE_ROLLING else 1.0)
+    if abs(value) < flat_band:
         return "flat"
     aligned = value > 0 if episode.side == "LONG" else value < 0
     return "aligned" if aligned else "against"
