@@ -205,13 +205,20 @@ def test_unknown_state_banner_and_dip_hint(app):
     widget.update_board({"state": {"state": "unknown"}, "pop": {}, "dip": {}, "mine": {}})
     widget.flush_pending_refresh()
     assert "unknown" in widget.banner.text()
-    # Pop mode keeps the Dip boxes and their titles; only the tables wait for a turn.
+    # Pop mode always shows three boxes; unlit Dip tables sit empty under their titles.
     assert not widget.strong.isHidden() and not widget.weak.isHidden()
-    assert widget.strong.table.isHidden() and widget.weak.table.isHidden()
+    assert not widget.strong.table.isHidden() and not widget.weak.table.isHidden()
+    assert widget.strong.model.rowCount() == 0 and widget.weak.model.rowCount() == 0
+    assert "not lit" in widget.strong.title_label.text()
     assert widget.strong.title_label.text().startswith("Dip-strong")
     assert widget.weak.title_label.text().startswith("Dip-weak")
-    assert "no SPY pullback or bounce" in widget.strong.empty_label.text()
-    assert widget.main.title_label.text().startswith("Pop")
+    assert "No SPY pullback, bounce or rally" in widget.strong.title_label.toolTip()
+    assert widget.strong.empty_label.isHidden()
+    assert widget.main.title_label.text().startswith("Movers")
+    layout = widget.layout()
+    assert layout.stretch(layout.indexOf(widget.main)) == 2
+    assert layout.stretch(layout.indexOf(widget.strong)) == 1
+    assert layout.stretch(layout.indexOf(widget.weak)) == 1
     assert not widget.main.title_label.isHidden()
 
 
