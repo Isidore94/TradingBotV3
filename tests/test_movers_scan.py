@@ -279,11 +279,13 @@ def test_dip_lists_empty_without_a_pullback():
 
 
 # ------------------------------------------------------------------ swing anchors (Dip boxes)
-# SPY today: 8 bars up 400 -> 404, 8 bars down to 398, 4 bars back up to 400.
+# SPY today: 8 bars up 400 -> 404, 8 bars down to 398, then 8 bars of chop.
+# HA colours: 9 green (bars 0-8, the major rip), 10 red (9-18, the major dip),
+# 5 green (too short to count).
 SWING_SPY = ([400.0 + 0.5 * k for k in range(1, 9)]
              + [404.0 - 0.75 * k for k in range(1, 9)]
-             + [398.0 + 0.5 * k for k in range(1, 5)])
-SWING_N = len(SWING_SPY)  # 20 bars, 06:30-08:05 LA
+             + [398.6, 398.3, 398.8, 398.4, 398.9, 398.5, 399.0, 398.6])
+SWING_N = len(SWING_SPY)  # 24 bars, 06:30-08:25 LA
 
 
 def _swing_spy():
@@ -296,65 +298,110 @@ def _today_index(stamp):
     return (moment.hour * 60 + moment.minute - 570) // 5
 
 
-def test_longs_measure_from_the_top_of_the_last_rip_and_shorts_from_the_bottom_of_the_last_dip():
-    spy = ms.normalize_bars(_swing_spy(), now=_now(SWING_N), local_tz=LA)
-    anchors = ms.swing_anchors(spy, TODAY)
-    # HA colours today: 9 green (bars 0-8, the major rip), 8 red (9-16, the major
-    # dip), 3 green (too short to count). Longs: the highest high since the rip
-    # began (the 10:10 NY top). Shorts: the lowest low since the dip began (the
-    # 10:50 NY bottom). A tied high or low takes the later bar.
-    assert _today_index(anchors["long"]["dt"]) == 8
-    assert anchors["long"]["price"] == pytest.approx(404.5)
+def _anchors(closes, n=None, previous=None):
+    n = len(closes) if n is None else n
+    spy = ms.normalize_bars(_series(closes, prior_close=400.0), now=_now(n), local_tz=LA)
+    return ms.swing_anchors(spy, TODAY, now=_now(n), previous_anchors=previous), [
+        b for b in spy if b["dt"].date() == TODAY]
+
+
+def test_longs_measure_from_the_low_after_the_last_dip_and_shorts_from_the_high_after_the_last_rip():
+    # Trader 2026-09-29: "longs should be beating SPY since a LOW not a HIGH".
+    # Longs: the lowest low since the major dip began (the 10:50 NY bottom).
+    # Shorts: the highest high since the major rip began (the 10:10 NY top).
+    # A tied high or low takes the later bar; both are 30+ minutes old.
+    anchors, _today = _anchors(SWING_SPY)
+    assert _today_index(anchors["long"]["dt"]) == 16
+    assert anchors["long"]["price"] == pytest.approx(397.5)
     assert anchors["long"]["kind"] == "swing"
-    assert _today_index(anchors["short"]["dt"]) == 16
-    assert anchors["short"]["price"] == pytest.approx(397.5)
+    assert _today_index(anchors["short"]["dt"]) == 8
+    assert anchors["short"]["price"] == pytest.approx(404.5)
     assert anchors["short"]["kind"] == "swing"
+    assert anchors["long"]["held_from_previous"] is False
+    assert anchors["short"]["held_from_previous"] is False
 
 
 TRADER_DAY = ([400.0 - 0.6 * k for k in range(1, 9)]       # bars 0-7 down to 395.2
               + [395.2 + 0.7 * k for k in range(1, 10)])  # bars 8-16 up to 401.5
 
 
-def test_the_trader_day_shorts_keep_the_bounce_low_while_longs_take_the_bounce_top():
+def test_the_trader_day_longs_take_the_bounce_low_and_shorts_the_bounce_top():
     # 09-28: SPY drops from the open (major dip), bounces (major rip) to the 09:25
-    # PT top, then chops lower with no 6-candle run. Longs: the bounce top.
-    # Shorts: the bounce low (the lowest low since the open drop began).
+    # PT top, then chops lower with no 6-candle run. Longs: the bounce low (the
+    # lowest low since the open drop began). Shorts: the bounce top.
     closes = TRADER_DAY + [401.0, 401.3, 400.6, 400.9, 400.2, 400.5, 399.8]
-    spy = ms.normalize_bars(_series(closes, prior_close=400.0), now=_now(len(closes)),
-                            local_tz=LA)
-    anchors = ms.swing_anchors(spy, TODAY)
-    today = [b for b in spy if b["dt"].date() == TODAY]
+    anchors, today = _anchors(closes)
     low_bar = min(range(8, 17), key=lambda i: (today[i]["low"], -i))
     high_bar = max(range(8, len(today)), key=lambda i: (today[i]["high"], i))
-    assert _today_index(anchors["short"]["dt"]) == low_bar == 8  # the bounce low
-    assert anchors["short"]["price"] == pytest.approx(min(b["low"] for b in today))
-    assert _today_index(anchors["long"]["dt"]) == high_bar  # the bounce top
+    assert _today_index(anchors["long"]["dt"]) == low_bar == 8  # the bounce low
+    assert anchors["long"]["price"] == pytest.approx(min(b["low"] for b in today))
+    assert _today_index(anchors["short"]["dt"]) == high_bar  # the bounce top
     assert anchors["long"]["kind"] == anchors["short"]["kind"] == "swing"
 
 
-def test_a_new_major_drop_moves_the_short_anchor_to_its_low():
-    # The same day, but the fall from the top becomes a 6+ red run: shorts now
-    # measure from that drop's lowest low, longs stay on the bounce top.
-    closes = TRADER_DAY + [401.5 - 0.6 * k for k in range(1, 11)] + [396.0, 396.6]
-    spy = ms.normalize_bars(_series(closes, prior_close=400.0), now=_now(len(closes)),
-                            local_tz=LA)
-    anchors = ms.swing_anchors(spy, TODAY)
-    today = [b for b in spy if b["dt"].date() == TODAY]
-    assert _today_index(anchors["short"]["dt"]) > 17
-    assert anchors["short"]["price"] == pytest.approx(min(b["low"] for b in today[17:]))
-    assert 15 <= _today_index(anchors["long"]["dt"]) <= 17
+# The trader day, then the fall from the top becomes a 6+ red run to a new low.
+NEW_DROP = TRADER_DAY + [401.5 - 0.6 * k for k in range(1, 11)] + [396.0, 396.6]
 
 
-def test_without_a_major_move_the_anchors_are_the_high_and_low_of_day():
-    # Five bars into the session no run can reach six candles.
+def test_a_fresh_new_low_keeps_the_previous_long_anchor_until_it_is_30_minutes_old():
+    first, today = _anchors(NEW_DROP)
+    drop_low = min(range(17, len(today)), key=lambda i: (today[i]["low"], -i))
+    # The new drop's low is under 30 minutes old: no previous anchor, so the
+    # low of day (the old bounce low, 30+ minutes old) stands in.
+    assert len(today) - drop_low < 6
+    assert first["long"]["kind"] == "lod" and _today_index(first["long"]["dt"]) == 8
+    assert first["long"]["held_from_previous"] is False
+    # With last tick's anchor carried in, that one is kept instead.
+    previous = {"long": {"dt": today[10]["dt"].isoformat(), "time": "x", "price": 1.0,
+                         "kind": "swing"}}
+    held, _ = _anchors(NEW_DROP, previous=previous)
+    assert _today_index(held["long"]["dt"]) == 10 and held["long"]["price"] == 1.0
+    assert held["long"]["kind"] == "swing" and held["long"]["held_from_previous"] is True
+    # Shorts stay on the bounce top (old enough).
+    assert _today_index(held["short"]["dt"]) in (16, 17) and held["short"]["kind"] == "swing"
+    # Once the new low is 30 minutes old the long anchor switches to it.
+    flat = [396.6 + 0.1 * (k % 2) for k in range(1, 7)]
+    later, later_today = _anchors(NEW_DROP + flat, previous=previous)
+    assert _today_index(later["long"]["dt"]) == drop_low
+    assert later["long"]["price"] == pytest.approx(later_today[drop_low]["low"])
+    assert later["long"]["kind"] == "swing" and later["long"]["held_from_previous"] is False
+
+
+def test_a_previous_anchor_from_another_day_is_not_kept():
+    _first, today = _anchors(NEW_DROP)
+    yesterday = today[10]["dt"] - timedelta(days=1)
+    previous = {"long": {"dt": yesterday.isoformat(), "time": "x", "price": 1.0, "kind": "swing"}}
+    anchors, _ = _anchors(NEW_DROP, previous=previous)
+    assert anchors["long"]["kind"] == "lod" and anchors["long"]["held_from_previous"] is False
+
+
+def test_without_a_major_move_the_anchors_are_the_low_and_high_of_day_once_30_minutes_old():
+    # Five bars in: no 6-candle run, and the low / high of day are under 30
+    # minutes old, so both boxes measure from the open.
     early = [400.5, 399.8, 401.0, 400.2, 399.6]
-    spy = ms.normalize_bars(_series(early, prior_close=400.0), now=_now(5), local_tz=LA)
-    anchors = ms.swing_anchors(spy, TODAY)
-    today = [b for b in spy if b["dt"].date() == TODAY]
-    assert anchors["long"]["kind"] == "hod" and anchors["short"]["kind"] == "lod"
-    assert anchors["long"]["price"] == max(b["high"] for b in today)
-    assert anchors["short"]["price"] == min(b["low"] for b in today)
+    anchors, today = _anchors(early)
+    assert anchors["long"]["kind"] == anchors["short"]["kind"] == "open"
+    assert _today_index(anchors["long"]["dt"]) == _today_index(anchors["short"]["dt"]) == 0
+    assert anchors["long"]["price"] == today[0]["open"]
+    # Eight bars in (still no 6-run), now 10:20 NY: the 09:45 high is 35 minutes
+    # old, the 09:55 low only 25, so shorts take the high of day, longs the open.
+    later = early + [400.3, 399.9, 400.4]
+    anchors, today = _anchors(later, n=10)
+    assert anchors["short"]["kind"] == "hod"
+    assert anchors["short"]["price"] == max(b["high"] for b in today)
+    assert _today_index(anchors["short"]["dt"]) == 3
+    assert anchors["long"]["kind"] == "open"
+    # Five minutes on, the low is 30 minutes old: longs take the low of day.
+    anchors, today = _anchors(later, n=11)
+    assert anchors["long"]["kind"] == "lod"
+    assert anchors["long"]["price"] == min(b["low"] for b in today)
+    assert _today_index(anchors["long"]["dt"]) == 5
     assert ms.swing_anchors([], TODAY) == {"long": None, "short": None}
+
+
+def test_swing_anchors_without_now_age_against_the_last_bar_end():
+    spy = ms.normalize_bars(_swing_spy(), now=_now(SWING_N), local_tz=LA)
+    assert ms.swing_anchors(spy, TODAY) == ms.swing_anchors(spy, TODAY, now=_now(SWING_N))
 
 
 def _swing_board(series, *, held=None, top_n=ms.MOVERS_TOP_N, daily=None):
@@ -366,7 +413,7 @@ def _swing_board(series, *, held=None, top_n=ms.MOVERS_TOP_N, daily=None):
 
 
 def _stock(closes_by_index):
-    """20 closes at 100 except where given."""
+    """SWING_N closes at 100 except where given."""
     closes = [100.0] * SWING_N
     for index, value in closes_by_index.items():
         closes[index] = value
@@ -375,10 +422,10 @@ def _stock(closes_by_index):
 
 def test_dip_strong_and_dip_weak_measure_from_different_spy_swings():
     series = {
-        # Flat through SPY's 10:10 NY top, then up hard: beats SPY since the high.
-        "LEAD": _stock({17: 102.0, 18: 103.0, 19: 104.0}),
-        # Falls from bar 9 on and keeps falling: lags SPY since the 10:50 NY low.
-        "LAG": _stock({**{k: 100.0 - 1.2 * (k - 8) for k in range(9, 20)}}),
+        # Flat through SPY's 10:50 NY low, then up hard: beats SPY since the low.
+        "LEAD": _stock({21: 102.0, 22: 103.0, 23: 104.0}),
+        # Falls from bar 9 on and keeps falling: lags SPY since the 10:10 NY high.
+        "LAG": _stock({**{k: 100.0 - 1.2 * (k - 8) for k in range(9, SWING_N)}}),
     }
     board = _swing_board(series)
     longs = [r["symbol"] for r in board["swing"]["long"]]
@@ -394,9 +441,9 @@ def test_dip_strong_and_dip_weak_measure_from_different_spy_swings():
 
 def test_a_held_weak_name_stays_on_dip_weak_while_it_is_still_weak():
     series = {
-        "WEAK1": _stock({k: 100.0 - 1.5 * (k - 8) for k in range(9, 20)}),
-        "WEAK2": _stock({k: 100.0 - 1.0 * (k - 8) for k in range(9, 20)}),
-        "OKAY": _stock({k: 100.0 + 0.3 * (k - 8) for k in range(9, 20)}),
+        "WEAK1": _stock({k: 100.0 - 1.5 * (k - 8) for k in range(9, SWING_N)}),
+        "WEAK2": _stock({k: 100.0 - 1.0 * (k - 8) for k in range(9, SWING_N)}),
+        "OKAY": _stock({k: 100.0 + 0.3 * (k - 8) for k in range(9, SWING_N)}),
     }
     # Top 1 only: WEAK2 is weak but not the weakest.
     assert [r["symbol"] for r in _swing_board(series, top_n=1)["swing"]["short"]] == ["WEAK1"]
@@ -418,7 +465,7 @@ def test_update_held_adds_every_listed_name_and_resets_each_session():
 
 
 def test_swing_lists_obey_the_d1_trend_gate():
-    series = {"LEAD": _stock({17: 102.0, 18: 103.0, 19: 104.0})}
+    series = {"LEAD": _stock({21: 102.0, 22: 103.0, 23: 104.0})}
     assert [r["symbol"] for r in _swing_board(series)["swing"]["long"]] == ["LEAD"]
     board = _swing_board(series, daily={"LEAD": [110.0] * 200})  # under its D1 SMAs
     assert board["swing"]["long"] == []
@@ -453,7 +500,7 @@ def test_ranked_lists_drop_riff_raff_and_keep_unknown_and_my_names():
 
 def test_no_spy_bars_leaves_the_swing_lists_empty():
     board = ms.build_movers_board(
-        {"LEAD": _stock({17: 102.0, 18: 103.0, 19: 104.0})}, [], now=_now(20),
+        {"LEAD": _stock({21: 102.0, 22: 103.0, 23: 104.0})}, [], now=_now(20),
         local_tz=LA, baselines={"LEAD": FLAT_BASELINE},
     )
     assert board["swing"] == {"long": [], "short": []}
