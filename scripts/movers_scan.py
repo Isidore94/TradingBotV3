@@ -29,11 +29,10 @@ Rules kept here:
   feed still read the pullback/bounce/rally `dip`/`rip` lists.
 - Quality floor (trader, 2026-09-28: "we get a lot of riff raff"): a ranked
   row needs market cap >= $1B and a 20-session mean share volume >= 1M (the
-  universe builder's numbers). Unknown stays; My names is never filtered.
+  universe builder's numbers). Unknown stays.
 - D1 trend gate (trader, 2026-09-28): a long pop/dip/rip row sits above the
   daily 100 and 200 SMA, a short row below the daily 50 and 100. Too little
-  daily history is UNKNOWN: the row stays, tagged, never dropped. My names is
-  the trader's own list: tagged, never filtered.
+  daily history is UNKNOWN: the row stays, tagged, never dropped.
 
 The RVOL baseline helpers (`build_rvol_baseline`, `recent_rvol`) are pure and
 importable on their own so other tools can share them.
@@ -824,7 +823,6 @@ def build_movers_board(
     *,
     now: datetime,
     baselines: Mapping[str, Mapping[int, float] | None] | None = None,
-    focus_by_side: Mapping[str, Iterable[str]] | None = None,
     local_tz: tzinfo | None = None,
     top_n: int = MOVERS_TOP_N,
     earnings: Iterable[str] | None = None,
@@ -835,12 +833,11 @@ def build_movers_board(
 ) -> dict[str, Any]:
     """The whole board as plain dicts (safe to emit across threads).
 
-    `focus_by_side` is {"long": [...], "short": [...]} of the trader's Focus
-    names; `earnings` the names to tag ER; `daily_closes` completed daily
+    `earnings` is the names to tag ER; `daily_closes` completed daily
     closes per symbol for the D1 trend gate (a name without them is unknown).
-    Lists: pop/dip/rip/mine, each {"long": rows, "short": rows}; dip is lit by
+    Lists: pop/dip/rip, each {"long": rows, "short": rows}; dip is lit by
     a pullback or bounce, rip by a rally (long = Rip-strong, short = Rip-weak).
-    The ranked lists drop a row on the wrong side of its D1 SMAs; mine never does.
+    The ranked lists drop a row on the wrong side of its D1 SMAs.
     `swing` holds the Dip boxes (see `swing_anchors`); `held_by_side` keeps a name
     listed earlier today on its box while it still qualifies. `fundamentals` is
     symbol -> {"market_cap_m", "avg_volume_20d"} for the quality floor.
@@ -949,17 +946,6 @@ def build_movers_board(
                         {t[0] for t in top})
             swing[side].append(data)
 
-    mine: dict[str, list[dict[str, Any]]] = {"long": [], "short": []}
-    for side in ("long", "short"):
-        for raw in (focus_by_side or {}).get(side, ()) or ():
-            symbol = str(raw or "").strip().upper()
-            if not symbol or any(item["symbol"] == symbol for item in mine[side]):
-                continue
-            row = rows.get(symbol) or MoverRow(symbol, note="no bars")
-            data = row.to_dict()
-            data["focus_side"] = side
-            mine[side].append(data)
-
     spy_today = split_today(spy, today_date)[1]
     spy_last_bar = spy_today[-1]["dt"] if spy_today else None
     return {
@@ -977,23 +963,10 @@ def build_movers_board(
         "swing": swing,
         "swing_anchor": {side: ({k: v for k, v in anchor.items() if k != "_dt"}
                                 if anchor else None) for side, anchor in anchors.items()},
-        "mine": mine,
         "measured": sum(1 for r in rows.values() if r.pop_score is not None),
         "daily_measured": sum(1 for r in rows.values() if r.daily_bars),
         "offered": len(normalised),
     }
-
-
-def sort_mine(rows: Sequence[Mapping[str, Any]], mode: str, side: str) -> list[dict[str, Any]]:
-    """My names sorted by the active mode's score; unmeasured rows last."""
-    key = "dip_score" if mode == "dip" else "pop_score"
-    sign = -1.0 if side == "long" else 1.0
-
-    def order(row):
-        value = row.get(key)
-        return (value is None, sign * value if value is not None else 0.0, row.get("symbol", ""))
-
-    return [dict(row) for row in sorted(rows, key=order)]
 
 
 # ---------------------------------------------------------------- helpers

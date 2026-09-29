@@ -1,5 +1,7 @@
 # Changelog
 
+- 2026-09-29 Movers: My names is gone; in its place M30 and Daily tabs (trader). Each shows the same three boxes as Pop + Dip on 30-minute or daily bars: the M30 board once per trading day at 09:00 PT (measured on the bars done by then), the Daily board once after the close (16:15 ET); nothing runs 22:00-06:00 PT, and the last boards come back after a restart. Box title hovers show how those picks did vs SPY at +1/+3/+5 sessions (`movers_timeframe_picks.jsonl`). New PB / Line chips and row-menu items arm D1 Pullback (fast) / Pullback to D1 line on the selected row's side. +F now also works on Dip-box rows. Pop + Dip lists, notices, outcome logs and the M5 watch feed are unchanged.
+
 - 2026-09-29 Movers: every box (Movers, Dip-strong, Dip-weak, My names) has a Copy chip in its title row (trader). One click puts the box's shown symbols, in on-screen order, on the clipboard as one comma line (`UMAC,IOVA,STGW`) for a TC2000 or TradingView watchlist; upper case, no blanks, no repeats. An empty box's chip is disabled; after a copy it reads "Copied N" for 1.5 s. List contents are unchanged.
 
 - 2026-09-29 Capture: new veto reason "Hammering" on key r (trader). A long reads "Hammering (bearish hammer)", a short "Hammering (bullish hammer)". Veto vocabulary v6 carries v5 unchanged, so the forward record keeps pooling; the new code grades on its own and arms no follow-up.

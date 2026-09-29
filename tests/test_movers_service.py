@@ -158,8 +158,8 @@ def test_small_bot_universe_adds_the_yahoo_sweep_and_caches_baselines():
     board = emitted[-1]
     assert board["bot_universe"] == 1
     assert board["yahoo_universe"] >= 2
-    assert board["mine"]["long"][0]["symbol"] == "AAA"
-    assert board["mine"]["long"][0]["rvol"] is not None  # baseline arrived
+    assert "mine" not in board
+    assert service._baselines.get("AAA") is not None  # the Focus name's baseline arrived
     assert "fetch_m5_chart_bars" not in bot.calls
 
     downloader.calls.clear()
