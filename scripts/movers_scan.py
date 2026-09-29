@@ -14,12 +14,13 @@ Rules kept here:
 - Missing data is UNKNOWN: an unmeasurable RVOL is None (neutral weight, shown
   "—"), an unmeasurable ATR drops the row from the ranked lists, missing SPY
   bars make the market state "unknown" and light nothing.
-- Dip boxes (trader, 2026-09-28): Dip-strong measures every name against SPY
-  from SPY's highest high since its last major M5 rip began (the top of that
-  rip, where any dip since fell from), Dip-weak from its lowest low since the
-  last major dip began (else the high / low of day so far). A major move
-  is a run of SWING_HA_RUN same-colour Heikin-Ashi candles on SPY's completed
-  M5 bars, so the anchors shift as new runs form. A name once on
+- Dip boxes (trader, 2026-09-29): Dip-strong measures every name against SPY
+  from SPY's lowest low since its last major M5 dip began, Dip-weak from its
+  highest high since the last major rip began (else the low / high of day so
+  far). A major move is a run of SWING_HA_RUN same-colour Heikin-Ashi candles
+  on SPY's completed M5 bars, so the anchors shift as new runs form. An anchor
+  under SWING_MIN_AGE_MIN old keeps last tick's (`previous_anchors`), else the
+  low / high of day if old enough, else the open. A name once on
   a box today stays on it while it still qualifies (`held_by_side`). These
   `swing` lists feed the boxes only; the P8 notices, outcome logs and M5 watch
   feed still read the pullback/bounce/rally `dip`/`rip` lists.
@@ -95,6 +96,8 @@ TREND_SMA_SHORT = (50, 100)
 #: Dip boxes: a completed run of at least this many same-colour Heikin-Ashi
 #: candles on SPY's M5 is a major move (trader: "more than 5 in a row").
 SWING_HA_RUN = 6
+#: Dip boxes: an anchor bar must be this many minutes old (trader, 2026-09-29).
+SWING_MIN_AGE_MIN = 30
 #: Quality floor for every ranked list (trader, 2026-09-28).
 MIN_MARKET_CAP_M = 1000.0
 MIN_AVG_VOLUME_20D = 1_000_000.0
@@ -509,17 +512,24 @@ def measure_symbol(
 
 
 def swing_anchors(
-    spy_bars: Sequence[Mapping[str, Any]], today_date: date | None = None
+    spy_bars: Sequence[Mapping[str, Any]],
+    today_date: date | None = None,
+    *,
+    now: datetime | None = None,
+    previous_anchors: Mapping[str, Mapping[str, Any] | None] | None = None,
 ) -> dict[str, dict[str, Any] | None]:
     """Where each Dip box measures from, off SPY's completed M5 bars (normalised).
 
     A major move is a run of SWING_HA_RUN+ same-colour Heikin-Ashi candles today
-    (it counts while still running). Longs measure from the highest high since
-    the last major rip began: its top, which is where any dip since fell from.
-    Shorts mirror it: the lowest low since the last major dip began. No major
-    rip yet: longs use the high of day so far (`kind` "hod"); no major dip yet:
-    shorts use the low of day ("lod"). Ties take the later bar. None only when
-    SPY has no bars today."""
+    (it counts while still running). Longs measure from the lowest low since the
+    last major dip began; shorts from the highest high since the last major rip
+    began. No major dip yet: longs use the low of day so far (`kind` "lod"); no
+    major rip yet: shorts use the high of day ("hod"). Ties take the later bar.
+
+    An anchor bar must be SWING_MIN_AGE_MIN old at `now` (default: the last bar's
+    end). A younger one yields to `previous_anchors[side]` (last tick's, today
+    only; `held_from_previous` True), else the low / high of day if old enough,
+    else the first bar today (`kind` "open"). None only when SPY has no bars today."""
     empty: dict[str, dict[str, Any] | None] = {"long": None, "short": None}
     if not spy_bars:
         return empty
@@ -532,6 +542,10 @@ def swing_anchors(
     first = next((i for i, b in enumerate(bars) if b["dt"].date() == day), None)
     if first is None:
         return empty
+    moment = now or (bars[-1]["dt"] + timedelta(minutes=BAR_MINUTES))
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=NY_TZ)
+    min_age = timedelta(minutes=SWING_MIN_AGE_MIN)
     runs: list[tuple[str, int, int]] = []  # (colour, start, end) of major runs today
     start = first
     for index in range(first + 1, len(bars) + 1):
@@ -540,22 +554,61 @@ def swing_anchors(
                 runs.append((colors[start], start, index - 1))
             start = index
 
+    def extreme(side: str, window: range) -> int:
+        if side == "long":
+            return min(window, key=lambda i: (bars[i]["low"], -i))
+        return max(window, key=lambda i: (bars[i]["high"], i))
+
+    def pack(at: int, kind: str, price: float | None = None) -> dict[str, Any]:
+        stamp = bars[at]["dt"]
+        if price is None:
+            price = bars[at]["low"] if kind in ("swing_long", "lod") else bars[at]["high"]
+        return {"dt": stamp.isoformat(timespec="seconds"), "time": stamp.strftime("%H:%M"),
+                "price": price, "kind": "swing" if kind.startswith("swing") else kind,
+                "held_from_previous": False, "_dt": stamp}
+
+    def old_enough(at: int) -> bool:
+        return moment - bars[at]["dt"] >= min_age
+
+    def previous(side: str) -> dict[str, Any] | None:
+        # Last tick's anchor for this side, only if it names a bar we hold today.
+        prior = (previous_anchors or {}).get(side)
+        if not isinstance(prior, Mapping):
+            return None
+        try:
+            stamp = datetime.fromisoformat(str(prior.get("dt") or ""))
+        except ValueError:
+            return None
+        if stamp.tzinfo is None:
+            return None
+        at = next((i for i in range(first, len(bars)) if bars[i]["dt"] == stamp), None)
+        if at is None:
+            return None
+        kind = str(prior.get("kind") or "swing")
+        price = _finite(prior.get("price"))
+        if price is None and kind == "open":
+            price = bars[at]["open"]
+        out = pack(at, "swing_" + side if kind == "swing" else kind, price)
+        out["held_from_previous"] = True
+        return out
+
     def anchor(side: str) -> dict[str, Any]:
-        move = GREEN if side == "long" else RED
+        move = RED if side == "long" else GREEN
+        day_kind = "lod" if side == "long" else "hod"
         last = next((r for r in reversed(runs) if r[0] == move), None)
         if last is None:
-            window, kind = range(first, len(bars)), ("hod" if side == "long" else "lod")
+            at, kind = extreme(side, range(first, len(bars))), day_kind
         else:
-            window, kind = range(last[1], len(bars)), "swing"
-        if side == "long":
-            at = max(window, key=lambda i: (bars[i]["high"], i))
-            price = bars[at]["high"]
-        else:
-            at = min(window, key=lambda i: (bars[i]["low"], -i))
-            price = bars[at]["low"]
-        stamp = bars[at]["dt"]
-        return {"dt": stamp.isoformat(timespec="seconds"), "time": stamp.strftime("%H:%M"),
-                "price": price, "kind": kind, "_dt": stamp}
+            at, kind = extreme(side, range(last[1], len(bars))), "swing_" + side
+        if old_enough(at):
+            return pack(at, kind)
+        held = previous(side)
+        if held is not None:
+            return held
+        at = extreme(side, range(first, len(bars)))
+        if old_enough(at):
+            return pack(at, day_kind)
+        return pack(first, "open", bars[first]["open"])
 
     return {"long": anchor("long"), "short": anchor("short")}
 
@@ -753,6 +806,7 @@ def build_movers_board(
     daily_closes: Mapping[str, Sequence[Any]] | None = None,
     held_by_side: Mapping[str, Iterable[str]] | None = None,
     fundamentals: Mapping[str, Mapping[str, Any]] | None = None,
+    previous_anchors: Mapping[str, Mapping[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """The whole board as plain dicts (safe to emit across threads).
 
@@ -765,6 +819,7 @@ def build_movers_board(
     `swing` holds the Dip boxes (see `swing_anchors`); `held_by_side` keeps a name
     listed earlier today on its box while it still qualifies. `fundamentals` is
     symbol -> {"market_cap_m", "avg_volume_20d"} for the quality floor.
+    `previous_anchors` is last tick's `swing_anchor`, kept while a new anchor is young.
     """
     baselines = baselines or {}
     er_names = {str(s or "").strip().upper() for s in earnings or ()}
@@ -836,7 +891,7 @@ def build_movers_board(
     rip_long, rip_short = (turn_long, turn_short) if state.rally else ([], [])
 
     # Dip boxes: each side against SPY from its own swing anchor.
-    anchors = swing_anchors(spy, today_date)
+    anchors = swing_anchors(spy, today_date, now=moment, previous_anchors=previous_anchors)
     spy_today = split_today(spy, today_date)[1]
     swing: dict[str, list[dict[str, Any]]] = {"long": [], "short": []}
     for side, anchor in anchors.items():

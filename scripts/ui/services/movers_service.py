@@ -444,6 +444,7 @@ class MoversService(QObject):
         self._daily_closes: dict[str, list[float]] = {}
         self._daily_tried: dict[str, datetime] = {}
         self._swing_held: dict[str, Any] = {}  # names each Dip box listed today
+        self._swing_anchors: dict[str, Any] = {}  # last final tick's Dip anchors + session
         self.bot_universe_size: int | None = None
         # Wall time of the last tick and of its options chase (None = chase off).
         self._perf_clock: Callable[[], float] = time.perf_counter
@@ -737,12 +738,14 @@ class MoversService(QObject):
             focus_by_side=focus, local_tz=local_tz, earnings=self._earnings,
             daily_closes=self._daily_closes,
             held_by_side=self._held_today(now),
+            previous_anchors=self._previous_anchors_today(now),
             fundamentals=self._fundamentals(series),
         )
         movers_scan.apply_group_tags(board, self._industry)
         session = now.astimezone(movers_scan.NY_TZ).date()
         if final:
             self._swing_held = movers_scan.update_held(self._swing_held, board, session=session)
+            self._swing_anchors = {"session": session, **(board.get("swing_anchor") or {})}
         memory = movers_scan.apply_persistence(
             board, self._persistence if final else dict(self._persistence), session=session
         )
@@ -968,6 +971,13 @@ class MoversService(QObject):
         if self._swing_held.get("session") != session:
             return {"long": [], "short": []}
         return {side: list(self._swing_held.get(side) or []) for side in ("long", "short")}
+
+    def _previous_anchors_today(self, now: datetime) -> dict[str, Any]:
+        """Last tick's Dip-box anchors if from today, else {} (a young anchor keeps them)."""
+        session = now.astimezone(movers_scan.NY_TZ).date()
+        if self._swing_anchors.get("session") != session:
+            return {}
+        return {side: self._swing_anchors.get(side) for side in ("long", "short")}
 
     def _liquidity(self, symbol: str, bot_bars) -> float:
         """Price x volume of the latest session we hold for the name; 0 when unknown."""

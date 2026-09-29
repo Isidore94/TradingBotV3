@@ -118,16 +118,22 @@ def symbol_text(row: dict[str, Any]) -> str:
 
 
 def _swing_title(side: str, anchor: dict[str, Any] | None) -> str:
-    """A Dip box title naming its own SPY swing (local clock), or that none exists yet."""
+    """A Dip box title naming its own SPY anchor (local clock), or that none exists yet."""
     name = "Dip-strong" if side == "long" else "Dip-weak"
     if not anchor:
         return f"{name} · no SPY bars today yet"
     when = _local_clock(anchor.get("dt")) or anchor.get("time") or ""
-    if side == "long":
-        point = "high of day so far" if anchor.get("kind") == "hod" else "high"
-        return f"{name} · beating SPY since the {when} {point}"
-    point = "low of day so far" if anchor.get("kind") == "lod" else "low"
-    return f"{name} · lagging SPY since the {when} {point}"
+    verb = "beating" if side == "long" else "lagging"
+    point = "low" if side == "long" else "high"
+    kind = anchor.get("kind")
+    if kind == "open":
+        since = "the open"
+    elif kind in ("lod", "hod"):
+        since = f"the {when} {point} of day so far"
+    else:
+        since = f"SPY's {point} {when}"
+    held = " (held)" if anchor.get("held_from_previous") else ""
+    return f"{name} · {verb} SPY since {since}{held}"
 
 
 def trend_flag(row: dict[str, Any]) -> bool | None:
@@ -1009,10 +1015,12 @@ class MoversBoard(QWidget):
         if swing_anchor is not None:
             self.strong.title_label.setText(_swing_title("long", swing_anchor.get("long")))
             self.weak.title_label.setText(_swing_title("short", swing_anchor.get("short")))
-            tip = ("Dip-strong measures from the top of SPY's last big M5 bounce; "
-                   "Dip-weak from the bottom of its last big M5 drop. Big = "
+            tip = ("Dip-strong measures from SPY's low since its last big M5 drop; "
+                   "Dip-weak from its high since its last big M5 bounce. Big = "
                    f"{movers_scan.SWING_HA_RUN}+ Heikin-Ashi candles in a row; with none yet, "
-                   "the high or low of day. A name listed earlier today stays while it "
+                   f"the low or high of day. A point under {movers_scan.SWING_MIN_AGE_MIN} "
+                   "minutes old keeps the last one (held), else the low/high of day, "
+                   "else the open. A name listed earlier today stays while it "
                    "still beats (or lags) SPY.")
         elif dip_live:
             self.strong.title_label.setText(f"{word}-strong ● · beating SPY {turn}")
@@ -1116,10 +1124,10 @@ class MoversBoard(QWidget):
         if "swing" in (self._board or {}):
             if name == "strong":
                 return "" if (self._board.get("swing_anchor") or {}).get("long") is None else (
-                    "No name is beating SPY since the high.")
+                    "No name is beating SPY since the low.")
             if name == "weak":
                 return "" if (self._board.get("swing_anchor") or {}).get("short") is None else (
-                    "No name is lagging SPY since the low.")
+                    "No name is lagging SPY since the high.")
         if name in ("strong", "weak") and not self._dip_live():
             return ""  # the box title says it is not lit
         if name == "strong":
