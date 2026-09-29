@@ -75,6 +75,10 @@ class JobSlot:
     #: A slot with no model-free half declares None and keeps being skipped:
     #: there is no summary without a model.
     model_free_kwargs: Mapping[str, Any] | None = None
+    #: Cheap check, called with ``session_date``, that says False when tonight's
+    #: run would load no model; the runner then skips the Ollama probe for it.
+    #: None, or a check that raises, means probe as usual.
+    model_wanted: Callable[..., bool] | None = None
     #: Which trader goal this slot serves (one of `SLOT_GOALS`); every ledger
     #: row the runner writes for the slot carries it as `goal`.
     goal: str = ""
@@ -607,7 +611,12 @@ def _run_slots_locked(
 
         # P1-3 3e: one Ollama probe per firing, before the first model slot.
         model_down = ""
-        if slot.uses_model and not model_free and probe is not None:
+        if (
+            slot.uses_model
+            and not model_free
+            and probe is not None
+            and _model_wanted(slot, run_session)
+        ):
             if probe_state is None:
                 probe_state = _run_probe(probe, session_date, ledger_path)
             if not probe_state[0]:
@@ -812,6 +821,17 @@ def _budget_refusal(
             + ", ".join(item.name for item in held)
         )
     return text + "; skipped"
+
+
+def _model_wanted(slot: JobSlot, session_date: str) -> bool:
+    """Whether ``slot`` would load a model tonight; unknown means yes."""
+    if slot.model_wanted is None:
+        return True
+    try:
+        return bool(slot.model_wanted(session_date=session_date))
+    except Exception:  # noqa: BLE001 - a failed check must not skip the probe
+        logging.debug("AI job %s: the model-wanted check failed.", slot.name, exc_info=True)
+        return True
 
 
 def _run_probe(
@@ -1788,6 +1808,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             max_attempts=2,
             uses_model=True,
             model_free_kwargs={"ask": False},
+            model_wanted=plan_review.model_wanted,
         ),
         # P1-4 4d (2026-09-25): three cited sentences per setup family over the
         # permutation report. Stage 3, directly BEFORE `setup_research`: two pins

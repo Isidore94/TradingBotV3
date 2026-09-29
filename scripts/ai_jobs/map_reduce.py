@@ -128,8 +128,9 @@ def chunk_chars(get_setting: Callable[..., Any] | None = None) -> int:
 
 
 #: P1-3 3c. Most slices one summary run reads; 0 or less means no cap.
+#: Default is no cap: the Saturday summary reads every slice.
 MAX_SLICES_SETTING_KEY = "ai_summary_max_slices"
-DEFAULT_MAX_SLICES = 24
+DEFAULT_MAX_SLICES = 0
 
 
 def max_slices(get_setting: Callable[..., Any] | None = None) -> int:

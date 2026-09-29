@@ -380,3 +380,21 @@ def test_the_plan_challenge_consumer_reads_the_decision():
 
     row = {item["kind"]: item for item in mentor_questions.consumer_report()}["plan_challenge"]
     assert row["imports"] and row["reads"], row
+
+
+def test_the_slot_needs_no_model_until_the_plan_has_a_line(world):
+    """An empty plan skips the Ollama probe: 18 cold model loads a night bought nothing."""
+    import trading_plan
+    from ai_jobs import plan_review, runner
+
+    slot = {slot.name: slot for slot in runner.default_slots()}["plan_review"]
+    assert slot.model_wanted is plan_review.model_wanted
+    assert plan_review.model_wanted(session_date=SESSION) is False, "no plan file"
+    trading_plan.plan_path().write_text(trading_plan.TEMPLATE, encoding="utf-8")
+    assert plan_review.model_wanted(session_date=SESSION) is False, "the empty template"
+    trading_plan.plan_path().write_text(
+        trading_plan.TEMPLATE.replace("## Rules\n", "## Rules\n- No trades before 06:45\n"),
+        encoding="utf-8",
+    )
+    assert plan_review.model_wanted(session_date=SESSION) is True
+    assert trading_plan.snapshots() == [], "the check never snapshots the plan"
