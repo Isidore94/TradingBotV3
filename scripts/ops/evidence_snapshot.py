@@ -69,6 +69,8 @@ KEEP_DAILY = 7
 KEEP_WEEKLY = 4
 KEEP_MONTHLY = 12
 FROZEN_DIR_NAME = "evidence_frozen"
+# Dated snapshots kept on the local SSD once the DAS holds a verified copy.
+KEEP_LOCAL_AFTER_DAS = 2
 
 # Files excluded by an explicit rule rather than a silent skip (trader,
 # 2026-08-22). The setup tracker rotates its `.bak` on every save, so once this
@@ -378,6 +380,37 @@ def prune(root: Path, **kwargs) -> list[str]:
     return removed
 
 
+def trim_local_after_das(staging_root: Path, das_backups_root: Path, *,
+                         keep_local: int = KEEP_LOCAL_AFTER_DAS) -> list[str]:
+    """Delete older local snapshots that the DAS already holds, verified.
+
+    Keeps the newest ``keep_local`` dated snapshots locally. An older one goes
+    only when the DAS copy has the same manifest and every stored file re-hashes
+    clean. Never touches the DAS or ``evidence_frozen/``.
+    """
+    staging_root, das_backups_root = Path(staging_root), Path(das_backups_root)
+    try:
+        if not staging_root.is_dir() or not das_backups_root.is_dir():
+            return []
+        dates = sorted((p.name for p in staging_root.iterdir() if p.is_dir() and _is_date(p.name)),
+                       reverse=True)
+    except OSError:
+        return []
+    removed = []
+    for stamp in dates[max(keep_local, 0):]:
+        local, remote = staging_root / stamp, das_backups_root / stamp
+        try:
+            same = ((local / "manifest.json").read_bytes()
+                    == (remote / "manifest.json").read_bytes())
+            if not same or not verify(remote)["ok"]:
+                continue
+            shutil.rmtree(local)
+            removed.append(stamp)
+        except (OSError, ValueError, KeyError):
+            logging.exception("kept local snapshot %s: DAS copy not confirmed", stamp)
+    return removed
+
+
 # ---------------------------------------------------------------------------
 # restore
 # ---------------------------------------------------------------------------
@@ -524,8 +557,18 @@ def main() -> int:
     parser.add_argument("--restore", type=Path, default=None, help="snapshot directory to restore")
     parser.add_argument("--into", type=Path, default=None, help="scratch directory to restore into")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--trim-local-after-das", type=Path, default=None,
+                        help="DAS backups dir; delete older local snapshots it holds verified")
+    parser.add_argument("--keep-local", type=int, default=KEEP_LOCAL_AFTER_DAS)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
+    if args.trim_local_after_das:
+        removed = trim_local_after_das(args.staging, args.trim_local_after_das,
+                                       keep_local=args.keep_local)
+        print(f"trimmed {len(removed)} local snapshot(s) held on the DAS: "
+              f"{', '.join(removed) or 'none'}")
+        return 0
 
     if args.verify:
         print(json.dumps(verify(args.verify), indent=1))

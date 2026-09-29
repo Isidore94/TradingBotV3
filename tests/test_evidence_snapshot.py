@@ -211,6 +211,68 @@ def test_pruning_never_touches_the_frozen_directory(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# local trim once the DAS holds a verified copy
+# ---------------------------------------------------------------------------
+def _staged_and_copied(tmp_path: Path, stamps: list[str], *, copy_to_das: bool = True):
+    import shutil
+
+    _, scope = _scope(tmp_path)
+    stage, das = tmp_path / "stage", tmp_path / "das" / "backups"
+    for stamp in stamps:
+        result = snap.build_snapshot(stage, scope=scope, snapshot_date=stamp)
+        if copy_to_das:
+            shutil.copytree(result.staging, das / stamp)
+    return stage, das
+
+
+def test_trim_keeps_the_newest_local_snapshots_and_drops_verified_older_ones(tmp_path):
+    stamps = ["2026-09-24", "2026-09-25", "2026-09-26", "2026-09-27"]
+    stage, das = _staged_and_copied(tmp_path, stamps)
+    (stage / snap.FROZEN_DIR_NAME).mkdir()
+    removed = snap.trim_local_after_das(stage, das, keep_local=2)
+    assert removed == ["2026-09-25", "2026-09-24"]
+    assert sorted(p.name for p in stage.iterdir()) == [
+        "2026-09-26", "2026-09-27", snap.FROZEN_DIR_NAME,
+    ]
+    assert all((das / s).is_dir() for s in stamps), "the DAS copy is never touched"
+
+
+def test_trim_keeps_a_local_snapshot_the_das_does_not_have(tmp_path):
+    stage, das = _staged_and_copied(tmp_path, ["2026-09-25", "2026-09-26"], copy_to_das=False)
+    assert snap.trim_local_after_das(stage, das, keep_local=1) == []
+    assert (stage / "2026-09-25").is_dir()
+
+
+def test_trim_keeps_a_local_snapshot_whose_das_copy_is_corrupt(tmp_path):
+    stage, das = _staged_and_copied(tmp_path, ["2026-09-25", "2026-09-26"])
+    (das / "2026-09-25" / "home-root" / "trader_annotations.jsonl").write_text("torn", encoding="utf-8")
+    assert snap.trim_local_after_das(stage, das, keep_local=1) == []
+    assert (stage / "2026-09-25").is_dir()
+
+
+def test_trim_keeps_a_local_snapshot_whose_das_manifest_differs(tmp_path):
+    """A DAS folder from an older run of the same date is not this snapshot."""
+    stage, das = _staged_and_copied(tmp_path, ["2026-09-25", "2026-09-26"])
+    manifest = das / "2026-09-25" / "manifest.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["finished_at"] = "2000-01-01T00:00:00+00:00"
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    assert snap.trim_local_after_das(stage, das, keep_local=1) == []
+
+
+def test_trim_does_nothing_when_the_das_is_unreachable(tmp_path):
+    stage, _ = _staged_and_copied(tmp_path, ["2026-09-25", "2026-09-26"], copy_to_das=False)
+    assert snap.trim_local_after_das(stage, tmp_path / "no-such-share", keep_local=1) == []
+
+
+def test_the_nightly_task_trims_local_only_after_a_successful_copy():
+    text = (SCRIPTS_DIR / "ops" / "snapshot_to_das.ps1").read_text(encoding="utf-8")
+    copy_at = text.index("robocopy $snapDir")
+    trim_at = text.index("--trim-local-after-das")
+    assert trim_at > text.index("if ($rc -ge 8)", copy_at), "trim runs only after the copy succeeded"
+
+
+# ---------------------------------------------------------------------------
 # verify and restore
 # ---------------------------------------------------------------------------
 def test_verify_confirms_a_good_snapshot_and_catches_a_corrupted_one(tmp_path):

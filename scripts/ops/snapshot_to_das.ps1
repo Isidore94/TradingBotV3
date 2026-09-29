@@ -101,5 +101,12 @@ if ($rc -ge 8) {
     exit 1
 }
 Write-Log "copied to $dst (rc=$rc)"
+
+# ---- trim local ----------------------------------------------------------
+# The DAS keeps every snapshot, so the SSD keeps only the newest few. Python
+# deletes an older local copy only after re-hashing its DAS copy clean.
+& $python $module --staging $Staging --trim-local-after-das (Join-Path $Dest 'backups') 2>&1 |
+    ForEach-Object { Write-Log $_ }
+if ($LASTEXITCODE -ne 0) { Write-Log "local trim failed (exit $LASTEXITCODE) - snapshots kept" }
 Write-Log '=== evidence snapshot complete ==='
 exit 0
