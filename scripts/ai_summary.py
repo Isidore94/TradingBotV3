@@ -810,9 +810,17 @@ def normalize_provider(provider: str) -> str:
     return value
 
 
+#: Set by `run_ai_jobs.ps1` for its child process only, once the remote GPU
+#: tunnel is up and warm; the saved setting stays the desk's own endpoint.
+LOCAL_ENDPOINT_OVERRIDE_ENV = "TRADINGBOTV3_AI_ENDPOINT_OVERRIDE"
+
+
 def local_endpoint_url() -> str:
     """Configured local inference base URL, or "" when the provider is off."""
-    return str(get_local_setting(LOCAL_ENDPOINT_SETTING_KEY, "") or "").strip().rstrip("/")
+    configured = str(get_local_setting(LOCAL_ENDPOINT_SETTING_KEY, "") or "").strip().rstrip("/")
+    override = os.environ.get(LOCAL_ENDPOINT_OVERRIDE_ENV, "").strip().rstrip("/")
+    # The override only redirects an enabled provider; it never switches one on.
+    return override if configured and override else configured
 
 
 def local_provider_enabled() -> bool:
