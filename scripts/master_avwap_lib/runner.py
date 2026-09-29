@@ -31,6 +31,7 @@ from setup_permutations import trendline_columns as permutation_trendline_column
 from tracker_store import record_write_failure as record_setup_tracker_write_failure
 from tracker_store import record_write_success as record_setup_tracker_write_success
 from swallowed import note_swallowed
+from project_paths import MASTER_AVWAP_FOCUS_PREVIEW_FILE
 # Packet WS-TH (2026-09-12). The theta picks the scan just printed, recorded as
 # shadow evidence in the scan's own output pass - never from `legacy.py`'s
 # tracker save (lead ruling (c)). A failed append loses the row, never the scan.
@@ -57,6 +58,24 @@ globals().update(
         if not (name.startswith("__") and name.endswith("__"))
     }
 )
+
+
+def write_focus_preview(priority_rows, ai_state, study_rows=None, *, path=None) -> bool:
+    """Write this daytime scan's focus-feed view to the preview file (display only).
+
+    The bounce bot and D1 watchlist keep reading the close-only focus feed.
+    """
+    try:
+        write_master_avwap_focus_feed(
+            path if path is not None else MASTER_AVWAP_FOCUS_PREVIEW_FILE,
+            priority_rows,
+            ai_state,
+            study_rows=study_rows,
+        )
+        return True
+    except Exception as exc:
+        logging.warning("Focus preview publish failed: %s", exc)
+        return False
 
 
 def _scan_daily_days_needed(curr_iso, prev_iso, today_run) -> int:
@@ -2912,6 +2931,8 @@ def _run_master_impl(
     run_result["favorite_zone_watchlists_updated"] = bool(favorite_watchlist_result.get("updated"))
     run_result["favorite_zone_watchlists_allowed"] = bool(favorite_watchlist_result.get("allowed"))
     run_result["favorite_zone_watchlists_skip_reason"] = favorite_watchlist_result.get("skip_reason", "")
+    if not favorite_watchlist_result.get("allowed"):
+        run_result["focus_preview_updated"] = write_focus_preview(priority_rows, ai_state, study_rows)
     updated_d1_watchlist = favorite_watchlist_result.get("d1_watchlist")
     if isinstance(updated_d1_watchlist, dict):
         run_result["d1_watchlist_symbol_count"] = len(updated_d1_watchlist.get("symbols", {}))

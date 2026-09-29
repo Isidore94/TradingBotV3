@@ -774,6 +774,8 @@ MASTER_POSITIONS_FILE = RUNTIME_DATA_DIR / "master_positions.json"
 PREVIOUS_GAP_UPS_FILE = RUNTIME_DATA_DIR / "previous_gap_ups.csv"
 ANCHOR_AVWAP_SIGNALS_FILE = RUNTIME_DATA_DIR / "master_anchor_avwap_signals.csv"
 MASTER_AVWAP_FOCUS_FILE = RUNTIME_DATA_DIR / "master_avwap_focus.json"
+# Focus-feed view of each daytime scan; display only, the close scan owns the real feed.
+MASTER_AVWAP_FOCUS_PREVIEW_FILE = RUNTIME_DATA_DIR / "master_avwap_focus_preview.json"
 MASTER_AVWAP_D1_WATCHLIST_FILE = RUNTIME_DATA_DIR / "master_avwap_d1_watchlist.json"
 MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE = RUNTIME_DATA_DIR / "master_avwap_d1_upgrade_alerts.json"
 # WS-10A (2026-09-12): the scan's own record of its three clocks - when it ran,
