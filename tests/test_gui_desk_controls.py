@@ -124,7 +124,7 @@ def test_compact_toolbar_fits_and_preserves_filters_and_split(
     panel.sound_input.setChecked(False)
     panel.hide_sector_input.setChecked(False)
     panel.show_filter_input.setCurrentIndex(
-        panel.show_filter_input.findData(alert_show_filter.BEST_NOW)
+        panel.show_filter_input.findData(alert_show_filter.ALL)
     )
     panel.first30_input.setChecked(False)
     panel.longs_off_input.setChecked(True)
