@@ -20,7 +20,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 - **Desk:** next launch uses main; live 4K/resource and first-usable checks are in GATES.
 - **Night window:** the night AI starts 22:00 PT. Its model runs on the RTX 5080 host
   (`ai_remote_gpu_ssh_alias` = `claude-host`, ssh tunnel on 11435); falls back to local Ollama
-  (also mid-run); a host the night woke is powered off after 05:30. No builders, merges or test runs
+  (also mid-run). One pass + one recheck, then unload and shut down; last firing 05:30. No builders, merges or test runs
   22:00-02:00 PT.
 - **Owed:** rolling-RRS leftovers still on % (industry board, autopilot open-scan RS,
   setup_group_context, D1 group strength; bounce CSV lacks `rrs_engine`, ask first); TLT/USO/HYG daily bars (scan-side, ask first); halted-name refetch; movers
