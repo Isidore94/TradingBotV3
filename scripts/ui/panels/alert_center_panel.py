@@ -7795,7 +7795,7 @@ class AlertCenterPanel(
         side = "short" if str(side or "").lower().startswith("short") else "long"
         board = self.movers_board.board()
         row = None
-        for mode in ("pop", "dip", "rip", "mine"):
+        for mode in ("pop", "dip", "rip"):
             for candidate in ((board.get(mode) or {}).get(side)) or []:
                 if str(candidate.get("symbol") or "").upper() == symbol:
                     row = candidate

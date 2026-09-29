@@ -4,12 +4,10 @@ Sits at the top of the Alert Center's lower-right column (trader, 2026-09-23).
 Two modes. Pop stacks three boxes (trader, 2026-09-24; always all three,
 2026-09-28): Movers on top (longs and shorts together, half the height), then
 Dip-strong and Dip-weak (a quarter each) for the live SPY turn: Dip-* in a
-pullback, Bounce-* in a bounce, Rip-* in a rally; unlit, they sit empty. My
-names is one table with a Long/Short toggle. A SPY state banner tops both.
-Sym cells carry the side colour in the mixed Pop table (long green, short red);
-names new to a list get a stronger tint. A row whose D1 trend is unknown is
-tagged "D1?"; a My-names row on the wrong side of its D1 SMAs is tagged "D1✗"
-(the ranked lists drop those). Header clicks sort (third click = board order); the trader can hide a
+pullback, Bounce-* in a bounce, Rip-* in a rally; unlit, they sit empty. A SPY
+state banner tops them. Sym cells carry the side colour in the mixed Pop table
+(long green, short red); names new to a list get a stronger tint. A row whose D1
+trend is unknown is tagged "D1?" (the ranked lists drop a known miss). Header clicks sort (third click = board order); the trader can hide a
 row for the day (right-click or Delete) and bring hidden rows back. The "Review" menu holds the Focus pick and
 Faded review doors; "Deep read" shows the old Strength page (Focus strength,
 entry board, RRS snapshot, M5 Strength Board) underneath.
@@ -71,16 +69,15 @@ LVL_COLUMN_PX = 70
 #: The Opt (options chase) cell: elided here, the full text is in its hover.
 OPT_COLUMN_PX = 96
 
-MODES = ("pop", "mine")
-MODE_LABELS = {"pop": "Pop + Dip", "mine": "My names"}
-MODE_SHORT = {"pop": "Pop", "mine": "Mine"}
+MODES = ("pop",)
+MODE_LABELS = {"pop": "Pop + Dip"}
+MODE_SHORT = {"pop": "Pop"}
 #: Below this width the chips and header buttons use short labels.
 NARROW_PX = 300
 #: Each box's Copy chip, and how long it shows "Copied N" after a click.
 COPY_LABEL = "Copy"
 COPY_FEEDBACK_MS = 1500
 MOVERS_MODE_SETTING = "movers_board_mode"
-MOVERS_SIDE_SETTING = "movers_board_side"
 MOVERS_DEEP_READ_SETTING = "movers_board_deep_read"
 #: {"day": "YYYY-MM-DD", "keys": ["SYM|side", ...]}: rows the trader hid today.
 MOVERS_HIDDEN_SETTING = "movers_board_hidden"
@@ -97,9 +94,6 @@ COLUMNS = {
     "dip": (("symbol", "Sym"), ("dip_score", "xSPY"), ("rvol", "RVOL"), ("lvl", "Lvl"),
             ("since_start_pct", "Since"), ("day_pct", "Day"), ("move15_pct", "15m"),
             ("group", "Grp")),
-    "mine": (("symbol", "Sym"), ("move15_pct", "15m"), ("rvol", "RVOL"), ("lvl", "Lvl"),
-             ("day_pct", "Day"), ("vs_spy15_pct", "vSPY"), ("since_start_pct", "Since"),
-             ("group", "Grp")),
 }
 _PCT_KEYS = {"move15_pct", "move30_pct", "day_pct", "vs_spy15_pct", "since_start_pct"}
 
@@ -167,7 +161,7 @@ def _tag_short_earnings(rows: list[dict[str, Any]]) -> None:
 
 
 def is_new(row: dict[str, Any]) -> bool:
-    """First tick on this list (lists only; My names carries no streak)."""
+    """First tick on this list (rows without a streak are never new)."""
     return "streak" in row and row.get("rank_change") is None
 
 
@@ -242,9 +236,6 @@ def rows_for(board: dict[str, Any] | None, mode: str, side: str) -> list[dict[st
                 for row in (((board.get(mode) or {}).get(s)) or [])]
         return sorted(both, key=lambda r: -abs(float(r.get("pop_score") or 0.0)))
     rows = list(((board.get(mode) or {}).get(side)) or [])
-    if mode == "mine":
-        dip_live = bool((board.get("state") or {}).get("pullback" if side == "long" else "bounce"))
-        rows = movers_scan.sort_mine(rows, "dip" if dip_live else "pop", side)
     return [dict(row, _side=side) for row in rows]
 
 
@@ -619,12 +610,9 @@ class MoversBoard(QWidget):
         self._mode = self._setting(MOVERS_MODE_SETTING, "pop")
         if self._mode not in MODES:
             self._mode = "pop"
-        self._side = self._setting(MOVERS_SIDE_SETTING, "long")
-        if self._side not in ("long", "short"):
-            self._side = "long"
+        # Every list carries its own side; this is only the fallback for an untagged row.
+        self._side = "long"
         self._auto_switched_episode = ""
-        # Session date + day state the side last followed (or the trader overrode).
-        self._day_followed = ""
         self._focus_service = None
         # Rows the trader hid today ("SYM|side").
         self._hidden_day, self._hidden = self._load_hidden()
@@ -682,11 +670,6 @@ class MoversBoard(QWidget):
             self.mode_group.addButton(button)
             self.mode_buttons[mode] = button
             modes_row.addWidget(button)
-        self.side_button = QToolButton()
-        self.side_button.setObjectName("MoversChip")
-        self.side_button.setCheckable(True)
-        self.side_button.clicked.connect(self._on_side_clicked)
-        modes_row.addWidget(self.side_button)
         self.add_focus_button = QToolButton()
         self.add_focus_button.setObjectName("MoversChip")
         self.add_focus_button.setText("+F")
@@ -712,7 +695,7 @@ class MoversBoard(QWidget):
         banner_row.addWidget(self.meta_label, 0, Qt.AlignmentFlag.AlignTop)
         banner_row.addWidget(self.banner, 1)
 
-        # Main table (Pop or My names), then the two dip tables under it.
+        # Main table (Pop), then the two dip tables under it.
         self.main = MoversSection(self, titled=True)
         self.strong = MoversSection(self, titled=True)
         self.weak = MoversSection(self, titled=True)
@@ -878,14 +861,11 @@ class MoversBoard(QWidget):
             text = labels[mode] + (" ●" if mode == "pop" and self._dip_live() else "")
             if button.text() != text:
                 button.setText(text)
-        long_side = self._side == "long"
-        side = ("L" if long_side else "S") if narrow else ("Long" if long_side else "Short")
         hidden = len(self._hidden_in_view())
         unhide = f"↺{hidden}" if narrow else f"Unhide {hidden}"
         if self.unhide_button.text() != unhide:
             self.unhide_button.setText(unhide)
         for button, text in (
-            (self.side_button, side),
             (self.review_button, "Rev ▾" if narrow else "Review ▾"),
             (self.deep_read_button, "Deep" if narrow else "Deep read"),
         ):
@@ -929,7 +909,6 @@ class MoversBoard(QWidget):
     def update_board(self, board: Any) -> None:
         """New board from the service. Coalesced: a burst is one render."""
         self._board = board if isinstance(board, dict) else {}
-        self._maybe_follow_day()
         self._maybe_auto_switch()
         self._render_coalescer.request()
 
@@ -944,10 +923,6 @@ class MoversBoard(QWidget):
     def mode(self) -> str:
         return self._mode
 
-    @property
-    def side(self) -> str:
-        return self._side
-
     def _state(self) -> dict[str, Any]:
         return dict(self._board.get("state") or {})
 
@@ -955,21 +930,6 @@ class MoversBoard(QWidget):
         """A SPY turn is live (pullback, bounce or rally): the strong/weak tables show."""
         state = self._state()
         return bool(state.get("pullback") or state.get("bounce") or state.get("rally"))
-
-    def _day_key(self) -> str:
-        state = self._state().get("state")
-        if state not in ("up_day", "down_day"):
-            return ""
-        return f"{str(self._board.get('as_of') or '')[:10]}|{state}"
-
-    def _maybe_follow_day(self) -> None:
-        """Long on an up day, Short on a down day, once per day state; a tap holds until it changes."""
-        key = self._day_key()
-        if not key or key == self._day_followed:
-            return
-        self._day_followed = key
-        self._side = "long" if key.endswith("up_day") else "short"
-        self._sync_controls()
 
     def _maybe_auto_switch(self) -> None:
         """Jump to Pop + Dip once per pullback/bounce episode (not a rally); never fight the trader."""
@@ -992,19 +952,6 @@ class MoversBoard(QWidget):
         self._sync_controls()
         self._render()
 
-    def set_side(self, side: str, *, user: bool = False) -> None:
-        if side not in ("long", "short"):
-            return
-        self._side = side
-        if user:
-            self._save(MOVERS_SIDE_SETTING, side)
-        self._sync_controls()
-        self._render()
-
-    def _on_side_clicked(self) -> None:
-        self._day_followed = self._day_key() or self._day_followed
-        self.set_side("short" if self._side == "long" else "long", user=True)
-
     def _on_deep_read(self, checked: bool) -> None:
         self._save(MOVERS_DEEP_READ_SETTING, bool(checked))
         self.deepReadToggled.emit(bool(checked))
@@ -1013,11 +960,6 @@ class MoversBoard(QWidget):
         button = self.mode_buttons[self._mode]
         if not button.isChecked():
             button.setChecked(True)
-        self.side_button.setToolTip("Showing longs" if self._side == "long" else "Showing shorts")
-        self.side_button.setChecked(self._side == "short")
-        # Pop shows both sides (and the dip tables are one per side), so the toggle is Mine's only.
-        if self.side_button.isHidden() != (self._mode == "pop"):
-            self.side_button.setVisible(self._mode != "pop")
         self._fit_columns()
 
     def _hidden_in_view(self) -> list[dict[str, Any]]:
@@ -1187,8 +1129,6 @@ class MoversBoard(QWidget):
             return "No name is beating SPY since the turn."
         if name == "weak":
             return "No name is lagging SPY since the turn."
-        if name == "mine":
-            return "No Focus names on this side."
         if self._hidden_in_view():
             return "Every popping name is hidden. Tap Unhide to see them."
         return "Nothing is popping."

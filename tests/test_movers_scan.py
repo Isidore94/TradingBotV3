@@ -64,13 +64,12 @@ def _flat_spy(n=20):
     return _series([400.0] * n, prior_close=400.0)
 
 
-def _board(symbols, *, spy=None, n=20, baselines=None, focus=None, now=None, earnings=None):
+def _board(symbols, *, spy=None, n=20, baselines=None, now=None, earnings=None):
     return ms.build_movers_board(
         symbols,
         _flat_spy(n) if spy is None else spy,
         now=now or _now(n),
         baselines=baselines,
-        focus_by_side=focus,
         local_tz=LA,
         earnings=earnings,
     )
@@ -162,10 +161,14 @@ def test_yesterdays_bars_are_not_today():
     """A series that stopped yesterday has no bars today (never yesterday's move)."""
     only_prior = _bars(PRIOR, _pop([100.33, 100.67, 101.0], n=78))
     spy_prior = _bars(PRIOR, [400.0] * 78)
-    board = _board({"OLD": only_prior}, spy=spy_prior, focus={"long": ["OLD"]})
+    board = _board({"OLD": only_prior}, spy=spy_prior)
     assert board["state"]["state"] == "unknown"
     assert board["pop"] == {"long": [], "short": []}
-    assert board["mine"]["long"][0]["note"] == "no bars today"
+    assert "mine" not in board  # My names is gone (trader 2026-09-29)
+    old = ms.normalize_bars(only_prior, now=_now(78), local_tz=LA)
+    row = ms.measure_symbol("OLD", old, baseline=None, spy_bars=[], state=ms.MarketState("unknown"),
+                            reference_end=None, today_date=TODAY)
+    assert row.note == "no bars today"
 
 
 # ------------------------------------------------------------------ market state
@@ -409,12 +412,14 @@ LONG_D1 = [50.0] * 200  # 100 and 200 SMA at 50: a long above both
 SHORT_D1 = [200.0] * 200  # 50 SMA at 200: a short below it
 
 
-def _swing_board(series, *, held=None, top_n=ms.MOVERS_TOP_N, daily=None, focus=None):
-    return ms.build_movers_board(
+def _swing_board(series, *, held=None, top_n=ms.MOVERS_TOP_N, daily=None):
+    board = ms.build_movers_board(
         series, _swing_spy(), now=_now(SWING_N),
         baselines={s: FLAT_BASELINE for s in series}, local_tz=LA,
-        top_n=top_n, held_by_side=held, daily_closes=daily, focus_by_side=focus,
+        top_n=top_n, held_by_side=held, daily_closes=daily,
     )
+    board["_inputs"] = (series, daily or {})  # for `_measured_row` (test only)
+    return board
 
 
 def _stock(closes_by_index):
@@ -487,12 +492,21 @@ LEAD_UP = {21: 102.0, 22: 103.0, 23: 104.0}
 LAG_DOWN = {k: 100.0 - 1.2 * (k - 8) for k in range(9, SWING_N)}  # last 82
 
 
-def _mine_row(board, side, symbol):
-    return next(r for r in board["mine"][side] if r["symbol"] == symbol)
+def _measured_row(board, side, symbol):
+    """The row's own measured levels and D1 flags, listed or not (was My names)."""
+    series, daily = board["_inputs"]
+    now = _now(SWING_N)
+    spy = ms.normalize_bars(_swing_spy(), now=now, local_tz=LA)
+    bars = ms.normalize_bars(series[symbol], now=now, local_tz=LA)
+    row = ms.measure_symbol(symbol, bars, baseline=FLAT_BASELINE, spy_bars=spy,
+                            state=ms.MarketState("unknown"), reference_end=None,
+                            today_date=TODAY)
+    long_ok, short_ok, _count = ms.trend_flags(row.last, daily.get(symbol))
+    return dict(row.to_dict(), trend_long=long_ok, trend_short=short_ok)
 
 
 def _box(series, side, **kwargs):
-    board = _swing_board(series, focus={side: list(series)}, **kwargs)
+    board = _swing_board(series, **kwargs)
     return board, [r["symbol"] for r in board["swing"][side]]
 
 
@@ -510,7 +524,7 @@ def test_dip_strong_drops_a_name_below_vwap():
     closes.update({k: 95.0 for k in range(11, 23)})
     closes[23] = 101.0
     board, names = _box({"UNDER": _stock(closes)}, "long", daily={"UNDER": LONG_D1})
-    row = _mine_row(board, "long", "UNDER")
+    row = _measured_row(board, "long", "UNDER")
     assert row["prev_high"] < row["last"] < row["session_vwap"]
     assert names == []
 
@@ -519,7 +533,7 @@ def test_dip_strong_drops_a_name_below_the_previous_days_high():
     closes = {k: 98.0 for k in range(16, 23)}
     closes[23] = 100.3
     board, names = _box({"INSIDE": _stock(closes)}, "long", daily={"INSIDE": LONG_D1})
-    row = _mine_row(board, "long", "INSIDE")
+    row = _measured_row(board, "long", "INSIDE")
     assert row["session_vwap"] < row["last"] < row["prev_high"]
     assert names == []
 
@@ -542,7 +556,7 @@ def test_dip_weak_drops_a_name_above_the_previous_days_low():
     closes = {k: 100.0 + k for k in range(0, 9)}
     closes.update({k: 108.0 - 0.5 * (k - 8) for k in range(9, SWING_N)})
     board, names = _box({"HIGHUP": _stock(closes)}, "short", daily={"HIGHUP": SHORT_D1})
-    row = _mine_row(board, "short", "HIGHUP")
+    row = _measured_row(board, "short", "HIGHUP")
     assert row["prev_low"] < row["last"] < row["session_vwap"]
     assert names == []
 
@@ -553,7 +567,7 @@ def test_dip_weak_drops_a_name_above_vwap():
     closes = {k: 85.0 for k in range(0, 8)}
     closes.update({k: 99.0 - 0.25 * (k - 8) for k in range(8, SWING_N)})
     board, names = _box({"OVER": _stock(closes)}, "short", daily={"OVER": SHORT_D1})
-    row = _mine_row(board, "short", "OVER")
+    row = _measured_row(board, "short", "OVER")
     assert row["session_vwap"] < row["last"] < row["prev_low"]
     assert names == []
 
@@ -566,7 +580,7 @@ def test_dip_weak_needs_only_the_50_sma_not_the_100():
     # The trader named only the 50 for Dip-weak (lead's call, trader can overrule).
     daily = {"LAG": [10.0] * 50 + [150.0] * 50}  # 50 SMA 150, 100 SMA 80 (< last 82)
     board, names = _box({"LAG": _stock(LAG_DOWN)}, "short", daily=daily)
-    assert _mine_row(board, "short", "LAG")["trend_short"] is False
+    assert _measured_row(board, "short", "LAG")["trend_short"] is False
     assert names == ["LAG"]
 
 
@@ -645,13 +659,11 @@ def test_ranked_lists_drop_riff_raff_and_keep_unknown_and_my_names():
              "THIN": {"market_cap_m": 5000.0, "avg_volume_20d": 2e5}}
     board = ms.build_movers_board(
         symbols, _flat_spy(n), now=_now(n), baselines={s: FLAT_BASELINE for s in symbols},
-        focus_by_side={"long": ["TINY"]}, local_tz=LA, fundamentals=facts,
+        local_tz=LA, fundamentals=facts,
     )
     assert [r["symbol"] for r in board["pop"]["long"]] == ["GOOD", "GRAY"]
     assert board["pop"]["long"][0]["quality_ok"] is True
     assert board["pop"]["long"][1]["quality_ok"] is None
-    assert [r["symbol"] for r in board["mine"]["long"]] == ["TINY"]
-    assert board["mine"]["long"][0]["quality_ok"] is False
 
 
 def test_no_spy_bars_leaves_the_swing_lists_empty():
@@ -691,20 +703,6 @@ def test_recent_rvol_none_when_an_offset_is_missing():
     assert ms.recent_rvol(today, {0: 100.0, 1: 100.0, 3: 100.0}) is None
     assert ms.recent_rvol(today, None) is None
     assert ms.rvol_weight(None) == 1.0
-
-
-# ------------------------------------------------------------------ my names
-def test_my_names_include_unmeasured_focus_and_sort_by_mode():
-    symbols = {
-        "AAA": _series(_pop([101.0, 102.0, 103.0])),
-        "BBB": _series(_pop([100.33, 100.67, 101.0])),
-    }
-    board = _board(symbols, focus={"long": ["bbb", "AAA", "GONE"], "short": []})
-    mine = board["mine"]["long"]
-    assert [row["symbol"] for row in mine] == ["BBB", "AAA", "GONE"]
-    assert mine[2]["note"] == "no bars" and mine[2]["pop_score"] is None
-    ordered = ms.sort_mine(mine, "pop", "long")
-    assert [row["symbol"] for row in ordered] == ["AAA", "BBB", "GONE"]
 
 
 # ------------------------------------------------------------------ freshness vs now
@@ -847,7 +845,7 @@ def test_ranked_lists_drop_the_wrong_side_of_the_d1_smas_and_keep_unknown():
              "SGOOD": [110.0] * 200, "SBAD": [90.0] * 200}
     board = ms.build_movers_board(
         symbols, _flat_spy(n), now=_now(n), baselines={s: FLAT_BASELINE for s in symbols},
-        focus_by_side={"long": ["BAD"]}, local_tz=LA, daily_closes=daily,
+        local_tz=LA, daily_closes=daily,
     )
     assert [r["symbol"] for r in board["pop"]["long"]] == ["GOOD", "GRAY"]
     assert [r["symbol"] for r in board["pop"]["short"]] == ["SGOOD"]
@@ -855,9 +853,6 @@ def test_ranked_lists_drop_the_wrong_side_of_the_d1_smas_and_keep_unknown():
     assert gray["trend_long"] is None and gray["daily_bars"] == 0
     good = board["pop"]["long"][0]
     assert good["trend_long"] is True and good["trend_short"] is False
-    # My names is the trader's list: tagged, never filtered.
-    mine = board["mine"]["long"]
-    assert [r["symbol"] for r in mine] == ["BAD"] and mine[0]["trend_long"] is False
     assert board["daily_measured"] == 4
 
 

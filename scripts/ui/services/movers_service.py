@@ -735,7 +735,7 @@ class MoversService(QObject):
         and the outcome log, so a tick that publishes twice counts once."""
         board = movers_scan.build_movers_board(
             series, spy, now=now, baselines=self._baselines,
-            focus_by_side=focus, local_tz=local_tz, earnings=self._earnings,
+            local_tz=local_tz, earnings=self._earnings,
             daily_closes=self._daily_closes,
             held_by_side=self._held_today(now),
             previous_anchors=self._previous_anchors_today(now),

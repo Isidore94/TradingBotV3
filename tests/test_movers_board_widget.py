@@ -41,7 +41,6 @@ def _board(pullback=False, start="2026-09-22T10:15:00-04:00"):
         "pop": {"long": [_row("AAA"), _row("BBB", rvol=None)], "short": [_row("ZZZ", move15_pct=-1.0)]},
         "dip": {"long": [_row("HOLD", dip_score=1.2, since_start_pct=0.3)] if pullback else [],
                 "short": [_row("SINK", dip_score=-1.5, since_start_pct=-0.9)] if pullback else []},
-        "mine": {"long": [_row("MYA", pop_score=0.2), _row("MYB", pop_score=2.0)], "short": []},
     }
 
 
@@ -63,28 +62,32 @@ def test_pop_mode_shows_both_sides_and_rvol_none_as_dash(app):
     widget = _widget(app)
     widget.update_board(_board())
     widget.flush_pending_refresh()
-    assert widget.mode == "pop" and widget.side == "long"
-    # Pop always lists longs and shorts together; its side toggle is hidden.
+    assert widget.mode == "pop"
+    # Pop always lists longs and shorts together.
     assert _symbols(widget) == ["AAA", "BBB", "ZZZ"]
-    assert widget.side_button.isHidden()
     rvol_col = [key for key, _h in widget.model._columns].index("rvol")
     assert widget.model.data(widget.model.index(1, rvol_col), Qt.ItemDataRole.DisplayRole) == "—"
     assert widget.model.data(widget.model.index(0, rvol_col), Qt.ItemDataRole.BackgroundRole) is not None
     assert widget.model.data(widget.model.index(1, rvol_col), Qt.ItemDataRole.BackgroundRole) is None
     assert "no pullback" in widget.banner.text()
-    widget.mode_buttons["mine"].click()
-    assert not widget.side_button.isHidden()
 
 
-def test_side_toggle_and_mine_sorted_by_score(app):
-    widget = _widget(app)
-    widget.update_board(_board())
-    widget.flush_pending_refresh()
-    widget.mode_buttons["mine"].click()
-    widget.side_button.click()
-    assert widget.side == "short" and _symbols(widget) == []
-    widget.side_button.click()
-    assert _symbols(widget) == ["MYB", "MYA"]
+def test_my_names_is_gone_and_a_saved_mine_mode_loads_as_pop(app, monkeypatch):
+    # Trader 2026-09-29: "lets remove the 'my names' section of Movers".
+    import project_paths
+    from ui.widgets import movers_board
+    from ui.widgets.movers_board import MoversBoard
+
+    assert "mine" not in movers_board.MODES and "mine" not in movers_board.COLUMNS
+    assert not hasattr(movers_board.movers_scan, "sort_mine")
+    monkeypatch.setattr(project_paths, "get_local_setting",
+                        lambda key, default=None: "mine" if key == "movers_board_mode" else default)
+    widget = MoversBoard(persist=True)
+    assert widget.mode == "pop"
+    assert "mine" not in widget.mode_buttons
+    assert not hasattr(widget, "side_button")
+    widget.set_mode("mine")
+    assert widget.mode == "pop"
 
 
 def _section_symbols(section):
@@ -93,10 +96,8 @@ def _section_symbols(section):
 
 def test_pullback_lights_both_dip_tables_under_pop_and_auto_switches_once(app):
     widget = _widget(app)
-    widget.set_mode("mine")
     widget.update_board(_board(pullback=False))
     widget.flush_pending_refresh()
-    assert widget.mode == "mine"
     widget.update_board(_board(pullback=True))
     widget.flush_pending_refresh()
     # Pop, Dip-strong and Dip-weak all show at once.
@@ -110,16 +111,6 @@ def test_pullback_lights_both_dip_tables_under_pop_and_auto_switches_once(app):
     assert _section_symbols(widget.weak) == ["SINK"]
     assert widget.strong.title_label.text().startswith("Dip-strong")
     assert widget.weak.title_label.text().startswith("Dip-weak")
-    # The trader goes to My names; the same episode does not pull them away again.
-    widget.mode_buttons["mine"].click()
-    assert widget.strong.isHidden() and widget.weak.isHidden()
-    widget.update_board(_board(pullback=True))
-    widget.flush_pending_refresh()
-    assert widget.mode == "mine"
-    # A new episode does.
-    widget.update_board(_board(pullback=True, start="2026-09-22T12:00:00-04:00"))
-    widget.flush_pending_refresh()
-    assert widget.mode == "pop"
 
 
 def test_dip_boxes_read_the_swing_lists_and_name_their_own_anchor(app):
@@ -221,7 +212,7 @@ def test_pop_symbol_cells_carry_the_side_colour_and_new_names_a_stronger_tint(ap
     assert background[0].rgb() == QColor(theme.color("long")).rgb()
     assert background[3].rgb() == QColor(theme.color("short")).rgb()  # SINK is a short
     # A single-side table tints only its new names.
-    widget.model.set_rows(widget.model.rows(), "mine", "long")
+    widget.model.set_rows(widget.model.rows(), "dip", "long")
     background = [widget.model.data(widget.model.index(r, col), Qt.ItemDataRole.BackgroundRole)
                   for r in range(3)]
     assert background[1] is not None
@@ -240,7 +231,7 @@ def test_d1_trend_tags_unknown_and_failing_rows(app):
     widget.flush_pending_refresh()
     assert _cell(widget, 0, "symbol") == "NVDA ER ▲2"
     assert _cell(widget, 1, "symbol") == "AMD new D1?"
-    # My names keeps a failing row and says so; a short row reads its own side.
+    # A failing row says so; a short row reads its own side.
     assert symbol_text({"symbol": "XXX", "_side": "long", "trend_long": False,
                         "trend_short": True, "last": 100.0}) == "XXX D1✗"
     assert symbol_text({"symbol": "YYY", "_side": "short", "trend_long": False,
@@ -251,7 +242,7 @@ def test_d1_trend_tags_unknown_and_failing_rows(app):
 
 def test_unknown_state_banner_and_dip_hint(app):
     widget = _widget(app)
-    widget.update_board({"state": {"state": "unknown"}, "pop": {}, "dip": {}, "mine": {}})
+    widget.update_board({"state": {"state": "unknown"}, "pop": {}, "dip": {}})
     widget.flush_pending_refresh()
     assert "unknown" in widget.banner.text()
     # Pop mode always shows three boxes; unlit Dip tables sit empty under their titles.
@@ -385,7 +376,7 @@ def test_sym_cell_carries_er_and_rank_change_and_lvl_tags(app):
 def test_column_priority_sym_score_rvol_lvl_first(app):
     from ui.widgets.movers_board import COLUMNS
 
-    for mode, main in (("pop", "move15_pct"), ("dip", "dip_score"), ("mine", "move15_pct")):
+    for mode, main in (("pop", "move15_pct"), ("dip", "dip_score")):
         keys = [k for k, _h in COLUMNS[mode]]
         assert keys[:4] == ["symbol", main, "rvol", "lvl"]
 
@@ -417,41 +408,6 @@ def test_model_updates_in_place_without_reset(app):
     widget.update_board(_board())
     widget.flush_pending_refresh()
     assert resets == []
-
-
-def _day_board(state, as_of="2026-09-22T10:40:00-04:00"):
-    board = _board()
-    board["state"] = dict(board["state"], state=state)
-    board["as_of"] = as_of
-    return board
-
-
-def test_side_follows_the_day_until_the_trader_taps_it(app):
-    widget = _widget(app)
-    widget.update_board(_day_board("down_day"))
-    widget.flush_pending_refresh()
-    assert widget.side == "short"
-    # The trader taps Long; the same down day does not pull them back.
-    widget.side_button.click()
-    widget.update_board(_day_board("down_day", as_of="2026-09-22T10:45:00-04:00"))
-    widget.flush_pending_refresh()
-    assert widget.side == "long"
-    # The day turns up: follow it again.
-    widget.update_board(_day_board("up_day", as_of="2026-09-22T11:30:00-04:00"))
-    widget.flush_pending_refresh()
-    assert widget.side == "long"
-    widget.update_board(_day_board("down_day", as_of="2026-09-22T13:00:00-04:00"))
-    widget.flush_pending_refresh()
-    assert widget.side == "short"
-
-
-def test_side_does_not_follow_flat_or_unknown_days(app):
-    widget = _widget(app)
-    widget.set_side("short", user=True)
-    for state in ("flat", "unknown"):
-        widget.update_board(_day_board(state))
-        widget.flush_pending_refresh()
-        assert widget.side == "short"
 
 
 def _view_symbols(widget):
@@ -594,12 +550,6 @@ def test_each_box_copy_button_puts_its_symbols_on_the_clipboard_in_view_order(ap
     widget.table.horizontalHeader().sectionClicked.emit(col)
     widget.main.copy_button.click()
     assert clipboard.text() == "BBB,AAA,ZZZ"
-    # My names has its own button.
-    widget.mode_buttons["mine"].click()
-    assert not widget.main.copy_button.isHidden()
-    widget.main.copy_button.click()
-    assert clipboard.text() == ",".join(_view_symbols(widget))
-    assert clipboard.text() == "MYB,MYA"
 
 
 def test_empty_box_copy_button_is_disabled_and_leaves_the_clipboard(app):
