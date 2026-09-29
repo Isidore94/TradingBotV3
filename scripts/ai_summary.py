@@ -25,6 +25,7 @@ import logging
 import os
 import re
 import threading
+import time
 from collections import deque
 from datetime import date, datetime
 from pathlib import Path
@@ -815,12 +816,65 @@ def normalize_provider(provider: str) -> str:
 LOCAL_ENDPOINT_OVERRIDE_ENV = "TRADINGBOTV3_AI_ENDPOINT_OVERRIDE"
 
 
+#: A flag file the wrapper names. It exists once the remote GPU has failed this
+#: night; this process creates it when it loses the remote mid-run.
+REMOTE_DEAD_FLAG_ENV = "TRADINGBOTV3_AI_REMOTE_DEAD_FLAG"
+#: How long a passing remote health check is trusted before it is asked again.
+REMOTE_HEALTH_TTL_SECONDS = 60.0
+_remote_state: dict[str, Any] = {"dead": False, "checked_at": None}
+
+
+def mark_remote_dead(reason: str) -> None:
+    """Stop using the remote GPU for the rest of this run (and tonight's firings)."""
+    if _remote_state["dead"]:
+        return
+    _remote_state["dead"] = True
+    logging.warning("AI: remote GPU lost (%s); using the local endpoint for the rest of the run", reason)
+    flag = os.environ.get(REMOTE_DEAD_FLAG_ENV, "").strip()
+    if flag:
+        try:
+            Path(flag).write_text(str(reason)[:500], encoding="utf-8")
+        except OSError:
+            logging.warning("AI: could not write the remote-dead flag %s", flag)
+
+
+def _remote_alive(override: str) -> bool:
+    if _remote_state["dead"]:
+        return False
+    flag = os.environ.get(REMOTE_DEAD_FLAG_ENV, "").strip()
+    if flag and os.path.exists(flag):
+        _remote_state["dead"] = True
+        return False
+    now = time.monotonic()
+    checked = _remote_state["checked_at"]
+    if checked is not None and now - checked < REMOTE_HEALTH_TTL_SECONDS:
+        return True
+    root = override[: -len("/v1")] if override.endswith("/v1") else override
+    try:
+        healthy = requests.get(f"{root}/api/version", timeout=5).status_code == 200
+    except Exception:  # noqa: BLE001 - any failure means the remote is gone
+        healthy = False
+    if healthy:
+        _remote_state["checked_at"] = now
+        return True
+    mark_remote_dead("health check failed")
+    return False
+
+
+def remote_endpoint_active(url: str) -> bool:
+    """True while ``url`` goes to the remote GPU override."""
+    override = os.environ.get(LOCAL_ENDPOINT_OVERRIDE_ENV, "").strip().rstrip("/")
+    return bool(override) and not _remote_state["dead"] and str(url).startswith(override)
+
+
 def local_endpoint_url() -> str:
     """Configured local inference base URL, or "" when the provider is off."""
     configured = str(get_local_setting(LOCAL_ENDPOINT_SETTING_KEY, "") or "").strip().rstrip("/")
     override = os.environ.get(LOCAL_ENDPOINT_OVERRIDE_ENV, "").strip().rstrip("/")
-    # The override only redirects an enabled provider; it never switches one on.
-    return override if configured and override else configured
+    # The override only redirects an enabled provider, and only while it answers.
+    if configured and override and _remote_alive(override):
+        return override
+    return configured
 
 
 def local_provider_enabled() -> bool:
@@ -4022,6 +4076,11 @@ def _request_local_summary(
                 timeout=max(10, min(LOCAL_REQUEST_TIMEOUT_CAP_SECONDS, int(timeout_seconds))),
             )
         except Exception as exc:  # unreachable endpoint is a clean error
+            if remote_endpoint_active(url):
+                # The remote GPU dropped mid-run: resend this request locally.
+                mark_remote_dead(f"{type(exc).__name__}: {exc}")
+                url = f"{local_endpoint_url()}{LOCAL_CHAT_COMPLETIONS_PATH}"
+                continue
             raise LocalEndpointUnreachable(
                 f"{LOCAL_UNREACHABLE_PREFIX} {url} {LOCAL_UNREACHABLE_MARKER}: {exc}"
             ) from exc

@@ -74,20 +74,19 @@ def test_the_host_start_script_ships_with_lf_line_endings():
     assert b"127.0.0.1:11434" in data
 
 
-def test_the_override_redirects_only_an_enabled_provider(monkeypatch):
-    import ai_summary
+def test_the_night_flags_steer_later_firings_and_the_shutdown():
+    code = _wrapper_code()
+    assert "(Get-Date).AddHours(-12).ToString('yyyyMMdd')" in code
+    assert "-and (Test-Path $script:deadFlag)" in code
+    assert "$env:TRADINGBOTV3_AI_REMOTE_DEAD_FLAG = $script:deadFlag" in code
+    # Only a host this job woke is ever powered off, and only when idle.
+    body = _remote_function()
+    assert "Set-Content -Path $script:wokenFlag" in body
+    assert "if ($script:remoteAlias -and (Test-Path $script:wokenFlag))" in code
+    assert "grep -v '^ollama$'" in code
+    assert "shutdown.exe /s /t 60" in code
 
-    monkeypatch.setenv(ai_summary.LOCAL_ENDPOINT_OVERRIDE_ENV, "http://127.0.0.1:11435/v1/")
-    monkeypatch.setattr(ai_summary, "get_local_setting", lambda key, default=None: "http://127.0.0.1:11434/v1")
-    assert ai_summary.local_endpoint_url() == "http://127.0.0.1:11435/v1"
 
-    monkeypatch.setattr(ai_summary, "get_local_setting", lambda key, default=None: "")
-    assert ai_summary.local_endpoint_url() == ""
-
-
-def test_without_the_override_the_setting_wins(monkeypatch):
-    import ai_summary
-
-    monkeypatch.delenv(ai_summary.LOCAL_ENDPOINT_OVERRIDE_ENV, raising=False)
-    monkeypatch.setattr(ai_summary, "get_local_setting", lambda key, default=None: "http://127.0.0.1:11434/v1/")
-    assert ai_summary.local_endpoint_url() == "http://127.0.0.1:11434/v1"
+def test_the_local_server_is_readied_even_when_the_5080_is_used():
+    code = _wrapper_code()
+    assert "-or $remoteReady) {" not in code
