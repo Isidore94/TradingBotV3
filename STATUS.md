@@ -2,7 +2,7 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-09-28 18:50 PT (night AI probe skip + uncapped summary merged, trader's word)
+**Updated:** 2026-09-28 20:45 PT (night AI model on the RTX 5080 host, trader's word)
 
 - **Live on `main`:** round 1, round 2 Phase A (`81272d42`), Phase B + S (`2d59aace`),
   S10a + S7 (`3802c0d7`), p9 phase 1 regime frame (`849390a2`), p9 phase 2 long
@@ -18,7 +18,9 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   Source and frozen selftests 105/105. Long combined Qt test runs still hit
   worker-lifetime crashes.
 - **Desk:** next launch uses main; live 4K/resource and first-usable checks are in GATES.
-- **Night window:** the night AI starts 22:00 PT. No builders, merges or test runs
+- **Night window:** the night AI starts 22:00 PT. Its model runs on the RTX 5080 host
+  (`ai_remote_gpu_ssh_alias` = `claude-host`, ssh tunnel on 11435); falls back to local Ollama
+  (also mid-run); a host the night woke is powered off after 05:30. No builders, merges or test runs
   22:00-02:00 PT.
 - **Owed:** rolling-RRS leftovers still on % (industry board, autopilot open-scan RS,
   setup_group_context, D1 group strength; bounce CSV lacks `rrs_engine`, ask first); TLT/USO/HYG daily bars (scan-side, ask first); halted-name refetch; movers

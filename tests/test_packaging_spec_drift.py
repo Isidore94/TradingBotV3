@@ -72,6 +72,10 @@ ASSETS_NOT_IN_THE_BUNDLE = {
         "invokes the repo venv's python.exe. The frozen exe never reads it - it is not "
         "reachable from launch_gui.py at all."
     ),
+    "scripts/remote_gpu/ollama_up.sh": (
+        "run_ai_jobs.ps1 pipes it to the GPU host over ssh from the repo checkout; "
+        "the frozen exe never reads it."
+    ),
 }
 #: The A4 suite's name for the same allowlist.
 UNBUNDLED_ASSETS = ASSETS_NOT_IN_THE_BUNDLE

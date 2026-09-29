@@ -2,6 +2,10 @@
 
 - 2026-09-28 Desk: removed the "Best right now" box from the M5 column and its "Show: Best right now" filter choice (trader: it listed weak names); a saved Best choice falls back to Grade B and up. Gates #231/#232 retired.
 
+- 2026-09-28 Night AI: if the 5080 host drops mid-run, the job resends that request to the local model and stays local for the rest of the night (health check cached 60 s; `gpu_host_dead-<night>.flag`). A host that does not wake in 5 minutes is skipped all night. A host the night job woke is powered off after the first firing that ends past `ai_remote_gpu_off_after` (05:30), once logs are copied, unless another tmux session runs there; a host that was already up is left on.
+
+- 2026-09-28 Night AI: `run_ai_jobs.ps1` can run the model on the RTX 5080 host. With `ai_remote_gpu_ssh_alias` set (e.g. `claude-host`) it wakes the host, starts Ollama there (`scripts/remote_gpu/ollama_up.sh`), opens a self-healing loopback ssh tunnel (`ai_remote_gpu_tunnel_port`, default 11435), checks the model tag and warms it, then hands the child `TRADINGBOTV3_AI_ENDPOINT_OVERRIDE`; the saved endpoint is untouched. Any failure falls back to local Ollama. After the run the host log is copied to `logs\` and the AI store `gpu_host\`. Measured: 19k-token prompt at ~4,000 tok/s, ~62 tok/s out.
+
 - 2026-09-28 Night AI: a model slot can say it will load no model tonight (plan_review with an empty plan), and then the 30-minute firings skip the Ollama probe; it had cold-loaded the 12B model 18 times a night for nothing. The Saturday summary now reads every slice (default cap 0, was 24 of 60); its window reserve is 260 min.
 
 - 2026-09-28 Swing list: every daytime D1 scan (07:30, 10:00, 12:45) now also writes the after-close style list (High Conviction, expected R) to `master_avwap_focus_preview.json`, and the swing list and Away report show it ("daytime preview" / `focus_preview`) instead of the plain report; the close scan's focus feed still wins after the close. Bounce bot, D1 watchlist and near-HOD adds still read the close-only feed.

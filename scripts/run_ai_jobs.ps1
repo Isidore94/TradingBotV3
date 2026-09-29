@@ -89,14 +89,114 @@ function Test-LocalEndpoint {
     } catch { return $false } finally { $client.Close() }
 }
 
+# Remote GPU host (2026-09-28)
+# ----------------------------
+# With `ai_remote_gpu_ssh_alias` set (e.g. "claude-host"), the model runs on the
+# RTX 5080 box and this PC only tunnels to it. Every job still runs here and
+# writes to the same AI store. The saved endpoint setting is NOT changed: once
+# the tunnel is up, the model tag is present and a warm-up call answered, the
+# child gets TRADINGBOTV3_AI_ENDPOINT_OVERRIDE pointing at the tunnel. Any
+# failure leaves the override unset and falls through to the local server.
+#
+# Night flags (one night = the evening's date, so 22:00-05:30 share one key):
+#   gpu_host_dead-<night>.flag   the host failed tonight (preflight, or the job
+#                                lost it mid-run); later firings go local at once.
+#   gpu_host_woken-<night>.flag  this job woke the host, so this job may power it
+#                                off after `ai_remote_gpu_off_after` (05:30).
+# A host that was already up is left on: someone else may be using it.
+$script:remoteAlias = ''
+$script:watchdog = $null
+$script:aiStoreDir = ''
+$nightKey = (Get-Date).AddHours(-12).ToString('yyyyMMdd')
+$stateDir = Join-Path $env:LOCALAPPDATA 'TradingBotV3'
+$script:deadFlag = Join-Path $stateDir "gpu_host_dead-$nightKey.flag"
+$script:wokenFlag = Join-Path $stateDir "gpu_host_woken-$nightKey.flag"
+
+function Invoke-RemoteGpuPreflight {
+    param([string]$Alias, [int]$TunnelPort, [string]$Model)
+    $sshHost = ''
+    foreach ($line in (& ssh -G $Alias)) { if ($line -like 'hostname *') { $sshHost = $line.Substring(9).Trim() } }
+    if (-not $sshHost) { Write-Log "remote GPU: cannot resolve ssh alias '$Alias'; using the local server"; return $false }
+    if (-not (Test-LocalEndpoint -EndpointHost $sshHost -Port 22)) {
+        $wake = Join-Path $HOME 'bin\host-on.ps1'
+        if (-not (Test-Path $wake)) { Write-Log "remote GPU: $sshHost is off and $wake is missing; using the local server"; return $false }
+        Write-Log "remote GPU: $sshHost is off; sending Wake-on-LAN"
+        # host-on.ps1 itself polls port 22 for up to 5 minutes.
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $wake | Out-Null
+        if (-not (Test-LocalEndpoint -EndpointHost $sshHost -Port 22)) { Write-Log "remote GPU: $sshHost did not wake within 5 minutes; using the local server"; return $false }
+        Set-Content -Path $script:wokenFlag -Value (Get-Date -Format s) -Encoding ascii
+    } else {
+        Write-Log "remote GPU: $sshHost is already up"
+    }
+    # The host-side start script is sent on stdin each run, so the host needs no
+    # copy of it and cannot drift from the repo.
+    $up = (Get-Content (Join-Path $PSScriptRoot 'remote_gpu\ollama_up.sh') -Raw) -replace "`r", ''
+    # PowerShell 5.1 may prefix a BOM when piping to a native exe; strip it host-side.
+    $result = $up | & ssh -o BatchMode=yes -o ConnectTimeout=10 $Alias "sed '1s/^\xEF\xBB\xBF//' | bash -s"
+    Write-Log "remote GPU: $($result -join ' ')"
+    # Watchdog: a hidden loop that reopens the tunnel whenever ssh exits, so a
+    # network blip costs seconds instead of the rest of the night.
+    if (-not (Test-LocalEndpoint -EndpointHost '127.0.0.1' -Port $TunnelPort)) {
+        $loop = "while (`$true) { ssh -N -L 127.0.0.1:${TunnelPort}:127.0.0.1:11434 -o ExitOnForwardFailure=yes -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 $Alias; Start-Sleep -Seconds 2 }"
+        $script:watchdog = Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile', '-Command', $loop)
+        $deadline = (Get-Date).AddSeconds(30)
+        while ((Get-Date) -lt $deadline -and -not (Test-LocalEndpoint -EndpointHost '127.0.0.1' -Port $TunnelPort)) { Start-Sleep -Seconds 1 }
+    }
+    if (-not (Test-LocalEndpoint -EndpointHost '127.0.0.1' -Port $TunnelPort)) { Write-Log "remote GPU: tunnel to $Alias did not open on $TunnelPort; using the local server"; return $false }
+    $base = "http://127.0.0.1:$TunnelPort"
+    try {
+        $tags = (Invoke-RestMethod "$base/api/tags" -TimeoutSec 15).models | ForEach-Object { $_.name }
+        if ($tags -notcontains $Model -and $tags -notcontains "${Model}:latest") { Write-Log "remote GPU: model '$Model' is not on $Alias; using the local server"; return $false }
+        # Load the model now, so the jobs' own short probe never pays a cold load.
+        $warm = @{ model = $Model; prompt = 'ok'; stream = $false; keep_alive = '24h'; options = @{ num_predict = 1 } } | ConvertTo-Json
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        Invoke-RestMethod "$base/api/generate" -Method Post -Body $warm -ContentType 'application/json' -TimeoutSec 300 | Out-Null
+        Write-Log ("remote GPU: '$Model' warm in {0:n0}s" -f $sw.Elapsed.TotalSeconds)
+    } catch { Write-Log "remote GPU: warm-up failed ($($_.Exception.Message)); using the local server"; return $false }
+    return $true
+}
+
+function Stop-RemoteGpuTunnel {
+    if (-not $script:watchdog) { return }
+    Get-CimInstance Win32_Process -Filter "ParentProcessId=$($script:watchdog.Id)" -ErrorAction SilentlyContinue |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Stop-Process -Id $script:watchdog.Id -Force -ErrorAction SilentlyContinue
+}
+
 try {
     $settingsPath = Join-Path $env:LOCALAPPDATA 'TradingBotV3\local_settings.json'
     $endpoint = ''
+    $remoteReady = $false
     if (Test-Path $settingsPath) {
-        $endpoint = (Get-Content $settingsPath -Raw | ConvertFrom-Json).ai_local_endpoint_url
+        $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
+        $endpoint = $settings.ai_local_endpoint_url
+        $script:remoteAlias = [string]$settings.ai_remote_gpu_ssh_alias
+        $script:aiStoreDir = [string]$settings.ai_store_dir
     }
     if ([string]::IsNullOrWhiteSpace($endpoint)) {
         Write-Log "local inference: no endpoint configured; narration is off by design"
+    } elseif (-not [string]::IsNullOrWhiteSpace($script:remoteAlias) -and (Test-Path $script:deadFlag)) {
+        Write-Log "remote GPU: the host failed earlier tonight; using the local server"
+    } elseif (-not [string]::IsNullOrWhiteSpace($script:remoteAlias)) {
+        $tunnelPort = if ($settings.ai_remote_gpu_tunnel_port) { [int]$settings.ai_remote_gpu_tunnel_port } else { 11435 }
+        $model = if ($settings.ai_local_model_medium) { [string]$settings.ai_local_model_medium } else { 'gemma3:12b' }
+        # Write-Log also writes to the pipeline, so only the LAST value is the verdict.
+        $preflight = @(Invoke-RemoteGpuPreflight -Alias $script:remoteAlias -TunnelPort $tunnelPort -Model $model)
+        $remoteReady = ($preflight.Count -gt 0) -and ($preflight[-1] -is [bool]) -and $preflight[-1]
+        if ($remoteReady) {
+            $env:TRADINGBOTV3_AI_ENDPOINT_OVERRIDE = "http://127.0.0.1:$tunnelPort/v1"
+            # The job writes this flag if it loses the host mid-run and goes local.
+            $env:TRADINGBOTV3_AI_REMOTE_DEAD_FLAG = $script:deadFlag
+            Write-Log "remote GPU: this run uses the 5080 ($env:TRADINGBOTV3_AI_ENDPOINT_OVERRIDE)"
+        } else {
+            Stop-RemoteGpuTunnel
+            Set-Content -Path $script:deadFlag -Value (Get-Date -Format s) -Encoding ascii
+        }
+    }
+    # The local server is always made ready: it is the fallback when the host
+    # drops mid-run, and it loads no model until a request reaches it.
+    if ([string]::IsNullOrWhiteSpace($endpoint)) {
+        # Nothing to start locally.
     } else {
         $uri = [System.Uri]$endpoint
         # Only a LOCAL server is ours to start. A remote endpoint belongs to
@@ -165,6 +265,49 @@ foreach ($stream in @(@{ Path = $stdout; Tag = 'out' }, @{ Path = $stderr; Tag =
         }
         Remove-Item $stream.Path -Force -ErrorAction SilentlyContinue
     }
+}
+
+# Bring the host's model/GPU log back beside this run's log and into the AI
+# store on the mini PC. Best effort: a mirror problem is never a job outcome.
+if ($script:remoteAlias) {
+    try {
+        $hostLog = Join-Path $logDir ("gpu_host-" + (Get-Date -Format 'yyyyMMdd') + ".log")
+        $hostLines = @(& ssh -o BatchMode=yes -o ConnectTimeout=10 $script:remoteAlias 'tail -n 500 ~/ollama-tradingbot.log; /usr/lib/wsl/lib/nvidia-smi --query-gpu=name,memory.used,memory.total,temperature.gpu --format=csv')
+        # An unreachable host must not overwrite the last good copy with nothing.
+        if ($hostLines.Count -eq 0) { throw "host unreachable, kept the last copy" }
+        $hostLines | Set-Content -Path $hostLog -Encoding utf8
+        if ($script:aiStoreDir -and (Test-Path $script:aiStoreDir)) {
+            $mirror = Join-Path $script:aiStoreDir 'gpu_host'
+            New-Item -ItemType Directory -Path $mirror -Force | Out-Null
+            Copy-Item -Path $hostLog -Destination $mirror -Force
+            Write-Log "remote GPU: host log mirrored to $mirror"
+        } else {
+            Write-Log "remote GPU: AI store not reachable; host log kept at $hostLog only"
+        }
+    } catch { Write-Log "remote GPU: host log mirror failed (ignored): $($_.Exception.Message)" }
+}
+Stop-RemoteGpuTunnel
+
+# Power the host off after the night, only if this job woke it and nothing else
+# is running there. The last firing starts 05:30; a late-running earlier firing
+# may be the one that gets here first, so any firing ending in the morning counts.
+if ($script:remoteAlias -and (Test-Path $script:wokenFlag)) {
+    try {
+        $offAfter = if ($settings.ai_remote_gpu_off_after) { [string]$settings.ai_remote_gpu_off_after } else { '05:30' }
+        $now = Get-Date
+        $cutoff = [datetime]::ParseExact($offAfter, 'HH:mm', $null)
+        $morning = $now.TimeOfDay -ge $cutoff.TimeOfDay -and $now.Hour -lt 12
+        if ($morning) {
+            $busy = @(& ssh -o BatchMode=yes -o ConnectTimeout=10 $script:remoteAlias "tmux ls -F '#S' 2>/dev/null | grep -v '^ollama$'")
+            if ($busy.Count -gt 0) {
+                Write-Log "remote GPU: host left ON - other work is running there: $($busy -join ', ')"
+            } else {
+                & ssh -o BatchMode=yes -o ConnectTimeout=10 $script:remoteAlias "/mnt/c/Windows/System32/shutdown.exe /s /t 60 /c 'TradingBotV3 night AI done'" | Out-Null
+                Write-Log "remote GPU: night done, logs copied; host shutdown requested (60s)"
+            }
+            Remove-Item $script:wokenFlag -Force -ErrorAction SilentlyContinue
+        }
+    } catch { Write-Log "remote GPU: shutdown step failed (ignored): $($_.Exception.Message)" }
 }
 
 $code = $process.ExitCode
