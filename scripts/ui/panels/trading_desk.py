@@ -33,7 +33,6 @@ from ui.services.watchlist_tab_service import WatchlistTabService
 from ui.timer_utils import SignalCoalescer
 from ui.widgets.group_tape_strip import GroupTapeStrip
 from ui.widgets.setups_toggle_button import SetupsToggleButton
-from ui.widgets.best_now_strip import BestNowStrip
 from ui.widgets.live_results_strip import LiveResultsStrip
 from ui.widgets.working_lately_strip import WorkingLatelyStrip
 from swallowed import note_swallowed
@@ -235,16 +234,7 @@ class TradingDeskPanel(QWidget):
 
         self.m5_alert_bar.set_risk_per_trade(entry_plan.risk_per_trade_dollars())
 
-        # P1-5 5b: "Best right now" - one ranked list under "Working now".
-        # Display only; it reads the strip's results, the Movers board and the
-        # swing context the desk already holds, and ranks them off the Qt thread.
-        self.best_now_strip = BestNowStrip()
-        self.m5_alert_bar.layout().insertWidget(2, self.best_now_strip)
-        self.best_now_strip.set_results_provider(self.live_results_strip.results)
-        self.best_now_strip.symbolActivated.connect(self.alert_center.chart_symbol)
-        self.alert_center.m5AlertsDayRolled.connect(self.best_now_strip.clear_day)
         # P9: the Alert Center's Show filter hides rows on the bar (display only).
-        self.best_now_strip.entriesChanged.connect(self.alert_center.set_best_now_entries)
         self.alert_center.showFilterChanged.connect(self.m5_alert_bar.refresh_show_filter)
         self.m5_alert_bar.set_show_filter(self.alert_center.show_filter_verdict)
         self._push_swing_context()
@@ -635,13 +625,6 @@ class TradingDeskPanel(QWidget):
             self.live_results_strip.set_setup_grades(grades)
             self.master_panel.set_setup_grades(grades)
 
-    def attach_movers_service(self, service) -> None:
-        """Feed the "Best right now" strip the Movers board (P1-5 5b). Hosting only."""
-        service.moversChanged.connect(self.best_now_strip.set_movers_board)
-        board = service.board()
-        if board:
-            self.best_now_strip.set_movers_board(board)
-
     def set_risk_per_trade(self, value) -> None:
         """P1-6 6c: the Settings page saved `risk_per_trade_dollars` (None = off)."""
         self.m5_alert_bar.set_risk_per_trade(value)
@@ -660,9 +643,6 @@ class TradingDeskPanel(QWidget):
         except Exception:  # noqa: BLE001 - a display hint never costs the bar
             mapping = {}
         self.m5_alert_bar.set_swing_context(mapping)
-        strip = getattr(self, "best_now_strip", None)
-        if strip is not None:
-            strip.set_swing_context(mapping)
 
     def _live_results_bars(self, symbol: str) -> list:
         """One symbol's CACHED M5 bars for the "Working now" strip, or [].

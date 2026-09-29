@@ -1,10 +1,10 @@
 """The Alert Center's "Show" filter for M5 rows (P9, display only).
 
-Three choices: All, Grade B and up, Best right now. It hides M5 rows from what
+Two choices: All, Grade B and up. It hides M5 rows from what
 the trader SEES; every alert is still recorded, still reaches the review-queue
 door, the Working-now strip and the evidence files. Rows on names the trader
 typed, Focus names, armed watches, price alerts and regime-pause rows always
-show. Unknown (grades not loaded, Best list not ranked yet) shows.
+show. Unknown (grades not loaded) shows.
 
 S2 (finding F5): a separate switch, default on, hides M5 rows whose alert time
 is 09:30-10:00 ET. Top-grade rows (`bypass_grades`, P14) and the always-show
@@ -32,12 +32,12 @@ SETTING_SHOW_FILTER = "alert_show_filter"
 
 ALL = "all"
 GRADE_B_UP = "grade_b_up"
+#: Retired 2026-09-28 with the "Best right now" box; a saved value falls back to the default.
 BEST_NOW = "best_now"
 #: (value, combo label), in menu order.
 MODES = (
     (ALL, "Show: All"),
     (GRADE_B_UP, "Show: Grade B and up"),
-    (BEST_NOW, "Show: Best right now"),
 )
 DEFAULT_MODE = GRADE_B_UP
 PASSING_GRADES = frozenset({setup_grades.PROVEN, setup_grades.A, setup_grades.B})
