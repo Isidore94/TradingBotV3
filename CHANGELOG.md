@@ -1,5 +1,7 @@
 # Changelog
 
+- 2026-09-29 Capture: veto reasons read inverted on a SHORT chart (trader). Veto vocabulary v5 adds short words: "SMA incoming (below)", "Horizontal support below", "Incoming trendline (below)", "Too extended below base", and a red-candle hint for "Too early". The capture rail relabels when the side flips; the Setups dislike dialog uses the row's side. Codes, long labels, hotkeys and follow-up arms are unchanged, so the forward record keeps pooling.
+
 - 2026-09-29 Movers: Dip-box entry gates (trader). Dip-strong lists only names above session VWAP, yesterday's high and the daily 100 and 200 SMA; Dip-weak only names below yesterday's low, VWAP and the daily 50 SMA (50 only). Unknown VWAP, prior-day level or SMA keeps a name off the boxes; a held name drops off once it fails. Pop, Dip, Rip, notices, outcome logs and the M5 watch feed are unchanged.
 
 - 2026-09-29 Movers: the Dip boxes' anchors are flipped back (trader): Dip-strong measures from SPY's low since its last big M5 drop (else the low of day), Dip-weak from its high since its last big M5 rip (else the high of day). An anchor under 30 minutes old keeps last tick's ("held"), else the low/high of day if old enough, else the open. Gate #303 replaced by #309.

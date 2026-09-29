@@ -2661,7 +2661,9 @@ class MasterAvwapPanel(SwingTableMixin, QWidget):
         except VocabularyError as exc:
             QMessageBox.warning(self, "Dislike unavailable", str(exc))
             return False
-        labels = [f"{reason.hotkey}. {reason.label} [{reason.code}]" for reason in vocabulary.reasons]
+        labels = [
+            f"{reason.hotkey}. {reason.label_for(row.side)} [{reason.code}]" for reason in vocabulary.reasons
+        ]
         selected, accepted = QInputDialog.getItem(
             self,
             f"Dislike {row.symbol}",
@@ -2680,9 +2682,9 @@ class MasterAvwapPanel(SwingTableMixin, QWidget):
             self,
             f"Dislike {row.symbol} — optional detail",
             (
-                f"{reason_choice.label}: add detail for later AI review."
+                f"{reason_choice.label_for(row.side)}: add detail for later AI review."
                 if not reason_choice.note_required
-                else f"{reason_choice.label}: detail is required for this reason."
+                else f"{reason_choice.label_for(row.side)}: detail is required for this reason."
             ),
         )
         if not accepted:

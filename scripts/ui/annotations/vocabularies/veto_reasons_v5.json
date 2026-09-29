@@ -1,0 +1,107 @@
+{
+  "vocabulary_id": "veto_reasons",
+  "vocab_version": 5,
+  "description": "Why the trader is passing on a symbol for today. v5 (2026-09-29) words the level reasons the other way up on a SHORT chart, at the trader's request: 'invert the rules for shorts. SMA incoming and horizontal overhead should mean the same thing but inverted.' Optional short_label/short_hint are shown when the side is SHORT. Codes, long labels, hints and hotkeys carry over byte-identical from v4, so every forward record keeps pooling.",
+  "reasons": [
+    {
+      "code": "incoming_trendline",
+      "label": "Incoming trendline",
+      "hotkey": "1",
+      "note_required": false,
+      "hint": "A descending/ascending line arrives at price soon enough to matter today.",
+      "short_label": "Incoming trendline (below)",
+      "short_hint": "A rising line arrives under price soon enough to catch the drop today."
+    },
+    {
+      "code": "sma_incoming",
+      "label": "SMA incoming",
+      "hotkey": "0",
+      "note_required": false,
+      "hint": "A moving average arrives at price soon enough to cap or catch the move today.",
+      "short_label": "SMA incoming (below)",
+      "short_hint": "A moving average sits just under price, close enough to catch the drop today."
+    },
+    {
+      "code": "overhead_horizontal",
+      "label": "Overhead horizontal",
+      "hotkey": "2",
+      "note_required": false,
+      "hint": "A horizontal level sits close enough above to cap the move.",
+      "short_label": "Horizontal support below",
+      "short_hint": "A horizontal level sits close enough below to stop the drop."
+    },
+    {
+      "code": "compressed",
+      "label": "Compressed",
+      "hotkey": "3",
+      "note_required": false,
+      "hint": "Range has coiled too tight to offer a workable move from here."
+    },
+    {
+      "code": "sector_mate_earnings_pending",
+      "label": "Sector mate earnings pending",
+      "hotkey": "4",
+      "note_required": false,
+      "hint": "A peer reports before this name would resolve."
+    },
+    {
+      "code": "too_extended_from_base",
+      "label": "Too extended from base",
+      "hotkey": "5",
+      "note_required": false,
+      "hint": "Price has already travelled too far from its base to start here.",
+      "short_label": "Too extended below base",
+      "short_hint": "Price has already fallen too far from its base to short here."
+    },
+    {
+      "code": "volume_dry",
+      "label": "Volume dry",
+      "hotkey": "6",
+      "note_required": false,
+      "hint": "Not enough participation to trust the move."
+    },
+    {
+      "code": "earnings_too_close",
+      "label": "Earnings too close",
+      "hotkey": "7",
+      "note_required": false,
+      "hint": "This name's own report lands inside the intended hold."
+    },
+    {
+      "code": "spread_liquidity",
+      "label": "Spread / liquidity",
+      "hotkey": "8",
+      "note_required": false,
+      "hint": "The spread or depth makes the risk unmanageable."
+    },
+    {
+      "code": "bad_industry",
+      "label": "Bad industry",
+      "hotkey": "q",
+      "note_required": false,
+      "hint": "The whole group is one the trader avoids right now, e.g. oil and gas or real estate."
+    },
+    {
+      "code": "too_early",
+      "label": "Too early",
+      "hotkey": "w",
+      "note_required": false,
+      "hint": "The bounce is only starting - one green candle. It needs more time to prove itself.",
+      "short_hint": "The fade is only starting - one red candle. It needs more time to prove itself."
+    },
+    {
+      "code": "not_remotely_good",
+      "label": "Not remotely good",
+      "hotkey": "e",
+      "note_required": false,
+      "hint": "The call makes no sense on the chart, e.g. a short on a name at all-time highs that is only red for the day."
+    },
+    {
+      "code": "other",
+      "label": "Other (note required)",
+      "hotkey": "9",
+      "note_required": true,
+      "hint": "Anything not covered above. The note is what makes this row usable later."
+    }
+  ]
+}
