@@ -404,11 +404,16 @@ def test_swing_anchors_without_now_age_against_the_last_bar_end():
     assert ms.swing_anchors(spy, TODAY) == ms.swing_anchors(spy, TODAY, now=_now(SWING_N))
 
 
-def _swing_board(series, *, held=None, top_n=ms.MOVERS_TOP_N, daily=None):
+# Daily closes that put a name on the right side of its Dip-box SMAs.
+LONG_D1 = [50.0] * 200  # 100 and 200 SMA at 50: a long above both
+SHORT_D1 = [200.0] * 200  # 50 SMA at 200: a short below it
+
+
+def _swing_board(series, *, held=None, top_n=ms.MOVERS_TOP_N, daily=None, focus=None):
     return ms.build_movers_board(
         series, _swing_spy(), now=_now(SWING_N),
         baselines={s: FLAT_BASELINE for s in series}, local_tz=LA,
-        top_n=top_n, held_by_side=held, daily_closes=daily,
+        top_n=top_n, held_by_side=held, daily_closes=daily, focus_by_side=focus,
     )
 
 
@@ -427,7 +432,7 @@ def test_dip_strong_and_dip_weak_measure_from_different_spy_swings():
         # Falls from bar 9 on and keeps falling: lags SPY since the 10:10 NY high.
         "LAG": _stock({**{k: 100.0 - 1.2 * (k - 8) for k in range(9, SWING_N)}}),
     }
-    board = _swing_board(series)
+    board = _swing_board(series, daily={"LEAD": LONG_D1, "LAG": SHORT_D1})
     longs = [r["symbol"] for r in board["swing"]["long"]]
     shorts = [r["symbol"] for r in board["swing"]["short"]]
     assert longs[0] == "LEAD" and "LAG" not in longs
@@ -445,9 +450,11 @@ def test_a_held_weak_name_stays_on_dip_weak_while_it_is_still_weak():
         "WEAK2": _stock({k: 100.0 - 1.0 * (k - 8) for k in range(9, SWING_N)}),
         "OKAY": _stock({k: 100.0 + 0.3 * (k - 8) for k in range(9, SWING_N)}),
     }
+    daily = {s: SHORT_D1 for s in series}
     # Top 1 only: WEAK2 is weak but not the weakest.
-    assert [r["symbol"] for r in _swing_board(series, top_n=1)["swing"]["short"]] == ["WEAK1"]
-    held = _swing_board(series, top_n=1, held={"short": ["WEAK2", "OKAY"]})
+    top = _swing_board(series, top_n=1, daily=daily)["swing"]["short"]
+    assert [r["symbol"] for r in top] == ["WEAK1"]
+    held = _swing_board(series, top_n=1, held={"short": ["WEAK2", "OKAY"]}, daily=daily)
     rows = held["swing"]["short"]
     assert [r["symbol"] for r in rows] == ["WEAK1", "WEAK2"]  # OKAY is not weak now
     assert rows[0]["held"] is False and rows[1]["held"] is True
@@ -466,9 +473,158 @@ def test_update_held_adds_every_listed_name_and_resets_each_session():
 
 def test_swing_lists_obey_the_d1_trend_gate():
     series = {"LEAD": _stock({21: 102.0, 22: 103.0, 23: 104.0})}
-    assert [r["symbol"] for r in _swing_board(series)["swing"]["long"]] == ["LEAD"]
+    board = _swing_board(series, daily={"LEAD": LONG_D1})
+    assert [r["symbol"] for r in board["swing"]["long"]] == ["LEAD"]
     board = _swing_board(series, daily={"LEAD": [110.0] * 200})  # under its D1 SMAs
     assert board["swing"]["long"] == []
+
+
+# ------------------------------------------------------------------ Dip-box entry gates
+# Trader 2026-09-29: "dip strong should be above vwap and above previous days high
+# and above the 100 and 200sma. dip weak stocks should be below previous days low
+# below vwap and below the 50sma". Prior day is flat 100 (high 100.5, low 99.5).
+LEAD_UP = {21: 102.0, 22: 103.0, 23: 104.0}
+LAG_DOWN = {k: 100.0 - 1.2 * (k - 8) for k in range(9, SWING_N)}  # last 82
+
+
+def _mine_row(board, side, symbol):
+    return next(r for r in board["mine"][side] if r["symbol"] == symbol)
+
+
+def _box(series, side, **kwargs):
+    board = _swing_board(series, focus={side: list(series)}, **kwargs)
+    return board, [r["symbol"] for r in board["swing"][side]]
+
+
+def test_dip_strong_lists_a_name_above_vwap_prev_high_and_the_100_and_200_sma():
+    board, names = _box({"LEAD": _stock(LEAD_UP)}, "long", daily={"LEAD": LONG_D1})
+    assert names == ["LEAD"]
+    row = board["swing"]["long"][0]
+    assert row["last"] > row["session_vwap"] and row["last"] > row["prev_high"]
+
+
+def test_dip_strong_drops_a_name_below_vwap():
+    # 110 all morning, down to 95 at SPY's low, back to 101: above yesterday's
+    # high, beating SPY since the low, but still under its session VWAP.
+    closes = {k: 110.0 for k in range(0, 11)}
+    closes.update({k: 95.0 for k in range(11, 23)})
+    closes[23] = 101.0
+    board, names = _box({"UNDER": _stock(closes)}, "long", daily={"UNDER": LONG_D1})
+    row = _mine_row(board, "long", "UNDER")
+    assert row["prev_high"] < row["last"] < row["session_vwap"]
+    assert names == []
+
+
+def test_dip_strong_drops_a_name_below_the_previous_days_high():
+    closes = {k: 98.0 for k in range(16, 23)}
+    closes[23] = 100.3
+    board, names = _box({"INSIDE": _stock(closes)}, "long", daily={"INSIDE": LONG_D1})
+    row = _mine_row(board, "long", "INSIDE")
+    assert row["session_vwap"] < row["last"] < row["prev_high"]
+    assert names == []
+
+
+def test_dip_strong_drops_a_name_below_its_200_sma():
+    daily = {"LEAD": [150.0] * 100 + [60.0] * 100}  # 100 SMA 60, 200 SMA 105
+    assert _box({"LEAD": _stock(LEAD_UP)}, "long", daily=daily)[1] == []
+
+
+def test_dip_weak_lists_a_name_below_prev_low_vwap_and_the_50_sma():
+    board, names = _box({"LAG": _stock(LAG_DOWN)}, "short", daily={"LAG": SHORT_D1})
+    assert names == ["LAG"]
+    row = board["swing"]["short"][0]
+    assert row["last"] < row["session_vwap"] and row["last"] < row["prev_low"]
+
+
+def test_dip_weak_drops_a_name_above_the_previous_days_low():
+    # Up to 108 by SPY's high, down to 100.5: lagging SPY, under VWAP, but still
+    # inside yesterday's range.
+    closes = {k: 100.0 + k for k in range(0, 9)}
+    closes.update({k: 108.0 - 0.5 * (k - 8) for k in range(9, SWING_N)})
+    board, names = _box({"HIGHUP": _stock(closes)}, "short", daily={"HIGHUP": SHORT_D1})
+    row = _mine_row(board, "short", "HIGHUP")
+    assert row["prev_low"] < row["last"] < row["session_vwap"]
+    assert names == []
+
+
+def test_dip_weak_drops_a_name_above_vwap():
+    # 85 early, 99 at SPY's high, then down to 95: lagging SPY, under yesterday's
+    # low, but above its session VWAP.
+    closes = {k: 85.0 for k in range(0, 8)}
+    closes.update({k: 99.0 - 0.25 * (k - 8) for k in range(8, SWING_N)})
+    board, names = _box({"OVER": _stock(closes)}, "short", daily={"OVER": SHORT_D1})
+    row = _mine_row(board, "short", "OVER")
+    assert row["session_vwap"] < row["last"] < row["prev_low"]
+    assert names == []
+
+
+def test_dip_weak_drops_a_name_above_its_50_sma():
+    assert _box({"LAG": _stock(LAG_DOWN)}, "short", daily={"LAG": [50.0] * 200})[1] == []
+
+
+def test_dip_weak_needs_only_the_50_sma_not_the_100():
+    # The trader named only the 50 for Dip-weak (lead's call, trader can overrule).
+    daily = {"LAG": [10.0] * 50 + [150.0] * 50}  # 50 SMA 150, 100 SMA 80 (< last 82)
+    board, names = _box({"LAG": _stock(LAG_DOWN)}, "short", daily=daily)
+    assert _mine_row(board, "short", "LAG")["trend_short"] is False
+    assert names == ["LAG"]
+
+
+def test_dip_boxes_drop_a_name_with_unknown_smas():
+    series = {"LEAD": _stock(LEAD_UP), "LAG": _stock(LAG_DOWN)}
+    board = _swing_board(series, daily={"LAG": [200.0] * 30})  # too little history
+    assert board["swing"] == {"long": [], "short": []}
+
+
+def test_dip_boxes_drop_a_name_with_unknown_vwap(monkeypatch):
+    import chart_snapshot
+
+    def broken(_bars):
+        raise ValueError("no vwap")
+
+    monkeypatch.setattr(chart_snapshot, "session_vwap_series", broken)
+    board = _swing_board({"LEAD": _stock(LEAD_UP), "LAG": _stock(LAG_DOWN)},
+                         daily={"LEAD": LONG_D1, "LAG": SHORT_D1})
+    assert board["swing"] == {"long": [], "short": []}
+
+
+def test_dip_boxes_drop_a_name_with_no_previous_session_levels(monkeypatch):
+    real = ms._levels
+
+    def no_prior(prior, today, atr):
+        out = real(prior, today, atr)
+        out.update(prev_high=None, prev_low=None)
+        return out
+
+    monkeypatch.setattr(ms, "_levels", no_prior)
+    board = _swing_board({"LEAD": _stock(LEAD_UP), "LAG": _stock(LAG_DOWN)},
+                         daily={"LEAD": LONG_D1, "LAG": SHORT_D1})
+    assert board["swing"] == {"long": [], "short": []}
+
+
+def test_a_held_name_drops_off_its_box_once_it_fails_a_gate():
+    series = {"LEAD": _stock(LEAD_UP)}
+    board = _swing_board(series, top_n=0, held={"long": ["LEAD"]}, daily={"LEAD": LONG_D1})
+    assert [r["symbol"] for r in board["swing"]["long"]] == ["LEAD"]  # held, still qualifies
+    board = _swing_board(series, top_n=0, held={"long": ["LEAD"]})  # SMA now unknown
+    assert board["swing"]["long"] == []
+
+
+def test_dip_box_gates_leave_pop_dip_and_rip_alone():
+    # No daily closes: off the Dip boxes (SMA unknown), still on the Pop list.
+    n = 20
+    up = _series(_pop([101.0, 102.0, 103.0], n=n))
+    board = ms.build_movers_board(
+        {"POP": up}, _flat_spy(n), now=_now(n), baselines={"POP": FLAT_BASELINE},
+        local_tz=LA,
+    )
+    assert [r["symbol"] for r in board["pop"]["long"]] == ["POP"]
+    assert board["swing"]["long"] == []
+    # A turn list still keeps the unknown-SMA name the Dip box drops.
+    swing = _swing_board({"LEAD": _stock(LEAD_UP)})
+    lit = swing["dip"]["long"] + swing["rip"]["long"]
+    assert "LEAD" in [r["symbol"] for r in lit]
+    assert swing["swing"]["long"] == []
 
 
 def test_quality_floor_needs_a_billion_cap_and_a_million_shares():

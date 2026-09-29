@@ -1020,8 +1020,10 @@ class MoversBoard(QWidget):
                    f"{movers_scan.SWING_HA_RUN}+ Heikin-Ashi candles in a row; with none yet, "
                    f"the low or high of day. A point under {movers_scan.SWING_MIN_AGE_MIN} "
                    "minutes old keeps the last one (held), else the low/high of day, "
-                   "else the open. A name listed earlier today stays while it "
-                   "still beats (or lags) SPY.")
+                   "else the open. Dip-strong lists only names above VWAP, yesterday's "
+                   "high and the daily 100 and 200 SMA; Dip-weak only names below "
+                   "yesterday's low, VWAP and the daily 50 SMA. A name listed earlier "
+                   "today stays while it still qualifies.")
         elif dip_live:
             self.strong.title_label.setText(f"{word}-strong ● · beating SPY {turn}")
             self.weak.title_label.setText(f"{word}-weak ● · lagging SPY {turn}")
