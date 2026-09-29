@@ -1,8 +1,9 @@
 """Owner of the M5 strength board's data (plan.md Phase 0.5, packet R2 Part B).
 
 One single-flight owner, one timer, one last-good snapshot - the Industry Board
-pattern the spec points at. Everything heavy happens on a worker thread; this
-object only orchestrates and publishes.
+pattern the spec points at. The build runs in a spawned below-normal child
+process; a desk thread only waits on its pipe, so the desk's GIL stays free.
+This object only orchestrates and publishes.
 
 Transport is a batched yfinance 5m download over `universe_all.txt`, reusing
 `autopilot_core.fetch_intraday_profiles`' batching. **Zero IB traffic**, so the
@@ -21,7 +22,9 @@ gate like every other one.
 from __future__ import annotations
 
 import logging
+import multiprocessing
 import threading
+import time
 from datetime import datetime
 from typing import Any, Callable
 
@@ -38,6 +41,32 @@ STRENGTH_BOARD_REFRESH_MINUTES = 15
 #: Percentile kept per side.
 STRENGTH_BOARD_FRACTION_SETTING = "strength_board_top_fraction"
 _TICK_INTERVAL_MS = 30_000
+#: What the child process runs (``module:function``); resolved in the child.
+BOARD_TARGET_SPEC = "ui.services.strength_board_service:build_board"
+#: A build past this is killed and reported; the last good board stays.
+BOARD_CHILD_TIMEOUT_SECONDS = 600.0
+_CHILD_POLL_SECONDS = 0.25
+
+
+def _board_child_main(connection, target_spec: str, kwargs: dict) -> None:
+    """Child entry point: build one board and send it back. Top-level for spawn."""
+    from ui.services.bounce_process import _resolve_launcher, _set_below_normal_priority
+
+    _set_below_normal_priority()
+    try:
+        target = _resolve_launcher(target_spec)
+        board = target(**dict(kwargs or {}))
+        connection.send({"ok": True, "board": board})
+    except BaseException as exc:  # noqa: BLE001 - reported to the desk, never lost
+        try:
+            connection.send({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+        except Exception:
+            logging.debug("Strength board child could not report its error", exc_info=True)
+    finally:
+        try:
+            connection.close()
+        except Exception:
+            logging.debug("Strength board child pipe close failed", exc_info=True)
 
 
 class StrengthBoardService(QObject):
@@ -53,6 +82,9 @@ class StrengthBoardService(QObject):
         self._last_success: datetime | None = None
         self._last_error = ""
         self._last_attempt: datetime | None = None
+        self._child = None
+        self._child_lock = threading.Lock()
+        self._stopping = threading.Event()
         self._timer = QTimer(self)
         self._timer.setInterval(_TICK_INTERVAL_MS)
         self._timer.timeout.connect(self._tick)
@@ -91,6 +123,10 @@ class StrengthBoardService(QObject):
 
     def shutdown(self) -> None:
         stop_staggered(self._timer)
+        self._stopping.set()
+        with self._child_lock:
+            child = self._child
+        _terminate_child(child)
 
     # ------------------------------------------------------------------ timer
     def _tick(self) -> None:
@@ -158,9 +194,67 @@ class StrengthBoardService(QObject):
         ).start()
         return True
 
+    def _build_in_child(self, fraction: float) -> dict[str, Any]:
+        """Run :func:`build_board` in a spawned child and return its board.
+
+        Raises on child error, crash, timeout or shutdown; the child is always
+        reaped before this returns.
+        """
+        context = multiprocessing.get_context("spawn")
+        parent, child_end = context.Pipe(duplex=False)
+        process = context.Process(
+            target=_board_child_main,
+            args=(child_end, BOARD_TARGET_SPEC, {"fraction": fraction}),
+            name="strength-board-build",
+            daemon=True,
+        )
+        try:
+            with self._child_lock:
+                if self._stopping.is_set():
+                    raise RuntimeError("desk is shutting down")
+                process.start()
+                self._child = process
+        finally:
+            child_end.close()
+        try:
+            deadline = time.monotonic() + float(BOARD_CHILD_TIMEOUT_SECONDS)
+            while True:
+                if parent.poll(_CHILD_POLL_SECONDS):
+                    try:
+                        reply = parent.recv()
+                    except EOFError:
+                        process.join(5.0)
+                        raise RuntimeError(
+                            f"build process exited with code {process.exitcode}"
+                        ) from None
+                    break
+                if self._stopping.is_set():
+                    raise RuntimeError("desk is shutting down")
+                if not process.is_alive() and not parent.poll(0):
+                    raise RuntimeError(
+                        f"build process exited with code {process.exitcode}"
+                    )
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"build timed out after {BOARD_CHILD_TIMEOUT_SECONDS:g} s"
+                    )
+        finally:
+            with self._child_lock:
+                self._child = None
+            process.join(5.0)
+            _terminate_child(process)
+            parent.close()
+        if not isinstance(reply, dict) or not reply.get("ok"):
+            error = reply.get("error") if isinstance(reply, dict) else None
+            raise RuntimeError(str(error or "build process failed"))
+        board = reply.get("board")
+        if not isinstance(board, dict):
+            raise RuntimeError("build process returned no board")
+        return board
+
     def _worker(self) -> None:
         try:
-            board = build_board(fraction=self._fraction())
+            board = self._build_in_child(self._fraction())
             self._board = board
             self._last_success = datetime.now()
             self._last_error = ""
@@ -173,7 +267,20 @@ class StrengthBoardService(QObject):
             logging.exception("Strength board refresh failed")
         finally:
             self._running = False
-            self.statusChanged.emit(self.status_text())
+            if not self._stopping.is_set():
+                self.statusChanged.emit(self.status_text())
+
+
+def _terminate_child(process) -> None:
+    """Kill a still-running build child and reap it; quiet on any failure."""
+    if process is None:
+        return
+    try:
+        if process.is_alive():
+            process.terminate()
+            process.join(2.0)
+    except Exception:
+        logging.debug("Strength board child terminate failed", exc_info=True)
 
 
 #: TWO years of daily bars (R4 A8). The 200 SMA needs 200 closes and a year
