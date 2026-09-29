@@ -1,5 +1,7 @@
 # Changelog
 
+- 2026-09-29 Capture: new veto reason "Hammering" on key r (trader). A long reads "Hammering (bearish hammer)", a short "Hammering (bullish hammer)". Veto vocabulary v6 carries v5 unchanged, so the forward record keeps pooling; the new code grades on its own and arms no follow-up.
+
 - 2026-09-29 Capture: veto reasons read inverted on a SHORT chart (trader). Veto vocabulary v5 adds short words: "SMA incoming (below)", "Horizontal support below", "Incoming trendline (below)", "Too extended below base", and a red-candle hint for "Too early". The capture rail relabels when the side flips; the Setups dislike dialog uses the row's side. Codes, long labels, hotkeys and follow-up arms are unchanged, so the forward record keeps pooling.
 
 - 2026-09-29 Movers: Dip-box entry gates (trader). Dip-strong lists only names above session VWAP, yesterday's high and the daily 100 and 200 SMA; Dip-weak only names below yesterday's low, VWAP and the daily 50 SMA (50 only). Unknown VWAP, prior-day level or SMA keeps a name off the boxes; a held name drops off once it fails. Pop, Dip, Rip, notices, outcome logs and the M5 watch feed are unchanged.
