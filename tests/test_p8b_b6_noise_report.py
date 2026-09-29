@@ -80,31 +80,6 @@ def test_a_failed_log_write_never_raises(tmp_path):
     assert log.record(best_now.rank_best_now([_alert("AAA")]), [_alert("AAA")]) == []
 
 
-def test_the_strip_logs_on_its_worker_thread_never_the_qt_thread(tmp_path):
-    import threading
-
-    from PySide6.QtWidgets import QApplication
-
-    app = QApplication.instance() or QApplication([])
-    from ui.widgets.best_now_strip import BestNowStrip
-
-    seen: list[tuple[bool, list]] = []
-
-    class _Log:
-        def record(self, entries, results):
-            seen.append((threading.current_thread() is threading.main_thread(), list(entries)))
-            return []
-
-    strip = BestNowStrip(threaded=True, log=_Log())
-    strip.set_results_provider(lambda: [_alert("AAA")])
-    strip.refresh()
-    deadline = datetime.now().timestamp() + 5
-    while not seen and datetime.now().timestamp() < deadline:
-        app.processEvents()
-    assert [(on_main, [e.symbol for e in entries]) for on_main, entries in seen] == [(False, ["AAA"])]
-    strip.deleteLater()
-
-
 def test_the_post_close_bar_download_includes_logged_names(tmp_path, monkeypatch):
     import best_now_outcomes
     import day_review_bars

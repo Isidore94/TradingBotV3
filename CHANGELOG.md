@@ -1,5 +1,7 @@
 # Changelog
 
+- 2026-09-28 Desk: removed the "Best right now" box from the M5 column and its "Show: Best right now" filter choice (trader: it listed weak names); a saved Best choice falls back to Grade B and up. Gates #231/#232 retired.
+
 - 2026-09-28 Night AI: a model slot can say it will load no model tonight (plan_review with an empty plan), and then the 30-minute firings skip the Ollama probe; it had cold-loaded the 12B model 18 times a night for nothing. The Saturday summary now reads every slice (default cap 0, was 24 of 60); its window reserve is 260 min.
 
 - 2026-09-28 Swing list: every daytime D1 scan (07:30, 10:00, 12:45) now also writes the after-close style list (High Conviction, expected R) to `master_avwap_focus_preview.json`, and the swing list and Away report show it ("daytime preview" / `focus_preview`) instead of the plain report; the close scan's focus feed still wins after the close. Bounce bot, D1 watchlist and near-HOD adds still read the close-only feed.

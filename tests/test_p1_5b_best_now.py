@@ -1,13 +1,11 @@
-"""P1-5 5b: the "Best right now" ranker and strip. Display and ranking only."""
+"""P1-5 5b: the "Best right now" ranker (its desk box was removed 2026-09-28)."""
 
 from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 
-import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 ROOT = Path(__file__).resolve().parents[1]
@@ -98,146 +96,11 @@ def test_dip_strong_rows_reads_the_board_or_nothing():
     assert best_now.dip_strong_rows(None) == []
 
 
-# --- the strip: diff, never rebuild ----------------------------------------
+# --- the box is gone ---------------------------------------------------------
 
 
-@pytest.fixture
-def app():
-    from PySide6.QtWidgets import QApplication
-
-    return QApplication.instance() or QApplication([])
-
-
-def _strip(results):
-    from ui.widgets.best_now_strip import BestNowStrip
-
-    strip = BestNowStrip(threaded=False)
-    strip.set_results_provider(lambda: list(results))
-    return strip
-
-
-def test_an_unchanged_list_touches_no_row_and_builds_no_widget(app):
-    results = [_alert("AAA", grade="A", r=1.0), _alert("BBB")]
-    strip = _strip(results)
-    widgets = strip.row_widgets()
-    strip.refresh()
-    assert strip.last_changed_rows == 2
-    assert [text.split()[0] for text in strip.row_texts()] == ["AAA", "BBB"]
-    calls = []
-    for row in widgets:
-        original = row.set_row
-        row.set_row = lambda *a, _o=original, **k: (calls.append(a), _o(*a, **k))
-    strip.refresh()
-    assert strip.last_changed_rows == 0 and calls == []
-    assert strip.row_widgets() == widgets  # the same label objects, never rebuilt
-
-
-def test_one_changed_row_rewrites_only_that_row(app):
-    results = [_alert("AAA", grade="A", r=1.0), _alert("BBB", r=0.5)]
-    strip = _strip(results)
-    strip.refresh()
-    results[1] = _alert("BBB", r=0.8)
-    strip.refresh()
-    assert strip.last_changed_rows == 1
-    assert "+0.8R" in strip.row_texts()[1]
-
-
-def test_the_movers_board_feeds_the_strip_and_a_day_roll_empties_it(app):
-    strip = _strip([])
-    strip.set_movers_board({"dip": {"long": [_dip("DIPX", 2.0)]}})
-    assert [e.symbol for e in strip.entries()] == ["DIPX"]
-    strip.clear_day()
-    assert strip.entries() == [] and strip.row_texts() == []
-
-
-def test_the_strip_never_sets_a_stylesheet(app, monkeypatch):
-    from PySide6.QtWidgets import QWidget
-
-    seen = []
-    monkeypatch.setattr(QWidget, "setStyleSheet", lambda self, sheet: seen.append(sheet))
-    strip = _strip([_alert("AAA")])
-    strip.refresh()
-    strip.refresh()
-    assert seen == []
-    import ui
-
-    qss = (Path(ui.__file__).parent / "theme.qss").read_text(encoding="utf-8")
-    assert "QFrame#BestNowStrip" in qss and "QLabel#BestNowRow" in qss
-
-
-def test_the_ranking_runs_off_the_qt_thread(app):
-    import threading
-
-    from ui.widgets import best_now_strip as module
-
-    seen = []
-    real = module.BestNowStrip._compute
-
-    def spy(results, dips, context, limit):
-        seen.append(threading.current_thread() is threading.main_thread())
-        return real(results, dips, context, limit)
-
-    strip = module.BestNowStrip(threaded=True)
-    strip._compute = spy
-    strip.set_results_provider(lambda: [_alert("AAA")])
-    strip.refresh()
-    deadline = datetime.now().timestamp() + 5
-    while not seen and datetime.now().timestamp() < deadline:
-        app.processEvents()
-    assert seen == [False]
-
-
-def test_the_timer_waits_for_the_next_bar_boundary():
-    from ui.widgets.best_now_strip import BAR_GRACE_SECONDS, ms_to_next_bar
-
-    assert ms_to_next_bar(datetime(2026, 9, 24, 10, 3, 0)) == (120 + BAR_GRACE_SECONDS) * 1000
-    assert ms_to_next_bar(datetime(2026, 9, 24, 10, 5, 0)) == (300 + BAR_GRACE_SECONDS) * 1000
-
-
-# --- the desk: mounted under "Working now", fits both layouts --------------
-
-
-@pytest.mark.parametrize("layout", ["compact", "classic"])
-def test_the_desk_mounts_the_strip_under_working_now_and_it_fits(app, layout):
-    from PySide6.QtCore import QObject, Signal
-
-    from ui.panels.trading_desk import TradingDeskPanel
-    from ui.widgets.best_now_strip import BestNowStrip
-
-    desk = TradingDeskPanel(workspace_mode="workspace", layout_name=layout)
-    try:
-        strip = desk.best_now_strip
-        assert isinstance(strip, BestNowStrip)
-        bar_layout = desk.m5_alert_bar.layout()
-        assert bar_layout.itemAt(1).widget() is desk.live_results_strip
-        assert bar_layout.itemAt(2).widget() is strip
-
-        # The Movers board reaches it through the desk's hosting seam.
-        class _Movers(QObject):
-            moversChanged = Signal(dict)
-
-            def board(self):
-                return {}
-
-        movers = _Movers()
-        desk.attach_movers_service(movers)
-        strip._threaded = False
-        movers.moversChanged.emit(
-            {"dip": {"long": [{"symbol": "DIPLONGNAME", "dip_score": 2.5, "last": 123.45, "lod": 120.1}]}}
-        )
-        assert [e.symbol for e in strip.entries()] == ["DIPLONGNAME"]
-
-        # It fits the M5 column: rows elide to the width, never widen the column.
-        desk.resize(1640, 980)
-        desk.show()
-        for _ in range(20):
-            app.processEvents()
-        column = desk.m5_column
-        assert strip.width() <= column.width()
-        assert strip.minimumSizeHint().width() <= column.minimumWidth()
-        row = strip.row_widgets()[0]
-        assert row.isVisible() and row.width() <= strip.width()
-        assert row.full_text().endswith("e 123.45 s 120.10")
-    finally:
-        desk.shutdown()
-        desk.close()
+def test_the_desk_has_no_best_right_now_box():
+    """Trader 2026-09-28: the box listed weak names; it is off the desk."""
+    source = (ROOT / "scripts" / "ui" / "panels" / "trading_desk.py").read_text(encoding="utf-8")
+    assert "BestNowStrip" not in source and "best_now_strip" not in source
+    assert not (ROOT / "scripts" / "ui" / "widgets" / "best_now_strip.py").exists()

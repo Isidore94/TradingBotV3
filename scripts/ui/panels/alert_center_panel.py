@@ -695,7 +695,6 @@ class AlertCenterPanel(
         self._bypass_grades: frozenset = frozenset()
         #: `id(alert) -> (alert, bool)`; cleared when the grades change.
         self._grade_bypass_cache: dict = {}
-        self._show_best_keys: frozenset | None = None
         #: `id(alert) -> (alert, (hidden, is_new))`; cleared when any input changes.
         self._show_verdicts: dict = {}
         self._show_typed_seen: frozenset | None = None
@@ -1903,14 +1902,6 @@ class AlertCenterPanel(
             pass
         return verdict
 
-    def set_best_now_entries(self, entries) -> None:
-        """The Best-right-now strip's rows (P1-5); the Best filter shows only these."""
-        keys = alert_show_filter.best_keys(entries)
-        if keys == self._show_best_keys:
-            return
-        self._show_best_keys = keys
-        self._show_filter_inputs_changed(alert_show_filter.BEST_NOW)
-
     def _show_filter_inputs_changed(self, affects: str | None = None) -> None:
         """An input the verdicts read changed: drop them and redraw by diff if it matters."""
         self._show_verdicts.clear()
@@ -2002,7 +1993,7 @@ class AlertCenterPanel(
         return alert_show_filter.hide_reason(
             self.show_filter_mode(),
             grade=grade,
-            best=self._show_best_keys,
+            best=None,
             symbol=alert.symbol,
             side=alert.side,
             privileged=self._show_filter_privileged(alert),

@@ -173,18 +173,13 @@ def test_all_shows_every_row(panel):
     assert panel.show_filter_hidden_counts() == (0, 0)
 
 
-def test_best_right_now_shows_only_best_rows_plus_privileged(panel):
+def test_best_right_now_is_no_longer_a_choice(env, panel):
+    """Trader 2026-09-28: the Best box is gone, so its Show choice is too."""
     import alert_show_filter
-    import best_now
 
-    _choose(panel, alert_show_filter.BEST_NOW)
-    _post_feed(panel)
-    # Not ranked yet: unknown shows.
-    assert _feed_symbols(panel) == {s for s, _k in FEED}
-    panel.set_best_now_entries(
-        [best_now.BestNowEntry(symbol="CEE", side="LONG", tier=1, why="", entry=None, stop=None)]
-    )
-    assert _feed_symbols(panel) == {"CEE", "TYPED", "FOC"}
+    assert panel.show_filter_input.findData(alert_show_filter.BEST_NOW) == -1
+    env[alert_show_filter.SETTING_SHOW_FILTER] = alert_show_filter.BEST_NOW
+    assert alert_show_filter.mode() == alert_show_filter.DEFAULT_MODE
 
 
 def test_regime_pause_and_chart_watch_rows_always_show(panel):
@@ -203,12 +198,12 @@ def test_the_choice_persists_as_a_local_setting(env, panel, tmp_path, monkeypatc
     import alert_show_filter
 
     assert alert_show_filter.mode() == alert_show_filter.GRADE_B_UP, "first-run default"
-    _choose(panel, alert_show_filter.BEST_NOW)
-    assert env[alert_show_filter.SETTING_SHOW_FILTER] == alert_show_filter.BEST_NOW
+    _choose(panel, alert_show_filter.ALL)
+    assert env[alert_show_filter.SETTING_SHOW_FILTER] == alert_show_filter.ALL
     (tmp_path / "again").mkdir()
     again = _make_panel(tmp_path / "again", monkeypatch)
     try:
-        assert again.show_filter_mode() == alert_show_filter.BEST_NOW
+        assert again.show_filter_mode() == alert_show_filter.ALL
     finally:
         again.deleteLater()
 
