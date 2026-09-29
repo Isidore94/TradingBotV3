@@ -20,7 +20,10 @@ Rules kept here:
   far). A major move is a run of SWING_HA_RUN same-colour Heikin-Ashi candles
   on SPY's completed M5 bars, so the anchors shift as new runs form. An anchor
   under SWING_MIN_AGE_MIN old keeps last tick's (`previous_anchors`), else the
-  low / high of day if old enough, else the open. A name once on
+  low / high of day if old enough, else the open. Entry (trader, 2026-09-29):
+  Dip-strong needs last above session VWAP, the previous day's high and the
+  daily 100 and 200 SMA; Dip-weak below the previous day's low, VWAP and the
+  daily 50 SMA (50 only). Unknown VWAP, level or SMA keeps a name off. A name once on
   a box today stays on it while it still qualifies (`held_by_side`). These
   `swing` lists feed the boxes only; the P8 notices, outcome logs and M5 watch
   feed still read the pullback/bounce/rally `dip`/`rip` lists.
@@ -93,6 +96,7 @@ EXT_ATR = 2.0
 #: are completed sessions only; too little history is unknown, never a fail.
 TREND_SMA_LONG = (100, 200)
 TREND_SMA_SHORT = (50, 100)
+DIP_WEAK_SMA = 50  # Dip-weak box: below this daily SMA only (trader 2026-09-29)
 #: Dip boxes: a completed run of at least this many same-colour Heikin-Ashi
 #: candles on SPY's M5 is a major move (trader: "more than 5 in a row").
 SWING_HA_RUN = 6
@@ -688,6 +692,27 @@ def trend_flags(
     return check(TREND_SMA_LONG, True), check(TREND_SMA_SHORT, False), len(closes)
 
 
+def below_sma(last: float | None, daily_closes: Sequence[Any] | None, period: int) -> bool | None:
+    """`last` below the daily `period` SMA; None when either is unmeasurable."""
+    closes = [c for c in (_finite(x) for x in daily_closes or ()) if c is not None]
+    price, level = _finite(last), strength_scan.sma(closes, period)
+    return None if price is None or level is None else price < level
+
+
+def dip_box_ok(row: MoverRow, side: str, below_weak_sma: bool | None) -> bool:
+    """Dip-box entry: long above session VWAP, the previous day's high and the
+    100/200 SMA; short below the previous day's low, VWAP and the 50 SMA only.
+    Unknown VWAP, level or SMA never qualifies."""
+    last, vwap = _finite(row.last), _finite(row.session_vwap)
+    if last is None or vwap is None:
+        return False
+    if side == "long":
+        high = _finite(row.prev_high)
+        return high is not None and last > vwap and last > high and row.trend_long is True
+    low = _finite(row.prev_low)
+    return low is not None and last < vwap and last < low and below_weak_sma is True
+
+
 def _levels(prior: Sequence[Mapping[str, Any]], today: Sequence[Mapping[str, Any]],
             atr: float | None) -> dict[str, Any]:
     """HOD/LOD/VWAP distances in ATRs and the break/extension tags."""
@@ -902,7 +927,10 @@ def build_movers_board(
         for symbol, row in rows.items():
             if not rankable(row):
                 continue
-            if (row.trend_long if side == "long" else row.trend_short) is False:
+            # Entry gate; an unmeasured SMA/VWAP/level can't be claimed, so it drops.
+            weak_sma = None if side == "long" else below_sma(
+                row.last, (daily_closes or {}).get(symbol), DIP_WEAK_SMA)
+            if not dip_box_ok(row, side, weak_sma):
                 continue
             today_bars = split_today(normalised[symbol], today_date)[1]
             since, score, _found = excess_since(
