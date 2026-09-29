@@ -7,7 +7,11 @@ Dip-strong and Dip-weak (a quarter each) for the live SPY turn: Dip-* in a
 pullback, Bounce-* in a bounce, Rip-* in a rally; unlit, they sit empty. A SPY
 state banner tops them. Sym cells carry the side colour in the mixed Pop table
 (long green, short red); names new to a list get a stronger tint. A row whose D1
-trend is unknown is tagged "D1?" (the ranked lists drop a known miss). Header clicks sort (third click = board order); the trader can hide a
+trend is unknown is tagged "D1?" (the ranked lists drop a known miss).
+M30 and Daily (trader, 2026-09-29) show the same three boxes from the
+once-a-day `MoversTimeframeService` boards; each box title's hover carries its
+outcome line. PB / Line chips (and the row menu) arm D1 Pullback (fast) or
+Pullback to D1 line on the selected row's side: an explicit click only. Header clicks sort (third click = board order); the trader can hide a
 row for the day (right-click or Delete) and bring hidden rows back. The "Review" menu holds the Focus pick and
 Faded review doors; "Deep read" shows the old Strength page (Focus strength,
 entry board, RRS snapshot, M5 Strength Board) underneath.
@@ -19,7 +23,7 @@ model's roles.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from PySide6.QtCore import (
@@ -50,6 +54,7 @@ from PySide6.QtWidgets import (
 )
 
 import movers_scan
+import movers_timeframe
 import options_chase
 from ui import theme
 from ui.timer_utils import SignalCoalescer
@@ -69,9 +74,16 @@ LVL_COLUMN_PX = 70
 #: The Opt (options chase) cell: elided here, the full text is in its hover.
 OPT_COLUMN_PX = 96
 
-MODES = ("pop",)
-MODE_LABELS = {"pop": "Pop + Dip"}
-MODE_SHORT = {"pop": "Pop"}
+MODES = ("pop", "m30", "d1")
+MODE_LABELS = {"pop": "Pop + Dip", "m30": "M30", "d1": "Daily"}
+MODE_SHORT = {"pop": "Pop", "m30": "M30", "d1": "D1"}
+#: The once-a-day timeframe tabs.
+TF_MODES = ("m30", "d1")
+#: Alert kinds the PB / Line chips arm (the D1 menu's "Pullback (fast)" and
+#: "Pullback to D1 line"); explicit clicks only (trader rule 2026-09-17).
+ARM_PULLBACK = "pullback"
+ARM_LINE = "d1_line_pullback"
+ARM_LABELS = {ARM_PULLBACK: "D1 Pullback (fast)", ARM_LINE: "Pullback to D1 line"}
 #: Below this width the chips and header buttons use short labels.
 NARROW_PX = 300
 #: Each box's Copy chip, and how long it shows "Copied N" after a click.
@@ -94,6 +106,19 @@ COLUMNS = {
     "dip": (("symbol", "Sym"), ("dip_score", "xSPY"), ("rvol", "RVOL"), ("lvl", "Lvl"),
             ("since_start_pct", "Since"), ("day_pct", "Day"), ("move15_pct", "15m"),
             ("group", "Grp")),
+    # M30 / Daily: moves over 3 and 6 bars of that timeframe; no Lvl or Opt.
+    "m30_pop": (("symbol", "Sym"), ("move15_pct", "90m"), ("rvol", "RVOL"),
+                ("vs_spy15_pct", "vSPY"), ("move30_pct", "3h"), ("day_pct", "Day"),
+                ("group", "Grp")),
+    "m30_dip": (("symbol", "Sym"), ("dip_score", "xSPY"), ("rvol", "RVOL"),
+                ("since_start_pct", "Since"), ("day_pct", "Day"), ("move15_pct", "90m"),
+                ("group", "Grp")),
+    "d1_pop": (("symbol", "Sym"), ("move15_pct", "3d"), ("rvol", "RVOL"),
+               ("vs_spy15_pct", "vSPY"), ("move30_pct", "6d"), ("day_pct", "1d"),
+               ("group", "Grp")),
+    "d1_dip": (("symbol", "Sym"), ("dip_score", "xSPY"), ("rvol", "RVOL"),
+               ("since_start_pct", "Since"), ("day_pct", "1d"), ("move15_pct", "3d"),
+               ("group", "Grp")),
 }
 _PCT_KEYS = {"move15_pct", "move30_pct", "day_pct", "vs_spy15_pct", "since_start_pct"}
 
@@ -138,6 +163,84 @@ def _swing_title(side: str, anchor: dict[str, Any] | None) -> str:
         since = f"SPY's {point} {when}"
     held = " (held)" if anchor.get("held_from_previous") else ""
     return f"{name} · {verb} SPY since {since}{held}"
+
+
+def _short_date(value: Any) -> str:
+    """'9/22' from an ISO date or stamp ('' when absent)."""
+    text = str(value or "")[:10]
+    try:
+        day = datetime.fromisoformat(text).date()
+    except ValueError:
+        return ""
+    return f"{day.month}/{day.day}"
+
+
+def _tf_measured_at(board: dict[str, Any]) -> str:
+    """When an M30 board was measured on the desk clock (its last bar's end)."""
+    try:
+        start = datetime.fromisoformat(str(board.get("as_of") or ""))
+    except ValueError:
+        return ""
+    return _local_clock((start + timedelta(minutes=movers_timeframe.M30_MINUTES)).isoformat())
+
+
+def tf_main_title(tf: str, board: dict[str, Any] | None) -> str:
+    """'M30 Movers · 3-bar moves at 09:00' / 'Daily Movers · 3-day moves to the 9/22 close'."""
+    board = board or {}
+    label = movers_timeframe.TF_LABELS.get(tf, tf)
+    if not board:
+        return f"{label} Movers · not scanned yet"
+    if tf == "d1":
+        return f"{label} Movers · 3-day moves to the {_short_date(board.get('session'))} close"
+    return f"{label} Movers · 3-bar moves at {_tf_measured_at(board)}"
+
+
+def tf_swing_title(tf: str, side: str, anchor: dict[str, Any] | None) -> str:
+    """'Daily Dip-strong · beating SPY since 9/22 low' (the anchor's own date / time)."""
+    label = movers_timeframe.TF_LABELS.get(tf, tf)
+    name = "Dip-strong" if side == "long" else "Dip-weak"
+    if not anchor:
+        return f"{label} {name} · no SPY anchor yet"
+    verb = "beating" if side == "long" else "lagging"
+    point = "low" if side == "long" else "high"
+    when = _short_date(anchor.get("date") or anchor.get("dt"))
+    if tf == "m30":
+        when = f"{when} {_local_clock(anchor.get('dt')) or anchor.get('time') or ''}".strip()
+    return f"{label} {name} · {verb} SPY since {when} {point}"
+
+
+def outcome_tip(board: dict[str, Any] | None, box: str) -> str:
+    """The box title's hover: its outcome line(s) from the board's summaries."""
+    import movers_timeframe_outcomes as outcomes
+
+    summaries = (board or {}).get("summaries") or {}
+    if box == "pop":
+        sides = summaries.get("pop") or {}
+        return (f"Longs: {outcomes.summary_line(sides.get('long'))}\n"
+                f"Shorts: {outcomes.summary_line(sides.get('short'))}")
+    side = "long" if box == "dip_strong" else "short"
+    return outcomes.summary_line((summaries.get(box) or {}).get(side))
+
+
+def tf_banner_text(tf: str, board: dict[str, Any] | None) -> str:
+    """'M30 scanned 9/22 09:05 · SPY +0.42% on the day · 812 of 1400 measured', or 'not scanned yet'."""
+    board = board or {}
+    label = movers_timeframe.TF_LABELS.get(tf, tf)
+    when = "runs at 09:00 on trading days" if tf == "m30" else "runs after the close"
+    if not board:
+        return f"{label}: not scanned yet ({when})"
+    stamp = f"{_short_date(board.get('scanned_at'))} {_local_clock(board.get('scanned_at'))}"
+    parts = [f"{label} scanned {stamp.strip()}"]
+    if board.get("stale"):
+        parts.append("stale")
+    day = (board.get("state") or {}).get("spy_day_pct")
+    if day is not None:
+        parts.append(f"SPY {float(day):+.2f}% " + ("on the day" if tf == "m30" else "last session"))
+    if board.get("offered"):
+        parts.append(f"{int(board.get('measured') or 0)} of {int(board['offered'])} measured")
+    if board.get("last_error"):
+        parts.append(f"last scan FAILED: {board['last_error']}")
+    return " · ".join(parts)
 
 
 def trend_flag(row: dict[str, Any]) -> bool | None:
@@ -311,7 +414,7 @@ class MoversTableModel(QAbstractTableModel):
             self._columns = columns
             self.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, len(columns) - 1)
         self._side = side
-        self._mixed = mode == "pop"
+        self._mixed = mode.endswith("pop")  # Pop, M30 and Daily Movers hold both sides
         old, new = len(self._rows), len(rows)
         if new < old:
             self.beginRemoveRows(QModelIndex(), new, old - 1)
@@ -386,8 +489,10 @@ class MoversTableModel(QAbstractTableModel):
 
 def _row_tooltip(row: dict[str, Any]) -> str:
     parts = [str(row.get("symbol") or "")]
-    for key, label in (("move15_pct", "15m %"), ("move30_pct", "30m %"), ("day_pct", "day %"),
-                       ("vs_spy15_pct", "vs SPY 15m"), ("since_start_pct", "since start %")):
+    short, long = movers_timeframe.MOVE_LABELS.get(row.get("_tf") or "", ("15m", "30m"))
+    for key, label in (("move15_pct", f"{short} %"), ("move30_pct", f"{long} %"),
+                       ("day_pct", "day %"), ("vs_spy15_pct", f"vs SPY {short}"),
+                       ("since_start_pct", "since start %")):
         parts.append(f"{label} {format_cell(key, row.get(key))}")
     parts.append(f"RVOL {format_cell('rvol', row.get('rvol'))}")
     for key, label in (("from_hod_atr", "from HOD"), ("from_lod_atr", "from LOD"),
@@ -414,6 +519,8 @@ def _row_tooltip(row: dict[str, Any]) -> str:
         verdict = ("yes" if trend else "NO" if trend is False
                    else f"unknown ({int(row.get('daily_bars') or 0)} daily bars)")
         parts.append(f"{want}: {verdict}")
+    if row.get("avwap") is not None:
+        parts.append(f"VWAP from SPY's anchor {float(row['avwap']):.2f}")
     if row.get("stale"):
         parts.append("stale bars")
     if row.get("note"):
@@ -594,6 +701,8 @@ class MoversBoard(QWidget):
     deepReadToggled = Signal(bool)
     #: The trader's explicit "+F" click: (symbol, "long"|"short"). Never automatic.
     focusAddRequested = Signal(str, str)
+    #: The trader's explicit PB / Line click: (symbol, "long"|"short", kind). Never automatic.
+    alertArmRequested = Signal(str, str, str)
 
     def __init__(self, parent=None, *, persist: bool = True) -> None:
         super().__init__(parent)
@@ -607,6 +716,10 @@ class MoversBoard(QWidget):
             note_swallowed("earnings warning warm not started", exc, quiet=True)
         self._persist = persist
         self._board: dict[str, Any] = {}
+        # The once-a-day M30 / Daily boards by timeframe.
+        self._tf_boards: dict[str, dict[str, Any]] = {}
+        # symbol -> armed alert kinds (the Alert Center's in-memory lists).
+        self._armed_provider = None
         self._mode = self._setting(MOVERS_MODE_SETTING, "pop")
         if self._mode not in MODES:
             self._mode = "pop"
@@ -679,6 +792,17 @@ class MoversBoard(QWidget):
         self.add_focus_button.setEnabled(False)
         self.add_focus_button.clicked.connect(self._add_selected_to_focus)
         modes_row.addWidget(self.add_focus_button)
+        self.arm_buttons: dict[str, QToolButton] = {}
+        for kind, text in ((ARM_PULLBACK, "PB"), (ARM_LINE, "Line")):
+            button = QToolButton()
+            button.setObjectName("MoversChip")
+            button.setText(text)
+            button.setToolTip(f"Arm {ARM_LABELS[kind]} on the selected row's side "
+                              "(click again to disarm).")
+            button.setEnabled(False)
+            button.clicked.connect(lambda _checked=False, k=kind: self._arm_selected(k))
+            self.arm_buttons[kind] = button
+            modes_row.addWidget(button)
         self.unhide_button = QToolButton()
         self.unhide_button.setObjectName("MoversChip")
         self.unhide_button.setToolTip("Show the rows you hid today again.")
@@ -695,7 +819,7 @@ class MoversBoard(QWidget):
         banner_row.addWidget(self.meta_label, 0, Qt.AlignmentFlag.AlignTop)
         banner_row.addWidget(self.banner, 1)
 
-        # Main table (Pop), then the two dip tables under it.
+        # Main table (Movers), then the two dip tables under it (every mode).
         self.main = MoversSection(self, titled=True)
         self.strong = MoversSection(self, titled=True)
         self.weak = MoversSection(self, titled=True)
@@ -811,10 +935,12 @@ class MoversBoard(QWidget):
         return None
 
     def _lists_in_view(self) -> list[tuple[MoversSection, str]]:
-        """(section, list) pairs the current mode shows."""
-        if self._mode == "pop":
-            return [(self.main, "pop"), (self.strong, "strong"), (self.weak, "weak")]
-        return [(self.main, self._mode)]
+        """(section, list) pairs the current mode shows: always the three boxes."""
+        return [(self.main, "pop"), (self.strong, "strong"), (self.weak, "weak")]
+
+    def _view_board(self) -> dict[str, Any]:
+        """The M5 board in Pop + Dip, else that timeframe's board."""
+        return self._board if self._mode == "pop" else (self._tf_boards.get(self._mode) or {})
 
     # ------------------------------------------------------------ metrics
     def apply_scaled_metrics(self) -> None:
@@ -842,7 +968,7 @@ class MoversBoard(QWidget):
         margins = self.layout().contentsMargins() if self.layout() is not None else None
         width = self.width() - (margins.left() + margins.right() if margins else 0)
         used = count = 0
-        for key, _header in COLUMNS[mode or self._mode]:
+        for key, _header in COLUMNS.get(mode or self._mode, COLUMNS["pop"]):
             used += self._column_px(key)
             if used > width:
                 break
@@ -853,9 +979,10 @@ class MoversBoard(QWidget):
         for section in self.sections:
             section.fit_columns(self.visible_column_count(section.columns_mode), self._column_px)
         narrow = self.width() < theme.px(NARROW_PX)
-        # The +F chip is the first control to go on a narrow board (the row menu stays).
-        if self.add_focus_button.isHidden() != narrow:
-            self.add_focus_button.setVisible(not narrow)
+        # The +F and arm chips are the first controls to go on a narrow board (the row menu stays).
+        for chip in (self.add_focus_button, *self.arm_buttons.values()):
+            if chip.isHidden() != narrow:
+                chip.setVisible(not narrow)
         labels = MODE_SHORT if narrow else MODE_LABELS
         for mode, button in self.mode_buttons.items():
             text = labels[mode] + (" ●" if mode == "pop" and self._dip_live() else "")
@@ -911,6 +1038,16 @@ class MoversBoard(QWidget):
         self._board = board if isinstance(board, dict) else {}
         self._maybe_auto_switch()
         self._render_coalescer.request()
+
+    def update_timeframe_board(self, tf: str, board: Any) -> None:
+        """A new M30 / Daily board from `MoversTimeframeService`. Coalesced."""
+        if tf not in TF_MODES:
+            return
+        self._tf_boards[tf] = board if isinstance(board, dict) else {}
+        self._render_coalescer.request()
+
+    def timeframe_board(self, tf: str) -> dict[str, Any]:
+        return dict(self._tf_boards.get(tf) or {})
 
     def flush_pending_refresh(self) -> None:
         self._render_coalescer.flush()
@@ -968,7 +1105,7 @@ class MoversBoard(QWidget):
             return []
         seen: dict[str, dict[str, Any]] = {}
         for _section, name in self._lists_in_view():
-            for row in rows_for(self._board, name, self._side):
+            for row in rows_for(self._view_board(), name, self._side):
                 key = hidden_key(row)
                 if key in hidden:
                     seen.setdefault(key, row)
@@ -977,28 +1114,82 @@ class MoversBoard(QWidget):
     def _render(self) -> None:
         hidden = self.hidden_keys()
         pop_mode = self._mode == "pop"
-        dip_live = pop_mode and self._dip_live()
-        # Pop mode always shows three boxes: Movers, Dip-strong, Dip-weak. The
-        # Dip tables fill only while SPY is in a pullback, bounce or rally.
+        board = self._view_board()
+        # Every mode shows three boxes: Movers, Dip-strong, Dip-weak. In Pop + Dip
+        # the Dip tables fill only while SPY is in a pullback, bounce or rally.
         for section in (self.strong, self.weak):
-            if section.isHidden() != (not pop_mode):
-                section.setVisible(pop_mode)
-        main_title = "Movers · biggest 15-minute moves now" if pop_mode else ""
+            if section.isHidden():
+                section.setVisible(True)
+        main_title = ("Movers · biggest 15-minute moves now" if pop_mode
+                      else tf_main_title(self._mode, board))
         if self.main.title_label.text() != main_title:
             self.main.title_label.setText(main_title)
-        if self.main.title_label.isHidden() != (not pop_mode):
-            self.main.title_label.setVisible(pop_mode)
+        if self.main.title_label.isHidden():
+            self.main.title_label.setVisible(True)
+        main_tip = "" if pop_mode else outcome_tip(board, "pop")
+        if self.main.title_label.toolTip() != main_tip:
+            self.main.title_label.setToolTip(main_tip)
+        prefix = "" if pop_mode else f"{self._mode}_"
         for section, name in self._lists_in_view():
-            rows = [r for r in rows_for(self._board, name, self._side)
+            rows = [r for r in rows_for(board, name, self._side)
                     if hidden_key(r) not in hidden]
+            if not pop_mode:
+                rows = [dict(r, _tf=self._mode) for r in rows]
             if name == "weak":
                 _tag_short_earnings(rows)
-            columns_mode = "dip" if name in ("strong", "weak") else self._mode
+            columns_mode = prefix + ("dip" if name in ("strong", "weak") else "pop")
             section.set_rows(rows, columns_mode, "short" if name == "weak" else self._side)
             section.empty_label.setText(self._empty_text(rows, name))
             section.empty_label.setVisible(not rows and bool(section.empty_label.text()))
             # Fixed shares: Movers half the height, each Dip box a quarter.
             self.layout().setStretchFactor(section, 2 if section is self.main else 1)
+        if pop_mode:
+            self._render_pop_titles()
+        else:
+            self._render_tf_titles(board)
+        hidden_count = len(self._hidden_in_view())
+        if self.unhide_button.isHidden() != (hidden_count == 0):
+            self.unhide_button.setVisible(hidden_count > 0)
+        self._fit_columns()
+        if pop_mode:
+            banner = banner_text(self._board.get("state") if self._board else None)
+            if self._board.get("offered"):
+                banner += (f" · {int(self._board.get('fresh') or 0)} of "
+                           f"{int(self._board['offered'])} fresh")
+            stamp = _local_clock(self._board.get("as_of")) or "--:--"
+            if self._board and self._board.get("as_of_stale"):
+                stamp += " stale"
+        else:
+            banner = tf_banner_text(self._mode, board)
+            stamp = _short_date(board.get("session")) or "--"
+            if board.get("stale"):
+                stamp += " stale"
+        self.banner.setText(banner)
+        self.meta_label.setText(stamp)
+        by_side = (board.get("groups") or {}).get("pop") or {}
+        labels = [f"{name} ×{count}{tag}" for s, tag in (("long", ""), ("short", " S"))
+                  for name, count in (by_side.get(s) or [])]
+        text = "Groups: " + ", ".join(labels) if labels else ""
+        if self.groups_label.text() != text:
+            self.groups_label.setText(text)
+        self.groups_label.setVisible(bool(text))
+        self._sync_add_button()
+
+    def _render_tf_titles(self, board: dict[str, Any]) -> None:
+        """M30 / Daily Dip-box titles name their SPY anchor; the hover is the outcome line."""
+        anchors = board.get("swing_anchor") or {}
+        for section, side, box in ((self.strong, "long", "dip_strong"),
+                                   (self.weak, "short", "dip_weak")):
+            title = tf_swing_title(self._mode, side, anchors.get(side))
+            if section.title_label.text() != title:
+                section.title_label.setText(title)
+            tip = outcome_tip(board, box)
+            if section.title_label.toolTip() != tip:
+                section.title_label.setToolTip(tip)
+
+    def _render_pop_titles(self) -> None:
+        """Pop + Dip's Dip-box titles and hover (the M5 SPY turn or swing anchor)."""
+        dip_live = self._dip_live()
         state = self._state()
         pullback = bool(state.get("pullback"))
         when = _local_clock(state.get("start_dt")) or state.get("extreme_time") or ""
@@ -1030,29 +1221,6 @@ class MoversBoard(QWidget):
         for section in (self.strong, self.weak):
             if section.title_label.toolTip() != tip:
                 section.title_label.setToolTip(tip)
-        hidden_count = len(self._hidden_in_view())
-        if self.unhide_button.isHidden() != (hidden_count == 0):
-            self.unhide_button.setVisible(hidden_count > 0)
-        self._fit_columns()
-        banner = banner_text(self._board.get("state") if self._board else None)
-        if self._board.get("offered"):
-            banner += f" · {int(self._board.get('fresh') or 0)} of {int(self._board['offered'])} fresh"
-        self.banner.setText(banner)
-        stamp = _local_clock(self._board.get("as_of")) or "--:--"
-        if self._board and self._board.get("as_of_stale"):
-            stamp += " stale"
-        self.meta_label.setText(stamp)
-        by_side = (self._board.get("groups") or {}).get(self._mode) or {}
-        if pop_mode:
-            labels = [f"{name} ×{count}{tag}" for s, tag in (("long", ""), ("short", " S"))
-                      for name, count in (by_side.get(s) or [])]
-        else:
-            labels = [f"{name} ×{count}" for name, count in (by_side.get(self._side) or [])]
-        text = "Groups: " + ", ".join(labels) if labels else ""
-        if self.groups_label.text() != text:
-            self.groups_label.setText(text)
-        self.groups_label.setVisible(bool(text))
-        self._sync_add_button()
 
     # ------------------------------------------------------------ +Focus
     def _on_selection(self, section: MoversSection) -> None:
@@ -1072,7 +1240,46 @@ class MoversBoard(QWidget):
         return None
 
     def _sync_add_button(self, *_args) -> None:
-        self.add_focus_button.setEnabled(self._selected_row() is not None)
+        row = self._selected_row()
+        self.add_focus_button.setEnabled(row is not None)
+        armed = self._armed_kinds(row) if row else set()
+        for kind, button in self.arm_buttons.items():
+            if button.isEnabled() != (row is not None):
+                button.setEnabled(row is not None)
+            text = ("PB" if kind == ARM_PULLBACK else "Line") + (" ✓" if kind in armed else "")
+            if button.text() != text:
+                button.setText(text)
+
+    # ------------------------------------------------------------ alert arming
+    def set_armed_kinds_provider(self, provider) -> None:
+        """`provider(symbol) -> set of armed kinds` (an in-memory read, Qt thread)."""
+        self._armed_provider = provider
+        self._sync_add_button()
+
+    def refresh_arm_state(self, *_args) -> None:
+        self._sync_add_button()
+
+    def _armed_kinds(self, row: dict[str, Any] | None) -> set[str]:
+        symbol = str((row or {}).get("symbol") or "").strip().upper()
+        if not symbol or self._armed_provider is None:
+            return set()
+        try:
+            return set(self._armed_provider(symbol) or ())
+        except Exception as exc:  # noqa: BLE001 - a failed read shows "not armed"
+            note_swallowed("movers armed-kinds read failed", exc, quiet=True)
+            return set()
+
+    def _arm_selected(self, kind: str) -> None:
+        row = self._selected_row()
+        if row:
+            self._request_arm(row, kind)
+
+    def _request_arm(self, row: dict[str, Any], kind: str) -> None:
+        """The trader's explicit arm / disarm click for one row, on that row's side."""
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if symbol and kind in ARM_LABELS:
+            side = "short" if row.get("_side") == "short" else "long"
+            self.alertArmRequested.emit(symbol, side, kind)
 
     def _add_selected_to_focus(self) -> None:
         row = self._selected_row()
@@ -1093,6 +1300,14 @@ class MoversBoard(QWidget):
             side = row.get("_side") or self._side
             action = menu.addAction(f"+F  Add {symbol} to M5 Focus ({side})")
             action.triggered.connect(lambda _checked=False, r=dict(row): self._request_focus(r))
+            armed = self._armed_kinds(row)
+            for kind in (ARM_PULLBACK, ARM_LINE):
+                label = ARM_LABELS[kind]
+                text = (f"✓ Disarm {label} {symbol}" if kind in armed
+                        else f"Arm {label} {symbol} ({side})")
+                arm = menu.addAction(text)
+                arm.triggered.connect(
+                    lambda _checked=False, r=dict(row), k=kind: self._request_arm(r, k))
             hide = menu.addAction(f"Hide {symbol} for today (Del)")
             hide.triggered.connect(lambda _checked=False, r=dict(row): self.hide_row(r))
         hidden = len(self._hidden_in_view())
@@ -1114,6 +1329,17 @@ class MoversBoard(QWidget):
     def _empty_text(self, rows, name: str) -> str:
         if rows:
             return ""
+        if self._mode in TF_MODES:
+            board = self._view_board()
+            if not board:
+                return "" if name != "pop" else tf_banner_text(self._mode, board)
+            if name == "strong":
+                return "No name is beating SPY since the low."
+            if name == "weak":
+                return "No name is lagging SPY since the high."
+            if self._hidden_in_view():
+                return "Every name is hidden. Tap Unhide to see them."
+            return "Nothing moved enough."
         if not self._board:
             return "No Movers read yet. It refreshes every 5-minute bar in market hours."
         if "swing" in (self._board or {}):

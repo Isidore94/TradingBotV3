@@ -565,3 +565,138 @@ def test_empty_box_copy_button_is_disabled_and_leaves_the_clipboard(app):
     assert widget.strong.copy_symbols() == ""
     assert clipboard.text() == "KEEP"
     assert widget.main.copy_button.isEnabled()
+
+
+# ------------------------------------------------------------------ M30 / Daily tabs
+def _tf_board(tf="m30", session="2026-09-22"):
+    as_of = f"{session}T11:30:00-04:00" if tf == "m30" else f"{session}T00:00:00-04:00"
+    line = {"n": {"1": 4, "3": 10, "5": 0}, "mean_excess_pct": {"1": 0.2, "3": 0.8, "5": None},
+            "beat_pct": {"1": 50.0, "3": 57.0, "5": None}, "lookback_sessions": 20}
+    empty = {"n": {"1": 0, "3": 0, "5": 0}}
+    return {
+        "tf": tf, "session": session, "as_of": as_of,
+        "scanned_at": f"{session}T12:00:05-04:00", "stale": False, "last_error": "",
+        "state": {"state": "up_day", "spy_day_pct": 0.42},
+        "pop": {"long": [_row("TFA", pop_score=2.0)], "short": [_row("TFZ", pop_score=-1.0)]},
+        "swing": {"long": [_row("TFS", dip_score=1.1)], "short": [_row("TFW", dip_score=-0.7)]},
+        "swing_anchor": {"long": {"dt": "2026-09-21T14:00:00-04:00", "date": "2026-09-21",
+                                  "time": "14:00", "kind": "swing"},
+                         "short": {"dt": f"{session}T00:00:00-04:00", "date": session,
+                                   "time": "", "kind": "window"}},
+        "summaries": {"pop": {"long": line, "short": empty},
+                      "dip_strong": {"long": line}, "dip_weak": {"short": empty}},
+        "offered": 900, "measured": 850,
+    }
+
+
+def test_m30_and_daily_tabs_show_the_three_boxes_from_their_boards(app):
+    from PySide6.QtWidgets import QApplication
+
+    from ui.widgets.movers_board import MODE_LABELS
+
+    widget = _widget(app)
+    assert [MODE_LABELS[m] for m in widget.mode_buttons] == ["Pop + Dip", "M30", "Daily"]
+    widget.update_board(_board())
+    widget.update_timeframe_board("m30", _tf_board("m30"))
+    widget.update_timeframe_board("d1", _tf_board("d1"))
+    widget.mode_buttons["m30"].click()
+    widget.flush_pending_refresh()
+    assert widget.mode == "m30"
+    assert _symbols(widget) == ["TFA", "TFZ"]
+    assert _section_symbols(widget.strong) == ["TFS"] and _section_symbols(widget.weak) == ["TFW"]
+    assert not widget.strong.isHidden() and not widget.weak.isHidden()
+    assert widget.main.title_label.text().startswith("M30 Movers · 3-bar moves at ")
+    assert widget.strong.title_label.text().startswith("M30 Dip-strong · beating SPY since 9/21")
+    assert [h for _k, h in widget.model._columns][:3] == ["Sym", "90m", "RVOL"]
+    # The outcome line rides on each box title's hover.
+    assert "Last 20 sessions: +0.8% vs SPY at 3d, 57% beat, n=10" in \
+        widget.main.title_label.toolTip()
+    assert widget.strong.title_label.toolTip() == \
+        "Last 20 sessions: +0.8% vs SPY at 3d, 57% beat, n=10"
+    assert widget.weak.title_label.toolTip() == "no results yet"
+    assert "M30 scanned 9/22" in widget.banner.text()
+    assert "850 of 900 measured" in widget.banner.text()
+    widget.mode_buttons["d1"].click()
+    widget.flush_pending_refresh()
+    assert widget.main.title_label.text() == "Daily Movers · 3-day moves to the 9/22 close"
+    assert widget.weak.title_label.text() == "Daily Dip-weak · lagging SPY since 9/22 high"
+    assert [h for _k, h in widget.model._columns][:2] == ["Sym", "3d"]
+    # Copy still copies the shown box.
+    widget.main.copy_button.click()
+    assert QApplication.clipboard().text() == "TFA,TFZ"
+    widget.mode_buttons["pop"].click()
+    assert _symbols(widget) == ["AAA", "BBB", "ZZZ"]
+
+
+def test_timeframe_banner_says_not_scanned_yet_stale_and_failed(app):
+    widget = _widget(app)
+    widget.set_mode("m30")
+    widget.flush_pending_refresh()
+    assert "M30: not scanned yet" in widget.banner.text()
+    assert widget.main.title_label.text() == "M30 Movers · not scanned yet"
+    board = dict(_tf_board("d1"), stale=True, last_error="no SPY bars from Yahoo")
+    widget.update_timeframe_board("d1", board)
+    widget.set_mode("d1")
+    widget.flush_pending_refresh()
+    assert "stale" in widget.banner.text() and "last scan FAILED" in widget.banner.text()
+    assert widget.meta_label.text() == "9/22 stale"
+
+
+def test_pb_and_line_chips_emit_arm_requests_with_the_row_side_in_every_mode(app):
+    widget = _widget(app)
+    widget.resize(700, 400)
+    widget.update_board(_board(pullback=True))
+    widget.update_timeframe_board("d1", _tf_board("d1"))
+    widget.flush_pending_refresh()
+    asked = []
+    widget.alertArmRequested.connect(lambda *args: asked.append(args))
+    assert not widget.arm_buttons["pullback"].isEnabled()
+    widget.weak.table.selectRow(0)  # SINK, a Dip-weak (short) row
+    widget.arm_buttons["pullback"].click()
+    widget.arm_buttons["d1_line_pullback"].click()
+    assert asked == [("SINK", "short", "pullback"), ("SINK", "short", "d1_line_pullback")]
+    widget.set_mode("d1")
+    widget.flush_pending_refresh()
+    widget.table.selectRow(0)
+    widget.arm_buttons["pullback"].click()
+    assert asked[-1] == ("TFA", "long", "pullback")
+
+
+def test_row_menu_arms_and_shows_disarm_when_armed(app):
+    widget = _widget(app)
+    widget.update_timeframe_board("m30", _tf_board("m30"))
+    widget.set_mode("m30")
+    widget.flush_pending_refresh()
+    armed = {"TFW": {"d1_line_pullback"}}
+    widget.set_armed_kinds_provider(lambda symbol: armed.get(symbol, set()))
+    index = widget.weak.proxy.index(0, 0)
+    texts = [a.text() for a in widget.row_menu(index).actions()]
+    assert "Arm D1 Pullback (fast) TFW (short)" in texts
+    assert "✓ Disarm Pullback to D1 line TFW" in texts
+    asked = []
+    widget.alertArmRequested.connect(lambda *args: asked.append(args))
+    action = next(a for a in widget.row_menu(index).actions() if a.text().startswith("✓"))
+    action.trigger()
+    assert asked == [("TFW", "short", "d1_line_pullback")]
+    widget.weak.table.selectRow(0)
+    assert widget.arm_buttons["d1_line_pullback"].text() == "Line ✓"
+    assert widget.arm_buttons["pullback"].text() == "PB"
+
+
+def test_a_pullback_pulls_to_pop_once_but_a_rally_never_leaves_m30(app):
+    widget = _widget(app)
+    widget.set_mode("m30")
+    widget.update_board(_board(pullback=True))
+    widget.flush_pending_refresh()
+    assert widget.mode == "pop"
+    # The trader goes back to M30; the same episode does not pull them away again.
+    widget.mode_buttons["m30"].click()
+    widget.update_board(_board(pullback=True))
+    widget.flush_pending_refresh()
+    assert widget.mode == "m30"
+    rally = _board()
+    rally["state"] = dict(rally["state"], state="up_day", rally=True,
+                          start_dt="2026-09-22T12:30:00-04:00")
+    widget.update_board(rally)
+    widget.flush_pending_refresh()
+    assert widget.mode == "m30"
