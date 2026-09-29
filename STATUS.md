@@ -15,9 +15,9 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   Saturday summary reads every slice (`1751c338`); gates #257-#306.
 - **GUI/startup delivery:** approved 4K GUI design in gui.md; Journal, Research,
   Day Review, supporting pages and Desk polish; Windows font-startup fix.
-  Source and frozen selftests 105/105. Long combined Qt test runs still hit
-  worker-lifetime crashes.
+  Source and frozen selftests 105/105. Long combined Qt runs still hit worker-lifetime crashes.
 - **Desk:** next launch uses main; live 4K/resource and first-usable checks are in GATES.
+- **In flight:** gpt-oss:20b on the 5080 host; code on `claude/gpt-oss-ready-2026-09-29`. Probe night, then the trader's word.
 - **Night window:** the night AI starts 22:00 PT. Its model runs on the RTX 5080 host
   (`ai_remote_gpu_ssh_alias` = `claude-host`, ssh tunnel on 11435); falls back to local Ollama
   (also mid-run). One pass + one recheck, then unload and shut down; last firing 05:30. No builders, merges or test runs
@@ -27,9 +27,8 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   summary into the night AI; phone-brief rule line; pre-Aug entry_at (outcome code, ask
   first); review of the per-trade Mentor Save (`182f3e08`); weekly-options facet needs a
   theta store (43 of 6,462 picks quoted).
-- **Night read 2026-09-28:** econ brief rejected 4 nights ("1 p.m." auction time, P4b);
-  Sat day_review_show (names XLK) and regime_read ("W bearish") rejected twice, reply text
-  not kept; setup_research narration absent. #264 Health rows need a desk session.
+- **Night read 2026-09-28:** econ brief rejected 4 nights ("1 p.m." auction time, P4b); Sat day_review_show
+  (names XLK) and regime_read ("W bearish") rejected twice; setup_research narration absent. #264 needs a desk session.
 - **Next action:** Tue 07:30 gate #305; gates #300-#301 (rolling RRS, Movers); gates #297-#298 (runner dips armed, a fire in the Alert Center); `desk_perf_report.py --day 2026-09-28 --compare 2026-09-24`,
   gates #258-#287. Left: B10, B2, C4a, Phase C.
 - **Trader actions owed:** set Risk per trade ($) in Settings > General; fill
@@ -38,4 +37,4 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   `map_freshness.py --apply`; desk down + market closed: `journal_pnl_repair.py` (#205),
   the options-journal repair (#162), `journal_questrade_gaps.py --statement`; the
   Saturday large-model probe; live click checks; consider rotating the market-prep
-  OpenAI key (a test read it once in the A5 suite run).
+  OpenAI key.

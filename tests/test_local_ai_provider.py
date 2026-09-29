@@ -493,6 +493,88 @@ class LocalRequestTests(unittest.TestCase):
         self.assertIn("404", str(ctx.exception))
 
 
+class ThinkingModelRequestTests(unittest.TestCase):
+    """gpt-oss reasons before it answers; gemma3 does not. Only the thinking tag
+    gets a reasoning level and an output allowance (2026-09-29, the 5080 host)."""
+
+    def setUp(self):
+        import ai_summary
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.evidence = ai_summary.build_evidence_package(
+            ["daily_report"], source_overrides=_daily_overrides(Path(self._tmp.name))
+        )
+        self.summary_text = json.dumps(_valid_summary("daily.auto_report"))
+
+    def _send(self, model, **settings):
+        import ai_summary
+
+        sent = []
+
+        def fake_post(url, **kwargs):
+            sent.append(kwargs["json"])
+            return _chat_response(self.summary_text)
+
+        with _settings(ai_local_endpoint_url=ENDPOINT, **settings):
+            ai_summary.request_ai_summary(
+                provider="local", model=model, api_key="", evidence=self.evidence, post=fake_post
+            )
+        return sent[0]
+
+    def test_model_thinks_is_by_tag_family(self):
+        import ai_summary
+
+        self.assertTrue(ai_summary.model_thinks("gpt-oss:20b"))
+        self.assertTrue(ai_summary.model_thinks("GPT-OSS:120b"))
+        self.assertTrue(ai_summary.model_thinks("hf.co/x/gpt-oss-20b-GGUF:Q8"))
+        self.assertFalse(ai_summary.model_thinks("gemma3:12b-tbv3ctx-64k"))
+        self.assertFalse(ai_summary.model_thinks(""))
+
+    def test_gpt_oss_request_carries_low_effort_and_the_allowance(self):
+        import ai_summary
+
+        sent = self._send("gpt-oss:20b")
+        self.assertEqual(sent["reasoning_effort"], "low")
+        self.assertEqual(
+            sent["max_tokens"],
+            ai_summary.LOCAL_MAP_GENERATION_TOKENS + ai_summary.DEFAULT_LOCAL_REASONING_TOKENS,
+        )
+        self.assertEqual(sent["response_format"]["type"], "json_schema")
+
+    def test_gemma_request_is_unchanged(self):
+        import ai_summary
+
+        sent = self._send("gemma3:12b-tbv3ctx-64k", ai_local_reasoning_effort="high")
+        self.assertNotIn("reasoning_effort", sent)
+        self.assertEqual(sent["max_tokens"], ai_summary.LOCAL_MAP_GENERATION_TOKENS)
+
+    def test_effort_and_allowance_come_from_settings(self):
+        import ai_summary
+
+        sent = self._send("gpt-oss:20b", ai_local_reasoning_effort="High", ai_local_reasoning_tokens="500")
+        self.assertEqual(sent["reasoning_effort"], "high")
+        self.assertEqual(sent["max_tokens"], ai_summary.LOCAL_MAP_GENERATION_TOKENS + 500)
+        sent = self._send("gpt-oss:20b", ai_local_reasoning_effort="max", ai_local_reasoning_tokens="lots")
+        self.assertEqual(sent["reasoning_effort"], "low")
+        self.assertEqual(
+            sent["max_tokens"],
+            ai_summary.LOCAL_MAP_GENERATION_TOKENS + ai_summary.DEFAULT_LOCAL_REASONING_TOKENS,
+        )
+
+    def test_evidence_ceiling_gives_the_allowance_back_to_the_window(self):
+        import ai_summary
+
+        with _settings(ai_local_context_tokens=65536, ai_local_model_medium="gemma3:12b"):
+            plain = ai_summary.local_evidence_budget_ceiling_chars()
+        with _settings(ai_local_context_tokens=65536, ai_local_model_medium="gpt-oss:20b"):
+            thinking = ai_summary.local_evidence_budget_ceiling_chars()
+        self.assertLess(thinking, plain)
+        with _settings(ai_local_context_tokens=4000, ai_local_model_medium="gpt-oss:20b"):
+            self.assertEqual(ai_summary.local_evidence_budget_ceiling_chars(), 1_000)
+
+
 class MarketPrepBaseUrlTests(unittest.TestCase):
     """market_prep/services/ai_service.py: same switch, same default-off rule."""
 
