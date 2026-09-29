@@ -564,3 +564,54 @@ def test_hide_persists_through_the_local_setting(app, monkeypatch):
     second.update_board(_sort_board())
     second.flush_pending_refresh()
     assert "ZZZ" not in _view_symbols(second)
+
+
+def test_each_box_copy_button_puts_its_symbols_on_the_clipboard_in_view_order(app):
+    """Trader 2026-09-29: one Copy per box, comma-joined for TC2000 / TradingView."""
+    from PySide6.QtWidgets import QApplication
+
+    widget = _widget(app)
+    board = _board(pullback=True)
+    board["pop"] = _sort_board()["pop"]
+    board["pop"]["long"].append(_row(" aaa ", move15_pct=0.1))  # duplicate, lower case, padded
+    board["pop"]["long"].append(_row("", move15_pct=0.05))  # blank symbol
+    widget.update_board(board)
+    widget.flush_pending_refresh()
+    assert widget.mode == "pop"
+    clipboard = QApplication.clipboard()
+    for section in widget.sections:
+        assert not section.copy_button.isHidden()
+        assert section.copy_button.isEnabled()
+    widget.main.copy_button.click()
+    assert clipboard.text() == "AAA,ZZZ,BBB"
+    assert widget.main.copy_button.text() == "Copied 3"
+    widget.strong.copy_button.click()
+    assert clipboard.text() == "HOLD"
+    widget.weak.copy_button.click()
+    assert clipboard.text() == "SINK"
+    # A header sort changes the on-screen order, and the copy follows it.
+    col = [k for k, _h in widget.model._columns].index("move15_pct")
+    widget.table.horizontalHeader().sectionClicked.emit(col)
+    widget.main.copy_button.click()
+    assert clipboard.text() == "BBB,AAA,ZZZ"
+    # My names has its own button.
+    widget.mode_buttons["mine"].click()
+    assert not widget.main.copy_button.isHidden()
+    widget.main.copy_button.click()
+    assert clipboard.text() == ",".join(_view_symbols(widget))
+    assert clipboard.text() == "MYB,MYA"
+
+
+def test_empty_box_copy_button_is_disabled_and_leaves_the_clipboard(app):
+    from PySide6.QtWidgets import QApplication
+
+    widget = _widget(app)
+    widget.update_board(_board(pullback=False))
+    widget.flush_pending_refresh()
+    clipboard = QApplication.clipboard()
+    clipboard.setText("KEEP")
+    assert not widget.strong.copy_button.isEnabled()
+    assert not widget.weak.copy_button.isEnabled()
+    assert widget.strong.copy_symbols() == ""
+    assert clipboard.text() == "KEEP"
+    assert widget.main.copy_button.isEnabled()
