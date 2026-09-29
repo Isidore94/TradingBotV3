@@ -24,7 +24,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt, Signal
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    QSortFilterProxyModel,
+    Qt,
+    QTimer,
+    Signal,
+)
 
 #: The invalid (root) index used as the default parent.
 _NO_PARENT = QModelIndex()
@@ -69,6 +76,9 @@ MODE_LABELS = {"pop": "Pop + Dip", "mine": "My names"}
 MODE_SHORT = {"pop": "Pop", "mine": "Mine"}
 #: Below this width the chips and header buttons use short labels.
 NARROW_PX = 300
+#: Each box's Copy chip, and how long it shows "Copied N" after a click.
+COPY_LABEL = "Copy"
+COPY_FEEDBACK_MS = 1500
 MOVERS_MODE_SETTING = "movers_board_mode"
 MOVERS_SIDE_SETTING = "movers_board_side"
 MOVERS_DEEP_READ_SETTING = "movers_board_deep_read"
@@ -455,10 +465,24 @@ class MoversSection(QWidget):
         self.empty_label = QLabel("")
         self.empty_label.setObjectName("MutedLabel")
         self.empty_label.setWordWrap(True)
+        self.copy_button = QToolButton()
+        self.copy_button.setObjectName("MoversChip")
+        self.copy_button.setText(COPY_LABEL)
+        self.copy_button.setToolTip(
+            "Copy this box's symbols, in the order shown, as one comma list "
+            "(pastes into a TC2000 or TradingView watchlist)."
+        )
+        self.copy_button.setEnabled(False)
+        self.copy_button.clicked.connect(self.copy_symbols)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(1)
-        layout.addWidget(self.title_label)
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(4)
+        layout.addLayout(title_row)
+        title_row.addWidget(self.title_label, 1)
+        title_row.addWidget(self.copy_button, 0, Qt.AlignmentFlag.AlignRight)
         layout.addWidget(self.table, 1)
         layout.addWidget(self.empty_label)
 
@@ -466,6 +490,33 @@ class MoversSection(QWidget):
         self.columns_mode = columns_mode
         self.model.set_rows(rows, columns_mode, side)
         self.apply_sort()
+        has_rows = bool(self.copy_symbols_text())
+        if self.copy_button.isEnabled() != has_rows:
+            self.copy_button.setEnabled(has_rows)
+
+    def copy_symbols_text(self) -> str:
+        """The shown symbols in view order: upper case, no blanks, no repeats, comma-joined."""
+        seen: dict[str, None] = {}
+        for row in self.visible_rows():
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if symbol:
+                seen.setdefault(symbol, None)
+        return ",".join(seen)
+
+    def copy_symbols(self) -> str:
+        """Put this box's symbols on the clipboard; an empty box copies nothing."""
+        text = self.copy_symbols_text()
+        if not text:
+            return ""
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(text)
+        self.copy_button.setText(f"Copied {text.count(',') + 1}")
+        QTimer.singleShot(COPY_FEEDBACK_MS, self._reset_copy_label)
+        return text
+
+    def _reset_copy_label(self) -> None:
+        self.copy_button.setText(COPY_LABEL)
 
     def columns(self):
         return COLUMNS.get(self.columns_mode, COLUMNS["pop"])
