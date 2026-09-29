@@ -1,0 +1,116 @@
+{
+  "vocabulary_id": "veto_reasons",
+  "vocab_version": 6,
+  "description": "Why the trader is passing on a symbol for today. v6 (2026-09-29) ADDS 'Hammering' at the trader's request: 'hammering which means the stock is making a hammer against the way we want to go. so for shorts its a bullish hammer for longs its a bearish ones. this indicates support/resistance is right there so we cant get into that trade.' It sits on hotkey r above Other. Every v5 reason carries over byte-identical (codes, labels, hints, short words, hotkeys), so every forward record keeps pooling; the new code grades on its own from today.",
+  "reasons": [
+    {
+      "code": "incoming_trendline",
+      "label": "Incoming trendline",
+      "hotkey": "1",
+      "note_required": false,
+      "hint": "A descending/ascending line arrives at price soon enough to matter today.",
+      "short_label": "Incoming trendline (below)",
+      "short_hint": "A rising line arrives under price soon enough to catch the drop today."
+    },
+    {
+      "code": "sma_incoming",
+      "label": "SMA incoming",
+      "hotkey": "0",
+      "note_required": false,
+      "hint": "A moving average arrives at price soon enough to cap or catch the move today.",
+      "short_label": "SMA incoming (below)",
+      "short_hint": "A moving average sits just under price, close enough to catch the drop today."
+    },
+    {
+      "code": "overhead_horizontal",
+      "label": "Overhead horizontal",
+      "hotkey": "2",
+      "note_required": false,
+      "hint": "A horizontal level sits close enough above to cap the move.",
+      "short_label": "Horizontal support below",
+      "short_hint": "A horizontal level sits close enough below to stop the drop."
+    },
+    {
+      "code": "compressed",
+      "label": "Compressed",
+      "hotkey": "3",
+      "note_required": false,
+      "hint": "Range has coiled too tight to offer a workable move from here."
+    },
+    {
+      "code": "sector_mate_earnings_pending",
+      "label": "Sector mate earnings pending",
+      "hotkey": "4",
+      "note_required": false,
+      "hint": "A peer reports before this name would resolve."
+    },
+    {
+      "code": "too_extended_from_base",
+      "label": "Too extended from base",
+      "hotkey": "5",
+      "note_required": false,
+      "hint": "Price has already travelled too far from its base to start here.",
+      "short_label": "Too extended below base",
+      "short_hint": "Price has already fallen too far from its base to short here."
+    },
+    {
+      "code": "volume_dry",
+      "label": "Volume dry",
+      "hotkey": "6",
+      "note_required": false,
+      "hint": "Not enough participation to trust the move."
+    },
+    {
+      "code": "earnings_too_close",
+      "label": "Earnings too close",
+      "hotkey": "7",
+      "note_required": false,
+      "hint": "This name's own report lands inside the intended hold."
+    },
+    {
+      "code": "spread_liquidity",
+      "label": "Spread / liquidity",
+      "hotkey": "8",
+      "note_required": false,
+      "hint": "The spread or depth makes the risk unmanageable."
+    },
+    {
+      "code": "bad_industry",
+      "label": "Bad industry",
+      "hotkey": "q",
+      "note_required": false,
+      "hint": "The whole group is one the trader avoids right now, e.g. oil and gas or real estate."
+    },
+    {
+      "code": "too_early",
+      "label": "Too early",
+      "hotkey": "w",
+      "note_required": false,
+      "hint": "The bounce is only starting - one green candle. It needs more time to prove itself.",
+      "short_hint": "The fade is only starting - one red candle. It needs more time to prove itself."
+    },
+    {
+      "code": "not_remotely_good",
+      "label": "Not remotely good",
+      "hotkey": "e",
+      "note_required": false,
+      "hint": "The call makes no sense on the chart, e.g. a short on a name at all-time highs that is only red for the day."
+    },
+    {
+      "code": "hammering",
+      "label": "Hammering (bearish hammer)",
+      "hotkey": "r",
+      "note_required": false,
+      "hint": "A bearish hammer against the long: resistance is right there.",
+      "short_label": "Hammering (bullish hammer)",
+      "short_hint": "A bullish hammer against the short: support is right there."
+    },
+    {
+      "code": "other",
+      "label": "Other (note required)",
+      "hotkey": "9",
+      "note_required": true,
+      "hint": "Anything not covered above. The note is what makes this row usable later."
+    }
+  ]
+}

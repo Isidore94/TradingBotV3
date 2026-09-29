@@ -39,7 +39,8 @@ def test_long_words_and_every_code_and_hotkey_carry_over_unchanged():
     versions = available_veto_versions()
     newest = load_veto_vocabulary()
     previous = load_veto_vocabulary(version=versions[-2])
-    assert newest.codes == previous.codes
+    # A later bump may add a reason (v6 added hammering); it never drops one.
+    assert set(previous.codes) <= set(newest.codes)
     for reason in previous.reasons:
         twin = newest.reason(reason.code)
         assert (twin.label, twin.hint, twin.hotkey, twin.note_required) == (
