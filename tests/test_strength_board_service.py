@@ -205,14 +205,15 @@ def test_only_one_refresh_runs_at_a_time(monkeypatch):
 def test_a_failed_refresh_keeps_the_last_good_board(monkeypatch):
     service, module = _service(monkeypatch)
     good = {"long": [{"symbol": "NVDA"}], "short": [], "offered": 1, "measured": 1}
-    monkeypatch.setattr(module, "build_board", lambda **_k: good)
+    # The build runs in a child process, so the seam is the child call itself.
+    monkeypatch.setattr(service, "_build_in_child", lambda _fraction: good)
     service._worker()
     assert service.board()["long"] == [{"symbol": "NVDA"}]
 
-    def explode(**_kwargs):
+    def explode(_fraction):
         raise RuntimeError("network gone")
 
-    monkeypatch.setattr(module, "build_board", explode)
+    monkeypatch.setattr(service, "_build_in_child", explode)
     service._worker()
     assert service.board()["long"] == [{"symbol": "NVDA"}], "last good survives"
     # ... and the failure is visible, so a stale board cannot look current.

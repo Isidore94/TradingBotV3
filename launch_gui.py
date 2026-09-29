@@ -63,6 +63,11 @@ def _enable_crash_log() -> None:
 
 
 def main() -> int:
+    # A frozen spawn child (bounce scanner, strength board build) re-runs this
+    # exe; freeze_support runs the child's work and exits. No-op from source.
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     argv = sys.argv[1:]
     # --selftest before anything else, including the crash log: it must be
     # runnable against a frozen bundle on a machine with no display and no
