@@ -14,6 +14,7 @@ import multiprocessing
 import os
 import queue
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 from swallowed import note_swallowed
@@ -22,6 +23,23 @@ MESSAGE_QUEUE_LIMIT = 8192
 START_TIMEOUT_SECONDS = 60.0
 RPC_TIMEOUT_SECONDS = 180.0
 BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+#: How often the proxy's status poller re-reads the small status values.
+STATUS_POLL_SECONDS = 2.0
+#: A cached status older than this is unknown (a hung child is not "connected").
+STATUS_STALE_SECONDS = 30.0
+#: Status attributes the GUI thread reads from the cache, never over the pipe.
+STATUS_GETS = ("connection_status",)
+#: Zero-argument status methods the GUI thread reads from the cache.
+STATUS_CALLS = (
+    "get_auto_regime_reading",
+    "entry_assist_state",
+    "get_market_environment",
+    "pacing_delay_remaining",
+)
+
+
+class StatusUnknown(RuntimeError):
+    """A GUI-thread status read before the poller has a fresh answer."""
 
 
 def _set_below_normal_priority() -> bool:
@@ -217,12 +235,81 @@ class BounceProcessProxy:
         self.pid = int(hello.get("pid") or self._process.pid or 0)
         self.priority_below_normal = bool(hello.get("priority_below_normal"))
         self._initial_state = dict(hello.get("state") or {})
+        self._init_status_cache()
+        if "connection_status" in self._initial_state:
+            self._store_status("get", "connection_status", self._initial_state["connection_status"])
         self._event_thread = threading.Thread(
             target=self._drain_events,
             name="bouncebot-callbacks",
             daemon=True,
         )
         self._event_thread.start()
+        self._start_status_poller()
+
+    # -- status cache: the GUI thread never waits on the pipe ----------------
+    def _init_status_cache(self) -> None:
+        self._gui_thread = threading.main_thread()
+        self._status_lock = threading.Lock()
+        self._status: dict[tuple[str, str], tuple[Any, float]] = {}
+        self._status_wake = threading.Event()
+        self._status_interval = STATUS_POLL_SECONDS
+        self._status_thread: threading.Thread | None = None
+
+    def _start_status_poller(self) -> None:
+        self._status_thread = threading.Thread(
+            target=self._poll_status,
+            name="bouncebot-status",
+            daemon=True,
+        )
+        self._status_thread.start()
+
+    def _on_gui_thread(self) -> bool:
+        return threading.current_thread() is self._gui_thread
+
+    def _store_status(self, operation: str, name: str, value: Any) -> None:
+        with self._status_lock:
+            self._status[(operation, name)] = (value, time.monotonic())
+
+    def _cached_status(self, operation: str, name: str) -> Any:
+        """The last fresh answer, else StatusUnknown. Memory only."""
+        with self._status_lock:
+            entry = self._status.get((operation, name))
+        if entry is None or time.monotonic() - entry[1] > STATUS_STALE_SECONDS:
+            raise StatusUnknown(f"BounceBot status not known yet: {name}")
+        return entry[0]
+
+    def _status_read(self, operation: str, name: str) -> Any:
+        """GUI thread: the cached value. Any other thread: a live RPC, also cached."""
+        if self._on_gui_thread():
+            return self._cached_status(operation, name)
+        value = self._rpc(operation, name)
+        self._store_status(operation, name, value)
+        return value
+
+    def _poll_status(self) -> None:
+        """The one owner of the status cache refresh; ends with the proxy."""
+        reads = [("get", name) for name in STATUS_GETS] + [("call", name) for name in STATUS_CALLS]
+        while not self._closed.is_set() and self._is_alive():
+            for operation, name in reads:
+                if self._closed.is_set():
+                    return
+                try:
+                    value = self._rpc(operation, name)
+                except Exception:  # noqa: BLE001 - a failed read is unknown, not the last answer
+                    with self._status_lock:
+                        self._status.pop((operation, name), None)
+                    continue
+                self._store_status(operation, name, value)
+            self._status_wake.wait(self._status_interval)
+            self._status_wake.clear()
+
+    def _stop_status_poller(self) -> None:
+        wake = getattr(self, "_status_wake", None)
+        if wake is not None:
+            wake.set()
+        thread = getattr(self, "_status_thread", None)
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(1.0)
 
     @property
     def process(self):
@@ -231,7 +318,7 @@ class BounceProcessProxy:
     @property
     def connection_status(self) -> bool:
         try:
-            return bool(self._get("connection_status"))
+            return bool(self._status_read("get", "connection_status"))
         except Exception:
             return False
 
@@ -307,8 +394,21 @@ class BounceProcessProxy:
         if name.startswith("_") and name not in {"_spy_session_bars"}:
             raise AttributeError(name)
 
+        if name in STATUS_CALLS:
+
+            def status(*args, **kwargs):
+                if args or kwargs:
+                    return self._rpc("call", name, *args, **kwargs)
+                return self._status_read("call", name)
+
+            return status
+
         def remote(*args, **kwargs):
-            return self._rpc("call", name, *args, **kwargs)
+            result = self._rpc("call", name, *args, **kwargs)
+            wake = getattr(self, "_status_wake", None)
+            if wake is not None:
+                wake.set()  # a command may change a status: re-read it now
+            return result
 
         return remote
 
@@ -325,6 +425,7 @@ class BounceProcessProxy:
             self._terminate()
         if self._event_thread is not threading.current_thread():
             self._event_thread.join(1.0)
+        self._stop_status_poller()
         try:
             self._events.close()
             self._events.join_thread()
@@ -340,6 +441,9 @@ class BounceProcessProxy:
 
     def _terminate(self) -> None:
         self._closed.set()
+        wake = getattr(self, "_status_wake", None)
+        if wake is not None:
+            wake.set()
         if self._is_alive():
             self._process.terminate()
             self._process.join(2.0)
