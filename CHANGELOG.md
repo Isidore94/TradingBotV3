@@ -1,6 +1,6 @@
 # Changelog
 
-- 2026-09-28 Night AI: `run_ai_jobs.ps1` can run the model on the RTX 5080 host. Set `ai_remote_gpu_ssh_alias` (e.g. `claude-host`) and point `ai_local_endpoint_url` at the tunnel's local port; the wrapper wakes the host, opens a loopback ssh tunnel, starts Ollama there (`scripts/remote_gpu/ollama_up.sh`), and after the run mirrors the host's model log to `logs\` and the AI store. Unset = unchanged. A host problem runs the night degraded, never refused.
+- 2026-09-28 Night AI: `run_ai_jobs.ps1` can run the model on the RTX 5080 host. With `ai_remote_gpu_ssh_alias` set (e.g. `claude-host`) it wakes the host, starts Ollama there (`scripts/remote_gpu/ollama_up.sh`), opens a self-healing loopback ssh tunnel (`ai_remote_gpu_tunnel_port`, default 11435), checks the model tag and warms it, then hands the child `TRADINGBOTV3_AI_ENDPOINT_OVERRIDE`; the saved endpoint is untouched. Any failure falls back to local Ollama. After the run the host log is copied to `logs\` and the AI store `gpu_host\`. Measured: 19k-token prompt at ~4,000 tok/s, ~62 tok/s out.
 
 - 2026-09-28 Night AI: a model slot can say it will load no model tonight (plan_review with an empty plan), and then the 30-minute firings skip the Ollama probe; it had cold-loaded the 12B model 18 times a night for nothing. The Saturday summary now reads every slice (default cap 0, was 24 of 60); its window reserve is 260 min.
 
