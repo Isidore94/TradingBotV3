@@ -22,7 +22,7 @@ def _wrapper_code() -> str:
 def _remote_function() -> str:
     code = _wrapper_code()
     start = code.index("function Invoke-RemoteGpuPreflight")
-    end = code.index("\ntry {", start)
+    end = code.index("function Stop-RemoteGpuTunnel", start)
     return code[start:end]
 
 
@@ -82,9 +82,59 @@ def test_the_night_flags_steer_later_firings_and_the_shutdown():
     # Only a host this job woke is ever powered off, and only when idle.
     body = _remote_function()
     assert "Set-Content -Path $script:wokenFlag" in body
-    assert "if ($script:remoteAlias -and (Test-Path $script:wokenFlag))" in code
+    assert "if ($hostFinished -and (Test-Path $script:wokenFlag))" in code
     assert "grep -v '^ollama$'" in code
     assert "shutdown.exe /s /t 60" in code
+
+
+def test_the_night_is_one_pass_and_one_recheck():
+    code = _wrapper_code()
+    # A clean pass ends the night; otherwise the second pass is the last.
+    assert "$clean = ($code -eq 0) -and ($summaryLine -match ', 0 degraded, 0 failed, ')" in code
+    assert "if ($clean -or $passes -ge 2) {" in code
+    assert "Set-Content -Path $script:doneFlag" in code
+    # A done night: later scheduled firings run nothing and wake nothing.
+    early = code.index("if ($scheduled -and (Test-Path $script:doneFlag)) {")
+    assert early < code.index("Invoke-RemoteGpuPreflight -Alias")
+    assert "exit 0" in code[early:early + 300]
+    # A run that reached nothing (exit 2) is not a pass.
+    assert "if ($scheduled -and $code -in @(0, 1)) {" in code
+
+
+def test_the_host_is_released_as_soon_as_the_night_is_done():
+    code = _wrapper_code()
+    assert "($nightDone -or ($scheduled -and $morning))" in code
+    # The model is unloaded through the tunnel before the tunnel closes.
+    assert code.index("keep_alive = 0") < code.rindex("Stop-RemoteGpuTunnel")
+    assert "if ($hostFinished -and $remoteReady) {" in code
+
+
+def test_runs_that_need_no_model_never_touch_the_host():
+    code = _wrapper_code()
+    assert "$_ -in @('--retry-journal-import', '--status')" in code
+    assert "} elseif ($noModelRun -and" in code
+    assert "if ($script:remoteAlias -and -not $noModelRun) {" in code
+
+
+def test_every_host_command_runs_with_a_timeout():
+    code = _wrapper_code()
+    # Only alias resolution calls ssh directly; the tunnel loop is a string.
+    direct = [line.strip() for line in code.splitlines() if "& ssh" in line]
+    assert len(direct) == 1 and "& ssh -G $Alias" in direct[0]
+    helper = code[code.index("function Invoke-HostSsh"):code.index("function Invoke-RemoteGpuPreflight")]
+    assert "$proc.StandardInput.Close()" in helper
+    assert "WaitForExit($TimeoutSeconds * 1000)" in helper
+    assert "$proc.Kill()" in helper
+
+
+def test_the_night_task_last_fires_at_0530():
+    source = (SCRIPTS_DIR / "register_ai_jobs_task.ps1").read_text(encoding="utf-8")
+    assert '[string]$LastStartLocal = "05:30"' in source
+    assert "$DurationHours" not in source
+    assert (
+        "-RepetitionDuration (New-TimeSpan -Minutes ($spanMinutes + [math]::Floor($RepeatMinutes / 2)))"
+        in source
+    )
 
 
 def test_the_local_server_is_readied_even_when_the_5080_is_used():

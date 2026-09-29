@@ -101,9 +101,14 @@ function Test-LocalEndpoint {
 # Night flags (one night = the evening's date, so 22:00-05:30 share one key):
 #   gpu_host_dead-<night>.flag   the host failed tonight (preflight, or the job
 #                                lost it mid-run); later firings go local at once.
-#   gpu_host_woken-<night>.flag  this job woke the host, so this job may power it
-#                                off after `ai_remote_gpu_off_after` (05:30).
-# A host that was already up is left on: someone else may be using it.
+#   gpu_host_woken-<night>.flag  this job woke the host, so this job powers it off
+#                                once the night is done (backstop: after
+#                                `ai_remote_gpu_off_after`, 05:30).
+#   night_passes-<night>.txt     scheduled passes that ran tonight.
+#   night_done-<night>.flag      a clean pass, or the pass plus ONE recheck, ran.
+#                                Later firings exit at once and wake nothing.
+# A host that was already up is left on (someone else may be using it); only
+# its model is unloaded.
 $script:remoteAlias = ''
 $script:watchdog = $null
 $script:aiStoreDir = ''
@@ -111,6 +116,40 @@ $nightKey = (Get-Date).AddHours(-12).ToString('yyyyMMdd')
 $stateDir = Join-Path $env:LOCALAPPDATA 'TradingBotV3'
 $script:deadFlag = Join-Path $stateDir "gpu_host_dead-$nightKey.flag"
 $script:wokenFlag = Join-Path $stateDir "gpu_host_woken-$nightKey.flag"
+$script:passFile = Join-Path $stateDir "night_passes-$nightKey.txt"
+$script:doneFlag = Join-Path $stateDir "night_done-$nightKey.flag"
+$scheduled = -not ($Passthrough | Where-Object { $_ })
+# These runs never call a model, so they never wake or load the 5080.
+$noModelRun = [bool]($Passthrough | Where-Object { $_ -in @('--retry-journal-import', '--status') })
+
+# Runs one command on the host with a hard timeout and stdin closed. Ok is
+# $false when ssh could not start or outlived the timeout.
+function Invoke-HostSsh {
+    param([string]$Command, [string]$InputText = '', [int]$TimeoutSeconds = 60)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'ssh.exe'
+    $psi.Arguments = "-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 $script:remoteAlias `"$($Command -replace '"', '\"')`""
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    try { $proc = [System.Diagnostics.Process]::Start($psi) } catch {
+        Write-Log "remote GPU: ssh did not start ($($_.Exception.Message))" | Out-Null
+        return [pscustomobject]@{ Ok = $false; Lines = @() }
+    }
+    $out = $proc.StandardOutput.ReadToEndAsync()
+    $null = $proc.StandardError.ReadToEndAsync()
+    if ($InputText) { $proc.StandardInput.Write($InputText) }
+    $proc.StandardInput.Close()
+    if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
+        try { $proc.Kill() } catch { $null = $_ }
+        Write-Log "remote GPU: ssh timed out after ${TimeoutSeconds}s: $Command" | Out-Null
+        return [pscustomobject]@{ Ok = $false; Lines = @() }
+    }
+    $lines = @(([string]$out.Result) -split "`r?`n" | Where-Object { $_ -ne '' })
+    return [pscustomobject]@{ Ok = $true; Lines = $lines }
+}
 
 function Invoke-RemoteGpuPreflight {
     param([string]$Alias, [int]$TunnelPort, [string]$Model)
@@ -132,8 +171,9 @@ function Invoke-RemoteGpuPreflight {
     # copy of it and cannot drift from the repo.
     $up = (Get-Content (Join-Path $PSScriptRoot 'remote_gpu\ollama_up.sh') -Raw) -replace "`r", ''
     # PowerShell 5.1 may prefix a BOM when piping to a native exe; strip it host-side.
-    $result = $up | & ssh -o BatchMode=yes -o ConnectTimeout=10 $Alias "sed '1s/^\xEF\xBB\xBF//' | bash -s"
-    Write-Log "remote GPU: $($result -join ' ')"
+    $result = Invoke-HostSsh -Command "sed '1s/^\xEF\xBB\xBF//' | bash -s" -InputText $up -TimeoutSeconds 90
+    if (-not $result.Ok) { Write-Log "remote GPU: the host start script did not answer; using the local server"; return $false }
+    Write-Log "remote GPU: $($result.Lines -join ' ')"
     # Watchdog: a hidden loop that reopens the tunnel whenever ssh exits, so a
     # network blip costs seconds instead of the rest of the night.
     if (-not (Test-LocalEndpoint -EndpointHost '127.0.0.1' -Port $TunnelPort)) {
@@ -163,6 +203,12 @@ function Stop-RemoteGpuTunnel {
     Stop-Process -Id $script:watchdog.Id -Force -ErrorAction SilentlyContinue
 }
 
+if ($scheduled -and (Test-Path $script:doneFlag)) {
+    Write-Log "night done: tonight's pass and recheck already ran; nothing to do"
+    Write-Log "=== AI jobs complete (exit 0: night already done) ==="
+    exit 0
+}
+
 try {
     $settingsPath = Join-Path $env:LOCALAPPDATA 'TradingBotV3\local_settings.json'
     $endpoint = ''
@@ -175,6 +221,8 @@ try {
     }
     if ([string]::IsNullOrWhiteSpace($endpoint)) {
         Write-Log "local inference: no endpoint configured; narration is off by design"
+    } elseif ($noModelRun -and -not [string]::IsNullOrWhiteSpace($script:remoteAlias)) {
+        Write-Log "remote GPU: this run needs no model; the host is not touched"
     } elseif (-not [string]::IsNullOrWhiteSpace($script:remoteAlias) -and (Test-Path $script:deadFlag)) {
         Write-Log "remote GPU: the host failed earlier tonight; using the local server"
     } elseif (-not [string]::IsNullOrWhiteSpace($script:remoteAlias)) {
@@ -258,24 +306,27 @@ $process = Start-Process -FilePath $python `
     -RedirectStandardOutput $stdout `
     -RedirectStandardError $stderr
 
+$summaryLine = ''
 foreach ($stream in @(@{ Path = $stdout; Tag = 'out' }, @{ Path = $stderr; Tag = 'err' })) {
     if (Test-Path $stream.Path) {
         Get-Content $stream.Path | Where-Object { $_ -ne '' } | ForEach-Object {
+            if ($_ -match 'AI jobs for session .*: \d+ ok, ') { $summaryLine = $_ }
             Add-Content -Path $logFile -Value "  [$($stream.Tag)] $_" -Encoding utf8
         }
         Remove-Item $stream.Path -Force -ErrorAction SilentlyContinue
     }
 }
+$code = $process.ExitCode
 
 # Bring the host's model/GPU log back beside this run's log and into the AI
 # store on the mini PC. Best effort: a mirror problem is never a job outcome.
-if ($script:remoteAlias) {
+if ($script:remoteAlias -and -not $noModelRun) {
     try {
         $hostLog = Join-Path $logDir ("gpu_host-" + (Get-Date -Format 'yyyyMMdd') + ".log")
-        $hostLines = @(& ssh -o BatchMode=yes -o ConnectTimeout=10 $script:remoteAlias 'tail -n 500 ~/ollama-tradingbot.log; /usr/lib/wsl/lib/nvidia-smi --query-gpu=name,memory.used,memory.total,temperature.gpu --format=csv')
+        $hostRead = Invoke-HostSsh -Command 'tail -n 500 ~/ollama-tradingbot.log; /usr/lib/wsl/lib/nvidia-smi --query-gpu=name,memory.used,memory.total,temperature.gpu --format=csv' -TimeoutSeconds 60
         # An unreachable host must not overwrite the last good copy with nothing.
-        if ($hostLines.Count -eq 0) { throw "host unreachable, kept the last copy" }
-        $hostLines | Set-Content -Path $hostLog -Encoding utf8
+        if (-not $hostRead.Ok -or $hostRead.Lines.Count -eq 0) { throw "host unreachable, kept the last copy" }
+        $hostRead.Lines | Set-Content -Path $hostLog -Encoding utf8
         if ($script:aiStoreDir -and (Test-Path $script:aiStoreDir)) {
             $mirror = Join-Path $script:aiStoreDir 'gpu_host'
             New-Item -ItemType Directory -Path $mirror -Force | Out-Null
@@ -286,31 +337,61 @@ if ($script:remoteAlias) {
         }
     } catch { Write-Log "remote GPU: host log mirror failed (ignored): $($_.Exception.Message)" }
 }
+
+# One pass, one recheck (trader 2026-09-29). A pass that ran (exit 0 or 1)
+# counts; a clean pass ends the night, otherwise the next firing is the one
+# recheck and the night ends after it. Exit 2 (store unreachable) ran nothing.
+$nightDone = $false
+if ($scheduled -and $code -in @(0, 1)) {
+    try {
+        $passes = 1
+        if (Test-Path $script:passFile) { $passes += [int](([string](Get-Content $script:passFile -Raw)).Trim()) }
+        Set-Content -Path $script:passFile -Value $passes -Encoding ascii
+        $clean = ($code -eq 0) -and ($summaryLine -match ', 0 degraded, 0 failed, ')
+        if ($clean -or $passes -ge 2) {
+            $nightDone = $true
+            Set-Content -Path $script:doneFlag -Value (Get-Date -Format s) -Encoding ascii
+            $why = if ($clean) { 'every job came out clean' } else { 'the one recheck ran' }
+            Write-Log "night done after pass ${passes}: $why; later firings tonight do nothing"
+        } else {
+            Write-Log "night pass $passes had failed or degraded jobs; the next firing is the one recheck"
+        }
+    } catch { Write-Log "night pass count failed (ignored): $($_.Exception.Message)" }
+}
+# Backstop: a night still going at `ai_remote_gpu_off_after` (05:30) is over.
+$offAfter = if ($settings.ai_remote_gpu_off_after) { [string]$settings.ai_remote_gpu_off_after } else { '05:30' }
+$now = Get-Date
+$morning = $now.TimeOfDay -ge ([datetime]::ParseExact($offAfter, 'HH:mm', $null)).TimeOfDay -and $now.Hour -lt 12
+$hostFinished = $script:remoteAlias -and -not $noModelRun -and ($nightDone -or ($scheduled -and $morning))
+
+# Free the 5080's memory as soon as the night is over, even on a host left on.
+if ($hostFinished -and $remoteReady) {
+    try {
+        $unload = @{ model = $model; keep_alive = 0 } | ConvertTo-Json
+        Invoke-RestMethod "http://127.0.0.1:$tunnelPort/api/generate" -Method Post -Body $unload -ContentType 'application/json' -TimeoutSec 30 | Out-Null
+        Write-Log "remote GPU: '$model' unloaded from the host"
+    } catch { Write-Log "remote GPU: model unload failed (ignored): $($_.Exception.Message)" }
+}
 Stop-RemoteGpuTunnel
 
-# Power the host off after the night, only if this job woke it and nothing else
-# is running there. The last firing starts 05:30; a late-running earlier firing
-# may be the one that gets here first, so any firing ending in the morning counts.
-if ($script:remoteAlias -and (Test-Path $script:wokenFlag)) {
+# Power the host off once the night is over, only if this job woke it and
+# nothing else is running there.
+if ($hostFinished -and (Test-Path $script:wokenFlag)) {
     try {
-        $offAfter = if ($settings.ai_remote_gpu_off_after) { [string]$settings.ai_remote_gpu_off_after } else { '05:30' }
-        $now = Get-Date
-        $cutoff = [datetime]::ParseExact($offAfter, 'HH:mm', $null)
-        $morning = $now.TimeOfDay -ge $cutoff.TimeOfDay -and $now.Hour -lt 12
-        if ($morning) {
-            $busy = @(& ssh -o BatchMode=yes -o ConnectTimeout=10 $script:remoteAlias "tmux ls -F '#S' 2>/dev/null | grep -v '^ollama$'")
-            if ($busy.Count -gt 0) {
-                Write-Log "remote GPU: host left ON - other work is running there: $($busy -join ', ')"
-            } else {
-                & ssh -o BatchMode=yes -o ConnectTimeout=10 $script:remoteAlias "/mnt/c/Windows/System32/shutdown.exe /s /t 60 /c 'TradingBotV3 night AI done'" | Out-Null
-                Write-Log "remote GPU: night done, logs copied; host shutdown requested (60s)"
-            }
-            Remove-Item $script:wokenFlag -Force -ErrorAction SilentlyContinue
+        $busy = Invoke-HostSsh -Command "tmux ls -F '#S' 2>/dev/null | grep -v '^ollama$'" -TimeoutSeconds 30
+        if (-not $busy.Ok) {
+            Write-Log "remote GPU: host left ON - could not check it for other work"
+        } elseif ($busy.Lines.Count -gt 0) {
+            Write-Log "remote GPU: host left ON - other work is running there: $($busy.Lines -join ', ')"
+        } else {
+            $off = Invoke-HostSsh -Command "/mnt/c/Windows/System32/shutdown.exe /s /t 60 /c 'TradingBotV3 night AI done'" -TimeoutSeconds 30
+            if ($off.Ok) { Write-Log "remote GPU: night done, logs copied; host shutdown requested (60s)" }
+            else { Write-Log "remote GPU: host shutdown request did not answer" }
         }
+        Remove-Item $script:wokenFlag -Force -ErrorAction SilentlyContinue
     } catch { Write-Log "remote GPU: shutdown step failed (ignored): $($_.Exception.Message)" }
 }
 
-$code = $process.ExitCode
 switch ($code) {
     0       { Write-Log "=== AI jobs complete (exit 0: nothing due, or all jobs succeeded) ===" }
     1       { Write-Log "=== AI jobs FAILED (exit 1: at least one job failed) - see [err] lines above ===" }

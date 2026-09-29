@@ -27,7 +27,8 @@ param(
     # because Task Scheduler triggers are local. On this Pacific desk that is
     # 22:00-06:00. Change both if the desk moves timezone.
     [string]$StartLocal = "22:00",
-    [int]$DurationHours = 8,
+    # The last firing. Nothing fires at the 06:00 window end (trader 2026-09-29).
+    [string]$LastStartLocal = "05:30",
     [int]$RepeatMinutes = 30,
     # Desk-local time of the once-a-morning journal import retry (07:00 PT).
     [string]$RetryLocal = "07:00"
@@ -65,13 +66,18 @@ $trigger.StartBoundary = (Get-Date).AddDays(-1).Date.Add([TimeSpan]::Parse($Star
 
 # Windows PowerShell 5.1 rejects -RepetitionInterval on a -Daily trigger, so
 # build a throwaway -Once trigger that accepts it and graft its .Repetition on.
+# The repetition ends half an interval after the last firing: the scheduler also
+# fires AT the duration boundary, which is how an 8-hour duration fired 06:00.
+$spanMinutes = ([datetime]::ParseExact($LastStartLocal, "HH:mm", $null) - [datetime]::ParseExact($StartLocal, "HH:mm", $null)).TotalMinutes
+if ($spanMinutes -le 0) { $spanMinutes += 24 * 60 }
+$windowMinutes = $spanMinutes + $RepeatMinutes
 $repetition = (New-ScheduledTaskTrigger -Once -At $StartLocal `
     -RepetitionInterval (New-TimeSpan -Minutes $RepeatMinutes) `
-    -RepetitionDuration (New-TimeSpan -Hours $DurationHours)).Repetition
+    -RepetitionDuration (New-TimeSpan -Minutes ($spanMinutes + [math]::Floor($RepeatMinutes / 2)))).Repetition
 $trigger.Repetition = $repetition
 
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit (New-TimeSpan -Hours $DurationHours) `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes $windowMinutes) `
     -MultipleInstances IgnoreNew
 # IgnoreNew is the skip-don't-pile-up policy in scheduler form: if a run is
 # still going when the next repetition fires, the new one is dropped rather
@@ -111,8 +117,7 @@ if ($existingRetry) { Unregister-ScheduledTask -TaskName $retryName -Confirm:$fa
 Register-ScheduledTask -TaskName $retryName -Action $retryAction -Trigger $retryTrigger -Settings $retrySettings `
     -RunLevel Limited | Out-Null
 
-$endLocal = ([datetime]::ParseExact($StartLocal, "HH:mm", $null)).AddHours($DurationHours).ToString("HH:mm")
-Write-Output "Registered '$taskName': daily $StartLocal-$endLocal local, repeating every $RepeatMinutes min."
+Write-Output "Registered '$taskName': daily from $StartLocal local every $RepeatMinutes min, last firing $LastStartLocal."
 Write-Output "Registered '$retryName': daily $RetryLocal local (journal import retry, once, only after a failed night)."
 Write-Output "Runner: $script"
 Write-Output ""
