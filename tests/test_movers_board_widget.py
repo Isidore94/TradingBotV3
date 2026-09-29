@@ -128,9 +128,9 @@ def test_dip_boxes_read_the_swing_lists_and_name_their_own_anchor(app):
     board["swing"] = {"long": [_row("LEAD", dip_score=1.1, since_start_pct=1.5)],
                       "short": [_row("LAG", dip_score=-0.9, since_start_pct=-1.2, held=True)]}
     board["swing_anchor"] = {
-        "long": {"dt": "2026-09-22T12:25:00-04:00", "time": "12:25", "price": 404.5,
+        "long": {"dt": "2026-09-22T12:25:00-04:00", "time": "12:25", "price": 398.0,
                  "kind": "swing"},
-        "short": {"dt": "2026-09-22T10:55:00-04:00", "time": "10:55", "price": 398.0,
+        "short": {"dt": "2026-09-22T10:55:00-04:00", "time": "10:55", "price": 404.5,
                   "kind": "swing"},
     }
     widget.update_board(board)
@@ -138,17 +138,31 @@ def test_dip_boxes_read_the_swing_lists_and_name_their_own_anchor(app):
     assert _section_symbols(widget.strong) == ["LEAD"]
     assert _section_symbols(widget.weak) == ["LAG"]
     strong, weak = widget.strong.title_label.text(), widget.weak.title_label.text()
-    # Longs from the high the dip fell from, shorts from the low the rip rose from.
-    assert strong.startswith("Dip-strong") and strong.endswith(" high") and "not lit" not in strong
-    assert weak.startswith("Dip-weak") and weak.endswith(" low")
+    # Trader 2026-09-29: longs from SPY's low after the dip, shorts from its high.
+    assert strong.startswith("Dip-strong") and "since SPY's low" in strong
+    assert "not lit" not in strong and "high" not in strong
+    assert weak.startswith("Dip-weak") and "since SPY's high" in weak and "low" not in weak
     assert strong != weak  # each box names its own swing
-    # No major move yet: the high / low of day, said so.
-    board["swing_anchor"]["long"]["kind"] = "hod"
-    board["swing_anchor"]["short"]["kind"] = "lod"
+    # No major move yet: the low / high of day, said so.
+    board["swing_anchor"]["long"]["kind"] = "lod"
+    board["swing_anchor"]["short"]["kind"] = "hod"
     widget.update_board(board)
     widget.flush_pending_refresh()
-    assert "high of day so far" in widget.strong.title_label.text()
-    assert "low of day so far" in widget.weak.title_label.text()
+    assert "low of day so far" in widget.strong.title_label.text()
+    assert "high of day so far" in widget.weak.title_label.text()
+    # Too early for either: the open.
+    board["swing_anchor"]["long"]["kind"] = "open"
+    board["swing_anchor"]["short"]["kind"] = "open"
+    widget.update_board(board)
+    widget.flush_pending_refresh()
+    assert "since the open" in widget.strong.title_label.text()
+    assert "since the open" in widget.weak.title_label.text()
+    # A fresh anchor under 30 minutes old: last tick's is kept, said so.
+    board["swing_anchor"]["long"].update(kind="swing", held_from_previous=True)
+    widget.update_board(board)
+    widget.flush_pending_refresh()
+    assert "held" in widget.strong.title_label.text()
+    assert "held" not in widget.weak.title_label.text()
     # No SPY bars at all: the boxes say so and stay empty.
     board["swing"] = {"long": [], "short": []}
     board["swing_anchor"] = {"long": None, "short": None}
