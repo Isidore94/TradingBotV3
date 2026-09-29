@@ -89,14 +89,60 @@ function Test-LocalEndpoint {
     } catch { return $false } finally { $client.Close() }
 }
 
+# Remote GPU host (2026-09-28)
+# ----------------------------
+# With `ai_remote_gpu_ssh_alias` set (e.g. "claude-host"), the model runs on the
+# RTX 5080 box and this PC only tunnels to it. Prompts and answers travel over
+# the ssh tunnel; every job still runs here and writes to the same AI store, so
+# nothing about where results land changes. The endpoint URL points at the
+# tunnel's local end (http://127.0.0.1:<port>/v1); the host side is always
+# Ollama on its own 127.0.0.1:11434. Unset = today's behaviour, untouched.
+$script:remoteAlias = ''
+$script:tunnel = $null
+$script:aiStoreDir = ''
+
+function Invoke-RemoteGpuPreflight {
+    param([string]$Alias, [int]$TunnelPort)
+    $sshHost = ''
+    foreach ($line in (& ssh -G $Alias)) { if ($line -like 'hostname *') { $sshHost = $line.Substring(9).Trim() } }
+    if (-not $sshHost) { Write-Log "remote GPU: cannot resolve ssh alias '$Alias'; jobs will run degraded"; return }
+    if (-not (Test-LocalEndpoint -EndpointHost $sshHost -Port 22)) {
+        $wake = Join-Path $HOME 'bin\host-on.ps1'
+        if (-not (Test-Path $wake)) { Write-Log "remote GPU: $sshHost is off and $wake is missing; jobs will run degraded"; return }
+        Write-Log "remote GPU: $sshHost is off; sending Wake-on-LAN"
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $wake | Out-Null
+        if (-not (Test-LocalEndpoint -EndpointHost $sshHost -Port 22)) { Write-Log "remote GPU: $sshHost did not wake; jobs will run degraded"; return }
+    }
+    if (-not (Test-LocalEndpoint -EndpointHost '127.0.0.1' -Port $TunnelPort)) {
+        $script:tunnel = Start-Process -FilePath 'ssh' -WindowStyle Hidden -PassThru -ArgumentList @(
+            '-N', '-L', "127.0.0.1:${TunnelPort}:127.0.0.1:11434",
+            '-o', 'ExitOnForwardFailure=yes', '-o', 'BatchMode=yes',
+            '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=4', $Alias)
+        $deadline = (Get-Date).AddSeconds(20)
+        while ((Get-Date) -lt $deadline -and -not (Test-LocalEndpoint -EndpointHost '127.0.0.1' -Port $TunnelPort)) { Start-Sleep -Seconds 1 }
+    }
+    if (-not (Test-LocalEndpoint -EndpointHost '127.0.0.1' -Port $TunnelPort)) { Write-Log "remote GPU: tunnel to $Alias did not open on $TunnelPort; jobs will run degraded"; return }
+    # The host-side start script is sent on stdin each run, so the host needs no
+    # copy of it and cannot drift from the repo.
+    $up = (Get-Content (Join-Path $PSScriptRoot 'remote_gpu\ollama_up.sh') -Raw) -replace "`r", ''
+    $OutputEncoding = New-Object System.Text.UTF8Encoding($false)  # no BOM on the piped script
+    $result = $up | & ssh -o BatchMode=yes -o ConnectTimeout=10 $Alias 'bash -s'
+    Write-Log "remote GPU: $($result -join ' ') (tunnel 127.0.0.1:$TunnelPort -> $Alias)"
+}
+
 try {
     $settingsPath = Join-Path $env:LOCALAPPDATA 'TradingBotV3\local_settings.json'
     $endpoint = ''
     if (Test-Path $settingsPath) {
-        $endpoint = (Get-Content $settingsPath -Raw | ConvertFrom-Json).ai_local_endpoint_url
+        $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
+        $endpoint = $settings.ai_local_endpoint_url
+        $script:remoteAlias = [string]$settings.ai_remote_gpu_ssh_alias
+        $script:aiStoreDir = [string]$settings.ai_store_dir
     }
     if ([string]::IsNullOrWhiteSpace($endpoint)) {
         Write-Log "local inference: no endpoint configured; narration is off by design"
+    } elseif (-not [string]::IsNullOrWhiteSpace($script:remoteAlias)) {
+        Invoke-RemoteGpuPreflight -Alias $script:remoteAlias -TunnelPort ([System.Uri]$endpoint).Port
     } else {
         $uri = [System.Uri]$endpoint
         # Only a LOCAL server is ours to start. A remote endpoint belongs to
@@ -166,6 +212,24 @@ foreach ($stream in @(@{ Path = $stdout; Tag = 'out' }, @{ Path = $stderr; Tag =
         Remove-Item $stream.Path -Force -ErrorAction SilentlyContinue
     }
 }
+
+# Bring the host's model/GPU log back beside this run's log and into the AI
+# store on the mini PC. Best effort: a mirror problem is never a job outcome.
+if ($script:remoteAlias) {
+    try {
+        $hostLog = Join-Path $logDir ("gpu_host-" + (Get-Date -Format 'yyyyMMdd') + ".log")
+        & ssh -o BatchMode=yes -o ConnectTimeout=10 $script:remoteAlias 'tail -n 500 ~/ollama-tradingbot.log; /usr/lib/wsl/lib/nvidia-smi --query-gpu=name,memory.used,memory.total,temperature.gpu --format=csv' | Set-Content -Path $hostLog -Encoding utf8
+        if ($script:aiStoreDir -and (Test-Path $script:aiStoreDir)) {
+            $mirror = Join-Path $script:aiStoreDir 'gpu_host'
+            New-Item -ItemType Directory -Path $mirror -Force | Out-Null
+            Copy-Item -Path $hostLog -Destination $mirror -Force
+            Write-Log "remote GPU: host log mirrored to $mirror"
+        } else {
+            Write-Log "remote GPU: AI store not reachable; host log kept at $hostLog only"
+        }
+    } catch { Write-Log "remote GPU: host log mirror failed (ignored): $($_.Exception.Message)" }
+}
+if ($script:tunnel -and -not $script:tunnel.HasExited) { Stop-Process -Id $script:tunnel.Id -Force -ErrorAction SilentlyContinue }
 
 $code = $process.ExitCode
 switch ($code) {
