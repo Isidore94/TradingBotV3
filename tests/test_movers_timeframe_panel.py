@@ -102,18 +102,32 @@ def test_attach_timeframe_service_feeds_the_tabs(tmp_path, app):
     assert panel.movers_board.timeframe_board("m30")["pop"]["long"][0]["symbol"] == "NEW"
 
 
-def test_plus_focus_on_an_m30_row_gates_on_its_own_levels(tmp_path, app):
+def test_plus_focus_on_an_m30_row_needs_todays_m5_row(tmp_path, app):
+    # Reviewer 2026-09-29: never gate on the M30 board's own session, levels or 12:00 last.
     panel = _panel(tmp_path)
     panel.movers_board.update_timeframe_board("m30", _tf_board("m30", [_row("TFA")]))
     panel.movers_board.set_mode("m30")
     panel.movers_board.focusAddRequested.emit("TFA", "long")
+    assert panel.focus_service.added == []
+    assert "M30 row" in panel.movers_board.status_label.text()
+    # On today's M5 board: the M5 row's live levels decide.
+    panel.movers_board.update_board({"as_of": "2026-09-22T13:40:00-04:00", "state": {},
+                                     "pop": {"long": [_row("TFA")], "short": []}})
+    panel.movers_board.focusAddRequested.emit("TFA", "long")
     assert [a[:2] for a in panel.focus_service.added] == [("TFA", "long")]
-    assert panel.focus_service.added[0][2].startswith("movers m30")
-    # Inside yesterday's range: the gate refuses and says why.
-    panel.movers_board.update_timeframe_board("m30", _tf_board("m30", [_row("IN", last=100.0)]))
-    panel.movers_board.focusAddRequested.emit("IN", "long")
-    assert "IN" not in [a[0] for a in panel.focus_service.added]
-    assert "✕ IN" in panel.movers_board.status_label.text()
+    assert panel.focus_service.added[0][2].startswith("movers 15m")
+
+
+def test_plus_focus_refuses_a_stale_m30_board_row(tmp_path, app):
+    panel = _panel(tmp_path)
+    stale = _tf_board("m30", [_row("OLD", prev_session="2026-09-21")], session="2026-09-22")
+    panel.movers_board.update_timeframe_board("m30", dict(stale, stale=True))
+    panel.movers_board.update_board({"as_of": "2026-09-24T10:40:00-04:00", "state": {},
+                                     "pop": {"long": [], "short": []}})
+    panel.movers_board.set_mode("m30")
+    panel.movers_board.focusAddRequested.emit("OLD", "long")
+    assert panel.focus_service.added == []
+    assert "✕ OLD" in panel.movers_board.status_label.text()
 
 
 def test_plus_focus_on_a_daily_row_refuses_without_m5_levels(tmp_path, app):

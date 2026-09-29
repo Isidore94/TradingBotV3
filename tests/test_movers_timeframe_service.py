@@ -237,3 +237,23 @@ def test_d1_scan_resolves_earlier_picks_and_one_worker_at_a_time(app, tmp_path):
     assert board["summaries"]["pop"]["long"]["tf"] == "d1"
     service._running = True
     assert service.refresh_now() is False
+
+
+def test_a_missing_daily_bar_retries_at_most_3_times_per_session(app, tmp_path):
+    # Yahoo still lacks 9/22's daily bar at 16:15: the board stays on 9/21.
+    downloader = FakeDownloader(daily={"SPY": _daily_frame([400.0] * 210, end_day=21),
+                                       "AAA": _daily_frame([100.0] * 210, end_day=21)})
+    clock = Clock(ny(22, 16, 20))
+    service = _service(tmp_path, downloader, clock)
+    status = []
+    service.statusChanged.connect(status.append)
+    for attempt in range(svc.MAX_TRIES_PER_SESSION):
+        assert "d1" in service.due(), attempt
+        service._worker(["d1"], service._snapshot())
+        clock.moment += timedelta(minutes=30)
+    assert service.boards()["d1"]["session"] == "2026-09-21"  # last good board kept
+    assert "d1" not in service.due()
+    assert "Daily: no 2026-09-22 bars after 3 tries" in status[-1]
+    # The next session's target starts a fresh count.
+    clock.moment = ny(23, 16, 20)
+    assert "d1" in service.due()

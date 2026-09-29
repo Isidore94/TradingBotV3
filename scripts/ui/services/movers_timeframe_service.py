@@ -53,6 +53,9 @@ D1_PERIOD = "1y"
 D1_INTERVAL = "1d"
 #: Market caps asked for listed names without one, per scan.
 CAP_FETCH_MAX = 60
+#: Scans per timeframe per target session; after that the last good board stays
+#: (Yahoo may lack the day's bar at 16:15; no retry every 30 min until night).
+MAX_TRIES_PER_SESSION = 3
 
 
 # ------------------------------------------------------------------ clock
@@ -221,6 +224,8 @@ class MoversTimeframeService(QObject):
         self._caps: dict[str, float] = {}
         self._daily_cache: dict[str, Any] = {"session": "", "bars": {}}
         self._errors: dict[str, str] = {}
+        # (tf, target session) -> scans started for it.
+        self._tries: dict[tuple[str, str], int] = {}
         self._running = False
         self._stopped = False
         # Last good boards, shown right after a restart (two small JSON reads).
@@ -248,7 +253,12 @@ class MoversTimeframeService(QObject):
         for tf in mtf.TIMEFRAMES:
             board = self._boards.get(tf) or {}
             label = mtf.TF_LABELS[tf]
-            if self._errors.get(tf):
+            target = self._target(tf, self._now())
+            behind = board and str(board.get("session") or "") < target
+            if behind and self._tries.get((tf, target), 0) >= MAX_TRIES_PER_SESSION:
+                parts.append(f"{label}: no {target} bars after {MAX_TRIES_PER_SESSION} tries, "
+                             f"showing {board.get('session') or '?'}")
+            elif self._errors.get(tf):
                 parts.append(f"{label} scan FAILED: {self._errors[tf]}")
             elif board:
                 parts.append(f"{label} {board.get('session') or '?'}")
@@ -284,11 +294,20 @@ class MoversTimeframeService(QObject):
         """The timeframes whose scan is due now."""
         now = now or self._now()
         out = []
-        if m30_due(now, (self._boards.get(mtf.TF_M30) or {}).get("session")):
+        if (m30_due(now, (self._boards.get(mtf.TF_M30) or {}).get("session"))
+                and not self._tries_spent(mtf.TF_M30, now)):
             out.append(mtf.TF_M30)
-        if d1_due(now, (self._boards.get(mtf.TF_D1) or {}).get("session")):
+        if (d1_due(now, (self._boards.get(mtf.TF_D1) or {}).get("session"))
+                and not self._tries_spent(mtf.TF_D1, now)):
             out.append(mtf.TF_D1)
         return out
+
+    def _target(self, tf: str, now: datetime) -> str:
+        day = m30_expected_session(now) if tf == mtf.TF_M30 else d1_target_session(now)
+        return day.isoformat() if day else ""
+
+    def _tries_spent(self, tf: str, now: datetime) -> bool:
+        return self._tries.get((tf, self._target(tf, now)), 0) >= MAX_TRIES_PER_SESSION
 
     def _tick(self) -> None:
         try:
@@ -339,6 +358,8 @@ class MoversTimeframeService(QObject):
     def _worker(self, tfs: list[str], snapshot: dict[str, list[str]]) -> None:
         try:
             for tf in tfs:
+                key = (tf, self._target(tf, self._now()))
+                self._tries[key] = self._tries.get(key, 0) + 1
                 try:
                     self._scan(tf, snapshot)
                     self._errors.pop(tf, None)

@@ -7816,13 +7816,11 @@ class AlertCenterPanel(
         if row is None and tf in ("m30", "d1"):
             tf_board = self.movers_board.timeframe_board(tf)
             tf_row = _movers_row(tf_board, ("pop", "swing"), side, symbol)
-            if tf_row is not None and tf == "d1":
-                # A daily row has no M5 prior-day high/low or session VWAP to gate on.
-                refusal = "Daily row: today's M5 levels are unknown until it shows on the M5 board"
-            elif tf_row is not None:
-                # The M30 row carries the same levels from M30 bars (the gate checks its session).
-                row, session = tf_row, str(tf_board.get("session") or "")
-                context = f"movers m30 90m {row.get('move15_pct')}"
+            if tf_row is not None:
+                # A once-a-day row's levels are not today's live M5 levels: never gate on them.
+                label = "Daily" if tf == "d1" else "M30"
+                refusal = (f"{label} row: today's M5 levels are unknown until it shows "
+                           "on the M5 board")
         if self.focus_service is None:
             message = f"✕ {symbol} (no Focus service on this desk)"
         elif refusal:
