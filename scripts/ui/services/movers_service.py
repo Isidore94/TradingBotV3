@@ -224,9 +224,10 @@ def read_bot_bars(bot, symbols: Iterable[str], *, rpc_gap: float = RPC_GAP_SECON
 
 # ------------------------------------------------------------------ yfinance
 def fetch_yahoo_bars(
-    symbols: Iterable[str], *, downloader, period: str, chunk_size: int | None = None
+    symbols: Iterable[str], *, downloader, period: str, chunk_size: int | None = None,
+    interval: str = "5m",
 ) -> dict[str, list[dict[str, Any]]]:
-    """Batched 5m download. A failed chunk contributes nothing."""
+    """Batched download (5m unless `interval` says otherwise). A failed chunk contributes nothing."""
     import autopilot_core as core
 
     pool = [s for s in dict.fromkeys(str(x or "").strip().upper() for x in symbols) if s]
@@ -235,7 +236,7 @@ def fetch_yahoo_bars(
     for start in range(0, len(pool), size):
         chunk = pool[start : start + size]
         try:
-            data = downloader(chunk, period=period, interval="5m")
+            data = downloader(chunk, period=period, interval=interval)
         except Exception as exc:
             logging.warning("Movers chunk %s..%s failed: %s", chunk[0], chunk[-1], exc)
             continue
