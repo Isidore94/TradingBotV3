@@ -15,8 +15,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   Saturday summary reads every slice (`1751c338`); gates #257-#306.
 - **GUI:** 4K design live; selftests 105/105; long combined Qt runs still hit
   worker-lifetime crashes.
-- **Merged 2026-09-30 (`370c6efb`), live at the next desk restart:** Trade Mentor app P0-P6 (shell to `/check` gate), gates #311-#317; `mentor_app_enabled` stays off until gate #312.
-- **In flight:** Mentor P7 news (gate #325), P8 `/book` (gate #321), P9 mirror + tilt (gate #322), P10 `/debate` (gate #323), P11 hypotheses + frontier (gate #324), P12 IBKR book on top (`claude/mentor-app-p12-ibkr-book-2026-09-30`, gate #326). Pause AI merged (gate #318).
+- **Merged 2026-09-30, live at the next desk restart:** Trade Mentor app P0-P12 (`370c6efb`, `8f7664fc` Pause AI, `e9c77690` P7-P12): chat, `/pick`, `/vetoes`, `/tape`, `/check`, `/news`, `/book` (Questrade + IBKR read-only), `/mirror`, `/tilt`, `/debate`, `/hypotheses`; gates #311-#318, #321-#326. `mentor_app_enabled` off until gate #312; frontier OFF (trader's word).
 - **Desk:** next launch uses main; live checks are in GATES.
 - **gpt-oss:20b:** code merged, inert for gemma3; probe 2 on 10-01 02:05, then the trader's word.
 - **Night window:** the night AI starts 22:00 PT. Its model runs on the RTX 5080 host
