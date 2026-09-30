@@ -209,3 +209,78 @@ def test_the_0620_fetch_is_queued_once_at_refresh_priority(win):
     win.clock["now"] = datetime(2026, 9, 29, 7, 20, tzinfo=PT)
     win.maybe_fetch_book()
     assert win.news_queue.pending() == [] and len(win.fetch.calls) == 1
+
+
+# ---------------------------------------------------------------- P14: a chat question about the book
+def _chat_turn(window, text):
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    window._brain_ok, window._endpoint, window._model, window._native_tools = True, "http://x", "gemma4:12b", True
+    window.send(text)
+    worker = window._worker
+    assert worker is not None and worker.wait(5000)
+    deadline = time.monotonic() + 5
+    while window._worker is not None and time.monotonic() < deadline:
+        QApplication.processEvents()
+    window._io.submit(lambda: None).result(5)
+    payload = window.model_calls[-1][1]
+    return "\n".join(str(m.get("content") or "") for m in payload["messages"] if m.get("role") == "tool")
+
+
+def test_a_chat_book_question_with_no_fresh_snapshot_queues_the_read_and_says_so(win):
+    """P14: "what am I holding" used to answer from the journal because only /book read the broker."""
+    first = _chat_turn(win, "what am I holding")
+    assert "Source: journal open trades" in first and book_jobs.PENDING_NOTE in first
+    assert "book-fetch" in win.news_queue.pending_keys() and win.fetch.calls == []
+    _drain(win)
+    assert len(win.fetch.calls) == 1
+    win.clock["now"] = TUE_0700 + timedelta(minutes=2)
+    second = _chat_turn(win, "and my exposure now?")
+    assert "Source: Questrade positions at Tue 09-29 07:00 PT" in second and book_jobs.PENDING_NOTE not in second
+    assert "book-fetch" not in win.news_queue.pending_keys() and len(win.fetch.calls) == 1, "fresh: no second read"
+
+
+def _source(pack):
+    return next(row for row in pack.rows if row["id"] == "book:source")["text"]
+
+
+def test_the_note_says_fetch_running_only_when_a_read_was_queued(store):
+    """Review of bba9077c: backing off, desk closed or no token is a labelled journal view, never "fetch running"."""
+    from mentor_packs.registry import make_pack
+
+    queued: list = []
+    journal = book_pack.build(now=TUE_0700, sources=book_jobs.store_sources(store, book_pack.fixture_sources()))
+    for why in ("broker read backing off", "desk closed"):
+        noted = book_jobs.note_pending_fetch(journal, lambda why=why: queued.append(why), state=lambda why=why: why)
+        assert _source(noted).endswith(f"; journal view ({why})") and book_jobs.PENDING_NOTE not in _source(noted)
+    assert queued == [], "no read queued while backing off or with the desk closed"
+    no_token = book_jobs.note_pending_fetch(journal, lambda: queued.append("tok") or True, state=lambda: "no broker token")
+    assert _source(no_token).endswith("; journal view (no broker token)") and queued == ["tok"], "a new token is read"
+    assert book_jobs.note_pending_fetch(journal, lambda: None) is not journal
+    assert _source(book_jobs.note_pending_fetch(journal, lambda: None)).endswith("journal view (broker read not queued)")
+    other = make_pack("pick_pack", [{"id": "pick:X:asof", "kind": "source", "source": "journal", "text": "x"}])
+    build = book_jobs.chat_pack_builder(lambda name, args: other, request_fetch=lambda: queued.append(1) or True)
+    assert build("pick_pack", {}) is other and queued == ["tok"]
+    noted = book_jobs.note_pending_fetch(journal, lambda: queued.append(1) or True)
+    assert _source(noted).endswith(book_jobs.PENDING_NOTE) and queued == ["tok", 1]
+    assert [row["id"] for row in noted.rows] == [row["id"] for row in journal.rows]
+
+
+def test_chat_fetch_state_reads_the_policy(store):
+    assert book_jobs.chat_fetch_state(store, TUE_0700, lambda: False) == ""
+    assert book_jobs.chat_fetch_state(store, TUE_0700, lambda: True) == "desk closed"
+    book_jobs.ensure_book(store, TUE_0700, fetch=_Fetch(fail="no token"))
+    assert book_jobs.chat_fetch_state(store, TUE_0700, lambda: False) == "no broker token"
+    book_jobs.ensure_book(store, TUE_0700, fetch=_Fetch(fail="RuntimeError: 400"))
+    assert book_jobs.chat_fetch_state(store, TUE_0700, lambda: False) == "broker read backing off"
+    book_jobs.ensure_book(store, TUE_0700 + timedelta(hours=1), fetch=_Fetch())
+    assert book_jobs.chat_fetch_state(store, TUE_0700 + timedelta(hours=1), lambda: False) == "fresh"
+
+
+def test_a_chat_book_question_with_the_desk_closed_says_so_and_queues_nothing(win):
+    win.desk["free"] = True
+    first = _chat_turn(win, "what am I holding")
+    assert "journal view (desk closed)" in first and book_jobs.PENDING_NOTE not in first
+    assert "book-fetch" not in win.news_queue.pending_keys() and win.fetch.calls == []
