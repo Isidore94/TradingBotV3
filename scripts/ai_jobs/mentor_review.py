@@ -147,7 +147,8 @@ class NightChallengeStore:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        self.graded: list[str] = []
+        self.graded: list[str] = []  # rows whose graded_utc this run set
+        self.updated: list[str] = []  # every row whose outcome this run changed
 
     def challenges(self, *, kind: str | None = None, open_only: bool = False) -> list[dict[str, Any]]:
         sql = "SELECT * FROM challenges WHERE 1 = 1"
@@ -170,7 +171,9 @@ class NightChallengeStore:
         except sqlite3.Error:
             _log.exception("mentor_review: grading %s could not be written", challenge_id)
             return False
-        self.graded.append(str(challenge_id))
+        self.updated.append(str(challenge_id))
+        if graded_utc:
+            self.graded.append(str(challenge_id))
         return True
 
 
@@ -416,14 +419,15 @@ def _grade(path: Path, moment: datetime, veto_outcomes: Any) -> dict[str, Any]:
     from mentor_app import challenge
 
     if not challenge.night_owns_grading(moment):
-        return {"owner": "app", "updated": 0, "reason": "outside 22:00-06:00 PT the app grades"}
+        return {"owner": "app", "graded": 0, "updated": 0, "reason": "outside 22:00-06:00 PT the app grades"}
     night_store = NightChallengeStore(path)
     try:
         updated = challenge.grade_open(night_store, moment, veto_outcomes=veto_outcomes)
     except Exception as exc:  # noqa: BLE001 - a grading failure never costs the facts
         _log.debug("mentor_review grading failed.", exc_info=True)
-        return {"owner": "night", "updated": 0, "error": f"{type(exc).__name__}: {exc}"}
-    return {"owner": "night", "updated": int(updated)}
+        return {"owner": "night", "graded": len(night_store.graded), "updated": len(night_store.updated),
+                "error": f"{type(exc).__name__}: {exc}"}
+    return {"owner": "night", "graded": len(night_store.graded), "updated": int(updated)}
 
 
 def run_mentor_review(
@@ -462,8 +466,10 @@ def run_mentor_review(
     facts["built_utc"] = moment.astimezone(timezone.utc).isoformat(timespec="seconds")
     summary = {
         "turns": facts["turns"], "challenges": facts["challenges"], "picks_assessed": facts["picks_assessed"],
-        "remember_notes": facts["remember_notes"], "graded": grading.get("updated", 0),
+        "remember_notes": facts["remember_notes"], "graded": grading.get("graded", 0),
+        "updated": grading.get("updated", 0),
     }
+    graded_note = f"{grading.get('graded', 0)} graded, {grading.get('updated', 0)} updated"
     try:
         facts_path = _publish(published_path(root, FACTS_STEM, session), facts)
     except OSError as exc:
@@ -473,7 +479,7 @@ def run_mentor_review(
     outputs = [str(facts_path)]
     if not ask:
         return {"status": ledger.STATUS_OK, "model": "", "outputs": outputs, "extra": summary,
-                "reason": f"facts published for {session}; {grading.get('updated', 0)} challenge(s) graded; no model asked"}
+                "reason": f"facts published for {session}; {graded_note}; no model asked"}
 
     inputs = build_inputs(path, session, facts)
     if not (inputs["turns"] or inputs["profile_notes"] or inputs["challenges"]):
@@ -536,7 +542,7 @@ def run_mentor_review(
     return {
         "status": ledger.STATUS_OK, "model": answered, "outputs": [*outputs, str(digest_path)], "extra": summary,
         "reason": (f"{len(kept['digest'])} digest item(s), {len(kept['open_questions'])} open question(s), "
-                   f"{dropped} dropped for {session}"),
+                   f"{dropped} dropped for {session}; {graded_note}"),
     }
 
 

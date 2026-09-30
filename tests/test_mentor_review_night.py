@@ -107,7 +107,7 @@ def test_facts_half_grades_and_publishes_facts_without_a_model(chat, tmp_path):
     assert facts["challenges"]["issued"] == 1
     assert facts["uncited_numbers"] == 2 and facts["numbers"] == 10 and facts["brain_offline_min"] == 3
     assert facts["first_token_ms"]["n"] == 2 and facts["first_token_ms"]["p95"] == 2400
-    assert facts["grading"] == {"owner": "night", "updated": 1}
+    assert facts["grading"] == {"owner": "night", "graded": 0, "updated": 1}
     row = MentorChatStore(chat).challenges(kind="veto")[0]
     assert json.loads(row["outcome_json"])["reason"] == "no veto cohort row yet", "graded by the night"
     assert not (tmp_path / "ai" / f"mentor_day_digest_{SESSION}.json").exists()
@@ -206,3 +206,21 @@ def test_no_chat_store_is_a_skip(tmp_path):
     out = mentor_review.run_mentor_review(session_date=SESSION, now=NIGHT, chat_db=tmp_path / "none.sqlite3",
                                           ai_root=tmp_path / "ai")
     assert out["status"] == "skipped" and not (tmp_path / "none.sqlite3").exists()
+
+
+def test_the_ledger_reason_counts_graded_and_updated_apart(chat, tmp_path, monkeypatch):
+    """One challenge fully matures (graded), one only gains a horizon (updated): '1 graded, 2 updated'."""
+    import annotations_reader
+
+    MentorChatStore(chat).add_challenge(
+        "veto:2026-09-29:BBB:1", kind="veto", symbol="BBB", claim="vetoes like it won", issued_utc=DAY_STAMP,
+        outcome={"status": "open", "session": SESSION, "session_date": SESSION, "side": "LONG"})
+    done = {h: ("2026-09-01", 0.01) for h in (1, 3, 5, 10)}
+    part = {1: ("2026-09-01", 0.01), 10: ("2026-12-31", 0.02)}
+    monkeypatch.setattr(annotations_reader, "veto_forward_returns",
+                        lambda _path: {(SESSION, "AAA", "LONG"): done, (SESSION, "BBB", "LONG"): part})
+    out = _run(chat, tmp_path, ask=False)
+    assert "1 graded, 2 updated" in out["reason"]
+    assert out["extra"]["graded"] == 1 and out["extra"]["updated"] == 2
+    graded = [row for row in MentorChatStore(chat).challenges(kind="veto") if row.get("graded_utc")]
+    assert len(graded) == out["extra"]["graded"]
