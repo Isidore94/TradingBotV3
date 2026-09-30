@@ -17,7 +17,7 @@ here.
   (`claude/mentor-app-p4-night-memory-2026-09-30`, gate #315). P5 tape built
   (`claude/mentor-app-p5-tape-2026-09-30`, gate #316). P6 gate built
   (`claude/mentor-app-p6-gate-2026-09-30`, gate #317). P7 news built
-  (`claude/mentor-app-p7-news-2026-09-30`, gate #319). P8 book built
+  (`claude/mentor-app-p7-news-2026-09-30`, gate #325). P8 book built
   (`claude/mentor-app-p8-book-2026-09-30`, gate #321). P9 mirror + tilt built
   (`claude/mentor-app-p9-mirror-tilt-2026-09-30`, gate #322). P10 debate built
   (`claude/mentor-app-p10-debate-2026-09-30`, gate #323). P11 hypotheses + frontier built

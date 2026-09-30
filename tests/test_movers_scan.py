@@ -308,74 +308,74 @@ def _anchors(closes, n=None, previous=None):
         b for b in spy if b["dt"].date() == TODAY]
 
 
-def test_longs_measure_from_the_low_after_the_last_dip_and_shorts_from_the_high_after_the_last_rip():
-    # Trader 2026-09-29: "longs should be beating SPY since a LOW not a HIGH".
-    # Longs: the lowest low since the major dip began (the 10:50 NY bottom).
-    # Shorts: the highest high since the major rip began (the 10:10 NY top).
+def test_longs_measure_from_the_high_after_the_last_rip_and_shorts_from_the_low_after_the_last_dip():
+    # Trader 2026-09-30: longs from the 07:05 high, shorts from the open low.
+    # Longs: the highest high since the major rip began (the 10:10 NY top).
+    # Shorts: the lowest low since the major dip began (the 10:50 NY bottom).
     # A tied high or low takes the later bar; both are 30+ minutes old.
     anchors, _today = _anchors(SWING_SPY)
-    assert _today_index(anchors["long"]["dt"]) == 16
-    assert anchors["long"]["price"] == pytest.approx(397.5)
-    assert anchors["long"]["kind"] == "swing"
-    assert _today_index(anchors["short"]["dt"]) == 8
-    assert anchors["short"]["price"] == pytest.approx(404.5)
+    assert _today_index(anchors["short"]["dt"]) == 16
+    assert anchors["short"]["price"] == pytest.approx(397.5)
     assert anchors["short"]["kind"] == "swing"
-    assert anchors["long"]["held_from_previous"] is False
+    assert _today_index(anchors["long"]["dt"]) == 8
+    assert anchors["long"]["price"] == pytest.approx(404.5)
+    assert anchors["long"]["kind"] == "swing"
     assert anchors["short"]["held_from_previous"] is False
+    assert anchors["long"]["held_from_previous"] is False
 
 
 TRADER_DAY = ([400.0 - 0.6 * k for k in range(1, 9)]       # bars 0-7 down to 395.2
               + [395.2 + 0.7 * k for k in range(1, 10)])  # bars 8-16 up to 401.5
 
 
-def test_the_trader_day_longs_take_the_bounce_low_and_shorts_the_bounce_top():
+def test_the_trader_day_longs_take_the_bounce_top_and_shorts_the_bounce_low():
     # 09-28: SPY drops from the open (major dip), bounces (major rip) to the 09:25
-    # PT top, then chops lower with no 6-candle run. Longs: the bounce low (the
-    # lowest low since the open drop began). Shorts: the bounce top.
+    # PT top, then chops lower with no 6-candle run. Longs: the bounce top.
+    # Shorts: the bounce low (the lowest low since the open drop began).
     closes = TRADER_DAY + [401.0, 401.3, 400.6, 400.9, 400.2, 400.5, 399.8]
     anchors, today = _anchors(closes)
     low_bar = min(range(8, 17), key=lambda i: (today[i]["low"], -i))
     high_bar = max(range(8, len(today)), key=lambda i: (today[i]["high"], i))
-    assert _today_index(anchors["long"]["dt"]) == low_bar == 8  # the bounce low
-    assert anchors["long"]["price"] == pytest.approx(min(b["low"] for b in today))
-    assert _today_index(anchors["short"]["dt"]) == high_bar  # the bounce top
-    assert anchors["long"]["kind"] == anchors["short"]["kind"] == "swing"
+    assert _today_index(anchors["short"]["dt"]) == low_bar == 8  # the bounce low
+    assert anchors["short"]["price"] == pytest.approx(min(b["low"] for b in today))
+    assert _today_index(anchors["long"]["dt"]) == high_bar  # the bounce top
+    assert anchors["short"]["kind"] == anchors["long"]["kind"] == "swing"
 
 
 # The trader day, then the fall from the top becomes a 6+ red run to a new low.
 NEW_DROP = TRADER_DAY + [401.5 - 0.6 * k for k in range(1, 11)] + [396.0, 396.6]
 
 
-def test_a_fresh_new_low_keeps_the_previous_long_anchor_until_it_is_30_minutes_old():
+def test_a_fresh_new_low_keeps_the_previous_short_anchor_until_it_is_30_minutes_old():
     first, today = _anchors(NEW_DROP)
     drop_low = min(range(17, len(today)), key=lambda i: (today[i]["low"], -i))
     # The new drop's low is under 30 minutes old: no previous anchor, so the
     # low of day (the old bounce low, 30+ minutes old) stands in.
     assert len(today) - drop_low < 6
-    assert first["long"]["kind"] == "lod" and _today_index(first["long"]["dt"]) == 8
-    assert first["long"]["held_from_previous"] is False
+    assert first["short"]["kind"] == "lod" and _today_index(first["short"]["dt"]) == 8
+    assert first["short"]["held_from_previous"] is False
     # With last tick's anchor carried in, that one is kept instead.
-    previous = {"long": {"dt": today[10]["dt"].isoformat(), "time": "x", "price": 1.0,
+    previous = {"short": {"dt": today[10]["dt"].isoformat(), "time": "x", "price": 1.0,
                          "kind": "swing"}}
     held, _ = _anchors(NEW_DROP, previous=previous)
-    assert _today_index(held["long"]["dt"]) == 10 and held["long"]["price"] == 1.0
-    assert held["long"]["kind"] == "swing" and held["long"]["held_from_previous"] is True
-    # Shorts stay on the bounce top (old enough).
-    assert _today_index(held["short"]["dt"]) in (16, 17) and held["short"]["kind"] == "swing"
-    # Once the new low is 30 minutes old the long anchor switches to it.
+    assert _today_index(held["short"]["dt"]) == 10 and held["short"]["price"] == 1.0
+    assert held["short"]["kind"] == "swing" and held["short"]["held_from_previous"] is True
+    # Longs stay on the bounce top (old enough).
+    assert _today_index(held["long"]["dt"]) in (16, 17) and held["long"]["kind"] == "swing"
+    # Once the new low is 30 minutes old the short anchor switches to it.
     flat = [396.6 + 0.1 * (k % 2) for k in range(1, 7)]
     later, later_today = _anchors(NEW_DROP + flat, previous=previous)
-    assert _today_index(later["long"]["dt"]) == drop_low
-    assert later["long"]["price"] == pytest.approx(later_today[drop_low]["low"])
-    assert later["long"]["kind"] == "swing" and later["long"]["held_from_previous"] is False
+    assert _today_index(later["short"]["dt"]) == drop_low
+    assert later["short"]["price"] == pytest.approx(later_today[drop_low]["low"])
+    assert later["short"]["kind"] == "swing" and later["short"]["held_from_previous"] is False
 
 
 def test_a_previous_anchor_from_another_day_is_not_kept():
     _first, today = _anchors(NEW_DROP)
     yesterday = today[10]["dt"] - timedelta(days=1)
-    previous = {"long": {"dt": yesterday.isoformat(), "time": "x", "price": 1.0, "kind": "swing"}}
+    previous = {"short": {"dt": yesterday.isoformat(), "time": "x", "price": 1.0, "kind": "swing"}}
     anchors, _ = _anchors(NEW_DROP, previous=previous)
-    assert anchors["long"]["kind"] == "lod" and anchors["long"]["held_from_previous"] is False
+    assert anchors["short"]["kind"] == "lod" and anchors["short"]["held_from_previous"] is False
 
 
 def test_without_a_major_move_the_anchors_are_the_low_and_high_of_day_once_30_minutes_old():
@@ -383,22 +383,22 @@ def test_without_a_major_move_the_anchors_are_the_low_and_high_of_day_once_30_mi
     # minutes old, so both boxes measure from the open.
     early = [400.5, 399.8, 401.0, 400.2, 399.6]
     anchors, today = _anchors(early)
-    assert anchors["long"]["kind"] == anchors["short"]["kind"] == "open"
-    assert _today_index(anchors["long"]["dt"]) == _today_index(anchors["short"]["dt"]) == 0
-    assert anchors["long"]["price"] == today[0]["open"]
+    assert anchors["short"]["kind"] == anchors["long"]["kind"] == "open"
+    assert _today_index(anchors["short"]["dt"]) == _today_index(anchors["long"]["dt"]) == 0
+    assert anchors["short"]["price"] == today[0]["open"]
     # Eight bars in (still no 6-run), now 10:20 NY: the 09:45 high is 35 minutes
-    # old, the 09:55 low only 25, so shorts take the high of day, longs the open.
+    # old, the 09:55 low only 25, so longs take the high of day, shorts the open.
     later = early + [400.3, 399.9, 400.4]
     anchors, today = _anchors(later, n=10)
-    assert anchors["short"]["kind"] == "hod"
-    assert anchors["short"]["price"] == max(b["high"] for b in today)
-    assert _today_index(anchors["short"]["dt"]) == 3
-    assert anchors["long"]["kind"] == "open"
-    # Five minutes on, the low is 30 minutes old: longs take the low of day.
+    assert anchors["long"]["kind"] == "hod"
+    assert anchors["long"]["price"] == max(b["high"] for b in today)
+    assert _today_index(anchors["long"]["dt"]) == 3
+    assert anchors["short"]["kind"] == "open"
+    # Five minutes on, the low is 30 minutes old: shorts take the low of day.
     anchors, today = _anchors(later, n=11)
-    assert anchors["long"]["kind"] == "lod"
-    assert anchors["long"]["price"] == min(b["low"] for b in today)
-    assert _today_index(anchors["long"]["dt"]) == 5
+    assert anchors["short"]["kind"] == "lod"
+    assert anchors["short"]["price"] == min(b["low"] for b in today)
+    assert _today_index(anchors["short"]["dt"]) == 5
     assert ms.swing_anchors([], TODAY) == {"long": None, "short": None}
 
 
@@ -432,9 +432,9 @@ def _stock(closes_by_index):
 
 def test_dip_strong_and_dip_weak_measure_from_different_spy_swings():
     series = {
-        # Flat through SPY's 10:50 NY low, then up hard: beats SPY since the low.
+        # Flat through SPY's 10:10 NY high, then up hard: beats SPY since the high.
         "LEAD": _stock({21: 102.0, 22: 103.0, 23: 104.0}),
-        # Falls from bar 9 on and keeps falling: lags SPY since the 10:10 NY high.
+        # Falls from bar 9 on and keeps falling: lags SPY since the 10:50 NY low.
         "LAG": _stock({**{k: 100.0 - 1.2 * (k - 8) for k in range(9, SWING_N)}}),
     }
     board = _swing_board(series, daily={"LEAD": LONG_D1, "LAG": SHORT_D1})

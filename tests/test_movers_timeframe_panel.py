@@ -102,6 +102,33 @@ def test_attach_timeframe_service_feeds_the_tabs(tmp_path, app):
     assert panel.movers_board.timeframe_board("m30")["pop"]["long"][0]["symbol"] == "NEW"
 
 
+def test_attach_passes_the_saved_daily_date_then_each_pick(tmp_path, app):
+    from datetime import date
+
+    from PySide6.QtCore import QObject, Signal
+
+    class Service(QObject):
+        timeframeBoardChanged = Signal(str, dict)
+
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def boards(self):
+            return {}
+
+        def set_d1_since(self, day, *, rebuild=True):
+            self.calls.append((day, rebuild))
+
+    panel = _panel(tmp_path)
+    panel.movers_board._d1_since = date(2026, 9, 2)  # as restored from the setting
+    service = Service()
+    panel.attach_movers_timeframe_service(service)
+    assert service.calls == [(date(2026, 9, 2), False)]  # stored before the first scan
+    panel.movers_board.d1SinceChanged.emit(date(2026, 9, 8))
+    assert service.calls[-1] == (date(2026, 9, 8), True)
+
+
 def test_plus_focus_on_an_m30_row_needs_todays_m5_row(tmp_path, app):
     # Reviewer 2026-09-29: never gate on the M30 board's own session, levels or 12:00 last.
     panel = _panel(tmp_path)
