@@ -19,6 +19,7 @@ HELP_TEXT = (
     "- `/read` give a market read now (Trade Mentor card)\n"
     "- `/pause` no Trade Mentor questions for the rest of today\n"
     "- `/pick SYM` what the desk knows about a pick, narrated (or tap a Focus chip)\n"
+    "- `/debate SYM [long|short]` a bull case and a bear case from the same evidence, side by side (you decide)\n"
     "- `/news SYM [days]` the stored headlines for a stock (title, source, time, link; 3 days unless you say)\n"
     "- `/vetoes [YYYY-MM-DD]` the last session's vetoes (or that one's), each with its slice and any challenge\n"
     "- `/check short NVDA 400 stop 3.20 entry 3.05` check a trade before you take it (advice only; it never orders)\n"
@@ -104,6 +105,14 @@ def handle(text: str) -> CommandResult | None:
             return CommandResult("error", "Try `/pick NVDA` (or `/pick NVDA short`).")
         side = parts[1] if len(parts) > 1 and parts[1] in ("LONG", "SHORT") else ""
         return CommandResult("pick", "", (symbol, side))
+    if name == "debate":
+        parts = rest.upper().split()
+        symbol = parts[0] if parts else ""
+        side = parts[1] if len(parts) > 1 else ""
+        if (not symbol or not symbol.replace(".", "").replace("-", "").isalnum() or len(parts) > 2
+                or side not in ("", "LONG", "SHORT")):
+            return CommandResult("error", "Try `/debate NVDA` (or `/debate NVDA short`).")
+        return CommandResult("debate", "", (symbol, side))
     if name == "news":
         from news_feed import clean_symbol
 
