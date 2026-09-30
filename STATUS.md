@@ -28,8 +28,8 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   regime_read rejected twice; setup_research narration absent. #264 needs a desk session.
 - **Next action:** Tue 07:30 gate #305; gates #300-#301, #297-#298; `desk_perf_report.py
   --day 2026-09-28 --compare 2026-09-24`, gates #258-#287. Left: B10, B2, C4a, Phase C.
-- **Trader actions owed:** Risk per trade ($) in Settings > General; permutation backfill
-  before Saturday; confirm setup tags (P2); night task "run whether logged on or not";
-  `map_freshness.py --apply`; desk down + market closed: `journal_pnl_repair.py` (#205),
+- **Trader actions owed:** Risk per trade ($) in Settings > General; confirm setup tags
+  (P2); night task "run whether logged on or not"; `map_freshness.py --apply`; desk down +
+  market closed: `journal_pnl_repair.py` (#205),
   options-journal repair (#162), `journal_questrade_gaps.py --statement`; Saturday
   large-model probe; live click checks; consider rotating the market-prep OpenAI key.
