@@ -109,6 +109,7 @@ class _Bridge(QObject):
     mirror_week = Signal(object)
     tilt_ready = Signal(object)
     tilt_card = Signal(object)
+    debate_card = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -163,6 +164,7 @@ class MentorWindow(QMainWindow):
         mirror_request: Callable[..., Any] | None = None,
         tilt_builder: Callable[[], Any] | None = None,
         tilt_journal: Any = None,
+        debate_request: Callable[..., Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -349,6 +351,12 @@ class MentorWindow(QMainWindow):
         self._tilt_timer = QTimer(self)
         self._tilt_timer.setInterval(tilt_watch.CHECK_MS)
         self._tilt_timer.timeout.connect(self.maybe_watch_tilt)
+        # P10 debate: two persona calls on one pick pack, on demand; Stop cancels between the calls.
+        self._debate_request = debate_request
+        self._debate_blocks: dict[int, int] = {}
+        self._debate_stops: dict[int, threading.Event] = {}
+        self._debate_seq = 0
+        self._bridge.debate_card.connect(self._on_debate_card)
         self._add_note("Hi. Ask me anything, or type `/help`.")
 
     # ------------------------------------------------------------------ UI
@@ -534,6 +542,8 @@ class MentorWindow(QMainWindow):
         if self._worker is not None:
             self._worker.cancel()
             self._worker.wait(3000)
+        for stop in self._debate_stops.values():
+            stop.set()
         self.queue.stop()
         self.news_queue.stop(timeout=0.5)  # a fetch stuck on the network is a daemon; never wait 10 s for it
         if self.card_host is not None:
@@ -1056,6 +1066,10 @@ class MentorWindow(QMainWindow):
             symbol, side = result.arg
             self._name_for_news(symbol)
             self.show_pick(symbol, side)
+        elif result.action == "debate":
+            symbol, side = result.arg
+            self._name_for_news(symbol)
+            self.show_debate(symbol, side)
         elif result.action == "news":
             symbol, days = result.arg
             self.show_news(symbol, days)
@@ -1089,6 +1103,7 @@ class MentorWindow(QMainWindow):
     def stop_turn(self) -> None:
         if self._worker is not None:
             self._worker.cancel()
+        self._stop_debates()
 
     def _stream_slot(self) -> int:
         index = self._stream_index
@@ -1118,7 +1133,7 @@ class MentorWindow(QMainWindow):
         self._stream_index = None
         self.activity_label.setText("")
         self.queue.end_interactive()
-        self.stop_button.setEnabled(False)
+        self.stop_button.setEnabled(bool(self._debate_stops))
         self.send_button.setEnabled(True)
 
     def _on_done(self, result: dict) -> None:
@@ -2151,6 +2166,95 @@ class MentorWindow(QMainWindow):
                          model=getattr(card, "model", "") or "",
                          tool_calls=[{"name": "mirror_pack", "arguments": {"weeks": done.get("weeks")},
                                       "hash": done.get("hash"), "error": getattr(card, "error", "")}])
+
+    # ------------------------------------------------------------------ /debate (P10)
+    def _debate_runner(self, stop: threading.Event) -> Callable[[Any, str], Any] | None:
+        """Both persona calls while the brain is up; None = no debate, the pack alone."""
+        if not self._brain_ok or not self._endpoint or self._gpu_reason():
+            return None
+        from mentor_app import debate
+
+        endpoint, model, request = self._endpoint, self._model, self._debate_request
+
+        def run(pack: Any, digest: str, symbol: str, side: str) -> Any:
+            return debate.debate(pack, symbol=symbol, side=side, pack_hash=digest, model=model, endpoint=endpoint,
+                                 request=request, cancelled=stop.is_set, now=self._now)
+
+        return run
+
+    def show_debate(self, symbol: str, side: str = "") -> None:
+        """/debate: the pick pack once, then bull and bear on the model queue (interactive); brain off = the pack."""
+        from mentor_app import debate
+        from mentor_packs import pick_pack
+
+        symbol = str(symbol or "").upper()
+        self._debate_seq += 1
+        seq = self._debate_seq
+        self._debate_blocks[seq] = len(self._blocks)
+        self._add_block(f"**Debate {symbol}**: building the pack, then bull and bear...")
+        stop = threading.Event()
+        runner = self._debate_runner(stop)
+        why = self._tape_why() or self._gpu_reason()
+        if runner is not None:
+            self._debate_stops[seq] = stop
+            self.stop_button.setEnabled(True)
+            self.activity_label.setText(f"debating {symbol}...")
+
+        def job() -> dict:
+            result = debate.run_debate_job(
+                symbol, side, store=self.store, build_pack=self._build_pick, pack_hash=pick_pack.pack_hash,
+                run=None if runner is None else (
+                    lambda pack, digest: runner(pack, digest, symbol, debate.pack_side(pack) or side)),
+            )
+            return {**result, "seq": seq, "why": why}
+
+        def failed(exc: BaseException) -> None:
+            self._bridge.debate_card.emit({"seq": seq, "symbol": symbol, "error": f"{type(exc).__name__}: {exc}"})
+
+        self.queue.submit(f"debate {symbol}", job, priority=PRIORITY_INTERACTIVE, needs_model=runner is not None,
+                          max_tokens=debate.MAX_OUTPUT_TOKENS, key=f"debate:{seq}",
+                          on_done=self._bridge.debate_card.emit, on_error=failed)
+
+    def _stop_debates(self) -> None:
+        """Stop: a debate not started yet is dropped; a running one stops before its next call."""
+        for seq, stop in list(self._debate_stops.items()):
+            stop.set()
+            if self.queue.cancel(f"debate:{seq}"):
+                self._debate_stops.pop(seq, None)
+                self._replace_debate_block(seq, "**Debate**: stopped before it started.")
+        if not self._debate_stops and self._worker is None:
+            self.stop_button.setEnabled(False)
+
+    def _replace_debate_block(self, seq: int, markdown: str) -> None:
+        index = self._debate_blocks.pop(seq, None)
+        if index is not None and index < len(self._blocks):
+            self._blocks[index] = markdown
+            self._render()
+        else:
+            self._add_block(markdown)
+
+    def _on_debate_card(self, done: dict) -> None:
+        from mentor_app import debate
+
+        seq = done.get("seq")
+        self._debate_stops.pop(seq, None)
+        if not self._debate_stops:
+            self.activity_label.setText("")
+            if self._worker is None:
+                self.stop_button.setEnabled(False)
+        symbol = str(done.get("symbol") or "")
+        if done.get("error"):
+            self._replace_debate_block(seq, f"**Debate {symbol}**: could not be built ({done['error']}).")
+            return
+        pack, digest, result = done["pack"], done["hash"], done.get("debate")
+        self._pick_packs[(symbol, digest)] = pack  # the card's evidence link opens this pack
+        markdown = debate.card_markdown(result, pack, symbol=symbol, side=str(done.get("side") or ""),
+                                        pack_hash=digest, brain_reason=str(done.get("why") or ""))
+        self._replace_debate_block(seq, markdown)
+        # The card joins the conversation; a follow-up goes through the normal turn (pick_pack stays a tool).
+        self.chat.add("assistant", markdown)
+        self._store_turn("assistant", markdown, pack_ids=getattr(pack, "ids", ()),
+                         model=getattr(result, "model", "") or "", tool_calls=debate.turn_tool_calls(done))
 
     def maybe_mirror_week(self) -> None:
         """Every minute: deliver a waiting weekly card; from 06:50 PT on the week's first session day, build it."""

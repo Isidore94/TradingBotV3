@@ -228,6 +228,12 @@ def debate(
 
 
 # ---------------------------------------------------------------- cache
+def pack_side(pack: Pack) -> str:
+    """The side the pick pack assessed (``/debate NVDA`` lets the pack choose), or ""."""
+    row = next((row for row in pack.rows if row.get("kind") == "side"), None)
+    return str((row or {}).get("side") or "").upper()
+
+
 def cache_key(symbol: str, side: str, pack_hash: str) -> dict[str, str]:
     return {"symbol": str(symbol).upper(), "side": str(side or "").upper(), "hash": str(pack_hash),
             "prompt": PROMPT_VERSION}
@@ -258,6 +264,7 @@ def run_debate_job(
     """
     pack = build_pack(symbol, side)
     digest = pack_hash(pack)
+    side = pack_side(pack) or side
     out: dict[str, Any] = {"symbol": symbol, "side": side, "pack": pack, "hash": digest, "debate": None, "ran": False}
     found = cached_debate(store, symbol, side, digest)
     if found is not None and found.clean:

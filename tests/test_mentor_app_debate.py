@@ -208,3 +208,113 @@ def test_the_debate_command_parses():
     assert commands.handle("/debate").action == "error"
     assert commands.handle("/debate NVDA sideways").action == "error"
     assert "/debate" in commands.HELP_TEXT
+
+
+def test_an_unsided_debate_reuses_the_pair_cached_for_the_side_the_pack_chose(store, pack):
+    ran = []
+
+    def run(p, digest):
+        ran.append(digest)
+        return debate.debate(p, symbol="NVDA", side="LONG", pack_hash=digest, model="m", endpoint="http://x",
+                             request=_requester())
+
+    debate.run_debate_job("NVDA", "LONG", store=store, build_pack=lambda s, d: pack,
+                          pack_hash=pick_pack.pack_hash, run=run)
+    again = debate.run_debate_job("NVDA", "", store=store, build_pack=lambda s, d: pack,
+                                  pack_hash=pick_pack.pack_hash, run=run)
+    assert len(ran) == 1 and again["side"] == "LONG" and again["debate"].clean
+
+
+# ---------------------------------------------------------------- the window
+@pytest.fixture
+def win(tmp_path, monkeypatch, world):
+    from PySide6.QtWidgets import QApplication
+
+    from mentor_app import settings
+    from mentor_app.prefetch import PrefetchQueue
+    from mentor_app.window import MentorWindow
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings, "gpu_block_reason", lambda now=None: "")
+    calls: list = []
+    hooks: dict = {}
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        if hooks.get("during"):
+            hooks["during"]()
+        return _requester()(**kwargs)
+
+    window = MentorWindow(
+        store=MentorChatStore(tmp_path / "mentor_chat.sqlite3"), queue=PrefetchQueue(), news_queue=PrefetchQueue(),
+        stream_post=lambda *a, **k: [], post=lambda *a, **k: {}, now=lambda: pick_pack.FIXTURE_NOW,
+        mentor_enabled=False,
+        pick_builder=lambda sym, side: pick_pack.build(sym, side, now=pick_pack.FIXTURE_NOW, paths=world),
+        debate_request=request,
+    )
+    window.calls, window.hooks = calls, hooks
+    yield window
+    window.shutdown()
+    window.deleteLater()
+
+
+def _drain(window):
+    while window.queue.run_one():
+        pass
+    window._io.submit(lambda: None).result(5)
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.processEvents()
+
+
+def _up(window):
+    window._brain_ok, window._endpoint, window._model = True, "http://127.0.0.1:11436", "gpt-oss:20b"
+
+
+def test_debate_with_the_brain_off_is_the_pack_and_no_model_call(win):
+    win._brain_reason = "the night AI owns the GPU"
+    win.send("/debate NVDA")
+    _drain(win)
+    text = win.transcript.toPlainText()
+    assert "Debate NVDA LONG: no debate (brain off: the night AI owns the GPU)" in text
+    assert "pick:NVDA:cell" in text and win.calls == []
+
+
+def test_debate_shows_two_columns_the_scoreboard_and_logs_both_replies(win):
+    _up(win)
+    win.send("/debate NVDA long")
+    assert win.stop_button.isEnabled(), "Stop can cancel a debate"
+    _drain(win)
+    assert len(win.calls) == 2 and not win.stop_button.isEnabled()
+    block = win._blocks[-1]
+    assert "| Bull | Bear |" in block and "**Scoreboard:** bull 2 cited, bear 2 cited" in block
+    assert block.rstrip().endswith(f"(evidence:NVDA:{pick_pack.pack_hash(win._build_pick('NVDA', 'LONG'))})")
+    assert debate.FOOTER in block and win.chat.turns[-1].text == block
+    stored = [row for row in win.store.turns() if row["role"] == "assistant"][-1]
+    calls = json.loads(stored["tool_calls_json"])
+    assert [c["name"] for c in calls] == ["pick_pack", "debate_bull", "debate_bear"]
+    assert calls[1]["dropped"] and calls[1]["reply"]["case"]
+    win.send("/debate NVDA long")
+    _drain(win)
+    assert len(win.calls) == 2, "an unchanged pack reuses the cached pair"
+    assert "| Bull | Bear |" in win._blocks[-1]
+
+
+def test_stop_before_the_debate_starts_drops_it(win):
+    _up(win)
+    win.send("/debate NVDA")
+    win.stop_turn()
+    _drain(win)
+    assert win.calls == [] and "stopped before it started" in win._blocks[-1]
+    assert not win.stop_button.isEnabled()
+
+
+def test_stop_between_the_two_calls_skips_the_bear(win):
+    _up(win)
+    win.hooks["during"] = win.stop_turn
+    win.send("/debate NVDA")
+    _drain(win)
+    assert len(win.calls) == 1
+    block = win._blocks[-1]
+    assert "bear case not argued: not run: stopped" in block and "Setup cell wins 60%" in block
+    assert debate.cached_debate(win.store, "NVDA", "LONG", pick_pack.pack_hash(win._build_pick("NVDA", "LONG"))) is None
