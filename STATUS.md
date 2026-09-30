@@ -2,7 +2,7 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-09-30 PT (Mentor P5)
+**Updated:** 2026-09-30 PT (Mentor P6)
 
 - **Live on `main`:** round 1, round 2 Phase A (`81272d42`), Phase B + S (`2d59aace`),
   S10a + S7 (`3802c0d7`), p9 phase 1 regime frame (`849390a2`), p9 phase 2 long
@@ -15,8 +15,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   Saturday summary reads every slice (`1751c338`); gates #257-#306.
 - **GUI:** 4K design live; selftests 105/105; long combined Qt runs still hit
   worker-lifetime crashes.
-- **In flight:** Trade Mentor app P0-P5 (shell, move with flag off, picks, vetoes, memory, tape)
-  (#311-#316); stacked `claude/mentor-app-p*-2026-09-30` branches, none merged.
+- **In flight:** Trade Mentor app P0-P6 (shell to `/check` gate) (#311-#317); stacked `claude/mentor-app-p*-2026-09-30` branches, none merged.
 - **Desk:** next launch uses main; live checks are in GATES.
 - **Night window:** the night AI starts 22:00 PT. Its model runs on the RTX 5080 host
   (`ai_remote_gpu_ssh_alias` = `claude-host`, ssh tunnel on 11435); falls back to local Ollama

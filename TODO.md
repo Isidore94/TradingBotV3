@@ -14,7 +14,8 @@ here.
   P2 picks built (`claude/mentor-app-p2-picks-2026-09-30`, gate #313). P3 vetoes built
   (`claude/mentor-app-p3-vetoes-2026-09-30`, gate #314). P4 night memory built
   (`claude/mentor-app-p4-night-memory-2026-09-30`, gate #315). P5 tape built
-  (`claude/mentor-app-p5-tape-2026-09-30`, gate #316). Next: P6 gate.
+  (`claude/mentor-app-p5-tape-2026-09-30`, gate #316). P6 gate built
+  (`claude/mentor-app-p6-gate-2026-09-30`, gate #317). Next: P7 news, by the trader's word only.
 
 ## Plan to 8/10, round 2 (trader's brief, 2026-09-25 evening)
 
