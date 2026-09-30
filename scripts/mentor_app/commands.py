@@ -13,6 +13,8 @@ HELP_TEXT = (
     "- `/quiet 2h` mute the Inbox for a while (`30m`, `1h30m`)\n"
     "- `/remember <text>` keep a note about you that I will recall later\n"
     "- `/tape` the desk right now (works with the brain off)\n"
+    "- `/read` give a market read now (Trade Mentor card)\n"
+    "- `/pause` no Trade Mentor questions for the rest of today\n"
     "- `/pick SYM` pick assessment (coming in Phase 2)\n"
     "- `/vetoes` veto challenges (coming in Phase 3)\n"
 )
@@ -62,6 +64,10 @@ def handle(text: str) -> CommandResult | None:
         return CommandResult("remember", "", rest)
     if name == "tape":
         return CommandResult("tape")
+    if name == "read":
+        return CommandResult("read")
+    if name == "pause":
+        return CommandResult("pause")
     if name == "pick":
         symbol = rest.split()[0].upper() if rest else ""
         return CommandResult("stub", f"`/pick {symbol or 'SYM'}` is coming in Phase 2.")

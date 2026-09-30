@@ -186,8 +186,11 @@ class _MentorAIFillWorker(QRunnable):
         blank: tuple[str, ...],
         trade: dict,
         now: datetime | None = None,
+        request: Callable[..., Any] | None = None,
     ) -> None:
         super().__init__()
+        #: The model call; None = `trade_mentor_ai`'s own local path.
+        self.request = request
         self.store = store
         self.trade_id = str(trade_id)
         self.raw_text = str(raw_text or "")
@@ -200,7 +203,8 @@ class _MentorAIFillWorker(QRunnable):
             import trade_mentor_ai
 
             rows = trade_mentor_ai.fill_blank_fields(
-                self.store, self.trade_id, self.raw_text, self.blank, self.trade, now=self.now
+                self.store, self.trade_id, self.raw_text, self.blank, self.trade,
+                request=self.request, now=self.now,
             )
             logging.info(
                 "Trade Mentor local AI filled %d of %d blank field(s) for %s.",
@@ -3037,10 +3041,26 @@ class TradeMentorCard(QWidget):
             "direction": str(getattr(question, "direction", "") or ""),
         }
         try:
-            worker = _MentorAIFillWorker(store, trade_id, words, blank, trade, moment)
+            worker = _MentorAIFillWorker(
+                store, trade_id, words, blank, trade, moment, request=self._ai_fill_request()
+            )
             QThreadPool.globalInstance().start(worker)
         except Exception:  # noqa: BLE001 - the blanks stay blank
             logging.warning("Trade Mentor local AI fill could not start.", exc_info=True)
+
+    def set_ai_request_provider(self, provider: Callable[[], Any] | None) -> None:
+        """The Trade Mentor app hands its 5080 call here; None keeps the local path."""
+        self._ai_request_provider = provider
+
+    def _ai_fill_request(self):
+        provider = getattr(self, "_ai_request_provider", None)
+        if provider is None:
+            return None
+        try:
+            return provider()
+        except Exception:  # noqa: BLE001 - an unknown brain falls back to the local path
+            logging.debug("Trade Mentor AI request provider failed.", exc_info=True)
+            return None
 
     def _file_trades(self, wanted: list[str], *, any_answer: bool) -> dict[str, Any]:
         """File each trade in `wanted` and take it off the card.

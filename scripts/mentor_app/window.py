@@ -79,6 +79,8 @@ class MentorWindow(QMainWindow):
         stream_post: Callable[..., Any] | None = None,
         post: Callable[..., Any] | None = None,
         now: Callable[[], datetime] | None = None,
+        card_host: Any = None,
+        mentor_enabled: bool | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -115,6 +117,17 @@ class MentorWindow(QMainWindow):
         self._bridge.brain_state.connect(self._on_brain_state)
         self._bridge.memory_ready.connect(self._on_memory)
         self._bridge.note.connect(self._add_note)
+        # P1: with `mentor_app_enabled` on, this process owns the Trade Mentor card.
+        self.card_host = card_host
+        if self.card_host is None:
+            if mentor_enabled is None:
+                from ui.services.mentor_launcher import mentor_app_enabled
+
+                mentor_enabled = mentor_app_enabled()
+            if mentor_enabled:
+                from mentor_app.card_host import AppMentorHost
+
+                self.card_host = AppMentorHost(self)
         self._build_ui()
         self._context_timer = QTimer(self)
         self._context_timer.setInterval(CONTEXT_REFRESH_MS)
@@ -156,6 +169,11 @@ class MentorWindow(QMainWindow):
         buttons = QVBoxLayout()
         buttons.addWidget(self.send_button)
         buttons.addWidget(self.stop_button)
+        self.read_button = QPushButton("Give a read")
+        self.read_button.setToolTip("Write a market read now and file it in the Market Journal.")
+        self.read_button.clicked.connect(self.give_a_read)
+        self.read_button.setVisible(self.card_host is not None)
+        buttons.addWidget(self.read_button)
         input_row = QHBoxLayout()
         input_row.addWidget(self.input, 1)
         input_row.addLayout(buttons)
@@ -163,7 +181,12 @@ class MentorWindow(QMainWindow):
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.addWidget(self.banner)
-        left_layout.addWidget(self.transcript, 1)
+        left_layout.addWidget(self.transcript, 3)
+        if self.card_host is not None:
+            # The Trade Mentor card sits in the conversation column, under the chat.
+            left_layout.addWidget(self.card_host.dock, 2)
+            self.card_host.cardShown.connect(self._on_card_shown)
+            self.card_host.dock.mentor_card.set_ai_request_provider(self._brain_fill_request)
         left_layout.addLayout(self.chip_row)
         left_layout.addLayout(input_row)
 
@@ -218,6 +241,8 @@ class MentorWindow(QMainWindow):
 
         self._focus_server = make_focus_server(self, self.bring_to_front)
         self.queue.start()
+        if self.card_host is not None:
+            self.card_host.start()
         self._context_timer.start()
         self._gpu_timer.start()
         self._submit_io(self._open_session)
@@ -234,6 +259,8 @@ class MentorWindow(QMainWindow):
             self._worker.cancel()
             self._worker.wait(3000)
         self.queue.stop()
+        if self.card_host is not None:
+            self.card_host.shutdown()
         if self._endpoint:
             # Hand both models back before the tunnel closes; a dead host costs at most the timeout.
             endpoint, model = self._endpoint, self._model
@@ -407,6 +434,31 @@ class MentorWindow(QMainWindow):
         lines = [f"[{row['id']}] {row['text']}" for row in self._context_pack.rows if str(row["id"]).startswith(prefix)]
         self._add_note("\n\n".join(lines) or "nothing")
 
+    # ------------------------------------------------------------------ Trade Mentor card
+    def give_a_read(self) -> None:
+        if self.card_host is not None:
+            self.card_host.give_a_read()
+
+    def _on_card_shown(self, slot: Any) -> None:
+        """A due card is up under the chat; the Inbox gets a quiet line (cap and quiet hours apply)."""
+        at = getattr(slot, "scheduled_at", None)
+        when = f" {at:%H:%M}" if hasattr(at, "strftime") else ""
+        self.post_to_inbox("question", f"Trade Mentor{when}: questions are waiting under the chat.")
+
+    def _brain_fill_request(self) -> Callable[..., Any] | None:
+        """The card's AI fill goes to the 5080 while the brain is up; None = the local path."""
+        if not self._brain_ok or not self._endpoint:
+            return None
+        endpoint, model = self._endpoint, self._model
+
+        def request(**kwargs: Any) -> Any:
+            import ai_summary
+
+            kwargs["model"] = model or kwargs.get("model")
+            return ai_summary.request_ai_summary(endpoint=f"{endpoint}/v1", **kwargs)
+
+        return request
+
     # ------------------------------------------------------------------ inbox
     def post_to_inbox(self, kind: str, text: str, **kwargs: Any) -> bool:
         item = self.inbox.add(kind, text, **kwargs)
@@ -488,6 +540,13 @@ class MentorWindow(QMainWindow):
             self._memory_text = (self._memory_text + f"\n- {note}").strip()
             self._submit_io(lambda: self.store.add_profile_note(note, "remember"))
             self._add_note(f"Kept: {note}")
+        elif result.action in ("read", "pause") and self.card_host is None:
+            self._add_note("The Trade Mentor questions are on the desk (`mentor_app_enabled` is off).")
+        elif result.action == "read":
+            self.give_a_read()
+        elif result.action == "pause":
+            self.card_host.pause_today()
+            self._add_note("No more Trade Mentor questions today.")
         elif result.action == "tape":
             if self._context_pack is None:
                 self._add_note("The desk context is still loading; try again in a moment.")
