@@ -132,15 +132,20 @@ def liked_sources() -> frozenset[str]:
 
 
 def gpu_block_reason(now: datetime | None = None) -> str:
-    """"" while the app may use the model; otherwise why the night owns the GPU.
+    """"" while the app may use the model; otherwise why it may not.
 
-    Blocked inside the ai_jobs night window and for PRE_WINDOW_MINUTES before it.
+    Blocked while Pause AI is on, inside the ai_jobs night window and for
+    PRE_WINDOW_MINUTES before it.
     """
+    import ai_pause
     from ai_jobs.window import in_offhours_window
 
     moment = now or datetime.now(timezone.utc)
     if moment.tzinfo is None:
         moment = moment.astimezone()
+    paused = ai_pause.reason(moment)
+    if paused:
+        return paused
     if in_offhours_window(moment):
         return "the night AI owns the GPU until its window closes (06:00 PT)"
     if in_offhours_window(moment + timedelta(minutes=PRE_WINDOW_MINUTES)):

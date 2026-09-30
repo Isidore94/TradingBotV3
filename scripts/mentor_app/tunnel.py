@@ -205,6 +205,9 @@ class Tunnel:
         """Start the watchdog (once) and wait for the local port to answer."""
         if self._port_open("127.0.0.1", self.port):
             return True
+        if self._watchdog is not None and self._watchdog.is_alive() and self._stop.is_set():
+            # A stopped watchdog (Pause AI) may still be winding down: let it end, then start afresh.
+            self._watchdog.join(5.0)
         if self._watchdog is None or not self._watchdog.is_alive():
             self._stop.clear()
             self._watchdog = threading.Thread(target=self._watch, name="mentor-tunnel-watchdog", daemon=True)
