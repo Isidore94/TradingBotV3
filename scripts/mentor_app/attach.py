@@ -24,6 +24,7 @@ PRIORITY = {
     "gate_pack": 0,
     "journal_pack": 1,
     "pick_pack": 2,
+    "earnings_pack": 2,
     "veto_pack": 3,
     "regime_pack": 4,
     "book_pack": 5,
@@ -54,6 +55,11 @@ _TODAY = re.compile(r"\b(today|this morning|so far|this session|today's)\b")
 _YESTERDAY = re.compile(r"\byesterday\b")
 _THIS_WEEK = re.compile(r"\bthis week\b|\bweek so far\b|\bmy week\b")
 _LAST_WEEK = re.compile(r"\blast week\b")
+_THIS_MONTH = re.compile(r"\bthis month\b|\bmonth so far\b|\bmy month\b|\bthe month\b")
+_LAST_MONTH = re.compile(r"\blast month\b")
+#: The trader talking about himself: a time word alone ("today") is his journal only with one of these.
+_FIRST_PERSON = re.compile(r"\b(?:i|i'm|im|i've|ive|me|my|mine)\b|\bgreen or red\b|\bso far\b|\btoday go\b"
+                           r"|\bthe day (?:go|going)\b|\bpassed on\b")
 _INTENT = re.compile(
     r"\bthinking (?:of|about)\b|\bshould i\b|\btake\b|\btaking\b|\bgo(?:ing)? (?:long|short)\b|\benter(?:ing)?\b"
     r"|\badd(?:ing)? (?:to )?\b|\bsize\b|\bsizing\b|\bget(?:ting)? (?:in|into)\b|\bworth (?:a|the) (?:trade|shot)\b"
@@ -69,15 +75,27 @@ _JOURNAL = re.compile(
     r"|\bstop(?:ped)? me out\b|\bmy (?:entry|exit|stop) on\b"
 )
 _VETO = re.compile(r"\bveto(?:ed|es|s)?\b|\bpassed on\b|\bi passed\b|\bskip(?:ped|ping|s)?\b")
-_TAPE = re.compile(r"\btape\b|\bmarket\b|\bspy\b|\bqqq\b|\biwm\b|\bregime\b|\bsectors?\b|\bbreadth\b|\bmacro\b"
-                   r"|\bindex(?:es)?\b|\bfomc\b|\bcpi\b|\bjobs report\b|\bfed\b")
+_TAPE = re.compile(r"\btape\b|\bmarkets?\b|\bspy\b|\bqqq\b|\biwm\b|\bregime\b|\bsectors?\b|\bbreadth\b|\bmacro\b"
+                   r"|\bindex(?:es)?\b|\bfomc\b|\bcpi\b|\bjobs report\b|\bfed\b|\bfutures\b")
+#: Getting ready for a session: the tape is the answer ("what should I look at tomorrow morning").
+_PREP = re.compile(r"\bwhat should i (?:look at|watch|focus on)\b|\bgame ?plan\b|\bpre-?market\b"
+                   r"|\btomorrow\b.*\b(?:look at|watch|expect|prep)\b|\b(?:look at|watch|expect|prep)\b.*\btomorrow\b")
 _NEWS = re.compile(r"\bnews\b|\bearnings\b|\breporting\b|\breports?\b|\bheadlines?\b|\bcatalysts?\b")
-_BOOK = re.compile(r"\bmy book\b|\bpositions?\b|\bexposure\b|\bholding\b|\bwhat am i in\b|\bopen trades?\b")
+_BOOK = re.compile(r"\bmy book\b|\bpositions?\b|\bexposure\b|\b(?:am i|i'm|im|i am) holding\b|\bholdings\b"
+                   r"|\bwhat am i in\b|\bopen trades?\b")
 _TILT = re.compile(r"\btilt(?:ed|ing)?\b|\brevenge\b|\bovertrad")
-_MIRROR = re.compile(r"\bmy record\b|\blately\b|\bmy stats\b|\bmy edge\b|\bhit rate\b|\bwin rate\b|\bpattern in my\b")
+#: Walking away for the day: the tilt read plus today's journal.
+_STOP_DAY = re.compile(r"\bstop trading\b|\bcall it a day\b|\bwalk away\b|\bovertrad|\bquit for (?:the|to)day\b"
+                       r"|\bdone for (?:the|to)day\b")
+_MIRROR = re.compile(r"\bmy record\b|\blately\b|\bmy stats\b|\bmy edge\b|\bhit rate\b|\bwin rate\b|\bpattern in my\b"
+                     r"|\btrade best\b|\bbest time\b|\btime of day\b|\bwhen during the day\b")
 _PLAN = re.compile(r"\bmy plan\b|\bmy rules?\b|\btrading plan\b|\bbreak(?:ing)? (?:a|my) rule\b")
 _RECALL = re.compile(r"\byou said\b|\bwe (?:said|talked|discussed)\b|\bremember when\b|\blast time we\b")
-_GROUP = re.compile(r"\bmy (longs|shorts|focus|names|picks|watchlist|likes|liked)\b|\bfocus (longs|shorts|names)\b")
+_GROUP = re.compile(r"\bmy (longs|shorts|focus|names|picks|watchlist|likes|liked|book|positions|holdings)\b"
+                    r"|\bfocus (longs|shorts|names)\b|\bopen (longs|shorts|positions)\b|\b(?:i'm|im|i am) (holding)\b")
+_EARNINGS = re.compile(r"\bearnings\b|\breporting\b|\breports?\b")
+#: The earnings pack's cap (one row per name).
+MAX_EARNINGS_NAMES = 40
 _SHORT_WORD = re.compile(r"\bshort(?:ing|s|ed)?\b|\bsell(?:ing)? short\b|\bput(?:s)?\b")
 _LONG_WORD = re.compile(r"\blong\b|\bbuy(?:ing)?\b|\bgo long\b|\bcalls?\b")
 
@@ -116,9 +134,13 @@ def last_weekday_named(name: str, today: date) -> date:
 
 
 def resolve_day(text: str, now: datetime | None = None) -> str:
-    """The journal day a question means: ISO date, ``week``, ``last_week``, or "" (none named)."""
+    """The journal day a question means: ISO date, ``week``, ``last_week``, ``month``, ``last_month`` or ""."""
     lowered = str(text or "").lower()
     today = _market_day(now)
+    if _LAST_MONTH.search(lowered):
+        return "last_month"
+    if _THIS_MONTH.search(lowered):
+        return "month"
     if _LAST_WEEK.search(lowered):
         return "last_week"
     if _THIS_WEEK.search(lowered):
@@ -185,6 +207,19 @@ def _side_words(lowered: str) -> str:
     return ""
 
 
+def market_cue(text: str) -> bool:
+    """True when the question is about the market or a trade about to be taken: then tape context is wanted."""
+    raw = str(text or "")
+    lowered = raw.lower()
+    if _TAPE.search(lowered) or _PREP.search(lowered):
+        return True
+    if any(sym in INDEX_SYMBOLS for sym in find_symbols(raw, set(INDEX_SYMBOLS))):
+        return True
+    if re.search(r"\bthis morning\b", lowered) and not _FIRST_PERSON.search(lowered):
+        return True
+    return bool(_INTENT.search(lowered) and not _PAST.search(lowered) and not _STOP_DAY.search(lowered))
+
+
 def plan_attachments(
     text: str, known_symbols: Mapping[str, Any] | Iterable[str], now: datetime | None = None
 ) -> list[AttachRequest]:
@@ -215,27 +250,45 @@ def plan_attachments(
         if sym not in gated:
             add("pick_pack", f"ticker {sym}", symbol=sym)
         add("news_pack", f"ticker {sym}", symbol=sym)
-    if day or _JOURNAL.search(lowered):
-        add("journal_pack", "time words" if day else "journal words", day=day or today)
-    if day:
-        add("regime_pack", "time words")
-    if _VETO.search(lowered):
+    vetoes = bool(_VETO.search(lowered))
+    journal_words = bool(_JOURNAL.search(lowered))
+    stop_day = bool(_STOP_DAY.search(lowered))
+    group = _GROUP.search(lowered) if not symbols else None
+    earnings_group = bool(group and _EARNINGS.search(lowered))
+    # P14: "today"/"this morning" alone is not the journal ("headlines on MSFT today", "market this morning");
+    # yesterday, a weekday, a week or a month is; so is any first-person time question. A veto question
+    # (or an earnings question over his book) reads its own pack, not the journal, unless it asks about trades.
+    journal_day = bool(day) and (day != today or bool(_FIRST_PERSON.search(lowered)))
+    if journal_words or stop_day or (journal_day and not vetoes and not earnings_group):
+        add("journal_pack", "journal words" if journal_words else "time words" if day else "stop words",
+            day=day or today)
+    if vetoes:
         add("veto_pack", "veto words", date=day if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else "")
-    if _TAPE.search(lowered) or any(sym in INDEX_SYMBOLS for sym in find_symbols(raw, set(INDEX_SYMBOLS))):
-        add("regime_pack", "tape words")
-    if _NEWS.search(lowered) and not symbols:
-        group = _GROUP.search(lowered)
-        if group:
-            which = next(g for g in group.groups() if g)
-            side = "LONG" if which.startswith("long") else "SHORT" if which.startswith("short") else ""
-            names = [sym for sym, s in known.items() if sym not in INDEX_SYMBOLS and (not side or s == side)]
-            for sym in names[:MAX_SYMBOLS]:
-                add("pick_pack", f"earnings/news across {which}", symbol=sym)
+    # P14: the tape only on market words, session prep, or trade intent the gate does not already carry.
+    tape_words = bool(_TAPE.search(lowered) or _PREP.search(lowered)
+                      or any(sym in INDEX_SYMBOLS for sym in find_symbols(raw, set(INDEX_SYMBOLS))))
+    if tape_words or (market_cue(raw) and not gated and not symbols) or (
+            symbols and not gated and _INTENT.search(lowered) and not past):
+        add("regime_pack", "market words" if tape_words else "trade intent")
+    if group and earnings_group:
+        which = next(g for g in group.groups() if g)
+        side = "LONG" if which.startswith("long") else "SHORT" if which.startswith("short") else ""
+        # Names with a side: Focus, liked chips and the open book (journal-only names carry no side).
+        names = [sym for sym, s in known.items() if sym not in INDEX_SYMBOLS and s and (not side or s == side)]
+        if names:
+            add("earnings_pack", f"earnings across {which}", symbols=names[:MAX_EARNINGS_NAMES])
+    elif group and _NEWS.search(lowered):
+        which = next(g for g in group.groups() if g)
+        side = "LONG" if which.startswith("long") else "SHORT" if which.startswith("short") else ""
+        names = [sym for sym, s in known.items() if sym not in INDEX_SYMBOLS and (not side or s == side)]
+        for sym in names[:MAX_SYMBOLS]:
+            add("pick_pack", f"news across {which}", symbol=sym)
     if _BOOK.search(lowered):
         add("book_pack", "book words")
-    if _TILT.search(lowered):
-        add("tilt_pack", "tilt words")
-    if _MIRROR.search(lowered):
+    if _TILT.search(lowered) or stop_day:
+        add("tilt_pack", "tilt words" if _TILT.search(lowered) else "stop words")
+    # A windowed win rate ("this month") is the journal's count, not the likes-vs-scan mirror.
+    if _MIRROR.search(lowered) and not (day and re.search(r"\b(?:win|hit) rate\b", lowered)):
         add("mirror_pack", "record words")
     if _PLAN.search(lowered):
         add("plan_lines", "plan words")

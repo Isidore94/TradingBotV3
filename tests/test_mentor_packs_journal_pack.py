@@ -92,3 +92,14 @@ def test_today_summary_and_recent_symbols(journal):
 def test_fixture_ids_are_unique():
     pack = journal_pack.fixture()
     assert pack.ids and len(pack.ids) == len(set(pack.ids))
+
+
+def test_month_puts_its_totals_first_with_the_win_rate(journal):
+    """P14: "what's my win rate this month" has a month window; its totals survive a tight attach budget."""
+    pack = journal_pack.build("month", now=NOW, journal=journal)
+    first = pack.rows[0]
+    assert first["id"] == "jrn:mo2026-09:totals" and (first["count"], first["wins"]) == (4, 2)
+    assert "2026-09-01 to 2026-09-30" in first["text"] and "win rate 50% (2 of 4 with a PnL)" in first["text"]
+    assert {"jrn:mo2026-09:Y1", "jrn:mo2026-09:W1"} <= set(_rows(pack))
+    assert journal_pack.resolve("last_month", NOW.date())[1:] == (datetime(2026, 8, 1).date(), datetime(2026, 8, 31).date())
+    assert "win rate" not in _rows(journal_pack.build("week", now=NOW, journal=journal))["jrn:wk2026-09-28:totals"]["text"]

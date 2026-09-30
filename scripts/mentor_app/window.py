@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 
 import ai_pause
 from mentor_app import assess as pick_assess
-from mentor_app import attach, brain, challenge, commands, grounding, memory, pick_jobs, plan_infer, settings, tape
+from mentor_app import attach, brain, challenge, commands, grounding, memory, pick_jobs, plan_infer, settings, style, tape
 from mentor_app.chat_model import ChatModel
 from mentor_app.inbox import Inbox
 from mentor_app.prefetch import (
@@ -1110,6 +1110,16 @@ class MentorWindow(QMainWindow):
         known = attach.known_symbols(context_rows, self._liked_names, self._journal_symbols)
         attachments = attach.plan_attachments(text, known, self._now())
         seen = attach.recent_cited_ids(self.chat.turns[:-1], attach.DEDUPE_TURNS)
+        # P14: a book_pack built from the journal (no fresh broker snapshot) queues the broker read on the
+        # news thread and says so; the next turn reads the fresh snapshot.
+        from mentor_app import book_jobs
+
+        store, now = self.store, self._now
+        build_pack = book_jobs.chat_pack_builder(
+            self._pack_builder or self._chat_pack,
+            request_fetch=lambda: self._queue_book_fetch("chat"),
+            due=lambda: not book_jobs.skip_reason(store, now()),
+        )
         worker = brain.StreamWorker(
             messages,
             parent=self,
@@ -1124,7 +1134,7 @@ class MentorWindow(QMainWindow):
             attachments=attachments,
             seen_ids=seen,
             question=text,
-            **({"build_pack": self._pack_builder} if self._pack_builder is not None else {}),
+            build_pack=build_pack,
         )
         worker.token.connect(self._on_token)
         worker.tool_call.connect(self._on_tool_call)
@@ -1139,6 +1149,14 @@ class MentorWindow(QMainWindow):
         self._blocks.append("**Mentor:** ")
         self._render()
         worker.start()
+
+    def _chat_pack(self, name: str, args: Any) -> Any:
+        """A chat turn's pack (worker thread): the registry's, except the book reads this app's own store."""
+        if name == "book_pack":
+            from mentor_packs import book_pack
+
+            return book_pack.build(now=self._now(), sources=self._book_pack_sources())
+        return brain._default_build(name, args)
 
     def _run_command(self, result: commands.CommandResult) -> None:
         stamp = self._utc_stamp()
@@ -1283,14 +1301,22 @@ class MentorWindow(QMainWindow):
         self.send_button.setEnabled(True)
 
     def _on_done(self, result: dict) -> None:
-        text = str(result.get("text") or "")
+        raw = str(result.get("text") or "")
+        question = next((turn.text for turn in reversed(self.chat.turns) if turn.role == "user"), "")
+        # P14 style guard: measure the model's wrapper, then drop headers and a closing offer; substance stays.
+        style_numbers = style.measure(raw, question)
+        text, stripped = style.guard(raw)
+        style_numbers["stripped"] = stripped
         if result.get("appendix"):
             # The pre-trade checklist: the app adds the pack's own rows for every section the reply skipped.
             text = f"{text.rstrip()}\n\n{result['appendix']}"
         if result.get("cancelled"):
             text += " *(stopped)*"
         # Guardrail 2: a number no pack sent this turn is grey, never hidden.
-        shown = grounding.mark_uncited_numbers(text, [self._context_text, *(result.get("pack_texts") or ())])
+        grounds = [self._context_text, *(result.get("pack_texts") or ())]
+        shown = grounding.mark_uncited_numbers(text, grounds)
+        # P14: an earnings claim about a name no pack gave earnings for is grey too.
+        shown = grounding.mark_ungrounded_earnings(shown, grounds)
         numbers = grounding.count_numbers(text)
         if numbers:
             self._bump_stats(numbers=numbers, uncited_numbers=shown.count(f'class="{grounding.UNCITED_CLASS}"'))
@@ -1300,7 +1326,6 @@ class MentorWindow(QMainWindow):
         self._latency_ms = result.get("first_token_ms")
         self._sync_status()
         if not result.get("cancelled"):
-            question = next((turn.text for turn in reversed(self.chat.turns[:-1]) if turn.role == "user"), "")
             self._last_turn = {"question": question, "context_text": self._context_text,
                                "memory_block": self._memory_block,
                                "pack_texts": list(result.get("pack_texts") or ())}
@@ -1314,7 +1339,7 @@ class MentorWindow(QMainWindow):
             completion_tokens=result.get("completion_tokens"),
             tool_calls=[*({**call, "source": "model"} for call in result.get("tool_calls") or ()),
                         *(result.get("attached") or ())],
-            timings=result.get("timings") or {},
+            timings={**(result.get("timings") or {}), "style": style_numbers},
         )
         self._finish_turn()
         self._queue_embeddings()

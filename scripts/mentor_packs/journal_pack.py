@@ -1,12 +1,13 @@
 """Journal pack: the trader's trades for a day or a week, from the journal (``mode=ro``). Read-only.
 
-``journal_pack(day="today"|"yesterday"|YYYY-MM-DD|weekday|"week"|"last_week")``. Per decision
+``journal_pack(day="today"|"yesterday"|YYYY-MM-DD|weekday|"week"|"last_week"|"month"|"last_month")``. Per decision
 (a stock trade, or option legs opened together = one spread): symbol, side, kind, open and
 close times (ET), size, R on the planned risk or $ with "R unknown", hold time, and the
 account's tax class. Then totals (count, wins, net R over the trades that have one, net $,
 largest loss) and the open positions. Ids: ``jrn:<day>:<trade_id>`` (a spread joins its trade
 ids with ``+``), ``jrn:<day>:totals``, ``jrn:<day>:open:<trade_id>``. A week's ``<day>`` is
-``wk<monday>``. The journal store class is never built; missing data is "unknown".
+``wk<monday>``; a month's is ``mo<YYYY-MM>`` (its totals row comes first and carries the win rate,
+so a long month survives the attach budget). The journal store class is never built; missing data is "unknown".
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ SCHEMA: dict[str, Any] = {
     "function": {
         "name": NAME,
         "description": (
-            "The trader's trades from his journal for one day or week: each trade's symbol, side, kind, open/close "
+            "The trader's trades from his journal for one day, week or month: each trade's symbol, side, kind, open/close "
             "times (ET), size, R or $, hold time and account tax class; totals (count, wins, net R/$, largest "
             "loss) and open positions."
         ),
@@ -36,7 +37,8 @@ SCHEMA: dict[str, Any] = {
             "type": "object",
             "properties": {
                 "day": {"type": "string", "description": (
-                    "'today' (default), 'yesterday', a date YYYY-MM-DD, a weekday name, 'week' or 'last_week'.")},
+                    "'today' (default), 'yesterday', a date YYYY-MM-DD, a weekday name, 'week', 'last_week', "
+                    "'month' or 'last_month'.")},
             },
             "required": [],
         },
@@ -80,6 +82,13 @@ def resolve(day: Any, today: date) -> tuple[str, date, date] | None:
     if text == "last_week":
         monday = today - timedelta(days=today.weekday() + 7)
         return f"wk{monday.isoformat()}", monday, monday + timedelta(days=6)
+    if text in ("month", "this_month"):
+        first = today.replace(day=1)
+        return f"mo{first:%Y-%m}", first, today
+    if text == "last_month":
+        last = today.replace(day=1) - timedelta(days=1)
+        first = last.replace(day=1)
+        return f"mo{first:%Y-%m}", first, last
     if text.rstrip("s") in _WEEKDAYS:
         target = _WEEKDAYS.index(text.rstrip("s"))
         back = today - timedelta(days=(today.weekday() - target) % 7)
@@ -193,8 +202,13 @@ def build(day: Any = "today", *, now: datetime | None = None, journal: Path | st
             f" ({net_r}); largest loss {worst_text}; {len(opened_in_span)} opened and still open"
             + ("" if len(known_values) == len(values) else f"; {len(values) - len(known_values)} with no PnL (unknown)")
         )
-    rows.append({"id": f"jrn:{label}:totals", "kind": "totals", "count": len(closed_units), "wins": wins,
-                 "net": sum(known_values) if known_values else None, "open": len(open_trades), "text": totals})
+    month = label.startswith("mo")
+    if month and known_values:
+        totals += f"; win rate {100 * wins / len(known_values):.0f}% ({wins} of {len(known_values)} with a PnL)"
+    total_row = {"id": f"jrn:{label}:totals", "kind": "totals", "count": len(closed_units), "wins": wins,
+                 "net": sum(known_values) if known_values else None, "open": len(open_trades), "text": totals}
+    # A month is many rows: its totals go first so a tight attach budget keeps the answer.
+    rows.insert(0 if month else len(rows), total_row)
     for trade in open_trades:
         opened = journal_read.parse_time(trade.get("opened_at"))
         qty = (journal_read.num(trade.get("quantity_opened")) or 0) - (journal_read.num(trade.get("quantity_closed")) or 0)

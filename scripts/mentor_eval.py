@@ -3,8 +3,9 @@
     .venv\\Scripts\\python.exe scripts\\mentor_eval.py            (offline, the default)
     .venv\\Scripts\\python.exe scripts\\mentor_eval.py --live     (the real brain; the trader runs it)
 
-The fixture ``tests/fixtures/mentor_eval_questions.json`` holds 40 questions written the way
-the trader talks, each with ``expected_packs`` and ``must_mention``.
+The fixture ``tests/fixtures/mentor_eval_questions.json`` holds 50 questions written the way
+the trader talks, each with ``expected_packs`` and ``must_mention``; ``simple: true`` marks the
+ones a reply should answer in a few sentences.
 
 ``--offline`` runs only ``attach.plan_attachments`` (pure, no model, no store) and reports
 attach recall per question: the share of expected packs the app attaches by itself.
@@ -13,7 +14,13 @@ attach recall per question: the share of expected packs the app attaches by itse
 tunnel, port 11436 by default, must be up and the GPU not handed to the night). It reports
 the tool hit rate (every expected pack fetched, by the app or by the model), checklist
 coverage on pre-trade questions (sections the model cited, and after the app's "Not
-covered" appendix), must-mention rate, and first-token p50/p95. It reads the live stores
+covered" appendix), must-mention rate, first-token p50/p95, and the style score (P14): reply
+chars p50, the share of replies with headers, with a closing question or offer, and with
+unasked context (regime/breadth/SPY pause on a question with no market or pre-trade cue),
+and the style pass rate (no header, no offer, <= 600 chars on simple questions), for the
+model's own words and after the app's guard.
+
+``--rescore REPORT`` recomputes the style score of an earlier ``--live`` report (no model). It reads the live stores
 read-only, writes nothing but its JSON report (``--out``, default the temp folder), and is
 never run by pytest.
 """
@@ -57,6 +64,52 @@ def offline_report(fixture: Mapping[str, Any]) -> dict[str, Any]:
                      "recall": len(hit) / len(expected) if expected else 1.0})
     recall = statistics.fmean(row["recall"] for row in rows) if rows else 0.0
     return {"mode": "offline", "questions": len(rows), "attach_recall": round(recall, 4), "rows": rows}
+
+
+def style_summary(rows: list[Mapping[str, Any]], fixture: Mapping[str, Any]) -> dict[str, Any]:
+    """Adds ``style`` / ``style_after_app`` / ``style_pass`` to every answered row; returns the overall numbers."""
+    from mentor_app import style
+
+    simple = {str(item["q"]) for item in fixture.get("questions") or () if item.get("simple")}
+    answered = [row for row in rows if "error" not in row]
+    for row in answered:
+        reply = str(row.get("reply") or "")
+        row["style"] = style.measure(reply, row["q"])
+        row["style_after_app"] = style.measure(style.guard(reply)[0], row["q"])
+        row["simple"] = row["q"] in simple
+        row["style_pass"] = style.passes(row["style"], simple=row["simple"])
+        row["style_pass_after_app"] = style.passes(row["style_after_app"], simple=row["simple"])
+    if not answered:
+        return {}
+
+    def share(rows_: list[Mapping[str, Any]], test: Any) -> float | None:
+        return round(sum(1 for row in rows_ if test(row)) / len(rows_), 4) if rows_ else None
+
+    plain = [row for row in answered if not row["style"]["market_cue"]]
+    simple_rows = [row for row in answered if row["simple"]]
+    return {
+        "reply_chars_p50": _percentile([float(row["style"]["chars"]) for row in answered], 50),
+        "headers_share": share(answered, lambda row: row["style"]["headers"] > 0),
+        "offer_or_closing_share": share(answered, lambda row: row["style"]["offer_phrases"] > 0
+                                        or row["style"]["closing_question"]),
+        "unasked_context_share": share(plain, lambda row: row["style"]["context_lines_unasked"] > 0),
+        "style_pass_rate": share(simple_rows, lambda row: row["style_pass"]),
+        "style_pass_rate_after_app": share(simple_rows, lambda row: row["style_pass_after_app"]),
+        "simple_questions": len(simple_rows),
+    }
+
+
+def rescore(report: Mapping[str, Any], fixture: Mapping[str, Any]) -> dict[str, Any]:
+    """An earlier --live report's style score, recomputed (no model, nothing written)."""
+    rows = [dict(row) for row in report.get("rows") or ()]
+    return {"mode": "rescore", "style": style_summary(rows, fixture), "rows": rows}
+
+
+def _style_line(summary: Mapping[str, Any]) -> str:
+    return (f"style: pass {summary.get('style_pass_rate')} on {summary.get('simple_questions')} simple "
+            f"({summary.get('style_pass_rate_after_app')} after app)  chars p50 {summary.get('reply_chars_p50')}  "
+            f"headers {summary.get('headers_share')}  offers/closing {summary.get('offer_or_closing_share')}  "
+            f"unasked context {summary.get('unasked_context_share')}")
 
 
 def _percentile(values: list[float], pct: float) -> float | None:
@@ -129,6 +182,7 @@ def live_report(fixture: Mapping[str, Any], *, out_dir: Path) -> dict[str, Any]:
         "checklist_coverage_after_app": round(statistics.fmean(len(r["checklist_after_app"]) / sections
                                                                for r in gates), 4) if gates else None,
         "first_token_p50_ms": _percentile(firsts, 50), "first_token_p95_ms": _percentile(firsts, 95),
+        "style": style_summary(rows, fixture),
         "rows": rows,
     }
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -143,6 +197,7 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--offline", action="store_true", help="attach recall only (default)")
     mode.add_argument("--live", action="store_true", help="the real brain on the mentor endpoint")
+    mode.add_argument("--rescore", metavar="REPORT", help="the style score of an earlier --live JSON report")
     parser.add_argument("--fixture", default=str(DEFAULT_FIXTURE))
     parser.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "mentor_eval"),
                         help="where --live writes its JSON report")
@@ -154,7 +209,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"tool hit rate {report['tool_hit_rate']}  checklist {report['checklist_coverage_model']} (model) / "
               f"{report['checklist_coverage_after_app']} (after app)  first token p50 {report['first_token_p50_ms']} ms "
               f"p95 {report['first_token_p95_ms']} ms  errors {report['errors']}")
+        print(_style_line(report["style"]))
         print(f"report: {report['written']}")
+        return 0
+    if args.rescore:
+        again = rescore(json.loads(Path(args.rescore).read_text(encoding="utf-8")), fixture)
+        for row in again["rows"]:
+            if "style" in row:
+                mark = "ok  " if row["style_pass"] else "FAIL"
+                print(f"{mark} {row['style']['chars']:>5}  {row['q']}")
+        print(_style_line(again["style"]))
         return 0
     report = offline_report(fixture)
     for row in report["rows"]:

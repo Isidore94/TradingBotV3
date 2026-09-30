@@ -209,3 +209,49 @@ def test_the_0620_fetch_is_queued_once_at_refresh_priority(win):
     win.clock["now"] = datetime(2026, 9, 29, 7, 20, tzinfo=PT)
     win.maybe_fetch_book()
     assert win.news_queue.pending() == [] and len(win.fetch.calls) == 1
+
+
+# ---------------------------------------------------------------- P14: a chat question about the book
+def _chat_turn(window, text):
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    window._brain_ok, window._endpoint, window._model, window._native_tools = True, "http://x", "gemma4:12b", True
+    window.send(text)
+    worker = window._worker
+    assert worker is not None and worker.wait(5000)
+    deadline = time.monotonic() + 5
+    while window._worker is not None and time.monotonic() < deadline:
+        QApplication.processEvents()
+    window._io.submit(lambda: None).result(5)
+    payload = window.model_calls[-1][1]
+    return "\n".join(str(m.get("content") or "") for m in payload["messages"] if m.get("role") == "tool")
+
+
+def test_a_chat_book_question_with_no_fresh_snapshot_queues_the_read_and_says_so(win):
+    """P14: "what am I holding" used to answer from the journal because only /book read the broker."""
+    first = _chat_turn(win, "what am I holding")
+    assert "Source: journal open trades" in first and book_jobs.PENDING_NOTE in first
+    assert "book-fetch" in win.news_queue.pending_keys() and win.fetch.calls == []
+    _drain(win)
+    assert len(win.fetch.calls) == 1
+    win.clock["now"] = TUE_0700 + timedelta(minutes=2)
+    second = _chat_turn(win, "and my exposure now?")
+    assert "Source: Questrade positions at Tue 09-29 07:00 PT" in second and book_jobs.PENDING_NOTE not in second
+    assert "book-fetch" not in win.news_queue.pending_keys() and len(win.fetch.calls) == 1, "fresh: no second read"
+
+
+def test_no_note_and_no_read_while_backing_off_or_when_the_pack_is_not_the_book(store):
+    from mentor_packs.registry import make_pack
+
+    queued: list = []
+    journal = book_pack.build(now=TUE_0700, sources=book_jobs.store_sources(store, book_pack.fixture_sources()))
+    assert book_jobs.note_pending_fetch(journal, lambda: queued.append(1), due=lambda: False) is journal
+    other = make_pack("pick_pack", [{"id": "pick:X:asof", "kind": "source", "source": "journal", "text": "x"}])
+    build = book_jobs.chat_pack_builder(lambda name, args: other, request_fetch=lambda: queued.append(1) or True)
+    assert build("pick_pack", {}) is other and queued == []
+    noted = book_jobs.note_pending_fetch(journal, lambda: queued.append(1) or True)
+    source = next(row for row in noted.rows if row["id"] == "book:source")
+    assert source["text"].endswith(book_jobs.PENDING_NOTE) and queued == [1]
+    assert [row["id"] for row in noted.rows] == [row["id"] for row in journal.rows]

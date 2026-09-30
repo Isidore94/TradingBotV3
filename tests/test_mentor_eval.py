@@ -1,4 +1,6 @@
-"""P13 mentor eval: the 40 plain questions, offline attach recall pinned at >= 90 %. Never runs --live."""
+"""P13/P14 mentor eval: the 50 plain questions, offline attach recall pinned at >= 97.5 %, and the style score.
+
+Never runs --live."""
 
 from __future__ import annotations
 
@@ -14,23 +16,24 @@ import mentor_eval  # noqa: E402
 from mentor_packs import registry  # noqa: E402
 
 
-def test_the_fixture_has_forty_plain_questions_with_real_pack_names():
+def test_the_fixture_has_fifty_plain_questions_with_real_pack_names():
     fixture = mentor_eval.load_fixture()
     questions = fixture["questions"]
-    assert len(questions) == 40 and len({q["q"] for q in questions}) == 40
+    assert len(questions) == 50 and len({q["q"] for q in questions}) == 50
     names = set(registry.names())
     for item in questions:
-        assert item["expected_packs"] and set(item["expected_packs"]) <= names, item["q"]
+        # Only a concept question ("explain ... in one paragraph") needs no desk data, and it says so.
+        assert (item["expected_packs"] or item.get("concept") is True) and set(item["expected_packs"]) <= names, item["q"]
         assert item["must_mention"], item["q"]
         assert not item["q"].startswith("/"), "plain words, never commands"
     gates = [q for q in questions if "gate_pack" in q["expected_packs"]]
     assert gates and all(set(q["must_mention"]) == set(fixture["checklist"]) for q in gates)
 
 
-def test_offline_attach_recall_is_at_least_ninety_percent():
+def test_offline_attach_recall_is_at_least_ninety_seven_and_a_half_percent():
     report = mentor_eval.offline_report(mentor_eval.load_fixture())
-    assert report["questions"] == 40
-    assert report["attach_recall"] >= 0.90, [row for row in report["rows"] if row["missed"]]
+    assert report["questions"] == 50
+    assert report["attach_recall"] >= 0.975, [row for row in report["rows"] if row["missed"]]
     assert report["attach_recall"] == 1.0, [row for row in report["rows"] if row["missed"]]
 
 
@@ -43,3 +46,59 @@ def test_the_trader_s_two_first_day_questions_attach_the_right_packs():
 def test_offline_is_the_default_and_prints_the_recall(capsys):
     assert mentor_eval.main([]) == 0
     assert "attach recall" in capsys.readouterr().out
+
+
+def test_about_twenty_five_simple_questions_are_tagged_and_no_pre_trade_one_is():
+    questions = mentor_eval.load_fixture()["questions"]
+    simple = [q for q in questions if q.get("simple")]
+    assert 20 <= len(simple) <= 30
+    assert not any("gate_pack" in q["expected_packs"] for q in simple)
+    assert {"green or red so far?", "how am i doing today", "should I stop trading for today"} <= {q["q"] for q in simple}
+
+
+def test_no_regime_is_expected_without_a_market_cue():
+    from mentor_app import attach
+
+    for item in mentor_eval.load_fixture()["questions"]:
+        if "regime_pack" in item["expected_packs"]:
+            assert attach.market_cue(item["q"]), item["q"]
+
+
+# ---------------------------------------------------------------- P14 style score, three live replies
+HOW_AM_I = ("You've had a productive day so far, net **+$11.75** [jrn:2026-09-30:totals].\n\n**Today's Performance:**\n"
+            "*   **Wins:** 1 [jrn:2026-09-30:totals]\n*   **Trend:** a **bear channel** regime [tape:regime].\n\n"
+            "You're holding steady. Anything specific you want to review?")
+DAY_GOING = ("You've closed 2 trades today, resulting in a net gain of +$11.75 [jrn:2026-09-30:totals].\n\n*   **WIN:** "
+             "LONG SHOP (+12.02 $) [jrn:2026-09-30:663018367e2e7d25bb43db6a]\n*   **LOSS:** LONG TWLO (-0.28 $) "
+             "[jrn:2026-09-30:73a77b0232cb58f82f0a8281]\n\nYou have 21 positions still open [ctx:today].")
+STOP = ("You have a net win of +$11.75 from two closed trades today [jrn:2026-09-30:totals]. \n\nYour current regime is "
+        "a **bear channel** with lower highs since 2026-09-28 [tape:regime]. \n\nDo you have a specific trade in mind, "
+        "or are you feeling the urge to overtrade?")
+
+
+def test_the_style_score_on_three_live_replies():
+    rows = [{"q": "how am i doing today", "reply": HOW_AM_I}, {"q": "how's the day going", "reply": DAY_GOING},
+            {"q": "should I stop trading for today", "reply": STOP}, {"q": "what's the tape doing", "error": "boom"}]
+    summary = mentor_eval.style_summary(rows, mentor_eval.load_fixture())
+    how, day, stop = rows[0], rows[1], rows[2]
+    assert how["simple"] and how["style"]["headers"] == 1 and not how["style_pass"]
+    assert how["style_pass_after_app"], "the guard strips the header and the closing offer"
+    assert day["style_pass"] and day["style"]["context_lines_unasked"] == 0
+    assert stop["style"]["closing_question"] and stop["style"]["context_lines_unasked"] == 1 and not stop["style_pass"]
+    assert summary["simple_questions"] == 3 and summary["style_pass_rate"] == round(1 / 3, 4)
+    assert summary["style_pass_rate_after_app"] == 1.0
+    assert summary["headers_share"] == round(1 / 3, 4) and summary["offer_or_closing_share"] == round(2 / 3, 4)
+    assert summary["unasked_context_share"] == round(2 / 3, 4)
+    assert summary["reply_chars_p50"] == float(sorted(len(r) for r in (HOW_AM_I, DAY_GOING, STOP))[1])
+    assert "style" not in rows[3], "an errored question is not scored"
+
+
+def test_rescore_reads_an_earlier_live_report(tmp_path, capsys):
+    import json
+
+    report = {"mode": "live", "rows": [{"q": "green or red so far?", "reply": "Green, +$11.75 [jrn:d:totals]."}]}
+    path = tmp_path / "live.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+    assert mentor_eval.main(["--rescore", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert "ok " in out and "style: pass 1.0 on 1 simple" in out

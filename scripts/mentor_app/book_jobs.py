@@ -136,6 +136,38 @@ def store_sources(store: Any, base: Any = None) -> Any:
                                ibkr_status=lambda: stored_status(store, "IBKR"))
 
 
+#: Added to ``book:source`` when a chat turn read the journal view and queued a broker read.
+PENDING_NOTE = "broker fetch running; this is the journal view"
+
+
+def note_pending_fetch(pack: Any, request_fetch: Callable[[], Any], due: Callable[[], bool] = lambda: True) -> Any:
+    """A journal-sourced book pack queues one broker read (when due) and says so in its source row."""
+    rows = list(getattr(pack, "rows", ()) or ())
+    source = next((row for row in rows if row.get("kind") == "source"), None)
+    if source is None or source.get("source") != "journal":
+        return pack
+    try:
+        if not due() or request_fetch() is None:
+            return pack
+    except Exception:  # noqa: BLE001 - a failed queue leaves the journal view as it was, unlabelled
+        return pack
+    from mentor_packs.registry import make_pack
+
+    noted = [dict(row, text=f"{row.get('text', '')}; {PENDING_NOTE}") if row is source else row for row in rows]
+    return make_pack(getattr(pack, "name", "book_pack"), noted, empty_text=getattr(pack, "empty_text", ""))
+
+
+def chat_pack_builder(build: Callable[[str, Any], Any], *, request_fetch: Callable[[], Any],
+                      due: Callable[[], bool] = lambda: True) -> Callable[[str, Any], Any]:
+    """The chat's pack builder: ``build``, with a journal-sourced ``book_pack`` queueing the broker read."""
+
+    def run(name: str, args: Any) -> Any:
+        pack = build(name, args)
+        return note_pending_fetch(pack, request_fetch, due) if name == "book_pack" else pack
+
+    return run
+
+
 def _as_dict(snap: Any) -> dict[str, Any] | None:
     return snap.as_dict() if snap is not None else None
 
