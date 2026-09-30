@@ -86,7 +86,9 @@ in the same commit.
 - `ai_paused_until` stops every local-AI use (app, desk fill, night model slots, remote GPU preflight); deterministic halves and the Trade Mentor Q&A keep running; the host is never powered off while paused.
 - `mentor_chat.sqlite3` (`MENTOR_CHAT_DB_FILE`) has one owner, the mentor app; anyone else reads it `mode=ro`. The app's packs read every desk store read-only (journal `mode=ro`, Focus files directly; never `JournalStore()`/`FocusPickStore()` construction). Its proactive output goes only to its Inbox: it never pops or beeps, and pushes only from `mentor_app/brief_push.py`.
 - The Trade Mentor push is one factual line a day from the regime pack, never model text, off by default.
-- `mentor_review` is the only night writer of the chat DB and only for grading (`challenges.outcome_json`/`graded_utc`, 22:00-06:00 PT; the app grades outside those hours); digests are published to the ai_store, never written back into the app's tables.
+- `mentor_review` is the only night writer of the chat DB, and only for grading (`challenges.outcome_json`/`graded_utc`) and its own `hypothesis` challenge rows, 22:00-06:00 PT (the app grades outside those hours); digests are published to the ai_store, never written back into the app's tables.
+- Hypotheses are looked up in the shadow permutation grid, never run or applied; grading is against the next report.
+- The frontier is off by default, keyed via keyring, capped per day in USD from a dated pricing table, never automatic, and reads only what the local model read.
 - `/check` is advice with citations; it never sizes, orders or writes the journal.
 - Trade Mentor assessments cite pack ids; uncited bullets are dropped; the app never proposes a rule change (that stays with `plan_challenges`).
 - Veto challenges need n >= 30 and LB above the side baseline; they are notes, never rule proposals.
