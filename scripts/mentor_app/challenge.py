@@ -399,8 +399,10 @@ def grade_open(store: Any, now: datetime, *, veto_outcomes: Path | str | None = 
     return updated
 
 
-#: Kinds the scorecard always lists (later phases add ``pick`` and ``gate`` rows); any other kind found is listed too.
-SCORECARD_KINDS = ("veto",)
+#: Kinds the scorecard always lists, even at n=0; any other kind found is listed too.
+SCORECARD_KINDS = ("veto", "gate")
+#: A kind whose hit is not the 5-session return says what it counts.
+HIT_LABELS = {"gate": "win rate of taken trades (R > 0)"}
 SERVICE_DAYS = 7
 
 
@@ -416,10 +418,11 @@ def _kind_lines(rows: list[dict[str, Any]], kind: str, floor: int) -> list[str]:
         if "hit" in outcome:
             hits.append(bool(outcome["hit"]))
     lines = [f"**Scorecard: {kind} challenges**", "", f"- issued {issued}, fully graded {graded}"]
+    label = HIT_LABELS.get(kind, f"{HIT_HORIZON}-session hit rate")
     if len(hits) < floor:
-        lines.append(f"- {HIT_HORIZON}-session hit rate: too few (n={len(hits)}, floor {floor})")
+        lines.append(f"- {label}: too few (n={len(hits)}, floor {floor})")
     else:
-        lines.append(f"- {HIT_HORIZON}-session hit rate {sum(hits) / len(hits):.0%} (n={len(hits)}, floor {floor})")
+        lines.append(f"- {label} {sum(hits) / len(hits):.0%} (n={len(hits)}, floor {floor})")
     return lines
 
 

@@ -1226,9 +1226,12 @@ class MentorWindow(QMainWindow):
                                           error=f"the brain is off: {why}")
             return {"seq": seq, "markdown": gate.card_markdown(card, request, pack), "pack": pack}
 
+        from mentor_app.gate import FOOTER as gate_footer
+
         def failed(exc: BaseException) -> None:
             self._bridge.check_card.emit({"seq": seq, "markdown": (
-                f"**Check {request.side} {request.symbol}**: could not be built ({type(exc).__name__}: {exc}).")})
+                f"**Check {request.side} {request.symbol}**: could not be built ({type(exc).__name__}: {exc}).\n\n"
+                f"{gate_footer}")})
 
         self.queue.submit(f"gate {request.symbol}", job, priority=PRIORITY_INTERACTIVE, needs_model=live,
                           max_tokens=MAX_GATE_TOKENS, key=f"gate:{seq}", on_done=self._bridge.check_card.emit,

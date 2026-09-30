@@ -271,14 +271,21 @@ def grade_open(store: Any, now: datetime, *, journal: Path | str | None = None) 
         except ValueError:
             continue
         symbol = str(row.get("symbol") or "").upper()
+        try:
+            issued = datetime.fromisoformat(str(row.get("issued_utc") or ""))
+            issued = issued if issued.tzinfo else issued.replace(tzinfo=timezone.utc)
+        except ValueError:
+            issued = datetime.combine(session, datetime.min.time(), tzinfo=ET)
         taken = None
         for trade in read_trades(journal, symbol, side):
             try:
                 opened = datetime.fromisoformat(str(trade["opened_at"]))
             except ValueError:
                 continue
-            opened_day = (opened if opened.tzinfo else opened.replace(tzinfo=ET)).astimezone(ET).date()
-            if opened_day >= session and _sessions_between(session, opened_day) <= OPEN_WITHIN_SESSIONS:
+            opened = opened if opened.tzinfo else opened.replace(tzinfo=ET)
+            opened_day = opened.astimezone(ET).date()
+            # Only a trade opened at or after the check, on its day or the next session, answers it.
+            if opened >= issued and _sessions_between(session, opened_day) <= OPEN_WITHIN_SESSIONS:
                 taken = trade
                 break
         new = dict(outcome)

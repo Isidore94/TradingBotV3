@@ -256,3 +256,34 @@ def test_check_narrates_each_different_request_and_records_it(win):
     assert len(win.store.challenges(kind="gate")) == 2
     text = win.transcript.toPlainText()
     assert "wait" in text and "never orders" in text
+
+
+# ---------------------------------------------------------------- review advisories (2026-09-30)
+def test_a_trade_opened_before_the_check_never_grades_it(pack, store, tmp_path):
+    # Check at 10:00 ET (14:00 UTC); T0 opened 09:35 and lost, T1 opened 11:00 and won.
+    gate.record(store, _narrated(pack), REQ, "d1")
+    db = _journal(tmp_path / "j.sqlite3", [
+        ("T0", "NVDA", "SHORT", "CLOSED", "2026-09-29T09:35:00-04:00", "x", 400, 3.05, 3.20, 3.20),
+        ("T1", "NVDA", "SHORT", "CLOSED", "2026-09-29T11:00:00-04:00", "x", 400, 3.05, 2.90, 3.20)])
+    gate.grade_open(store, datetime(2026, 9, 30, 8, 0, tzinfo=PT), journal=db)
+    outcome = json.loads(store.challenges(kind="gate")[0]["outcome_json"])
+    assert outcome["trade_id"] == "T1" and outcome["hit"] is True
+
+
+def test_the_scorecard_shows_gate_before_the_first_check_with_its_own_label(store):
+    text = challenge.scorecard(store, floor=30)
+    gate_block = text.split("**Scorecard: gate challenges**", 1)[1].split("**", 1)[0]
+    assert "win rate of taken trades (R > 0): too few (n=0" in gate_block
+    assert "session hit rate" not in gate_block
+    assert "5-session hit rate" in text.split("**Scorecard: gate challenges**", 1)[0]  # veto keeps its label
+
+
+def test_a_failed_check_card_carries_the_advice_only_footer(win):
+    def broken(req):
+        raise RuntimeError("disk gone")
+
+    win._gate_builder = broken
+    win.send("/check short NVDA")
+    _drain(win)
+    text = win.transcript.toPlainText()
+    assert "could not be built" in text and "advice only; you click, it never orders" in text
