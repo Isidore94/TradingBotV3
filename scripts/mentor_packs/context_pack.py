@@ -116,6 +116,16 @@ def live_sources() -> Sources:
     )
 
 
+def econ_events(view: Mapping[str, Any], session: date) -> list[dict[str, Any]]:
+    """Today's and this week's events from an ``econ_brief.today_view`` dict, up to 7 days ahead."""
+    horizon = (session + timedelta(days=ECON_DAYS_AHEAD)).isoformat()
+    return [
+        dict(event)
+        for event in list(view.get("today") or ()) + list(view.get("week") or ())
+        if str(event.get("date") or "") <= horizon
+    ]
+
+
 def _unknown(row_id: str, what: str, exc: BaseException) -> dict[str, Any]:
     return {"id": row_id, "kind": "unknown", "text": f"{what}: unknown ({type(exc).__name__})"}
 
@@ -204,12 +214,7 @@ def build(*, now: datetime | None = None, sources: Sources | None = None) -> Pac
         rows.append(_unknown("ctx:focus", "Focus names", exc))
     try:
         view = src.econ(session.isoformat()) or {}
-        horizon = (session + timedelta(days=ECON_DAYS_AHEAD)).isoformat()
-        events = [
-            dict(event)
-            for event in list(view.get("today") or ()) + list(view.get("week") or ())
-            if str(event.get("date") or "") <= horizon
-        ]
+        events = econ_events(view, session)
         if not events:
             note = str(view.get("note") or "no events listed")
             rows.append({"id": "ctx:econ", "kind": "econ", "text": f"Econ next {ECON_DAYS_AHEAD} days: {note}"})
