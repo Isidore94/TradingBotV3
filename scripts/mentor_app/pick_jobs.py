@@ -126,3 +126,58 @@ def run_pick_job(
     result["assessment"] = assessment
     result["narrated"] = True
     return result
+
+
+# ---------------------------------------------------------------- the liked set
+LIKED_DAYS = 30
+MAX_CHIPS = 24
+
+
+def _norm_side(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    return text if text in ("LONG", "SHORT") else ""
+
+
+def liked_picks(
+    *,
+    today: date,
+    claims_path: Any = None,
+    feedback_path: Any = None,
+    favorites_path: Any = None,
+) -> list[tuple[str, str]]:
+    """The trader's own picks, newest first, each symbol once: ``[(SYMBOL, SIDE)]``.
+
+    A standing claim (``claimed_picks``), a like in ``pick_feedback`` within LIKED_DAYS,
+    or a swing favourite still standing from a session within LIKED_DAYS. Read-only.
+    """
+    import claimed_picks
+    import pick_feedback
+    import swing_favorites
+
+    since = (today - timedelta(days=LIKED_DAYS)).isoformat()
+    seen: list[tuple[str, str, Any]] = []  # (when, symbol, side)
+    for row in claimed_picks.active_claims(claims_path or claimed_picks.CLAIMED_PICKS_FILE, as_of=today):
+        seen.append((str(row.get("claim_at") or row.get("session_date") or ""), str(row.get("symbol") or ""), row.get("side")))
+    for row in pick_feedback.load_pick_feedback(feedback_path or pick_feedback.PICK_FEEDBACK_FILE):
+        if row.get("verdict") == "like" and str(row.get("trade_date") or "")[:10] >= since:
+            seen.append((str(row.get("ts") or ""), str(row.get("symbol") or ""), row.get("side")))
+    standing: dict[tuple[str, str], str] = {}
+    for row in swing_favorites.load_rows(favorites_path or swing_favorites.SWING_FAVORITES_FILE):
+        if str(row.get("session_date") or "") < since:
+            continue
+        key = (str(row.get("symbol") or "").strip().upper(), _norm_side(row.get("side")))
+        action = str(row.get("action") or "").strip().lower()
+        if action == "remove":
+            standing.pop(key, None)
+        elif action == "add":
+            standing[key] = str(row.get("event_at") or row.get("session_date") or "")
+    seen.extend((when, symbol, side) for (symbol, side), when in standing.items())
+    out: list[tuple[str, str]] = []
+    done: set[str] = set()
+    # Newest first by the wall-clock stamp (first 19 chars: offsets vary between stores).
+    for _, symbol, side in sorted(seen, key=lambda item: item[0][:19], reverse=True):
+        sym = str(symbol or "").strip().upper()
+        if sym and sym not in done:
+            done.add(sym)
+            out.append((sym, _norm_side(side)))
+    return out

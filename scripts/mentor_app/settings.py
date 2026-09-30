@@ -33,6 +33,8 @@ REMOTE_OLLAMA_PORT = 11434
 #: The app hands the GPU back this many minutes before the night window opens.
 PRE_WINDOW_MINUTES = 15
 EMBED_MODEL = "nomic-embed-text"
+PREFETCH_SCOPE_KEY = "mentor_prefetch_scope"
+PREFETCH_SCOPES = ("liked", "all")
 
 
 def _setting(key: str, default: Any = None) -> Any:
@@ -102,6 +104,12 @@ def proactive_per_day() -> int:
         return max(0, int(raw))
     except (TypeError, ValueError):
         return DEFAULT_PROACTIVE_PER_DAY
+
+
+def prefetch_scope() -> str:
+    """``liked`` (default): prefetch only the trader's liked picks; ``all``: then the rest of Focus when idle."""
+    raw = str(_setting(PREFETCH_SCOPE_KEY, "liked") or "").strip().lower()
+    return raw if raw in PREFETCH_SCOPES else "liked"
 
 
 def gpu_block_reason(now: datetime | None = None) -> str:

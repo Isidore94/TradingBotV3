@@ -18,6 +18,8 @@ from typing import Any, Callable
 PRIORITY_INTERACTIVE = 0
 PRIORITY_REFRESH = 1
 PRIORITY_EMBED = 2
+#: Runs only when nothing else waits (the rest of Focus after the liked picks).
+PRIORITY_IDLE = 3
 MAX_JOB_OUTPUT_TOKENS = 600
 IDLE_WAIT_SECONDS = 1.0
 
@@ -97,6 +99,19 @@ class PrefetchQueue:
         """True when a running model job must stop at its next step: one slot and a chat turn waits."""
         with self._lock:
             return self.single_slot and self._interactive > 0
+
+    def cancel(self, key: str) -> bool:
+        """Drop a job that has not started; False when none with ``key`` is waiting."""
+        with self._lock:
+            for index, job in enumerate(self._jobs):
+                if key and job.key == key:
+                    del self._jobs[index]
+                    return True
+        return False
+
+    def pending_keys(self) -> list[str]:
+        with self._lock:
+            return [job.key for job in self._jobs]
 
     def pending(self) -> list[str]:
         with self._lock:

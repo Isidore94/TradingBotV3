@@ -27,6 +27,8 @@ CACHE_NAME = "pick_assessment"
 MAX_OUTPUT_TOKENS = 600
 EFFORT_PREFETCH = "high"
 EFFORT_LIVE = "medium"
+#: The rest of Focus, prefetched only when the queue is idle.
+EFFORT_IDLE = "low"
 TIMEOUT_SECONDS = 180
 
 SCHEMA: dict[str, Any] = {
@@ -167,6 +169,7 @@ def assess(
     model: str,
     endpoint: str,
     live: bool = False,
+    effort: str | None = None,
     post: Callable[..., Any] | None = None,
     request: Callable[..., Mapping[str, Any]] | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
@@ -174,7 +177,7 @@ def assess(
     """Narrate one pick pack. A failed call or a rejected reply is an Assessment with ``error``."""
     import requests
 
-    effort = EFFORT_LIVE if live else EFFORT_PREFETCH
+    effort = effort or (EFFORT_LIVE if live else EFFORT_PREFETCH)
     out = Assessment(
         symbol=symbol, pack_hash=pack_hash, model=model, effort=effort,
         built_utc=now().astimezone(timezone.utc).isoformat(timespec="seconds"), pack_json=pack.as_json(),

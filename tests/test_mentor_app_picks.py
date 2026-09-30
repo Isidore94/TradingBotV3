@@ -272,6 +272,11 @@ def window(app, world, tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "gpu_block_reason", lambda now=None: "")
     monkeypatch.setattr(settings, "context_tokens", lambda: 8192)
+    scope = {"value": "liked"}
+    monkeypatch.setattr(settings, "prefetch_scope", lambda: scope["value"])
+    gpu = {"reason": ""}
+    monkeypatch.setattr(settings, "gpu_block_reason", lambda now=None: gpu["reason"])
+    liked = [("NVDA", "LONG"), ("TSLA", "SHORT")]
     requests_made: list[dict] = []
 
     def request(**kwargs):
@@ -290,9 +295,11 @@ def window(app, world, tmp_path, monkeypatch):
         mentor_enabled=False,
         pick_builder=lambda sym, side: pick_pack.build(sym, side, now=clock["now"], paths=world),
         assess_request=request,
-        focus_source=lambda: {"swing": {"long": ["NVDA"], "short": ["TSLA"]}, "m5": {"long": [], "short": []}},
+        focus_source=lambda: {"swing": {"long": ["NVDA"], "short": ["TSLA"]}, "m5": {"long": [], "short": ["AMD"]}},
+        liked_source=lambda: list(liked),
     )
     win.requests_made = requests_made
+    win.scope, win.gpu, win.liked = scope, gpu, liked
     win.clock = clock
     yield win
     win.shutdown()
@@ -356,17 +363,24 @@ def test_a_changed_pack_is_renarrated(window, app, world):
     assert len(window.requests_made) == 2 and "evidence changed" in _text(window)
 
 
-def test_focus_chips_open_their_pick(window, app):
-    from mentor_packs import context_pack
-
-    window._on_context(context_pack.fixture())
-    assert list(window.pick_chips) == ["AAPL", "TSLA", "AMD", "NVDA"]
+def test_chips_follow_the_liked_picks_not_all_of_focus(window, app):
+    window.refresh_liked()
+    _drain(window, app)
+    assert list(window.pick_chips) == ["NVDA", "TSLA"], "AMD is on Focus but not liked: no chip"
     assert window.pick_chips["TSLA"].text() == "TSLA S"
     window.pick_chips["NVDA"].click()
     assert "Pick NVDA" in _text(window)
 
 
-def test_the_0615_prefetch_assesses_every_focus_name_quietly(window, app):
+def test_chips_are_capped_at_24_newest_first_with_a_pick_hint(window, app):
+    window.liked[:] = [(f"S{i:02d}", "LONG") for i in range(30)]
+    window.refresh_liked()
+    _drain(window, app)
+    assert list(window.pick_chips) == [f"S{i:02d}" for i in range(24)]
+    assert window.pick_more.text() == "+6 more: /pick SYM" and not window.pick_more.isHidden()
+
+
+def test_the_0615_prefetch_assesses_the_liked_picks_quietly(window, app):
     window._brain_ok, window._endpoint, window._model = True, "http://h", "gpt-oss:20b"
     window.clock["now"] = datetime(2026, 9, 29, 6, 10, tzinfo=PT)
     window.maybe_prefetch_picks()
@@ -375,7 +389,7 @@ def test_the_0615_prefetch_assesses_every_focus_name_quietly(window, app):
     before = _text(window)
     window.maybe_prefetch_picks()
     _drain(window, app)
-    assert sorted(window._pick_cards) == ["NVDA", "TSLA"]
+    assert sorted(window._pick_cards) == ["NVDA", "TSLA"], "AMD (Focus, not liked) is not prefetched"
     assert _text(window) == before, "prefetched cards never move the transcript"
     assert all(call["post"] is not None for call in window.requests_made) and len(window.requests_made) == 2
     # An hour later nothing changed: no model call.
@@ -417,3 +431,129 @@ def test_a_failed_build_says_so_and_frees_the_symbol(window, app):
     _drain(window, app)
     assert "could not be built (OSError: disk gone)" in _text(window)
     assert "NVDA" not in window._pick_blocks
+
+
+# ---------------------------------------------------------------- review fixes
+def test_a_chip_tap_mid_stream_never_eats_the_answer(window, app):
+    """Reviewer's repro: tokens after a pick placeholder landed in it and were overwritten."""
+    window._brain_reason = "not connected"
+    window._blocks[:] = ["Hi. Ask me anything.", "**Mentor:** "]
+    window._stream_index = 1
+    window._worker = object()
+    window.queue.begin_interactive()
+    window._on_token("The answer is")
+    window.show_pick("NVDA")
+    window._on_token(" forty-two.")
+    window._on_done({"text": "The answer is forty-two.", "pack_texts": [], "model": "m"})
+    _drain(window, app)
+    text = _text(window)
+    assert "The answer is forty-two." in text
+    assert "Pick NVDA" in text and "no assessment" in text
+    assert window._blocks[1] == "**Mentor:** The answer is forty-two."
+
+
+def test_the_liked_set_is_claims_likes_and_favourites_newest_first(tmp_path):
+    from datetime import date
+
+    claims = tmp_path / "claimed_picks.jsonl"
+    claims.write_text(json.dumps({"action": "claim", "symbol": "FORM", "side": "LONG", "claimed_setup_id": "x",
+                                  "claim_at": "2026-09-29T12:10:02-07:00", "session_date": "2026-09-29"}) + "\n",
+                      encoding="utf-8")
+    feedback = tmp_path / "pick_feedback.jsonl"
+    feedback.write_text("\n".join(json.dumps(row) for row in (
+        {"ts": "2026-09-28T07:00:00", "trade_date": "2026-09-28", "symbol": "NVDA", "side": "LONG", "verdict": "like"},
+        {"ts": "2026-08-01T07:00:00", "trade_date": "2026-08-01", "symbol": "OLD", "side": "LONG", "verdict": "like"},
+        {"ts": "2026-09-29T08:00:00", "trade_date": "2026-09-29", "symbol": "BAD", "side": "LONG", "verdict": "dislike"},
+    )) + "\n", encoding="utf-8")
+    favourites = tmp_path / "swing_favorites.jsonl"
+    favourites.write_text("\n".join(json.dumps(row) for row in (
+        {"action": "add", "symbol": "SHOP", "side": "long", "session_date": "2026-09-29", "event_at": "2026-09-29T13:00:00-07:00"},
+        {"action": "add", "symbol": "GONE", "side": "long", "session_date": "2026-09-29", "event_at": "2026-09-29T13:01:00-07:00"},
+        {"action": "remove", "symbol": "GONE", "side": "long", "session_date": "2026-09-29", "event_at": "2026-09-29T13:02:00-07:00"},
+    )) + "\n", encoding="utf-8")
+    got = pick_jobs.liked_picks(today=date(2026, 9, 29), claims_path=claims, feedback_path=feedback,
+                                favorites_path=favourites)
+    assert got == [("SHOP", "LONG"), ("FORM", "LONG"), ("NVDA", "LONG")]
+
+
+def test_scope_all_adds_the_rest_of_focus_at_low_effort_when_idle(window, app):
+    from mentor_app.prefetch import PRIORITY_IDLE
+
+    window._brain_ok, window._endpoint, window._model = True, "http://h", "gpt-oss:20b"
+    window.scope["value"] = "all"
+    window.clock["now"] = datetime(2026, 9, 29, 6, 15, tzinfo=PT)
+    efforts: dict[str, str] = {}
+    real = assess.assess
+
+    def spy(pack, **kwargs):
+        efforts[kwargs["symbol"]] = kwargs.get("effort")
+        return real(pack, **kwargs)
+
+    import mentor_app.window as window_module
+
+    window_module.pick_assess.assess, saved = spy, real
+    try:
+        window.maybe_prefetch_picks()
+        window.queue.run_one()  # the plan job queues the names
+        jobs = {job.name: job.priority for job in window.queue._jobs}
+        assert jobs["pick_prefetch AMD"] == PRIORITY_IDLE and jobs["pick_prefetch NVDA"] < PRIORITY_IDLE
+        _drain(window, app)
+    finally:
+        window_module.pick_assess.assess = saved
+    assert efforts == {"NVDA": "high", "TSLA": "high", "AMD": "low"}
+    assert list(window.queue.ran[-3:]) == ["pick_prefetch NVDA", "pick_prefetch TSLA", "pick_prefetch AMD"]
+
+
+def test_a_narration_that_never_gets_the_model_shows_the_evidence_and_frees_the_symbol(window, app):
+    import time
+
+    window._brain_ok, window._endpoint, window._model = True, "http://h", "m"
+    window.assess_wait_ms = 20
+    window.show_pick("NVDA")
+    window.queue.run_one()  # the pack builds
+    app.processEvents()
+    window.gpu["reason"] = "the night AI owns the GPU"  # the model job now waits
+    assert "narrating" in _text(window)
+    deadline = time.monotonic() + 2
+    while "NVDA" in window._pick_blocks and time.monotonic() < deadline:
+        app.processEvents()
+    text = _text(window)
+    assert "no assessment (the brain is busy or off" in text and "narrating" not in text
+    assert "NVDA" not in window._pick_blocks
+    assert "pick-assess:NVDA" not in window.queue.pending_keys()
+    assert "evidence:NVDA:" in window._blocks[-1]
+
+
+def test_a_prefetched_card_replaces_the_waiting_placeholder_once(window, app):
+    window._brain_ok, window._endpoint, window._model = True, "http://h", "m"
+    window.gpu["reason"] = "busy"  # the live narration will wait
+    window.show_pick("NVDA")
+    window.queue.run_one()
+    app.processEvents()
+    built_pack = next(v for (sym, _), v in window._pick_packs.items() if sym == "NVDA")
+    digest = pick_pack.pack_hash(built_pack)
+    failed = assess.Assessment(symbol="NVDA", pack_hash=digest, error="timeout")
+    window._on_pick_card({"symbol": "NVDA", "side": "LONG", "pack": built_pack, "hash": digest,
+                          "assessment": failed, "source": "prefetch"})
+    assert "narrating" in _text(window) and "timeout" not in _text(window), "a failed prefetch is never a card"
+    good = assess.Assessment(symbol="NVDA", pack_hash=digest, verdict="wait",
+                             bullets=[{"text": "cell", "evidence_refs": ["pick:NVDA:cell"]}])
+    window._on_pick_card({"symbol": "NVDA", "side": "LONG", "pack": built_pack, "hash": digest,
+                          "assessment": good, "source": "prefetch"})
+    text = _text(window)
+    assert "narrating" not in text and text.count("Pick NVDA") == 1 and "wait" in text
+    assert "pick-assess:NVDA" not in window.queue.pending_keys(), "the waiting live job is dropped"
+
+
+def test_only_the_24_newest_liked_picks_get_the_high_effort_pass(window, app):
+    from mentor_app.prefetch import PRIORITY_IDLE, PRIORITY_REFRESH
+
+    window._brain_ok, window._endpoint, window._model = True, "http://h", "gpt-oss:20b"
+    window.liked[:] = [(f"S{i:02d}", "LONG") for i in range(30)]
+    window.clock["now"] = datetime(2026, 9, 29, 6, 15, tzinfo=PT)
+    window.maybe_prefetch_picks()
+    window.queue.run_one()
+    jobs = {job.name: job.priority for job in window.queue._jobs}
+    assert all(jobs[f"pick_prefetch S{i:02d}"] == PRIORITY_REFRESH for i in range(24))
+    assert all(jobs[f"pick_prefetch S{i:02d}"] == PRIORITY_IDLE for i in range(24, 30))
+    assert "pick_prefetch AMD" not in jobs, "scope liked never reaches the rest of Focus"
