@@ -3,8 +3,9 @@
 ``run_turn`` is Qt-free and takes injected ``stream_post``/``post`` callables so tests
 never touch the network. ``StreamWorker`` runs it on a QThread and re-emits tokens,
 tool calls, the result and failures as signals. At most MAX_TOOL_CALLS packs per turn;
-after that the model must answer without tools. Models without native tool calling
-(gemma) get a one-shot JSON "which packs do you need" step first.
+after that the model must answer without tools. Native tool calling is decided by the
+model's own capabilities (``/api/show``), never by its tag; a model without ``tools``, or
+one whose capabilities are unknown, gets a one-shot JSON "which packs do you need" step.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import json
 import logging
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 import requests
@@ -20,8 +22,14 @@ from PySide6.QtCore import QThread, Signal
 
 MAX_TOOL_CALLS = 4
 THINKING_MODEL_PREFIXES = ("gpt-oss",)
-#: Families Ollama serves without native tool calling.
-NO_NATIVE_TOOLS_MARKERS = ("gemma",)
+#: How long a tag's probed capabilities are trusted (app_state cache).
+CAPS_TTL = timedelta(hours=24)
+CAPS_STATE_PREFIX = "model_caps:"
+SHOW_TIMEOUT = 20
+#: The app's auto-attached packs share this many tokens; lower-priority packs are dropped first.
+ATTACH_BUDGET_TOKENS = 6000
+#: Room below this is not worth a cut pack: the pack is dropped instead.
+MIN_TRUNCATED_TOKENS = 300
 CHAT_REASONING_EFFORT = "low"
 STREAM_TIMEOUT = (10, 300)
 SELECT_TIMEOUT = 120
@@ -40,9 +48,71 @@ def is_thinking_model(model: str) -> bool:
     return str(model or "").strip().lower().startswith(THINKING_MODEL_PREFIXES)
 
 
-def has_native_tools(model: str) -> bool:
-    lowered = str(model or "").lower()
-    return not any(marker in lowered for marker in NO_NATIVE_TOOLS_MARKERS)
+#: Tags whose failed or unknown capability probe was already logged (once per tag per process).
+_probe_logged: set[str] = set()
+
+
+def _log_probe_once(model: str, why: str) -> None:
+    if model in _probe_logged:
+        return
+    _probe_logged.add(model)
+    logging.info("Trade Mentor: %s capabilities unknown (%s); tools: fallback", model, why)
+
+
+def show_model(endpoint: str, model: str, *, post: Post) -> Mapping[str, Any] | None:
+    """Ollama ``POST /api/show`` for one tag; None when the host does not describe it."""
+    reply = post(f"{endpoint.rstrip('/')}/api/show", {"model": model}, SHOW_TIMEOUT)
+    if isinstance(reply, Mapping) and ("capabilities" in reply or "details" in reply):
+        return reply
+    return None
+
+
+def _caps_of(reply: Mapping[str, Any] | None) -> tuple[str, ...] | None:
+    caps = (reply or {}).get("capabilities")
+    if not isinstance(caps, (list, tuple)):
+        return None
+    return tuple(str(cap).strip().lower() for cap in caps)
+
+
+def model_capabilities(
+    endpoint: str, model: str, *, post: Post, store: Any = None, now: datetime | None = None
+) -> tuple[str, ...] | None:
+    """The tag's capabilities (e.g. ``("completion", "tools")``), cached 24 h in app_state; None = unknown."""
+    moment = now or datetime.now(timezone.utc)
+    key = CAPS_STATE_PREFIX + str(model)
+    if store is not None:
+        try:
+            cached = json.loads(store.get_state(key) or "{}")
+            at = datetime.fromisoformat(str(cached.get("at_utc") or ""))
+            if isinstance(cached.get("caps"), list) and timedelta(0) <= moment - at < CAPS_TTL:
+                return tuple(str(cap) for cap in cached["caps"])
+        except (TypeError, ValueError, AttributeError):
+            pass
+    try:
+        caps = _caps_of(show_model(endpoint, model, post=post))
+    except Exception as exc:  # noqa: BLE001 - a failed probe is "unknown", never "native"
+        _log_probe_once(model, f"{type(exc).__name__}: {exc}")
+        return None
+    if caps is None:
+        _log_probe_once(model, "the host listed no capabilities")
+        return None
+    if store is not None:
+        store.set_state(key, json.dumps({"caps": list(caps), "at_utc": moment.astimezone(timezone.utc).isoformat()}))
+    return caps
+
+
+def native_tools_for(caps: Sequence[str] | None) -> bool:
+    """Native tool calling only when the model lists ``tools``; unknown = the fallback."""
+    return caps is not None and "tools" in caps
+
+
+def model_present(endpoint: str, model: str, *, post: Post) -> bool:
+    """True when the host describes ``model`` (``/api/show`` answers for it); any failure = absent."""
+    try:
+        return show_model(endpoint, model, post=post) is not None
+    except Exception as exc:  # noqa: BLE001
+        logging.info("Trade Mentor: %s is not on the host (%s)", model, exc)
+        return False
 
 
 def chat_payload(
@@ -189,6 +259,7 @@ def run_turn(
     keep_alive: Any = -1,
     num_ctx: int | None = None,
     tools: Sequence[Mapping[str, Any]] | None = None,
+    native_tools: bool | None = None,
     stream_post: StreamPost = default_stream_post,
     post: Post = default_post,
     build_pack: Callable[[str, Mapping[str, Any]], Any] = _default_build,
@@ -196,8 +267,18 @@ def run_turn(
     on_tool_call: Callable[[dict], None] = lambda call: None,
     cancelled: Callable[[], bool] = lambda: False,
     clock: Callable[[], float] = time.monotonic,
+    attachments: Sequence[Any] = (),
+    seen_ids: Iterable[str] = (),
+    question: str | None = None,
+    attach_budget_tokens: int = ATTACH_BUDGET_TOKENS,
 ) -> dict[str, Any]:
-    """One chat turn, tools included. Returns the result dict ``done`` carries."""
+    """One chat turn, tools included. Returns the result dict ``done`` carries.
+
+    ``native_tools`` is the probed capability (:func:`native_tools_for`); None (unknown) = the fallback.
+    ``attachments`` (``attach.AttachRequest``) are built here and injected as tool results after the
+    newest user turn (native) or as a packs block before it (fallback): never into the system prefix.
+    Rows cited in ``seen_ids`` are left out unless ``question`` names their subject.
+    """
     url = f"{endpoint.rstrip('/')}/api/chat"
     started = clock()
     convo = [dict(message) for message in messages]
@@ -212,24 +293,54 @@ def run_turn(
         "pack_ids": [],
         #: Every pack text sent this turn (guardrail 2 greys numbers found in none of them).
         "pack_texts": [],
+        #: Packs the app attached from the question (``source: auto``), kept or dropped by the budget.
+        "attached": [],
+        "attach_ms": 0,
+        #: "Not covered: ..." for a pre-trade question whose reply skipped checklist sections.
+        "appendix": "",
         "cancelled": False,
     }
     emitted: list[str] = []
+    gate_packs: list[Any] = []
+
+    def note_pack(name: str, pack: Any, shown_ids: Iterable[str] | None = None) -> None:
+        if hasattr(pack, "as_text"):
+            result["pack_texts"].append(pack.as_text())
+        for pack_id in (getattr(pack, "ids", ()) if shown_ids is None else shown_ids):
+            if pack_id not in result["pack_ids"]:
+                result["pack_ids"].append(pack_id)
+        if name == "gate_pack" and getattr(pack, "rows", ()):
+            gate_packs.append(pack)
 
     def use_pack(name: str, args: dict[str, Any]) -> Any:
         call = {"name": name, "arguments": args}
         result["tool_calls"].append(call)
         on_tool_call(call)
         pack = build_pack(name, args)
-        if hasattr(pack, "as_text"):
-            result["pack_texts"].append(pack.as_text())
-        for pack_id in getattr(pack, "ids", ()):
-            if pack_id not in result["pack_ids"]:
-                result["pack_ids"].append(pack_id)
+        note_pack(name, pack)
         return pack
 
-    native = bool(tools) and has_native_tools(model)
-    if tools and not native:
+    native = bool(tools) and native_tools is True
+    kept: list[tuple[Any, str]] = []
+    if attachments:
+        asked = question if question is not None else next(
+            (str(m.get("content") or "") for m in reversed(convo) if m.get("role") == "user"), "")
+        kept = _attach(list(attachments), build_pack, note_pack, result, set(seen_ids or ()), asked,
+                       int(attach_budget_tokens), on_tool_call, cancelled)
+        result["attach_ms"] = int((clock() - started) * 1000)
+        if cancelled():
+            result["cancelled"] = True
+            result["total_ms"] = int((clock() - started) * 1000)
+            return result
+    if kept and native:
+        convo.append({"role": "assistant", "content": "", "tool_calls": [
+            {"function": {"name": request.name, "arguments": dict(request.args)}} for request, _ in kept]})
+        convo.extend({"role": "tool", "content": text, "tool_name": request.name} for request, text in kept)
+    elif kept:
+        # No native tools: the app's packs go just before the newest user turn, the prefix untouched.
+        convo.insert(len(convo) - 1, {"role": "system", "content": "# Packs (attached by the app)\n"
+                                      + "\n\n".join(text for _, text in kept)})
+    if tools and not native and not kept:
         catalog = "\n".join(
             f"- {tool['function']['name']}: {tool['function'].get('description', '')}" for tool in tools
         )
@@ -287,8 +398,96 @@ def run_turn(
             name, args = _arguments(call)
             convo.append({"role": "tool", "content": use_pack(name, args).as_text(), "tool_name": name})
     result["text"] = "".join(emitted)
+    if gate_packs and not result["cancelled"]:
+        from mentor_app import checklist
+
+        result["appendix"] = "\n\n".join(filter(None, (checklist.appendix(result["text"], pack)
+                                                       for pack in gate_packs[:1])))
     result["total_ms"] = int((clock() - started) * 1000)
+    result["timings"] = {
+        "attach_ms": result["attach_ms"],
+        "prompt_tokens": result["prompt_tokens"],
+        "completion_tokens": result["completion_tokens"],
+        "first_token_ms": result["first_token_ms"],
+        "total_ms": result["total_ms"],
+        "tool_calls": len(result["tool_calls"]),
+        "auto_packs": sum(1 for item in result["attached"] if not item.get("dropped")),
+    }
+    logging.info("Trade Mentor turn: %s", json.dumps(result["timings"], sort_keys=True))
     return result
+
+
+def _render(name: str, rows: Sequence[Mapping[str, Any]], empty_text: str, hidden: int) -> str:
+    """A pack as the model sees it: one ``[id] text`` line per shown row."""
+    if not rows:
+        body = f"## {name}\n{empty_text or 'nothing'}"
+    else:
+        body = "\n".join([f"## {name}", *(f"[{row['id']}] {row.get('text', '')}" for row in rows)])
+    if hidden:
+        body += f"\n({hidden} row(s) you cited in the last turns left out; ask again by name to see them)"
+    return body
+
+
+def _attach(
+    requests_: list[Any],
+    build_pack: Callable[[str, Mapping[str, Any]], Any],
+    note_pack: Callable[..., None],
+    result: dict[str, Any],
+    seen_ids: set[str],
+    question: str,
+    budget: int,
+    on_tool_call: Callable[[dict], None],
+    cancelled: Callable[[], bool],
+) -> list[tuple[Any, str]]:
+    """Build the app's packs, drop recently-cited rows, keep the most important under ``budget`` tokens."""
+    from mentor_app.attach import names_subject
+    from mentor_app.chat_model import estimate_tokens
+
+    built: list[tuple[Any, Any, list[dict[str, Any]], int]] = []
+    for request in sorted(requests_, key=lambda item: getattr(item, "priority", 50)):
+        if cancelled():
+            return []
+        on_tool_call({"name": request.name, "arguments": dict(request.args), "source": "auto"})
+        try:
+            pack = build_pack(request.name, dict(request.args))
+        except Exception as exc:  # noqa: BLE001 - a broken pack is left out, never a guess
+            logging.warning("Trade Mentor: auto pack %s failed: %s", request.name, exc)
+            continue
+        rows = [dict(row) for row in getattr(pack, "rows", ()) or ()]
+        shown = [row for row in rows if str(row.get("id")) not in seen_ids or names_subject(question, str(row.get("id")))]
+        built.append((request, pack, shown, len(rows) - len(shown)))
+    # Strict priority: keep packs in order while they fit; the first that does not fit is cut to the room
+    # left (its first rows), and every lower-priority pack after it is dropped, whatever its size.
+    kept: list[tuple[Any, str]] = []
+    used = 0
+    full = False
+    for request, pack, shown, hidden in built:
+        text = _render(getattr(pack, "name", request.name), shown, getattr(pack, "empty_text", ""), hidden)
+        cost = estimate_tokens(text)
+        dropped = truncated = False
+        room = budget - used
+        if full:
+            dropped = True
+        elif cost > room:
+            full = True
+            if kept and room < MIN_TRUNCATED_TOKENS:
+                dropped = True
+            else:
+                lines = text.split("\n")
+                while lines and estimate_tokens("\n".join(lines)) > room:
+                    lines.pop()
+                shown = [row for row in shown if f"[{row['id']}]" in "\n".join(lines)]
+                text, cost, truncated = "\n".join(lines), estimate_tokens("\n".join(lines)), True
+        entry = {"name": request.name, "arguments": dict(request.args), "reason": getattr(request, "reason", ""),
+                 "source": "auto", "rows": len(shown), "hidden": hidden, "tokens": cost, "dropped": dropped,
+                 "truncated": truncated}
+        result["attached"].append(entry)
+        if dropped:
+            continue
+        used += cost
+        note_pack(request.name, pack, [str(row["id"]) for row in shown])
+        kept.append((request, text))
+    return kept
 
 
 def warm(endpoint: str, model: str, keep_alive: Any = -1, *, post: Post = default_post) -> Mapping[str, Any]:

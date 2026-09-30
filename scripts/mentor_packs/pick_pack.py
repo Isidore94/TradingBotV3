@@ -86,6 +86,10 @@ class PickPaths:
     #: symbol -> last good fetch UTC ISO / last feed failure (``news_pack`` readers); None = not known.
     news_stamps: Callable[[str], Any] | None = field(default=None, compare=False)
     news_errors: Callable[[str], Any] | None = field(default=None, compare=False)
+    #: P13 M5 branch: the desk's M5 alert log (``INTRADAY_BOUNCES_FILE``) and its day-trade grades
+    #: (``working_lately/setup_grades_latest.json``); None = not stored.
+    m5_alerts: Path | None = None
+    m5_grades: Path | None = None
 
 
 def live_paths() -> PickPaths:
@@ -116,6 +120,8 @@ def live_paths() -> PickPaths:
         news=news_pack.live_reader(),
         news_stamps=news_pack.live_stamp_reader(),
         news_errors=news_pack.live_error_reader(),
+        m5_alerts=Path(pp.INTRADAY_BOUNCES_FILE),
+        m5_grades=Path(pp.LOCAL_SETTINGS_DIR) / "working_lately" / "setup_grades_latest.json",
     )
 
 
@@ -306,7 +312,87 @@ def _pct(value: float | None, digits: int = 1) -> str:
     return "unknown" if value is None else f"{value:+.{digits}f}%"
 
 
-def _cell_rows(symbol: str, side: str, claims: list[dict[str, Any]], paths: PickPaths) -> list[dict[str, Any]]:
+def is_m5_branch(found: list[tuple[str, str]], side: str, claims: list[dict[str, Any]]) -> bool:
+    """An M5 Focus pick on ``side`` that is neither a swing Focus pick nor a D1 claim on that side."""
+    return (bool(side) and ("m5", side) in found and ("swing", side) not in found
+            and not any(row.get("side") == side for row in claims))
+
+
+def _m5_branch_row(symbol: str, side: str) -> dict[str, Any]:
+    return {"id": f"pick:{symbol}:branch", "kind": "branch", "branch": "m5",
+            "text": (f"Setup cell branch: M5 (Focus m5 {side.lower()}, no D1 claim): the M5 bounce cell is this "
+                     "pick's setup cell; any D1 cell row is context only")}
+
+
+#: How far back the M5 alert log is searched for the name's latest alert.
+M5_WINDOW_DAYS = 60
+#: At most this many bounce types of one alert get a cell row.
+M5_MAX_TYPES = 3
+
+
+def _m5_latest_index(path: Path) -> dict[tuple[str, str], tuple[str, str, str]]:
+    """Per (symbol, side) the latest alert in the desk's M5 alert log: (trade date, time, bounce types)."""
+    latest: dict[tuple[str, str], tuple[str, str, str]] = {}
+    with path.open(newline="", encoding="utf-8-sig") as handle:
+        for row in csv.DictReader(handle):
+            key = (_sym(row.get("symbol")), _side(row.get("direction")))
+            stamp = (str(row.get("trade_date") or "")[:10], str(row.get("time_local") or ""))
+            if key[0] and key[1] and stamp >= latest.get(key, ("", "", ""))[:2]:
+                latest[key] = (*stamp, str(row.get("bounce_types") or ""))
+    return latest
+
+
+def _m5_grades(path: Path) -> dict[str, Any]:
+    payload = _read_json(path)
+    cells = {str(row.get("key") or ""): row for row in (payload or {}).get("daytrade") or () if isinstance(row, Mapping)}
+    return {"as_of": str((payload or {}).get("as_of") or "?"), "cells": cells}
+
+
+def _m5_cell_rows(symbol: str, side: str, today: date, paths: PickPaths) -> list[dict[str, Any]]:
+    """The M5 setup cell: the desk's day-trade grade (``setup_grades_latest.json``) for each bounce type of the
+    name's latest M5 alert (``intraday_bounces.csv``). Both are small files the desk already writes."""
+    from held_run_score import bounce_components
+
+    row_id = f"pick:{symbol}:m5cell"
+    alerts, grades = paths.m5_alerts, paths.m5_grades
+    if alerts is None or grades is None or not Path(alerts).is_file() or not Path(grades).is_file():
+        return [{"id": row_id, "kind": "cell",
+                 "text": "M5 setup cell: not stored (no M5 alert log or day-trade grades file on this desk)"}]
+    latest = _cached("m5_alerts", Path(alerts), _m5_latest_index).get((symbol, side))
+    since = (today - timedelta(days=M5_WINDOW_DAYS)).isoformat()
+    if not latest or latest[0] < since:
+        return [{"id": row_id, "kind": "cell", "n": 0,
+                 "text": f"M5 setup cell: no M5 alert for {symbol} {side} in the last {M5_WINDOW_DAYS} days"}]
+    day, clock, raw_types = latest
+    graded = _cached("m5_grades", Path(grades), _m5_grades)
+    types: list[str] = []
+    for raw in raw_types.split(","):
+        for part in bounce_components(raw.strip()):
+            if part and part not in types:
+                types.append(part)
+    if not types:
+        return [{"id": row_id, "kind": "cell", "text": f"M5 setup cell: the latest {symbol} alert ({day}) names no type"}]
+    rows = []
+    for family in types[:M5_MAX_TYPES]:
+        head = (f"M5 setup cell {family} {side} (from the latest M5 alert, {day} {clock[:5]} PT; desk day-trade grade "
+                f"as of {graded['as_of']}, 1:1 bracket)")
+        cell = graded["cells"].get(f"{family}|{side}")
+        n = int(_float((cell or {}).get("n")) or 0)
+        if not cell or not n:
+            text = f"{head}: no graded rows"
+        elif n < MIN_REPORTABLE_N:
+            text = f"{head}: too few, n={n} (floor {MIN_REPORTABLE_N})"
+        else:
+            win, bound, avg = (_float(cell.get(key)) for key in ("win_rate", "low_bound", "avg_r"))
+            text = (f"{head}: grade {cell.get('grade') or '?'}, n={n} (floor {MIN_REPORTABLE_N}), win rate "
+                    f"{'unknown' if win is None else f'{win:.0%}'}, low bound "
+                    f"{'unknown' if bound is None else f'{bound:.2f}'}, avg R {'unknown' if avg is None else f'{avg:+.2f}'}")
+        rows.append({"id": f"{row_id}:{family}", "kind": "cell", "setup": family, "n": n, "text": text})
+    return rows
+
+
+def _cell_rows(symbol: str, side: str, claims: list[dict[str, Any]], paths: PickPaths,
+               *, m5: bool = False) -> list[dict[str, Any]]:
     import setup_grades
 
     if not side:
@@ -321,6 +407,8 @@ def _cell_rows(symbol: str, side: str, claims: list[dict[str, Any]], paths: Pick
         latest = index["latest"].get((symbol, side))
         if latest:
             setup, basis = latest[1], f"the latest D1 scan row, {latest[0]}"
+            if m5:
+                basis += "; D1 context only, this is an M5 pick"
     if not setup:
         return [{"id": f"pick:{symbol}:cell", "kind": "cell", "text": f"Setup cell: no setup known for {symbol} {side}"}]
     cell = index["cells"].get((setup, side))
@@ -565,8 +653,16 @@ def build(symbol: str = "", side: str = "", *, now: datetime | None = None, path
     rows.append(
         {"id": f"pick:{sym}:side", "kind": "side", "side": chosen, "text": f"Side assessed: {chosen or 'unknown'}"}
     )
+    m5 = is_m5_branch(found, chosen, claims)
+    if m5:
+        # The D1 branch already says so in its cell row ("5-session D1 outcomes"); only M5 needs its own row.
+        rows.append(_m5_branch_row(sym, chosen))
+        try:
+            rows.extend(_m5_cell_rows(sym, chosen, today, src))
+        except Exception as exc:  # noqa: BLE001
+            rows.append(_unknown(f"pick:{sym}:m5cell", "M5 setup cell", exc))
     try:
-        rows.extend(_cell_rows(sym, chosen, claims, src))
+        rows.extend(_cell_rows(sym, chosen, claims, src, m5=m5))
     except Exception as exc:  # noqa: BLE001
         rows.append(_unknown(f"pick:{sym}:cell", "Setup cell", exc))
     dates: dict[str, list[date]] | None = None
@@ -624,6 +720,29 @@ FIXTURE_NOW = datetime(2026, 9, 29, 14, 0, tzinfo=timezone.utc)  # Tue 2026-09-2
 FIXTURE_TIER_HEADER = "symbol,side,setup_family,scan_date,horizon_sessions,win,side_return_pct,stale_horizon"
 FIXTURE_LEADERBOARD_HEADER = "side,priority_bucket,attribute_key,value_label,closed_tradeable_setup_count,avg_closed_r"
 FIXTURE_COHORT_HEADER = "cohort,side,horizon_sessions,sample_count,win_rate,avg_side_return"
+
+
+def write_fixture_m5(root: Path | str) -> tuple[Path, Path]:
+    """The M5 alert log and day-trade grades: AMD's latest SHORT alert (2026-09-25 07:05) fired
+    ``vwap_lower_band, 10_candle_high``; ``vwap_lower_band|SHORT`` is graded B at n=40,
+    ``10_candle|SHORT`` is thin (n=12). An older AMD alert (2026-08-01) fired ``ema_8``."""
+    base = Path(root)
+    alerts = base / "intraday_bounces.csv"
+    alerts.write_text(
+        "time_local,trade_date,symbol,direction,bounce_types,tier,composite_r\n"
+        "06:40:00,2026-08-01,AMD,short,ema_8,B,0.1\n"
+        "07:05:00,2026-09-25,AMD,short,\"vwap_lower_band, 10_candle_high\",A,0.3\n"
+        "06:50:00,2026-09-25,NVDA,long,vwap,B,0.1\n",
+        encoding="utf-8",
+    )
+    grades = base / "setup_grades_latest.json"
+    grades.write_text(json.dumps({"schema": "setup_grades_v2", "as_of": "2026-09-28", "daytrade": [
+        {"key": "vwap_lower_band|SHORT", "grade": "B", "n": 40, "wins": 22, "win_rate": 0.55, "low_bound": 0.40,
+         "avg_r": 0.08, "bounce_type": "vwap_lower_band", "side": "SHORT"},
+        {"key": "10_candle|SHORT", "grade": "New", "n": 12, "wins": 5, "win_rate": 0.42, "low_bound": 0.19,
+         "avg_r": -0.1, "bounce_type": "10_candle", "side": "SHORT"},
+    ]}), encoding="utf-8")
+    return alerts, grades
 
 
 def write_fixture_world(root: Path | str, *, plan_text: str | None = None) -> PickPaths:
@@ -710,7 +829,10 @@ def write_fixture_world(root: Path | str, *, plan_text: str | None = None) -> Pi
         "AMD": {"industry": "Semiconductors", "industry_member_symbols": ["NVDA", "AVGO", "AMAT", "MU", "AMD", "QCOM"]},
         "TSLA": {"industry": "Auto Manufacturers", "industry_member_symbols": ["TSLA", "F", "GM"]},
     }
+    m5_alerts, m5_grades = write_fixture_m5(base)
     return PickPaths(
+        m5_alerts=m5_alerts,
+        m5_grades=m5_grades,
         focus_longs=base / "focus_longs.txt",
         focus_shorts=base / "focus_shorts.txt",
         focus_swing_longs=base / "focus_swing_longs.txt",

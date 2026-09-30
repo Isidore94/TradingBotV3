@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 
 import ai_pause
 from mentor_app import assess as pick_assess
-from mentor_app import brain, challenge, commands, grounding, memory, pick_jobs, plan_infer, settings, tape
+from mentor_app import attach, brain, challenge, commands, grounding, memory, pick_jobs, plan_infer, settings, tape
 from mentor_app.chat_model import ChatModel
 from mentor_app.inbox import Inbox
 from mentor_app.prefetch import (
@@ -83,6 +83,28 @@ def _quit_qt() -> None:
         app.quit()
 
 
+def latency_card(rows: list[dict]) -> str:
+    """`/latency`: the last answers' timings from the turn log (newest last)."""
+    import json
+
+    if not rows:
+        return "No answers logged yet."
+    lines = ["**Last answers** (attach ms · first token ms · total ms · prompt tokens · model tools + app packs)", ""]
+    for row in rows:
+        try:
+            timing = json.loads(row.get("timings_json") or "{}")
+        except ValueError:
+            timing = {}
+        first = timing.get("first_token_ms", row.get("latency_ms"))
+        lines.append(
+            f"- {str(row.get('ts_utc') or '')[11:19]} UTC {row.get('model') or '?'}: "
+            f"{timing.get('attach_ms', '-')} · {'-' if first is None else first} · {timing.get('total_ms', '-')} · "
+            f"{timing.get('prompt_tokens', row.get('prompt_tokens') or '-')} · "
+            f"{timing.get('tool_calls', '-')} + {timing.get('auto_packs', '-')}"
+        )
+    return "\n".join(lines)
+
+
 class _Bridge(QObject):
     """Signals the worker threads emit; Qt queues them onto the window's thread."""
 
@@ -112,6 +134,7 @@ class _Bridge(QObject):
     debate_card = Signal(object)
     frontier_card = Signal(object)
     frontier_state = Signal(object)
+    journal_symbols = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -179,6 +202,8 @@ class MentorWindow(QMainWindow):
         frontier_post: Callable[..., Any] | None = None,
         frontier_key: Callable[[], str] | None = None,
         plan_path: Any = None,
+        journal_path: Any = None,
+        pack_builder: Callable[[str, Any], Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -197,6 +222,15 @@ class MentorWindow(QMainWindow):
         self._model = ""
         self._endpoint = ""
         self._latency_ms: int | None = None
+        #: The model's probed native tool calling (False = the one-shot fallback, also when unknown).
+        self._native_tools = False
+        #: P13 auto-attach: the liked picks and the journal's names of the last 60 days (the trader's universe).
+        self._liked_names: list[tuple[str, str]] = []
+        self._journal_symbols: list[str] = []
+        #: The journal /today and the universe read (None = the live one, read-only).
+        self._journal_path = journal_path
+        #: The chat turn's pack builder (None = the registry); tests inject fixtures.
+        self._pack_builder = pack_builder
         #: When the Pause AI switch ends, as last seen; None = AI on.
         self._paused_until: datetime | None = None
         self.queue =queue or PrefetchQueue(blocked=self._gpu_reason, model_ready=lambda: self._brain_ok)
@@ -225,6 +259,7 @@ class MentorWindow(QMainWindow):
         self._shut = False
         self._bridge = _Bridge(self)
         self._bridge.context_ready.connect(self._on_context)
+        self._bridge.journal_symbols.connect(self._on_journal_symbols)
         self._bridge.brain_state.connect(self._on_brain_state)
         self._bridge.memory_ready.connect(self._on_memory)
         self._bridge.still_true.connect(self._on_still_true)
@@ -535,7 +570,8 @@ class MentorWindow(QMainWindow):
         host = self._host or "no host"
         latency = f"{self._latency_ms} ms" if self._latency_ms is not None else "-"
         state = "ready" if self._brain_ok else "off"
-        self.status_pill.setText(f"{host} · {model} · {latency} · brain {state}")
+        tools = "native" if self._native_tools else "fallback"
+        self.status_pill.setText(f"{host} · {model} · tools: {tools} · {latency} · brain {state}")
         self.banner.setVisible(not self._brain_ok)
         self.banner.setText(f"Brain is off: {self._brain_reason}. Packs still work: try /tape.")
         self.ai_pause_button.refresh()
@@ -792,7 +828,13 @@ class MentorWindow(QMainWindow):
                 state["reason"] = status.reason
                 return
             state["endpoint"] = self._tunnel.endpoint
-            single = int(getattr(status, "slots", 2) or 2) == 1
+            if not settings.explicit_model() and brain.model_present(state["endpoint"], settings.DAY_MODEL,
+                                                                     post=self._post):
+                state["model"] = settings.DAY_MODEL
+            caps = brain.model_capabilities(state["endpoint"], state["model"], post=self._post, store=self.store,
+                                            now=self._now())
+            state["native_tools"] = brain.native_tools_for(caps)
+            single =int(getattr(status, "slots", 2) or 2) == 1
             if single:
                 # The night left Ollama running with one slot: background jobs yield fully.
                 logging.info("Trade Mentor: Ollama already running: 1 slot, night-started")
@@ -862,6 +904,8 @@ class MentorWindow(QMainWindow):
         self._brain_reason = str(state.get("reason") or "")
         self._host = str(state.get("host") or self._host)
         self._model = str(state.get("model") or self._model)
+        if "native_tools" in state:
+            self._native_tools = bool(state["native_tools"])
         self._endpoint = str(state.get("endpoint") or self._endpoint)
         self._sync_status()
         if self._brain_ok:
@@ -920,6 +964,28 @@ class MentorWindow(QMainWindow):
         self.queue.submit("context_pack", build, priority=PRIORITY_REFRESH, key="context_pack",
                           on_done=self._bridge.context_ready.emit)
         self.refresh_liked()
+        self.queue.submit("journal_symbols", self._read_journal_symbols, priority=PRIORITY_REFRESH,
+                          key="journal_symbols", on_done=self._bridge.journal_symbols.emit)
+
+    def _read_journal_symbols(self) -> list[str]:
+        """Queue thread: the journal's names of the last 60 days (part of the auto-attach universe)."""
+        from mentor_packs import journal_pack
+
+        try:
+            return journal_pack.recent_symbols(self._journal_path, now=self._now())
+        except Exception as exc:  # noqa: BLE001 - an unreadable journal only narrows the universe
+            logging.info("Trade Mentor: journal symbols not read (%s)", exc)
+            return []
+
+    def _on_journal_symbols(self, symbols: Any) -> None:
+        self._journal_symbols = [str(sym) for sym in symbols or ()]
+
+    def _today_card(self, day: str) -> str:
+        """Queue thread: `/today` as a card from the journal pack (ids intact)."""
+        from mentor_packs import journal_pack
+
+        pack = journal_pack.build(day, now=self._now(), journal=self._journal_path)
+        return "**Journal**\n\n" + pack.as_text().replace("\n", "\n\n")
 
     def _liked(self) -> list[tuple[str, str]]:
         if self._liked_source is not None:
@@ -1039,6 +1105,11 @@ class MentorWindow(QMainWindow):
             context_text=self._context_text, budget_tokens=settings.context_tokens(), memory_text=self._memory_text,
             memory_block=self._memory_block,
         )
+        # P13: the app reads the question and attaches the packs it needs; the model may still call more.
+        context_rows = self._context_pack.rows if self._context_pack is not None else ()
+        known = attach.known_symbols(context_rows, self._liked_names, self._journal_symbols)
+        attachments = attach.plan_attachments(text, known, self._now())
+        seen = attach.recent_cited_ids(self.chat.turns[:-1], attach.DEDUPE_TURNS)
         worker = brain.StreamWorker(
             messages,
             parent=self,
@@ -1047,8 +1118,13 @@ class MentorWindow(QMainWindow):
             keep_alive=settings.keep_alive(),
             num_ctx=settings.context_tokens(),
             tools=registry.tool_schemas(),
+            native_tools=self._native_tools,
             stream_post=self._stream_post,
             post=self._post,
+            attachments=attachments,
+            seen_ids=seen,
+            question=text,
+            **({"build_pack": self._pack_builder} if self._pack_builder is not None else {}),
         )
         worker.token.connect(self._on_token)
         worker.tool_call.connect(self._on_tool_call)
@@ -1149,6 +1225,12 @@ class MentorWindow(QMainWindow):
             self.show_check(result.arg)
         elif result.action == "book":
             self.show_book()
+        elif result.action == "today":
+            day = str(result.arg or "today")
+            self.queue.submit("journal_today", lambda: self._today_card(day), priority=PRIORITY_INTERACTIVE,
+                              key=f"journal_today:{day}", on_done=self._bridge.note.emit)
+        elif result.action == "latency":
+            self._submit_io(lambda: self._bridge.note.emit(latency_card(self.store.latency_rows(10))))
         elif result.action == "mirror":
             self.show_mirror(int(result.arg or 6))
         elif result.action == "tilt":
@@ -1202,6 +1284,9 @@ class MentorWindow(QMainWindow):
 
     def _on_done(self, result: dict) -> None:
         text = str(result.get("text") or "")
+        if result.get("appendix"):
+            # The pre-trade checklist: the app adds the pack's own rows for every section the reply skipped.
+            text = f"{text.rstrip()}\n\n{result['appendix']}"
         if result.get("cancelled"):
             text += " *(stopped)*"
         # Guardrail 2: a number no pack sent this turn is grey, never hidden.
@@ -1227,7 +1312,9 @@ class MentorWindow(QMainWindow):
             latency_ms=result.get("first_token_ms"),
             prompt_tokens=result.get("prompt_tokens"),
             completion_tokens=result.get("completion_tokens"),
-            tool_calls=result.get("tool_calls") or (),
+            tool_calls=[*({**call, "source": "model"} for call in result.get("tool_calls") or ()),
+                        *(result.get("attached") or ())],
+            timings=result.get("timings") or {},
         )
         self._finish_turn()
         self._queue_embeddings()
@@ -1367,6 +1454,7 @@ class MentorWindow(QMainWindow):
     def _sync_pick_chips(self, liked: Any) -> None:
         """One chip per liked pick, newest first, at most MAX_CHIPS; the rest are a `/pick` away."""
         everything = [(str(sym).upper(), str(side or "").upper()) for sym, side in liked or ()]
+        self._liked_names = list(everything)
         wanted = everything[: pick_jobs.MAX_CHIPS]
         extra = len(everything) - len(wanted)
         self.pick_more.setText(f"+{extra} more: /pick SYM" if extra > 0 else "")

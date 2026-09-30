@@ -104,3 +104,21 @@ def test_the_live_focus_read_never_constructs_the_focus_store():
     source = (SCRIPTS_DIR / "mentor_packs" / "context_pack.py").read_text(encoding="utf-8")
     # FocusPickStore() expires and rewrites the m5 lists on construction; JournalStore() migrates.
     assert "FocusPickStore(" not in source and "JournalStore(" not in source
+
+
+def test_the_context_pack_carries_today_so_far():
+    rows = {row["id"]: row for row in context_pack.fixture().rows}
+    assert rows["ctx:today"]["text"].startswith("Today so far: 2 closed trade(s)")
+    broken = replace(context_pack.fixture_sources(), today=lambda moment: (_ for _ in ()).throw(OSError("locked")))
+    rows = {row["id"]: row for row in context_pack.build(now=NOW, sources=broken).rows}
+    assert rows["ctx:today"]["kind"] == "unknown"
+
+
+def test_the_live_today_row_reads_the_journal_pack(tmp_path, monkeypatch):
+    import project_paths
+    from mentor_packs import journal_pack
+
+    db = journal_pack.write_fixture_journal(tmp_path / "trade_journal.sqlite3")
+    monkeypatch.setattr(project_paths, "JOURNAL_DB_FILE", db)
+    assert context_pack.live_sources().today(journal_pack.FIXTURE_NOW) == (
+        "Today so far: 3 closed trade(s), 2 win(s), net +30.00 $, 1 open")

@@ -244,3 +244,76 @@ def test_any_plan_edit_changes_the_hash_even_one_that_adds_no_line(world):
     b = pick_pack.build("NVDA", now=NOW, paths=world)
     assert a.ids == b.ids and a.as_text() == b.as_text(), "the edit adds no citable line"
     assert pick_pack.pack_hash(a) != pick_pack.pack_hash(b), "a changed plan re-narrates the card"
+
+
+# ---------------------------------------------------------------- P13: the M5 branch
+def test_an_m5_focus_pick_takes_its_setup_cell_from_the_desk_s_day_trade_grades(world):
+    rows = {row["id"]: row for row in pick_pack.build("AMD", now=NOW, paths=world).rows}
+    assert rows["pick:AMD:branch"]["branch"] == "m5" and "M5 bounce cell" in rows["pick:AMD:branch"]["text"]
+    band = rows["pick:AMD:m5cell:vwap_lower_band"]
+    assert band["setup"] == "vwap_lower_band" and band["n"] == 40
+    assert "latest M5 alert, 2026-09-25 07:05 PT" in band["text"] and "grade B" in band["text"]
+    assert "low bound 0.40" in band["text"] and "as of 2026-09-28" in band["text"]
+    thin = rows["pick:AMD:m5cell:10_candle"]
+    assert "too few, n=12 (floor 30)" in thin["text"] and "grade New" not in thin["text"], "a thin cell carries n only"
+    assert "pick:AMD:m5cell:ema_8" not in rows, "only the latest alert's types"
+    assert "D1 context only" in rows["pick:AMD:cell"]["text"]
+    assert rows["pick:AMD:cohort:1"]["text"].startswith("Cohort human_focus_m5 SHORT")
+
+
+def test_an_m5_pick_with_no_m5_files_says_not_stored_and_never_guesses(world):
+    rows = {row["id"]: row for row in pick_pack.build("AMD", now=NOW, paths=replace(world, m5_grades=None)).rows}
+    assert rows["pick:AMD:m5cell"]["text"].startswith("M5 setup cell: not stored")
+    missing = replace(world, m5_alerts=world.focus_longs.with_name("nope.csv"))
+    rows = {row["id"]: row for row in pick_pack.build("AMD", now=NOW, paths=missing).rows}
+    assert "not stored" in rows["pick:AMD:m5cell"]["text"]
+
+
+def test_an_m5_pick_with_no_recent_alert_of_its_own_says_so(world):
+    world.focus_shorts.write_text("AMD\nQQQX\n", encoding="utf-8")
+    rows = {row["id"]: row for row in pick_pack.build("QQQX", now=NOW, paths=world).rows}
+    assert "no M5 alert for QQQX SHORT in the last 60 days" in rows["pick:QQQX:m5cell"]["text"]
+    later = NOW.replace(month=12)
+    rows = {row["id"]: row for row in pick_pack.build("AMD", now=later, paths=world).rows}
+    assert "no M5 alert for AMD SHORT in the last 60 days" in rows["pick:AMD:m5cell"]["text"]
+
+
+def test_the_650_mb_m5_outcome_store_is_never_opened(monkeypatch, tmp_path):
+    import builtins
+    import io
+
+    import project_paths
+
+    outcomes = tmp_path / "intraday_bounce_outcomes.csv"
+    outcomes.write_text("event_id\n", encoding="utf-8")
+    monkeypatch.setattr(project_paths, "INTRADAY_BOUNCE_OUTCOMES_FILE", outcomes)
+    opened: list[str] = []
+
+    def audit(real):
+        def wrapper(file, *args, **kwargs):
+            if "intraday_bounce_outcomes" in str(file):
+                opened.append(str(file))
+                raise AssertionError(f"pick_pack opened {file}")
+            return real(file, *args, **kwargs)
+        return wrapper
+
+    real_path_open = Path.open
+    monkeypatch.setattr(builtins, "open", audit(builtins.open))
+    monkeypatch.setattr(io, "open", audit(io.open))
+    monkeypatch.setattr(Path, "open", lambda self, *a, **k: audit(lambda f, *x, **y: real_path_open(self, *x, **y))(
+        self, *a, **k))
+    live = pick_pack.live_paths()  # builds the live path set only; nothing is read
+    assert outcomes not in {value for value in vars(live).values() if isinstance(value, Path)}
+    world = pick_pack.write_fixture_world(tmp_path / "desk")
+    for symbol in ("AMD", "NVDA", "TSLA"):
+        pick_pack.build(symbol, now=NOW, paths=world)
+    assert opened == []
+
+
+def test_a_swing_or_claimed_pick_stays_on_the_d1_branch(world):
+    for symbol in ("NVDA", "TSLA"):
+        ids = pick_pack.build(symbol, now=NOW, paths=world).ids
+        assert f"pick:{symbol}:branch" not in ids and f"pick:{symbol}:m5cell" not in ids
+    assert pick_pack.is_m5_branch([("m5", "SHORT")], "SHORT", []) is True
+    assert pick_pack.is_m5_branch([("m5", "SHORT")], "SHORT", [{"side": "SHORT"}]) is False, "a D1 claim wins"
+    assert pick_pack.is_m5_branch([("m5", "SHORT"), ("swing", "SHORT")], "SHORT", []) is False

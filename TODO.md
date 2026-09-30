@@ -26,6 +26,9 @@ here.
   gate #326): read-only IBKR positions + cash beside Questrade, own client id 9155.
   Plan inference built (trader 2026-09-30, `claude/mentor-plan-infer-2026-09-30`, gate #327):
   the app adds `[ai date]` plan lines from the trader's chat words.
+  P13 plain-language routing built (trader 2026-09-30, `claude/mentor-app-p13-routing-2026-09-30`,
+  gate #329): native tools by capability (gemma4:12b default), auto-attach, `journal_pack`, M5 cell,
+  pre-trade checklist, `/today` `/latency`, `mentor_eval.py`.
   Next only by the trader's word: an alerts pack, a movers pack, more recall sources.
 
 ## Plan to 8/10, round 2 (trader's brief, 2026-09-25 evening)

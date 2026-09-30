@@ -9,7 +9,7 @@ closes, on its own port (11436 by default).
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 import project_paths
 
@@ -73,11 +73,23 @@ def endpoint() -> str:
     return f"http://127.0.0.1:{tunnel_port()}"
 
 
-def mentor_model() -> str:
-    """The app's chat model; defaults to the night's medium model tag."""
-    chosen = str(_setting(MODEL_KEY, "") or "").strip()
+#: The day model when the host has it (dense, native tool calling).
+DAY_MODEL = "gemma4:12b"
+
+
+def explicit_model() -> str:
+    """The trader's own ``mentor_model`` setting, or "" when he never set one."""
+    return str(_setting(MODEL_KEY, "") or "").strip()
+
+
+def mentor_model(has_model: Callable[[str], bool] | None = None) -> str:
+    """The app's chat model: the setting; else DAY_MODEL when ``has_model`` says the host has it;
+    else the night's medium model tag."""
+    chosen = explicit_model()
     if chosen:
         return chosen
+    if has_model is not None and has_model(DAY_MODEL):
+        return DAY_MODEL
     import ai_summary
 
     return ai_summary.local_model("medium")

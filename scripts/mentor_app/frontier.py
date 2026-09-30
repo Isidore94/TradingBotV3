@@ -322,7 +322,7 @@ def think_chat(question: str, *, context_text: str, memory_block: str, pack_text
                request: Callable[..., Mapping[str, Any]], post: Callable[..., Any]) -> ThinkResult:
     """Re-ask the last question over the same texts; the same citation rule as every structured reply."""
     import ai_summary
-    from mentor_app.chat_model import SYSTEM_PROMPT
+    from mentor_app.chat_model import PERSONA_PROMPT
 
     out = ThinkResult("chat", model, title=f"Think harder: {str(question)[:120]}")
     allowed = ids_in([context_text, memory_block, *pack_texts])
@@ -330,7 +330,7 @@ def think_chat(question: str, *, context_text: str, memory_block: str, pack_text
         out.reply = _ask(request, evidence=chat_evidence(question, context_text=context_text,
                                                          memory_block=memory_block, pack_texts=pack_texts),
                          schema=CHAT_SCHEMA, schema_name=CHAT_SCHEMA_NAME, prompt_version=CHAT_PROMPT_VERSION,
-                         system_instruction=ai_summary.persona_instruction(SYSTEM_PROMPT), post=post)
+                         system_instruction=ai_summary.persona_instruction(PERSONA_PROMPT), post=post)
         checked = check_citations({"bullets": out.reply.get("answer")}, allowed)
         out.points = list(checked.kept)
         out.dropped = [{"reason": "uncited", **row} for row in checked.dropped]
