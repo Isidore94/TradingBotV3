@@ -78,12 +78,14 @@ def _run(chat, tmp_path, **kwargs):
 
 
 # ---------------------------------------------------------------- registration
-def test_mentor_review_is_registered_after_ticker_briefs_and_cut_first():
+def test_mentor_review_is_registered_after_exit_note_fields_and_cut_first():
+    # Was directly after `ticker_briefs`; the briefs moved last on 2026-09-30 (trader).
     from ai_jobs import runner
 
     slots = runner.default_slots()
     names = [slot.name for slot in slots]
-    assert names.index("mentor_review") == names.index("ticker_briefs") + 1
+    assert names.index("mentor_review") == names.index("exit_note_fields") + 1
+    assert names.index("mentor_review") < names.index("ticker_briefs")
     slot = next(slot for slot in slots if slot.name == "mentor_review")
     assert slot.goal == "journal" and slot.goal in runner.SLOT_GOALS
     assert slot.uses_model and slot.model_free_kwargs == {"ask": False}

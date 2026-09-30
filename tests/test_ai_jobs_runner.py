@@ -351,6 +351,9 @@ EXPECTED_SLOT_ORDER = (
     # P10 (2026-09-27): point-in-time daily regime rows in the research lake.
     # Deterministic, no model; directly after `market_regime_table`.
     "market_regime_daily",
+    # Nightly permutation report (trader 2026-09-30): backfill + search, deterministic,
+    # directly after `market_regime_daily` (pinned right after `lake_history_topup`).
+    "permutation_report",
     # WS-10D (2026-09-12): the Market Journal's weekly/monthly/quarterly rollups.
     # Deterministic, no model; it reads the daily stories and the exchange calendar
     # and feeds nothing above it, so it CLOSES the deterministic stage.
@@ -399,14 +402,14 @@ EXPECTED_SLOT_ORDER = (
     # because TJ-5 pins that name DIRECTLY after `observation_tags`, and before
     # `ticker_briefs`, whose two hours of reserve it must not queue behind.
     "exit_note_fields",
-    "ticker_briefs",
     # Trade Mentor app P4 (2026-09-30): the app's day, graded and digested. Directly after
-    # the briefs; the night budget cuts it first (runner.CUT_FIRST_SLOTS), facts half still runs.
+    # `exit_note_fields` since the briefs moved last; the night budget cuts it first
+    # (runner.CUT_FIRST_SLOTS), facts half still runs.
     "mentor_review",
     # Econ morning brief (2026-09-24): the next session's "what to watch" from
-    # the newest pasted brief. Stage 2, directly after the briefs (the slots
-    # before them are pinned closed, `week_questions` is pinned after the
-    # market story); a local model words it and the fixed parser owns every time.
+    # the newest pasted brief. Stage 2, directly after `mentor_review`
+    # (`week_questions` is pinned after the market story); a local model words it
+    # and the fixed parser owns every time.
     "econ_brief",
     "market_story_narration",
     # S17.2 (2026-09-26): the regime read joins the market story, so it sits
@@ -422,13 +425,16 @@ EXPECTED_SLOT_ORDER = (
     # P1-7 7b (2026-09-25): challenges to the trader's plan. Stage 3, before
     # `setup_research` because `improvement_ideas` is pinned last.
     "plan_review",
-    # P1-4 4d (2026-09-25): Saturday-only setup-keys narration, inside stage 3,
+    # P1-4 4d (2026-09-25): setup-keys narration (nightly since 2026-09-30), inside stage 3,
     # directly before `setup_research` (only `improvement_ideas` may follow it).
     "setup_keys_narration",
     "setup_research",
     # TJ-6 (2026-09-20), appended LAST inside stage 3: it reads what the rest of
     # the night wrote and feeds nothing.
     "improvement_ideas",
+    # Trader 2026-09-30: every care name is briefed nightly (100+ minutes on the
+    # 5080), so the briefs run LAST, after every story the morning needs.
+    "ticker_briefs",
 )
 
 

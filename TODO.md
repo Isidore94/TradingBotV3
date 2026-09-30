@@ -349,5 +349,4 @@ S1 and keep the order. The two 500 MB logs are read with
   a mood with a result), TJ-9E (exit fields in the day pack; `CLOSED_PARTIAL` spelling
   in 4 ask-first places; `ai_summary._journal_source` exit words).
 - Housekeeping: dead-script review needs the trader's yes; 142 owed gates need a batch
-  pass/drop; the live `permutation_report.json` names a scratch parquet as its source
-  (the Saturday job must write it from the live warehouse).
+  pass/drop.

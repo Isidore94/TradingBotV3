@@ -644,6 +644,8 @@ def test_the_scope_can_be_selected_on_demand():
         # regime rows that read it.
         "lake_history_topup",
         "market_regime_daily",
+        # Nightly permutation report (2026-09-30), stage 1 after the lake regime rows.
+        "permutation_report",
         "market_story_rollups",
         "measured_report",
         # AI-R3 keeps the factual day pack current before stage-2 stories.
@@ -673,13 +675,13 @@ def test_the_scope_can_be_selected_on_demand():
         "week_review_narration",
         # TJ-9E (2026-09-21): the exit-note reader, appended inside stage 2
         # after the week story (TJ-5 pins that DIRECTLY after the word tagger)
-        # and before the two-hour briefs.
+        # and before the briefs.
         "exit_note_fields",
-        "ticker_briefs",
-        # Mentor app P4 (2026-09-30): the app's day, graded and digested, directly after the briefs.
+        # Mentor app P4 (2026-09-30): the app's day, graded and digested, directly
+        # after the exit-note reader since the briefs moved last.
         "mentor_review",
         # Econ morning brief (2026-09-24): "what to watch today" from the
-        # pasted brief, a stage 2 model slot directly after the briefs.
+        # pasted brief, a stage 2 model slot directly after `mentor_review`.
         "econ_brief",
         "market_story_narration",
         # S17.2 (2026-09-26): the regime read joins the market story, a stage 2
@@ -696,11 +698,13 @@ def test_the_scope_can_be_selected_on_demand():
         "review_policy_draft",
         # P1-7 7b (2026-09-25): plan challenges, a stage 3 model slot.
         "plan_review",
-        # P1-4 4d (2026-09-25): the Saturday setup-keys narration, before setup_research.
+        # P1-4 4d (2026-09-25): the setup-keys narration (nightly since 2026-09-30), before setup_research.
         "setup_keys_narration",
         "setup_research",
         # TJ-6 (2026-09-20), appended LAST inside stage 3.
         "improvement_ideas",
+        # Trader 2026-09-30: every care name briefed nightly, so the briefs run last.
+        "ticker_briefs",
     ]
     # And the override is per-call: building again without it is untouched.
     # BY NAME rather than by index - decision 0018 moved the slot.

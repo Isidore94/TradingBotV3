@@ -836,16 +836,19 @@ FAMILY_SIDE_EVIDENCE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "family_side_evidence.
 SWING_PATH_FACTS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "swing_path_facts.csv"
 # P1-4 4c: the setup-permutation search report (shadow only). Written by
 # `setup_permutation_search.py --out`; read by Research -> Setup keys and the
-# Saturday `setup_keys_narration` slot. Nothing ranks, filters or alerts on it.
+# nightly `setup_keys_narration` slot. Nothing ranks, filters or alerts on it.
 SETUP_PERMUTATION_REPORT_FILE = PERSISTENT_RUNTIME_DATA_DIR / "permutation_report.json"
 # The same report, under the name the `plan_review` slot reads.
 PERMUTATION_REPORT_FILE = SETUP_PERMUTATION_REPORT_FILE
-# P12: every Saturday's report, one `<date>.json` per run (unchanged content
+# P12: every report, one `<date>.json` per data date (unchanged content
 # skipped, 600-day prune), and the weak-variant / promotion-candidate verdicts
 # read from the newest two. Both rank and annotate only.
 SETUP_PERMUTATION_REPORT_HISTORY_DIR = PERSISTENT_RUNTIME_DATA_DIR / "permutation_report_history"
 SETUP_PERMUTATION_VERDICTS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "permutation_verdicts.json"
-# P1-4 4d: the Saturday slot's cited sentences per family over that report.
+# The backfill's episode x horizon table the nightly `permutation_report` slot
+# searches; the report's `source` names this path. Written only by that slot.
+SETUP_PERMUTATION_OUTCOMES_FILE = PERSISTENT_RUNTIME_DATA_DIR / "permutation_outcomes.parquet"
+# P1-4 4d: the nightly slot's cited sentences per family over that report.
 SETUP_KEYS_NARRATION_FILE = PERSISTENT_RUNTIME_DATA_DIR / "setup_keys_narration.json"
 # Packet WS-TH (2026-09-12). The theta picks graded forward: held above the sold
 # strike at the exact 5/10/20-session endpoints and at the option's own expiry,

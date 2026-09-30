@@ -1113,6 +1113,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         miss_contrast,
         observation_tags,
         outcome_sweep,
+        permutation_report,
         plan_review,
         policy_draft,
         prediction_contrast,
@@ -1474,6 +1475,21 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             ),
             max_attempts=3,
         ),
+        # Nightly permutation report (trader, 2026-09-30: every night, no by-hand
+        # step). Stage 1 directly after `market_regime_daily` (pinned right after
+        # `lake_history_topup`): the backfill then the search as library calls,
+        # grids registered in the live lake's trial ledger. Shadow only.
+        JobSlot(
+            name="permutation_report",
+            goal="permutations",
+            run=permutation_report.run_permutation_report,
+            reserve_minutes=permutation_report.RESERVE_MINUTES,
+            description=(
+                "Setup permutation backfill + hold-out search from the live stores; "
+                "report, history and verdicts (deterministic, no model; shadow only)"
+            ),
+            max_attempts=2,
+        ),
         # Packet WS-10D (2026-09-12), APPENDED at the END of the deterministic
         # stage, after `theta_pick_grading`, and it CLOSES the block. It reads
         # the Market Journal's own entries and the exchange calendar, writes
@@ -1729,17 +1745,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             max_attempts=3,
             uses_model=True,
         ),
-        JobSlot(
-            name="ticker_briefs",
-            goal="coaching",
-            # Every night, for the week's picks, alerts and traded names (P1-3 3b).
-            run=briefs.run_weekly_ticker_briefs,
-            reserve_minutes=120.0,
-            description="Medium-tier advisory briefs for the week's picked, alerted and traded names",
-            max_attempts=briefs.TICKER_BRIEFS_MAX_ATTEMPTS,
-            uses_model=True,
-        ),
-        # Trade Mentor app P4 (2026-09-30), directly after `ticker_briefs`. Deterministic half
+        # Trade Mentor app P4 (2026-09-30), after `exit_note_fields`. Deterministic half
         # (`ask=False`): grade open challenges 22:00-06:00 PT and publish the day's facts. Model
         # half: one cited day digest to the ai_store. Cut first by the night budget
         # (`CUT_FIRST_SLOTS`). Its only chat-DB write is the grading columns.
@@ -1761,8 +1767,8 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # newest pasted brief, for the Mentor's first card of the next session.
         # A local MEDIUM model words it; every time and event is checked against
         # the deterministic pack, and the card falls back to the brief's own
-        # lines if this never runs. Stage 2, directly after the briefs: the
-        # slots before `ticker_briefs` are pinned closed, and `week_questions`
+        # lines if this never runs. Stage 2, directly after `mentor_review` (the
+        # briefs moved to the end 2026-09-30); `week_questions`
         # is pinned directly after `regime_read`, which follows `market_story_narration`.
         JobSlot(
             name="econ_brief",
@@ -1884,9 +1890,10 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         ),
         # P1-4 4d (2026-09-25): three cited sentences per setup family over the
         # permutation report. Stage 3, directly BEFORE `setup_research`: two pins
-        # say only `improvement_ideas` may follow `setup_research`. SATURDAY ONLY via WEEKEND_ONLY_SLOTS:
-        # the report is weekly research. No deterministic half, so no
-        # `model_free_kwargs`; a missing report skips before any model load.
+        # say only `improvement_ideas` may follow `setup_research`. Every night since
+        # 2026-09-30 (the report is nightly); an unchanged report asks no model.
+        # No deterministic half, so no `model_free_kwargs`; a missing report skips
+        # before any model load.
         JobSlot(
             name="setup_keys_narration",
             goal="permutations",
@@ -1914,8 +1921,9 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         # TJ-6 (2026-09-20), APPENDED LAST, inside stage 3.
         #
         # Last because it READS what the rest of the night wrote - the packs,
-        # the day stories, TJ-15's contrast pack - and feeds nothing. Nothing in
-        # the night runs after it, so a night that ran out of window loses the
+        # the day stories, TJ-15's contrast pack - and feeds nothing. Only
+        # `ticker_briefs` runs after it (trader 2026-09-30), and the ideas never
+        # read the briefs, so a night that ran out of window loses the
         # suggestions and never the evidence.
         #
         # `uses_model=True` and no `model_free_kwargs`: there is no half of an
@@ -1937,6 +1945,20 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
                 "measurable that will check it"
             ),
             max_attempts=2,
+            uses_model=True,
+        ),
+        # LAST (trader 2026-09-30): every care name is briefed nightly, 100+ minutes on the
+        # 5080, so it runs after every story the morning needs. Reserve grows with the roster.
+        JobSlot(
+            name="ticker_briefs",
+            goal="coaching",
+            run=briefs.run_weekly_ticker_briefs,
+            reserve_minutes=briefs.ticker_briefs_reserve_minutes(),
+            description=(
+                "Medium-tier advisory briefs for every care name (positions, trades, "
+                "claims, likes, Focus) plus the week's top alert-only names"
+            ),
+            max_attempts=briefs.TICKER_BRIEFS_MAX_ATTEMPTS,
             uses_model=True,
         ),
     ]
@@ -1963,9 +1985,9 @@ NIGHT_KINDS = (NIGHT_WEEKNIGHT, NIGHT_SATURDAY, NIGHT_SUNDAY)
 #: `ticker_briefs` was weekend-only 2026-09-24 (66-139 min a weeknight on the old
 #: box); the trader put it back on weeknights 2026-09-30 (the 5080 takes minutes).
 #:
-#: `setup_keys_narration` joins it (P1-4 4d, 2026-09-25): the permutation report
-#: is weekly research, narrated once on Saturday.
-WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration", "setup_keys_narration")
+#: `setup_keys_narration` was weekend-only 2026-09-25; the trader made the
+#: permutation report nightly 2026-09-30, so its narration runs every night too.
+WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration")
 
 #: The deterministic stage (decision 0018 stage 1), which every night runs. It
 #: ENDS at `swing_path_facts` (S15, directly after S12's `family_side_evidence`); a

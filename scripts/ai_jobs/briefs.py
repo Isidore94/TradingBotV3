@@ -130,6 +130,21 @@ SUMMARY_RESERVE_MINUTES = 20.0
 SUMMARY_RESERVE_MINUTES_CHUNKED = 260.0
 
 
+#: Ticker-brief reserve: 0.4 min a roster name (09-25: 40 names in 13.4 min on
+#: the 5080), never below the old flat 120.
+TICKER_BRIEFS_MINUTES_PER_NAME = 0.4
+TICKER_BRIEFS_RESERVE_FLOOR = 120.0
+
+
+def ticker_briefs_reserve_minutes(roster_size: int | None = None) -> float:
+    """Minutes the ticker-brief slot reserves for tonight's roster (floor 120)."""
+    if roster_size is None:
+        from ai_jobs import week_names
+
+        roster_size = week_names.roster_size()
+    return max(TICKER_BRIEFS_RESERVE_FLOOR, TICKER_BRIEFS_MINUTES_PER_NAME * int(roster_size))
+
+
 def summary_reserve_minutes() -> float:
     """Window minutes the summary slot should reserve, for the mode it is in."""
     from ai_jobs import map_reduce
@@ -1069,10 +1084,10 @@ def run_ticker_briefs(
     """Publish validated medium-tier briefs, then one bounded home-folder file.
 
     ``week`` (a :class:`ai_jobs.week_names.WeekNames`, P1-3 3b) restricts the
-    run to that week's picks, alerts and traded names, capped at ``name_cap``
-    (default: the ``ai_ticker_briefs_max_names`` setting), and reuses a brief
-    already written for the same (symbol, week) in the last 7 days. ``None``
-    briefs every watchlist name, as before.
+    run to that roster: every care name uncapped, then alert-only names capped at
+    ``name_cap`` (default: the ``ai_ticker_briefs_max_names`` setting). A cached
+    brief is reused only while the symbol's content hash is unchanged (trader
+    2026-09-30). ``None`` briefs every watchlist name, as before.
 
     The runner is the sole caller/writer. The gate is repeated here, including
     before every model call, so a direct invocation or a long ticker batch can
@@ -1105,18 +1120,21 @@ def run_ticker_briefs(
         from ai_jobs import week_names
 
         cap = week_names.max_names() if name_cap is None else int(name_cap)
-        wanted = list(week.ordered)
-        symbols = wanted[:cap] if cap > 0 else wanted
-        over_cap = len(wanted) - len(symbols)
+        # Care names are never capped; only alert-only names respect the cap.
+        symbols, over_cap = week.roster(cap)
         outside = [name for name in watchlists.symbols if name not in week.reasons]
         membership_by_symbol = {
             name: list(watchlists.memberships.get(name, []))
             + [{"list": f"week_{week.reasons[name]}", "path": ""}]
             for name in symbols
         }
+        roster_counts = ", ".join(
+            f"{count} {reason}" for reason, count in week.reason_counts(symbols).items()
+        )
         skip_note = (
-            f"{len(outside)} watchlist name(s) skipped: not picked, alerted or traded "
-            f"in week {week.week}; {over_cap} week name(s) skipped: over the "
+            f"roster {len(symbols)} name(s) ({roster_counts or 'none'}); "
+            f"{len(outside)} watchlist name(s) skipped: not a care name or alerted "
+            f"in week {week.week}; {over_cap} alert-only name(s) skipped: over the "
             f"{cap}-name cap"
         )
         if week.unreadable:
@@ -1184,15 +1202,15 @@ def run_ticker_briefs(
     outputs: list[str] = []
     calls = 0
     reused = 0
-    week_reused = 0
+    cache_reused = 0
     early_stop = ""
     cache_path: Path | None = None
     cached: dict[str, dict[str, Any]] = {}
     if week is not None:
         from ai_jobs import week_names
 
-        cache_path = week_names.week_cache_path(root)
-        cached = week_names.read_week_cache(cache_path, week.week)
+        cache_path = week_names.evidence_cache_path(root)
+        cached = week_names.read_evidence_cache(cache_path)
 
     def _publish_progress() -> None:
         """Re-render and republish the morning file from what is resolved now.
@@ -1245,18 +1263,20 @@ def run_ticker_briefs(
 
     for symbol in symbols:
         memberships = membership_by_symbol[symbol]
-        if symbol in cached:
-            # P1-3 3b: this week's brief for this symbol already exists.
-            entry = {key: value for key, value in cached[symbol].items() if key != "week"}
-            entries[symbol] = {**entry, "reused_from_week_cache": True}
-            reused += 1
-            week_reused += 1
-            continue
         evidence = build_ticker_evidence(
             base, symbol, memberships, budget_chars=ticker_budget
         )
         evidence_hash = str(evidence.get("evidence_hash") or "")
         resume_key = str(evidence.get("resume_key") or "")
+        digest = week_names.content_hash(evidence) if cache_path is not None else ""
+        hit = cached.get(symbol) or {}
+        if digest and str(hit.get("content_hash") or "") == digest:
+            # Same evidence as the cached brief: reuse it, no model call (trader 2026-09-30).
+            entry = {key: value for key, value in hit.items() if key != "content_hash"}
+            entries[symbol] = {**entry, "reused_from_evidence_cache": True}
+            reused += 1
+            cache_reused += 1
+            continue
 
         prior = recorded.get(symbol) or {}
         if (
@@ -1319,9 +1339,9 @@ def run_ticker_briefs(
             fresh.append(entry)
             if cache_path is not None:
                 try:
-                    week_names.append_week_cache(cache_path, entry, week.week)
+                    week_names.append_evidence_cache(cache_path, entry, digest)
                 except OSError:
-                    logging.exception("Ticker briefs: week cache row for %s not written", symbol)
+                    logging.exception("Ticker briefs: evidence cache row for %s not written", symbol)
         _publish_progress()
 
     ordered = [entries[symbol] for symbol in symbols if symbol in entries]
@@ -1351,10 +1371,15 @@ def run_ticker_briefs(
     )
     if failed:
         reason += ": " + ", ".join(str(entry.get("symbol")) for entry in failed)
+    if cache_path is not None:
+        try:
+            week_names.compact_evidence_cache(cache_path)
+        except OSError:
+            logging.exception("Ticker briefs: evidence cache compaction failed")
     if early_stop:
         reason += f"; {early_stop}"
     if week is not None:
-        reason += f"; {week_reused} reused from the week cache; {skip_note}"
+        reason += f"; {cache_reused} reused: evidence unchanged; {skip_note}"
     logging.info("Ticker briefs: %s", reason)
     return {
         "status": ledger.STATUS_OK if complete else ledger.STATUS_DEGRADED,
@@ -1365,7 +1390,7 @@ def run_ticker_briefs(
             "ticker_calls": calls,
             "tickers_resolved": len(resolved),
             "tickers_reused": reused,
-            **({"tickers_week_cache_reused": week_reused} if week is not None else {}),
+            **({"tickers_evidence_cache_reused": cache_reused} if week is not None else {}),
             "tickers_failed": len(failed),
             **_summed_usage(fresh),
         },
@@ -1375,7 +1400,7 @@ def run_ticker_briefs(
 def run_weekly_ticker_briefs(
     *, session_date: str, now: datetime | None = None, **kwargs: Any
 ) -> dict[str, Any]:
-    """The nightly slot (P1-3 3b): brief only the week's picks, alerts and traded names."""
+    """The nightly slot: brief every care name, plus the week's top alert-only names."""
     from ai_jobs import week_names
 
     return run_ticker_briefs(
