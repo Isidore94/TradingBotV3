@@ -20,6 +20,7 @@ HELP_TEXT = (
     "- `/pause` no Trade Mentor questions for the rest of today\n"
     "- `/pick SYM` what the desk knows about a pick, narrated (or tap a Focus chip)\n"
     "- `/vetoes [YYYY-MM-DD]` the last session's vetoes (or that one's), each with its slice and any challenge\n"
+    "- `/check short NVDA 400 stop 3.20 entry 3.05` check a trade before you take it (advice only; it never orders)\n"
     "- `/scorecard` how the challenges have done by kind, with n, and how the app itself is doing\n"
 )
 MAX_QUIET = timedelta(hours=12)
@@ -96,6 +97,13 @@ def handle(text: str) -> CommandResult | None:
         if rest and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", rest):
             return CommandResult("error", "Try `/vetoes` or `/vetoes 2026-09-29`.")
         return CommandResult("vetoes", "", rest)
+    if name == "check":
+        from mentor_app.gate import parse_check
+
+        request = parse_check(rest)
+        if request is None:
+            return CommandResult("error", "Try `/check short NVDA 400 stop 3.20 entry 3.05` (size, stop, entry are optional).")
+        return CommandResult("check", "", request)
     if name == "scorecard":
         return CommandResult("scorecard")
     return CommandResult("error", f"I don't know `/{name}`. Type `/help`.")

@@ -349,10 +349,12 @@ def _veto_outcomes_path() -> Path:
     return Path(project_paths.VETO_COHORT_OUTCOMES_FILE)
 
 
-def grade_open(store: Any, now: datetime, *, veto_outcomes: Path | str | None = None) -> int:
+def grade_open(store: Any, now: datetime, *, veto_outcomes: Path | str | None = None,
+               journal: Path | str | None = None) -> int:
     """Fill each open veto challenge's matured side returns; ``graded_utc`` once all four horizons are in.
 
-    A challenge with no cohort row yet stays open, its outcome saying why. Returns rows updated.
+    A challenge with no cohort row yet stays open, its outcome saying why. Open ``gate`` challenges
+    are graded from the journal (``gate.grade_open``). Returns rows updated.
     """
     import annotations_reader
 
@@ -388,6 +390,12 @@ def grade_open(store: Any, now: datetime, *, veto_outcomes: Path | str | None = 
         graded = moment.astimezone(timezone.utc).isoformat(timespec="seconds") if new.get("status") == "graded" else None
         if store.update_challenge(row["id"], outcome=new, graded_utc=graded):
             updated += 1
+    try:
+        from mentor_app import gate
+
+        updated += gate.grade_open(store, moment, journal=journal)
+    except Exception as exc:  # noqa: BLE001 - a gate grading failure never costs the veto grades
+        logging.warning("Trade Mentor gate grading failed: %s", exc)
     return updated
 
 

@@ -45,6 +45,8 @@ from mentor_app.prefetch import (
 from mentor_app.store import MentorChatStore
 
 CONTEXT_REFRESH_MS = 5 * 60 * 1000
+#: The /check narration's output cap (gate.MAX_OUTPUT_TOKENS).
+MAX_GATE_TOKENS = 600
 GPU_CHECK_MS = 60 * 1000
 PICK_CHECK_MS = 60 * 1000
 #: How long a live narration may wait for the model before the card shows the evidence alone.
@@ -76,6 +78,7 @@ class _Bridge(QObject):
     veto_morning = Signal(object)
     tape_ready = Signal(object)
     tape_refreshed = Signal(object)
+    check_card = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -116,6 +119,8 @@ class MentorWindow(QMainWindow):
         tape_builder: Callable[[], Any] | None = None,
         tape_request: Callable[..., Any] | None = None,
         push_send: Callable[..., Any] | None = None,
+        gate_builder: Callable[..., Any] | None = None,
+        gate_request: Callable[..., Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -193,6 +198,11 @@ class MentorWindow(QMainWindow):
         # P5 tape talk: the regime pack builder, the narration call and the push sender are injectable.
         self._tape_builder = tape_builder
         self._tape_request = tape_request
+        self._gate_builder = gate_builder
+        self._gate_request = gate_request
+        self._check_blocks: dict[int, int] = {}
+        self._check_seq = 0
+        self._bridge.check_card.connect(self._on_check_card)
         self._push_send = push_send
         #: {pack, hash, card, at_utc} of the last tape build; /tape answers from it while it is fresh.
         self._tape_last: dict[str, Any] | None = None
@@ -748,6 +758,8 @@ class MentorWindow(QMainWindow):
                               priority=PRIORITY_INTERACTIVE, key="scorecard", on_done=self._bridge.note.emit)
         elif result.action == "tape":
             self.show_tape()
+        elif result.action == "check":
+            self.show_check(result.arg)
         else:
             self._add_note(result.reply)
 
@@ -1179,6 +1191,59 @@ class MentorWindow(QMainWindow):
         self._add_block("**Tape**: reading the desk...")
         self.queue.submit("tape", self._tape_job(narrate=False, source="tape"), priority=PRIORITY_INTERACTIVE,
                           key="tape-build", on_done=self._bridge.tape_ready.emit)
+
+    # ------------------------------------------------------------------ /check (P6)
+    def _build_gate(self, request: Any) -> Any:
+        if self._gate_builder is not None:
+            return self._gate_builder(request)
+        from mentor_packs import gate_pack
+
+        return gate_pack.build(request.side, request.symbol, request.size, request.stop, request.entry)
+
+    def show_check(self, request: Any) -> None:
+        """/check: build the gate pack off-thread, narrate once (never cached across requests), store the claim."""
+        self._check_seq += 1
+        seq = self._check_seq
+        self._check_blocks[seq] = len(self._blocks)
+        self._add_block(f"**Check {request.side} {request.symbol}**: building...")
+        live = self._brain_ok and bool(self._endpoint) and not self._gpu_reason()
+        why = "" if live else (self._gpu_reason() or self._brain_reason or "the brain is off")
+        endpoint, model, gate_request, store, now = self._endpoint, self._model, self._gate_request, self.store, self._now
+
+        def job() -> dict:
+            from mentor_app import assess as _assess
+            from mentor_app import gate
+            from mentor_packs import gate_pack
+
+            pack = self._build_gate(request)
+            digest = gate.request_hash(request, gate_pack.pack_hash(pack))
+            if live:
+                card = gate.narrate(pack, symbol=request.symbol, pack_hash=digest, model=model, endpoint=endpoint,
+                                    request=gate_request, now=now)
+                gate.record(store, card, request, digest)
+            else:
+                card = _assess.Assessment(symbol=request.symbol, pack_hash=digest, pack_json=pack.as_json(),
+                                          error=f"the brain is off: {why}")
+            return {"seq": seq, "markdown": gate.card_markdown(card, request, pack), "pack": pack}
+
+        def failed(exc: BaseException) -> None:
+            self._bridge.check_card.emit({"seq": seq, "markdown": (
+                f"**Check {request.side} {request.symbol}**: could not be built ({type(exc).__name__}: {exc}).")})
+
+        self.queue.submit(f"gate {request.symbol}", job, priority=PRIORITY_INTERACTIVE, needs_model=live,
+                          max_tokens=MAX_GATE_TOKENS, key=f"gate:{seq}", on_done=self._bridge.check_card.emit,
+                          on_error=failed)
+
+    def _on_check_card(self, done: dict) -> None:
+        index = self._check_blocks.pop(done.get("seq"), None)
+        markdown = str(done.get("markdown") or "")
+        if index is not None and index < len(self._blocks):
+            self._blocks[index] = markdown
+            self._render()
+        else:
+            self._add_block(markdown)
+        # The card joins the conversation, so a follow-up sees it (gate_pack stays a tool).
+        self.chat.add("assistant", markdown)
 
     def _tape_why(self) -> str:
         return "" if self._brain_ok else (self._brain_reason or "the brain is off")
