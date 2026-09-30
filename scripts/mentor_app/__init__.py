@@ -10,9 +10,31 @@ from __future__ import annotations
 from typing import Sequence
 
 
+def _log_to_file() -> None:
+    """pythonw has no console: the app logs to LOCAL_LOG_DIR/mentor_app-YYYYMMDD.log."""
+    import logging
+    from datetime import date
+    from pathlib import Path
+
+    try:
+        from project_paths import LOCAL_LOG_DIR
+
+        folder = Path(LOCAL_LOG_DIR)
+        folder.mkdir(parents=True, exist_ok=True)
+        logging.basicConfig(
+            filename=str(folder / f"mentor_app-{date.today():%Y%m%d}.log"),
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(threadName)s %(message)s",
+        )
+    except Exception:  # noqa: BLE001 - logging must never keep the app from starting
+        logging.basicConfig(level=logging.INFO)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the app's Qt loop. The caller already holds the mentor slot."""
     import sys
+
+    _log_to_file()
 
     from PySide6.QtWidgets import QApplication
 
