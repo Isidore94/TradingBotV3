@@ -11,13 +11,16 @@ HELP_TEXT = (
     "**Commands** (or just ask in plain words)\n\n"
     "- `/help` this list\n"
     "- `/quiet 2h` mute the Inbox for a while (`30m`, `1h30m`)\n"
-    "- `/remember <text>` keep a note about you that I will recall later\n"
+    "- `/remember <text>` keep a note about you that I will recall later (start it with `rule:` for a rule)\n"
+    "- `/memory` what I loaded at start (night digests and your notes), with ids\n"
+    "- `/recall <text>` search what we said before (plain text search when the brain is off)\n"
+    "- `/forget <id>` retire a note (it is kept, never deleted); `/keep <id>` says it is still true\n"
     "- `/tape` the desk right now (works with the brain off)\n"
     "- `/read` give a market read now (Trade Mentor card)\n"
     "- `/pause` no Trade Mentor questions for the rest of today\n"
     "- `/pick SYM` what the desk knows about a pick, narrated (or tap a Focus chip)\n"
     "- `/vetoes [YYYY-MM-DD]` the last session's vetoes (or that one's), each with its slice and any challenge\n"
-    "- `/scorecard` how the veto challenges have done, with n\n"
+    "- `/scorecard` how the challenges have done by kind, with n, and how the app itself is doing\n"
 )
 MAX_QUIET = timedelta(hours=12)
 
@@ -63,6 +66,19 @@ def handle(text: str) -> CommandResult | None:
         if not rest:
             return CommandResult("error", "Try `/remember I stop after two losses`.")
         return CommandResult("remember", "", rest)
+    if name in ("forget", "keep"):
+        from mentor_app.memory import parse_note_id
+
+        note_id = parse_note_id(rest)
+        if note_id is None:
+            return CommandResult("error", f"Try `/{name} 12` (the note id `/memory` shows).")
+        return CommandResult(name, "", note_id)
+    if name == "memory":
+        return CommandResult("memory")
+    if name == "recall":
+        if not rest:
+            return CommandResult("error", "Try `/recall NVDA`.")
+        return CommandResult("recall", "", rest)
     if name == "tape":
         return CommandResult("tape")
     if name == "read":

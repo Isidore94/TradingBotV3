@@ -49,15 +49,20 @@ class ChatModel:
         self.turns.clear()
 
     @staticmethod
-    def system_message(context_text: str) -> dict[str, Any]:
+    def system_message(context_text: str, memory_block: str = "") -> dict[str, Any]:
+        """Rules, then the start-of-day Memory block, then the desk context: byte-stable between turns."""
         body = SYSTEM_PROMPT
+        if memory_block.strip():
+            body += "\n" + memory_block.strip() + "\n"
         if context_text:
             body += "\n# Desk context\n" + context_text.strip() + "\n"
         return {"role": "system", "content": body}
 
-    def messages(self, *, context_text: str = "", budget_tokens: int = 12_288, memory_text: str = "") -> list[dict[str, Any]]:
+    def messages(
+        self, *, context_text: str = "", budget_tokens: int = 12_288, memory_text: str = "", memory_block: str = ""
+    ) -> list[dict[str, Any]]:
         """System prefix + as many recent turns as fit; the newest turn is always kept."""
-        system = self.system_message(context_text)
+        system = self.system_message(context_text, memory_block)
         memory = {"role": "system", "content": "# Earlier notes\n" + memory_text.strip()} if memory_text.strip() else None
         room = int(budget_tokens) - REPLY_RESERVE_TOKENS - estimate_tokens(system["content"])
         if memory:

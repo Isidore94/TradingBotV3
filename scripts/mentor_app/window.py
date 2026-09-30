@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from mentor_app import assess as pick_assess
-from mentor_app import brain, challenge, commands, grounding, pick_jobs, settings
+from mentor_app import brain, challenge, commands, grounding, memory, pick_jobs, settings
 from mentor_app.chat_model import ChatModel
 from mentor_app.inbox import Inbox
 from mentor_app.prefetch import (
@@ -61,7 +61,8 @@ class _Bridge(QObject):
 
     context_ready = Signal(object)
     brain_state = Signal(dict)
-    memory_ready = Signal(str)
+    memory_ready = Signal(object)
+    still_true = Signal(object)
     note = Signal(str)
     pick_built = Signal(object)
     pick_card = Signal(object)
@@ -107,6 +108,7 @@ class MentorWindow(QMainWindow):
         veto_builder: Callable[[str], Any] | None = None,
         challenge_request: Callable[..., Any] | None = None,
         veto_outcomes: Any = None,
+        memory_root: Any = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -130,7 +132,12 @@ class MentorWindow(QMainWindow):
         self.chat = ChatModel()
         self._context_pack: Any = None
         self._context_text = ""
+        #: P4 memory: the start-of-day block (system prefix, byte-stable) and this session's new notes (tail).
+        self._memory_root = memory_root
+        self._memory = memory.Memory()
+        self._memory_block = ""
         self._memory_text = ""
+        self._still_true_day: Any = None
         self._session_id: int | None = None
         self._worker: Any = None
         self._blocks: list[str] = []
@@ -142,6 +149,7 @@ class MentorWindow(QMainWindow):
         self._bridge.context_ready.connect(self._on_context)
         self._bridge.brain_state.connect(self._on_brain_state)
         self._bridge.memory_ready.connect(self._on_memory)
+        self._bridge.still_true.connect(self._on_still_true)
         self._bridge.note.connect(self._add_note)
         self._bridge.pick_built.connect(self._on_pick_built)
         self._bridge.pick_card.connect(self._on_pick_card)
@@ -328,6 +336,7 @@ class MentorWindow(QMainWindow):
         self._context_timer.start()
         self._gpu_timer.start()
         self._pick_timer.start()
+        self.install_recall_fallback()
         self._submit_io(self._open_session)
         self.refresh_context()
         self.connect_brain()
@@ -339,6 +348,10 @@ class MentorWindow(QMainWindow):
         self._context_timer.stop()
         self._gpu_timer.stop()
         self._pick_timer.stop()
+        from mentor_packs import recall
+
+        recall.set_fallback(None)
+        recall.set_searcher(None)
         if self._worker is not None:
             self._worker.cancel()
             self._worker.wait(3000)
@@ -382,11 +395,18 @@ class MentorWindow(QMainWindow):
 
     def _open_session(self) -> None:
         self._session_id = self.store.start_session(self._model)
-        notes = self.store.profile_notes()
-        self._bridge.memory_ready.emit("\n".join(f"- {row['text']}" for row in notes))
+        self._load_memory()
 
-    def _on_memory(self, text: str) -> None:
-        self._memory_text = text
+    def _load_memory(self) -> None:
+        """IO thread: the night digests and live notes, rendered once into the byte-stable block."""
+        self._bridge.memory_ready.emit(memory.load(self.store, ai_root=self._memory_root))
+
+    def _on_memory(self, loaded: Any) -> None:
+        self._memory = loaded
+        self._memory_block = loaded.text
+        self._memory_text = ""  # notes kept this session are in the new block now
+        if self._brain_ok:
+            self._queue_memory_embeddings()
 
     # ------------------------------------------------------------------ brain
     def _gpu_reason(self) -> str:
@@ -433,13 +453,25 @@ class MentorWindow(QMainWindow):
         finally:
             self._bridge.brain_state.emit(state)
 
+    def install_recall_fallback(self) -> None:
+        """With the brain down, /recall and the recall tool still answer by plain substring."""
+        from mentor_packs import recall
+
+        recall.set_fallback(lambda query, k: memory.substring_search(self.store, self._memory, query, k))
+
     def _install_recall(self, endpoint: str) -> None:
         from mentor_packs import recall
+
+        def rows() -> list[dict]:
+            retired = {int(row["id"]) for row in self.store.profile_notes(limit=100_000, include_retired=True)
+                       if row.get("retired_utc")}
+            return [row for row in self.store.embeddings(settings.EMBED_MODEL)
+                    if not (row["kind"] == "note" and int(row["ref_id"]) in retired)]
 
         recall.set_searcher(
             recall.make_searcher(
                 lambda texts: brain.embed(endpoint, texts, model=settings.EMBED_MODEL, post=self._post),
-                lambda: self.store.embeddings(settings.EMBED_MODEL),
+                rows,
             )
         )
 
@@ -451,6 +483,13 @@ class MentorWindow(QMainWindow):
         self._model = str(state.get("model") or self._model)
         self._endpoint = str(state.get("endpoint") or self._endpoint)
         self._sync_status()
+        if self._brain_ok:
+            self._queue_memory_embeddings()
+
+    def _bump_stats(self, **counts: float) -> None:
+        """This PT day's service counters (the night's mentor_review reads them)."""
+        day = self._now().astimezone(challenge.PT).date().isoformat()
+        self._submit_io(lambda: self.store.bump_day_stats(day, **counts))
 
     def check_gpu_share(self) -> None:
         """Every minute: hand the GPU back before the night, take it again after."""
@@ -468,6 +507,8 @@ class MentorWindow(QMainWindow):
             self._brain_reason = reason
             self._sync_status()
         elif not self._brain_ok and not self._connecting:
+            # Outside the night's hours a down brain is an outage minute (the night hand-back is not).
+            self._bump_stats(brain_offline_min=GPU_CHECK_MS / 60_000)
             if time.monotonic() - self._last_connect >= RECONNECT_BACKOFF_SECONDS or self._last_connect == 0:
                 self.connect_brain()
 
@@ -590,6 +631,7 @@ class MentorWindow(QMainWindow):
         self.send(text)
 
     def send(self, text: str) -> None:
+        self._maybe_still_true()
         result = commands.handle(text)
         if result is not None:
             self._add_block(f"**You:** {text}")
@@ -604,7 +646,8 @@ class MentorWindow(QMainWindow):
         from mentor_packs import registry
 
         messages = self.chat.messages(
-            context_text=self._context_text, budget_tokens=settings.context_tokens(), memory_text=self._memory_text
+            context_text=self._context_text, budget_tokens=settings.context_tokens(), memory_text=self._memory_text,
+            memory_block=self._memory_block,
         )
         worker = brain.StreamWorker(
             messages,
@@ -640,6 +683,30 @@ class MentorWindow(QMainWindow):
             self._memory_text = (self._memory_text + f"\n- {note}").strip()
             self._submit_io(lambda: self.store.add_profile_note(note, "remember"))
             self._add_note(f"Kept: {note}")
+        elif result.action == "forget":
+            note_id = int(result.arg)
+
+            def forget() -> None:
+                if self.store.retire_note(note_id):
+                    self._bridge.note.emit(f"Retired [mem:note:{note_id}]. It is kept, never deleted.")
+                    self._load_memory()
+                else:
+                    self._bridge.note.emit(f"There is no note {note_id}. `/memory` shows the ids.")
+
+            self._submit_io(forget)
+        elif result.action == "keep":
+            note_id = int(result.arg)
+            self._submit_io(lambda: self._bridge.note.emit(
+                f"Still true: [mem:note:{note_id}]. I will ask again in {memory.STILL_TRUE_DAYS} days."
+                if self.store.check_note(note_id) else f"There is no note {note_id}. `/memory` shows the ids."))
+        elif result.action == "memory":
+            self._add_note(memory.as_listing(self._memory))
+        elif result.action == "recall":
+            from mentor_packs import recall
+
+            query = str(result.arg)
+            self.queue.submit("recall", lambda: recall.build(query).as_text().replace("\n", "\n\n"),
+                              priority=PRIORITY_INTERACTIVE, key=f"recall:{query}", on_done=self._bridge.note.emit)
         elif result.action in ("read", "pause") and self.card_host is None:
             self._add_note("The Trade Mentor questions are on the desk (`mentor_app_enabled` is off).")
         elif result.action == "read":
@@ -704,6 +771,9 @@ class MentorWindow(QMainWindow):
             text += " *(stopped)*"
         # Guardrail 2: a number no pack sent this turn is grey, never hidden.
         shown = grounding.mark_uncited_numbers(text, [self._context_text, *(result.get("pack_texts") or ())])
+        numbers = grounding.count_numbers(text)
+        if numbers:
+            self._bump_stats(numbers=numbers, uncited_numbers=shown.count(f'class="{grounding.UNCITED_CLASS}"'))
         self._blocks[self._stream_slot()] = f"**Mentor:** {shown}"
         self._render()
         self.chat.add("assistant", text)
@@ -727,6 +797,51 @@ class MentorWindow(QMainWindow):
         self._render()
         self._brain_reason = message
         self._finish_turn()
+
+    # ------------------------------------------------------------------ memory (P4)
+    def _maybe_still_true(self) -> None:
+        """First turn of a session day: look for ONE old ``rule:`` note to re-check (IO thread)."""
+        now = self._now()
+        day = now.astimezone(challenge.PT).date()
+        if self._still_true_day == day:
+            return
+        self._still_true_day = day
+        if not challenge.is_session_day(now):
+            return
+        self._submit_io(lambda: self._bridge.still_true.emit(
+            memory.still_true_candidate(self.store.profile_notes(limit=memory.NOTE_LIMIT), self._now())))
+
+    def _on_still_true(self, row: Any) -> None:
+        """Post the "still true?" item to the Inbox when it may land; marked asked only once it did."""
+        if not row:
+            return
+        item = self.inbox.add("memory", memory.still_true_text(row))
+        if item is None:
+            logging.info("Trade Mentor: the still-true question waits (%s)", self.inbox.last_refusal)
+            return
+        note_id = int(row["id"])
+        self._submit_io(lambda: self.store.mark_note_asked(note_id))
+        self.refresh_inbox()
+
+    def _queue_memory_embeddings(self) -> None:
+        """Idle priority: embed night digests and notes the recall search has not seen yet."""
+        endpoint, items = self._endpoint, list(self._memory.items)
+
+        def job() -> int:
+            done = 0
+            have = self.store.embedded_refs("digest", settings.EMBED_MODEL)
+            todo = [(item.kind, item.ref_id, item.text) for item in items if item.kind == "digest" and item.ref_id not in have]
+            todo += [("note", int(row["id"]), str(row["text"])) for row in self.store.unembedded_notes(settings.EMBED_MODEL)]
+            for kind, ref_id, text in todo:
+                if self.queue.should_yield():
+                    break
+                vectors = brain.embed(endpoint, [text], model=settings.EMBED_MODEL, post=self._post)
+                if vectors:
+                    self.store.put_embedding(kind, ref_id, settings.EMBED_MODEL, vectors[0], text=text[:2000])
+                    done += 1
+            return done
+
+        self.queue.submit("embed_memory", job, priority=PRIORITY_IDLE, needs_model=True, key="embed_memory")
 
     def _store_turn(self, role: str, text: str, **kwargs: Any) -> None:
         self._submit_io(lambda: self.store.add_turn(self._session_id, role, text, **kwargs))

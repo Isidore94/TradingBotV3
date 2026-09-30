@@ -1,8 +1,9 @@
 """Recall pack: what was said before, found by embedding search over the mentor chat store.
 
-The app installs a searcher once the brain answers (``set_searcher``); without one
-the pack is a no-op that says recall is off. Pure: the embedding call and the store
-are injected.
+The app installs a searcher once the brain answers (``set_searcher``) over turns, night
+digests and profile notes. With the brain down it falls back to a plain substring search
+(``set_fallback``); with neither the pack says recall is off. Pure: the embedding call and
+the store are injected. Row ids are ``mem:<kind>:<id>``.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": NAME,
-        "description": "Search earlier mentor conversations and profile notes for a topic, e.g. 'NVDA last week'.",
+        "description": "Search earlier mentor conversations, night digests and profile notes for a topic, e.g. 'NVDA last week'.",
         "parameters": {
             "type": "object",
             "properties": {"query": {"type": "string", "description": "What to look for."}},
@@ -32,9 +33,19 @@ Searcher = Callable[[str, int], list[Mapping[str, Any]]]
 _searcher: Searcher | None = None
 
 
+_fallback: Searcher | None = None
+FALLBACK_EMPTY = "nothing found (plain text search: the brain is off)"
+
+
 def set_searcher(searcher: Searcher | None) -> None:
     global _searcher
     _searcher = searcher
+
+
+def set_fallback(fallback: Searcher | None) -> None:
+    """The substring search used while no embedding searcher is installed."""
+    global _fallback
+    _fallback = fallback
 
 
 def cosine(a: Sequence[float], b: Sequence[float]) -> float:
@@ -70,6 +81,9 @@ def make_searcher(
 
 def build(query: str = "", k: int = DEFAULT_K, *, searcher: Searcher | None = None) -> Pack:
     search = searcher or _searcher
+    empty = "nothing found"
+    if search is None and _fallback is not None:
+        search, empty = _fallback, FALLBACK_EMPTY
     if not str(query or "").strip():
         return make_pack(NAME, (), empty_text="recall needs a query")
     if search is None:
@@ -84,7 +98,7 @@ def build(query: str = "", k: int = DEFAULT_K, *, searcher: Searcher | None = No
         }
         for hit in hits
     ]
-    return make_pack(NAME, rows, empty_text="nothing found")
+    return make_pack(NAME, rows, empty_text=empty)
 
 
 def fixture() -> Pack:

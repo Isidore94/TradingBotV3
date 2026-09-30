@@ -49,6 +49,11 @@ def mark_uncited_numbers(reply: str, pack_texts: Iterable[str]) -> str:
     return "".join(out)
 
 
+def count_numbers(reply: str) -> int:
+    """Numbers in the reply outside citations (the denominator of the uncited-number rate)."""
+    return len(NUMBER_RE.findall(CITATION_RE.sub(" ", str(reply or ""))))
+
+
 def _mark(chunk: str, allowed: set[str]) -> str:
     def replace(match: re.Match[str]) -> str:
         token = match.group(0)
