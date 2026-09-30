@@ -45,7 +45,7 @@ _WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
 _WEEKDAY = re.compile(r"\b(" + "|".join(_WEEKDAYS) + r")s?\b")
 _TODAY = re.compile(r"\b(today|this morning|so far|this session|today's)\b")
 _YESTERDAY = re.compile(r"\byesterday\b")
-_THIS_WEEK = re.compile(r"\bthis week\b|\bweek so far\b")
+_THIS_WEEK = re.compile(r"\bthis week\b|\bweek so far\b|\bmy week\b")
 _LAST_WEEK = re.compile(r"\blast week\b")
 _INTENT = re.compile(
     r"\bthinking (?:of|about)\b|\bshould i\b|\btake\b|\btaking\b|\bgo(?:ing)? (?:long|short)\b|\benter(?:ing)?\b"
@@ -59,6 +59,7 @@ _JOURNAL = re.compile(
     r"|\bhow(?:'s| is| has) (?:today|the day|my day) (?:going|been)\b|\bmy trades\b|\btrades? did i\b"
     r"|\bdid i (?:take|trade|make|lose|win|do)\b|\bp&l\b|\bpnl\b|\blos[et] money\b|\bmade money\b"
     r"|\bmy (?:day|week|losses|wins|fills)\b|\bhow am i doing today\b|\bgreen or red\b|\bi took\b"
+    r"|\bstop(?:ped)? me out\b|\bmy (?:entry|exit|stop) on\b"
 )
 _VETO = re.compile(r"\bveto(?:ed|es|s)?\b|\bpassed on\b|\bi passed\b|\bskipped\b")
 _TAPE = re.compile(r"\btape\b|\bmarket\b|\bspy\b|\bqqq\b|\biwm\b|\bregime\b|\bsectors?\b|\bbreadth\b|\bmacro\b"
