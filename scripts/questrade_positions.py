@@ -26,16 +26,19 @@ ALLOWED_PATHS = ("v1/accounts", "v1/accounts/{n}/positions", "v1/accounts/{n}/ba
 
 @dataclass(frozen=True)
 class BookSnapshot:
-    """One point-in-time read of the Questrade book. ``fetched_utc`` is tz-aware UTC ISO."""
+    """One point-in-time read of one broker's book. ``fetched_utc`` is tz-aware UTC ISO."""
 
     fetched_utc: str
     accounts: tuple[dict[str, Any], ...] = ()
     positions: tuple[dict[str, Any], ...] = ()
     errors: tuple[str, ...] = field(default=())
+    #: ``QUESTRADE`` or ``IBKR`` (``ibkr_positions``); the same shape for both.
+    broker: str = "QUESTRADE"
 
     def as_dict(self) -> dict[str, Any]:
         return {"fetched_utc": self.fetched_utc, "accounts": [dict(a) for a in self.accounts],
-                "positions": [dict(p) for p in self.positions], "errors": list(self.errors)}
+                "positions": [dict(p) for p in self.positions], "errors": list(self.errors),
+                "broker": self.broker}
 
     def as_json(self) -> str:
         return json.dumps(self.as_dict(), sort_keys=True, default=str)
@@ -47,6 +50,7 @@ class BookSnapshot:
             accounts=tuple(dict(a) for a in data.get("accounts") or () if isinstance(a, Mapping)),
             positions=tuple(dict(p) for p in data.get("positions") or () if isinstance(p, Mapping)),
             errors=tuple(str(e) for e in data.get("errors") or ()),
+            broker=str(data.get("broker") or "QUESTRADE").upper(),
         )
 
     @classmethod
