@@ -400,6 +400,9 @@ EXPECTED_SLOT_ORDER = (
     # `ticker_briefs`, whose two hours of reserve it must not queue behind.
     "exit_note_fields",
     "ticker_briefs",
+    # Trade Mentor app P4 (2026-09-30): the app's day, graded and digested. Directly after
+    # the briefs; the night budget cuts it first (runner.CUT_FIRST_SLOTS), facts half still runs.
+    "mentor_review",
     # Econ morning brief (2026-09-24): the next session's "what to watch" from
     # the newest pasted brief. Stage 2, directly after the briefs (the slots
     # before them are pinned closed, `week_questions` is pinned after the

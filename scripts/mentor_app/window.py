@@ -1129,11 +1129,13 @@ class MentorWindow(QMainWindow):
         now = self._now()
         self._deliver_veto_inbox()
         local_day = now.astimezone(challenge.PT).date()
-        if self._graded_on != local_day:
+        # 22:00-06:00 PT the night's mentor_review grades; the app waits for 06:00 (one writer at a time).
+        if self._graded_on != local_day and not challenge.night_owns_grading(now):
             self._graded_on = local_day
             self.queue.submit(
                 "grade_challenges",
-                lambda: challenge.grade_open(self.store, self._now(), veto_outcomes=self._veto_outcomes),
+                lambda: 0 if challenge.night_owns_grading(self._now())
+                else challenge.grade_open(self.store, self._now(), veto_outcomes=self._veto_outcomes),
                 priority=PRIORITY_IDLE, key="grade_challenges",
             )
         if not self._veto_schedule.due(now):

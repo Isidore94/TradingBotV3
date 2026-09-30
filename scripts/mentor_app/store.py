@@ -57,7 +57,10 @@ CREATE TABLE IF NOT EXISTS profile_notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts_utc TEXT NOT NULL,
     text TEXT NOT NULL,
-    source TEXT NOT NULL DEFAULT ''
+    source TEXT NOT NULL DEFAULT '',
+    retired_utc TEXT,
+    checked_utc TEXT,
+    asked_utc TEXT
 );
 CREATE TABLE IF NOT EXISTS pack_cache (
     name TEXT NOT NULL,
@@ -77,6 +80,10 @@ CREATE TABLE IF NOT EXISTS embeddings (
 """
 
 BUSY_TIMEOUT_MS = 5000
+#: Columns added to ``profile_notes`` after Phase 3 (retire, "still true?" check and ask).
+NOTE_COLUMNS = ("retired_utc", "checked_utc", "asked_utc")
+#: app_state key for one PT day's service counters (uncited numbers, brain-offline minutes).
+DAY_STATS_KEY = "stats:{day}"
 _CHALLENGES_TABLE = SCHEMA[SCHEMA.index("CREATE TABLE IF NOT EXISTS challenges"):].split(";", 1)[0]
 
 
@@ -133,6 +140,15 @@ def _open_graded_column(conn: sqlite3.Connection) -> None:
         raise
 
 
+def _add_note_columns(conn: sqlite3.Connection) -> None:
+    """Add the Phase 4 note columns to an older ``profile_notes`` (nullable, rows kept)."""
+    have = {row[1] for row in conn.execute("PRAGMA table_info(profile_notes)").fetchall()}
+    for name in NOTE_COLUMNS:
+        if name not in have:
+            conn.execute(f"ALTER TABLE profile_notes ADD COLUMN {name} TEXT")
+    conn.commit()
+
+
 class MentorChatStore:
     def __init__(self, path: Path | str | None = None) -> None:
         if path is None:
@@ -153,6 +169,7 @@ class MentorChatStore:
                 conn.execute("PRAGMA journal_mode = WAL")
                 conn.executescript(SCHEMA)
                 _open_graded_column(conn)
+                _add_note_columns(conn)
             except BaseException:
                 conn.close()
                 raise
@@ -224,8 +241,58 @@ class MentorChatStore:
             "profile note", "INSERT INTO profile_notes (ts_utc, text, source) VALUES (?, ?, ?)", (utc_now(), text, source)
         )
 
-    def profile_notes(self, *, limit: int = 50) -> list[dict[str, Any]]:
-        return self._read("SELECT * FROM profile_notes ORDER BY id DESC LIMIT ?", (int(limit),))[::-1]
+    def profile_notes(self, *, limit: int = 50, include_retired: bool = False) -> list[dict[str, Any]]:
+        """The newest ``limit`` notes, oldest first; a retired note only when asked for."""
+        where = "" if include_retired else " WHERE retired_utc IS NULL"
+        return self._read(f"SELECT * FROM profile_notes{where} ORDER BY id DESC LIMIT ?", (int(limit),))[::-1]
+
+    def _note_stamp(self, what: str, column: str, note_id: int, when: str = "") -> bool:
+        if column not in NOTE_COLUMNS:
+            raise ValueError(column)
+        if not self._read("SELECT id FROM profile_notes WHERE id = ?", (int(note_id),)):
+            return False
+        written = self._write(what, f"UPDATE profile_notes SET {column} = ? WHERE id = ?", (when or utc_now(), int(note_id)))
+        return written is not None
+
+    def retire_note(self, note_id: int) -> bool:
+        """``/forget``: the note stays in the table, marked retired; it is never deleted."""
+        return self._note_stamp("note retire", "retired_utc", note_id)
+
+    def check_note(self, note_id: int) -> bool:
+        """``/keep``: the trader says the note is still true; its age restarts."""
+        return self._note_stamp("note keep", "checked_utc", note_id)
+
+    def mark_note_asked(self, note_id: int, when: str = "") -> bool:
+        return self._note_stamp("note asked", "asked_utc", note_id, when)
+
+    def search_text(self, query: str, *, limit: int = 5) -> list[dict[str, Any]]:
+        """Plain substring search over turns and live notes, newest first (recall with the brain down)."""
+        like = f"%{str(query or '').strip()}%"
+        return self._read(
+            "SELECT 'note' AS kind, id AS ref_id, text, ts_utc FROM profile_notes "
+            "WHERE retired_utc IS NULL AND text LIKE ? "
+            "UNION ALL SELECT 'turn' AS kind, id AS ref_id, text, ts_utc FROM turns "
+            "WHERE role IN ('user', 'assistant') AND text LIKE ? ORDER BY ts_utc DESC LIMIT ?",
+            (like, like, int(limit)),
+        )
+
+    # ----------------------------------------------------------------- day stats
+    def bump_day_stats(self, day: str, **counts: float) -> bool:
+        """Add to one PT day's service counters (call from the one IO thread: read-modify-write)."""
+        key = DAY_STATS_KEY.format(day=day)
+        try:
+            current = json.loads(self.get_state(key) or "{}")
+        except ValueError:
+            current = {}
+        for name, value in counts.items():
+            current[name] = round(float(current.get(name) or 0) + float(value), 3)
+        return self.set_state(key, json.dumps(current, sort_keys=True))
+
+    def day_stats(self, day: str) -> dict[str, Any]:
+        try:
+            return dict(json.loads(self.get_state(DAY_STATS_KEY.format(day=day)) or "{}"))
+        except ValueError:
+            return {}
 
     # ----------------------------------------------------------------- challenges
     def add_challenge(
@@ -310,6 +377,18 @@ class MentorChatStore:
             vector.frombytes(row.pop("vector_blob"))
             out.append({**row, "vector": list(vector)})
         return out
+
+    def embedded_refs(self, kind: str, model: str) -> set[int]:
+        rows = self._read("SELECT ref_id FROM embeddings WHERE kind = ? AND model = ?", (kind, model))
+        return {int(row["ref_id"]) for row in rows}
+
+    def unembedded_notes(self, model: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        return self._read(
+            "SELECT n.id, n.text FROM profile_notes n LEFT JOIN embeddings e "
+            "ON e.kind = 'note' AND e.ref_id = n.id AND e.model = ? "
+            "WHERE e.ref_id IS NULL AND n.retired_utc IS NULL ORDER BY n.id LIMIT ?",
+            (model, int(limit)),
+        )
 
     def unembedded_turns(self, model: str, *, limit: int = 50) -> list[dict[str, Any]]:
         return self._read(

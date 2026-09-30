@@ -80,6 +80,7 @@ LEAD_GOAL_MAP = {
     "journal_auto_tag": "journal",
     "journal_enrichment": "journal",
     "preference_trade_outcomes": "journal",
+    "mentor_review": "journal",
     "setup_keys_narration": "permutations",
     "read_grades_mature": "market_read",
     "prediction_contrast": "market_read",
