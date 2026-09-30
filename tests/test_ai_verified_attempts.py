@@ -12,9 +12,9 @@ from pathlib import Path
 import pytest
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-SCRIPTS_DIR = ROOT_DIR / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
+for _extra in (ROOT_DIR / "scripts", ROOT_DIR / "tests"):
+    if str(_extra) not in sys.path:
+        sys.path.insert(0, str(_extra))
 
 
 def _scripted(*replies):
@@ -187,6 +187,119 @@ def test_econ_three_rejections_keep_the_last_good_file_and_name_every_reason(tmp
     assert "attempt 2/3: " in outcome["reason"]
     assert "attempt 3/3: expected 3-6 lines" in outcome["reason"]
     assert (tmp_path / "2026-09-25.json").read_text(encoding="utf-8") == before
+
+
+# ---------------------------------------------------------------------------
+# day story wiring
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def day_root(tmp_path, monkeypatch):
+    """A scratch `DAY_REVIEW_DIR` holding the TJ-4 fixture session's pack."""
+    import day_review_pack
+    import project_paths
+
+    fx = _day().fx
+
+    assert "TradingBotData" not in str(project_paths.DATA_DIR), project_paths.DATA_DIR
+    root = tmp_path / "day_review"
+    monkeypatch.setattr(project_paths, "DAY_REVIEW_DIR", root, raising=False)
+    day_review_pack.write_pack(fx.build(), root=root)
+    return root
+
+
+def _day():
+    import test_tj4_narration_slot as day_tests
+
+    return day_tests
+
+
+def _run_day(root, *replies):
+    """Run the day story with one reply per call (the last one repeats)."""
+    from ai_jobs.day_review_narration import run_day_review_narration
+
+    calls: list[dict] = []
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        return replies[min(len(calls), len(replies)) - 1]
+
+    outcome = run_day_review_narration(
+        session_date=_day().SESSION, now=_day().fx.OVERNIGHT, root=root, request=request,
+        only_this_session=True,
+    )
+    story = [call for call in calls if call["schema_name"] == "tradingbot_day_review_narration"]
+    return outcome, story
+
+
+def _day_bad(root, tag):
+    call, _seen, read, _verdict = _day()._ids(root)
+    return _day()._reply(root, sources=[call, read, f"journal:{tag}"])
+
+
+def test_day_story_a_rejection_then_a_pass_is_ok_on_attempt_two(day_root):
+    outcome, story = _run_day(day_root, _day_bad(day_root, "mj-one"), _day()._reply(day_root))
+    assert outcome["status"] == "ok", outcome
+    assert "grounded day story written" in outcome["reason"]
+    assert "attempt 2/3" in outcome["reason"]
+    assert len(story) == 2
+
+
+def test_day_story_the_second_attempt_carries_the_first_rejection(day_root):
+    _outcome, story = _run_day(day_root, _day_bad(day_root, "mj-one"), _day()._reply(day_root))
+    assert len(story) == 2
+    first, second = story[0]["evidence"], story[1]["evidence"]
+    assert "journal:mj-one" not in first["instructions"]
+    assert "An earlier reply was rejected" in second["instructions"]
+    assert "journal:mj-one" in second["instructions"]
+    assert first["evidence_hash"] == second["evidence_hash"]
+
+
+def test_day_story_three_rejections_keep_the_prior_story_and_name_every_reason(day_root):
+    path, before = _day()._prior_file(day_root)
+    outcome, story = _run_day(
+        day_root,
+        _day_bad(day_root, "mj-one"),
+        _day_bad(day_root, "mj-two"),
+        _day_bad(day_root, "mj-three"),
+    )
+    assert outcome["status"] == "degraded_no_narrative", outcome
+    assert len(story) == 3
+    for index, tag in enumerate(("mj-one", "mj-two", "mj-three"), 1):
+        assert f"attempt {index}/3: the narration cited id(s) the pack does not carry: journal:{tag}" in outcome["reason"]
+    assert path.read_bytes() == before
+
+
+def test_day_story_a_first_time_pass_makes_exactly_one_call(day_root):
+    outcome, story = _run_day(day_root, _day()._reply(day_root))
+    assert outcome["status"] == "ok", outcome
+    assert len(story) == 1
+    assert "attempt 1/3" in outcome["reason"]
+
+
+from test_tj4_d1_view import rolling_root  # noqa: E402,F401 - fixture reuse
+
+
+def test_d1_view_a_rejection_then_a_pass_is_ok_on_attempt_two(rolling_root):  # noqa: F811
+    import day_review_pack
+    import test_tj4_d1_view as d1_tests
+    from ai_jobs import day_review_narration as module
+
+    root = rolling_root["root"]
+    pack = day_review_pack.read_pack(d1_tests.SESSION, root=root)
+    m5_read = next(row for row in pack["reads"] if str(row.get("timeframe") or "").upper() == "M5")
+    d1_item = d1_tests._d1_items(root, d1_tests.SESSION)[0]
+    replies = [d1_tests._d1_reply(m5_read["source_id"]), d1_tests._d1_reply(d1_item["source_id"])]
+    seen: list[dict] = []
+
+    def d1_reply(**kwargs):
+        seen.append(kwargs)
+        return replies[len(seen) - 1]
+
+    outcome, _calls = d1_tests._run(root, day_reply=d1_tests._day_reply(root), d1_reply=d1_reply)
+    assert len(seen) == 2
+    assert "rolling D1 view refreshed (attempt 2/3)" in outcome["reason"], outcome
+    assert module.read_d1_view(root=root)["narration"]["sources"] == [d1_item["source_id"]]
+    assert m5_read["source_id"] in seen[1]["evidence"]["instructions"]
 
 
 def test_econ_a_first_time_pass_makes_exactly_one_call(tmp_path):

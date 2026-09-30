@@ -50,9 +50,14 @@ def describe_rejections(reasons: Sequence[str], attempts: int, *, stopped: str =
     return "; ".join(parts)
 
 
+#: A fed-back reason is cut to this many characters so a retry's prompt stays bounded.
+FEEDBACK_REASON_CHARS = 300
+
+
 def feedback_line(reason: str) -> str:
     """One instruction sentence quoting why an earlier reply was rejected."""
-    return f' An earlier reply was rejected for this reason. Do not repeat it: "{reason}"'
+    text = str(reason)[:FEEDBACK_REASON_CHARS]
+    return f' An earlier reply was rejected for this reason. Do not repeat it: "{text}"'
 
 
 def instructions_feedback(evidence: Mapping[str, Any], reasons: Sequence[str]) -> dict[str, Any]:
@@ -110,6 +115,7 @@ def verified_attempts(
 
 __all__ = [
     "VERIFIED_ATTEMPTS",
+    "FEEDBACK_REASON_CHARS",
     "AttemptsRejected",
     "Verified",
     "describe_rejections",
