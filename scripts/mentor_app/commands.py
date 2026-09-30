@@ -15,7 +15,7 @@ HELP_TEXT = (
     "- `/memory` what I loaded at start (night digests and your notes), with ids\n"
     "- `/recall <text>` search what we said before (plain text search when the brain is off)\n"
     "- `/forget <id>` retire a note (it is kept, never deleted); `/keep <id>` says it is still true\n"
-    "- `/tape` the desk right now (works with the brain off)\n"
+    "- `/tape` the tape: Auto mode, D1, last night's read, econ, sectors (read aloud when the brain is up)\n"
     "- `/read` give a market read now (Trade Mentor card)\n"
     "- `/pause` no Trade Mentor questions for the rest of today\n"
     "- `/pick SYM` what the desk knows about a pick, narrated (or tap a Focus chip)\n"

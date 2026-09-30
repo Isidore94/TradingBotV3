@@ -210,8 +210,11 @@ def test_tape_and_chips_show_the_context_pack(window):
     window._on_context(context_pack.fixture())
     assert window.chips["auto_mode"].text().startswith("Auto mode: DESK")
     assert window.chips["positions"].text() == "Open: 1"
-    window.send("/tape")
+    window._show_chip("d1_env")
     assert "[ctx:d1_env]" in _text(window)
+    # P5: /tape is the regime pack now (tests/test_mentor_app_tape.py); it is built off-thread.
+    window.send("/tape")
+    assert "reading the desk" in _text(window) and window.queue.pending_keys() == ["tape-build"]
 
 
 def test_the_inbox_shows_a_badge_and_never_touches_the_transcript(window):

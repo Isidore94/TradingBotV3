@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from mentor_app import assess as pick_assess
-from mentor_app import brain, challenge, commands, grounding, memory, pick_jobs, settings
+from mentor_app import brain, challenge, commands, grounding, memory, pick_jobs, settings, tape
 from mentor_app.chat_model import ChatModel
 from mentor_app.inbox import Inbox
 from mentor_app.prefetch import (
@@ -72,6 +72,8 @@ class _Bridge(QObject):
     veto_card = Signal(object)
     veto_failed = Signal(object)
     veto_morning = Signal(object)
+    tape_ready = Signal(object)
+    tape_refreshed = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -109,6 +111,9 @@ class MentorWindow(QMainWindow):
         challenge_request: Callable[..., Any] | None = None,
         veto_outcomes: Any = None,
         memory_root: Any = None,
+        tape_builder: Callable[[], Any] | None = None,
+        tape_request: Callable[..., Any] | None = None,
+        push_send: Callable[..., Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -183,6 +188,17 @@ class MentorWindow(QMainWindow):
         self._veto_inbox_waiting: list[tuple[str, Any, str, str]] = []
         self._inbox_cards: dict[int, str] = {}
         self._graded_on: Any = None
+        # P5 tape talk: the regime pack builder, the narration call and the push sender are injectable.
+        self._tape_builder = tape_builder
+        self._tape_request = tape_request
+        self._push_send = push_send
+        #: {pack, hash, card, at_utc} of the last tape build; /tape answers from it while it is fresh.
+        self._tape_last: dict[str, Any] | None = None
+        self._tape_block: int | None = None
+        self._tape_schedule = tape.TapeSchedule()
+        self._push_checked_day: Any = None
+        self._bridge.tape_ready.connect(self._on_tape_ready)
+        self._bridge.tape_refreshed.connect(self._on_tape_refreshed)
         # P1: with `mentor_app_enabled` on, this process owns the Trade Mentor card.
         self.card_host = card_host
         if self.card_host is None:
@@ -205,6 +221,8 @@ class MentorWindow(QMainWindow):
         self._pick_timer.setInterval(PICK_CHECK_MS)
         self._pick_timer.timeout.connect(self.maybe_prefetch_picks)
         self._pick_timer.timeout.connect(self.maybe_veto_card)
+        self._pick_timer.timeout.connect(self.maybe_prefetch_tape)
+        self._pick_timer.timeout.connect(self.maybe_push_brief)
         self._add_note("Hi. Ask me anything, or type `/help`.")
 
     # ------------------------------------------------------------------ UI
@@ -723,10 +741,7 @@ class MentorWindow(QMainWindow):
             self.queue.submit("scorecard", lambda: challenge.scorecard(self.store, facts=memory.load_facts(self._memory_root)),
                               priority=PRIORITY_INTERACTIVE, key="scorecard", on_done=self._bridge.note.emit)
         elif result.action == "tape":
-            if self._context_pack is None:
-                self._add_note("The desk context is still loading; try again in a moment.")
-            else:
-                self._add_note(self._context_pack.as_text().replace("\n", "\n\n") + "\n\n(Full tape talk comes in Phase 5.)")
+            self.show_tape()
         else:
             self._add_note(result.reply)
 
@@ -1110,6 +1125,130 @@ class MentorWindow(QMainWindow):
             return len(names)
 
         self.queue.submit("pick_prefetch_plan", plan, priority=PRIORITY_REFRESH, key="pick_prefetch_plan")
+
+    # ------------------------------------------------------------------ tape (P5)
+    def _build_tape(self) -> Any:
+        if self._tape_builder is not None:
+            return self._tape_builder()
+        from mentor_packs import regime_pack
+
+        return regime_pack.build()
+
+    def _tape_narrator(self) -> Callable[[Any, str], Any] | None:
+        """The narration call while the brain is up; None = the pack alone."""
+        if not self._brain_ok or not self._endpoint or self._gpu_reason():
+            return None
+        endpoint, model, request = self._endpoint, self._model, self._tape_request
+
+        def narrate(pack: Any, digest: str) -> Any:
+            return tape.narrate(pack, pack_hash=digest, model=model, endpoint=endpoint, request=request, now=self._now)
+
+        return narrate
+
+    def _tape_fresh(self) -> bool:
+        last = self._tape_last
+        return last is not None and self._now() - last["at_utc"] < tape.REFRESH_EVERY
+
+    def _tape_job(self, *, narrate: bool, source: str) -> Callable[[], dict]:
+        narrator = self._tape_narrator() if narrate else None
+        last_hash = str((self._tape_last or {}).get("hash") or "")
+
+        def job() -> dict:
+            result = tape.run_tape_job(store=self.store, build_pack=self._build_tape, narrate=narrator,
+                                       last_hash=last_hash, should_yield=self.queue.should_yield)
+            return {**result, "at_utc": self._now(), "source": source}
+
+        return job
+
+    def show_tape(self) -> None:
+        """/tape: the cached read at once while fresh; else the pack off-thread, then one narration."""
+        if self._tape_fresh():
+            last = self._tape_last
+            self._tape_block = len(self._blocks)
+            self._add_block(tape.card_markdown(last["pack"], last["card"], brain_reason=self._tape_why()))
+            if not (last["card"] is not None and last["card"].narrated):
+                self._queue_tape_narration(PRIORITY_INTERACTIVE, "tape")
+            return
+        self._tape_block = len(self._blocks)
+        self._add_block("**Tape**: reading the desk...")
+        self.queue.submit("tape", self._tape_job(narrate=False, source="tape"), priority=PRIORITY_INTERACTIVE,
+                          key="tape-build", on_done=self._bridge.tape_ready.emit)
+
+    def _tape_why(self) -> str:
+        return "" if self._brain_ok else (self._brain_reason or "the brain is off")
+
+    def _queue_tape_narration(self, priority: int, source: str) -> None:
+        if self._tape_narrator() is None:
+            return
+        done = self._bridge.tape_ready.emit if source == "tape" else self._bridge.tape_refreshed.emit
+        self.queue.submit("tape_narrate", self._tape_job(narrate=True, source=source), priority=priority,
+                          needs_model=True, max_tokens=tape.MAX_OUTPUT_TOKENS, key=f"tape-narrate:{source}",
+                          on_done=done)
+
+    def _remember_tape(self, result: dict) -> None:
+        old = self._tape_last or {}
+        card = result.get("card")
+        if card is None and old.get("hash") == result["hash"]:
+            card = old.get("card")  # a pack-only rebuild keeps the read it already has
+        self._tape_last = {"pack": result["pack"], "hash": result["hash"], "card": card, "at_utc": result["at_utc"]}
+
+    def _on_tape_ready(self, result: dict) -> None:
+        """A /tape answer: replace the /tape block; narrate once when no cached read fits the pack."""
+        self._remember_tape(result)
+        last = self._tape_last
+        markdown = tape.card_markdown(last["pack"], last["card"], brain_reason=self._tape_why())
+        index = self._tape_block
+        if index is not None and index < len(self._blocks):
+            self._blocks[index] = markdown
+            self._render()
+        else:
+            self._tape_block = len(self._blocks)
+            self._add_block(markdown)
+        card = last["card"]
+        if card is not None and card.narrated:
+            self._store_turn("assistant", markdown, tool_calls=[{"name": "regime_pack", "arguments": {},
+                                                                 "hash": last["hash"]}])
+        elif not result.get("narrated") and not result.get("yielded"):
+            self._queue_tape_narration(PRIORITY_INTERACTIVE, "tape")
+
+    def _on_tape_refreshed(self, result: dict) -> None:
+        """A background rebuild: keep it for /tape; re-narrate only on a hash change. The transcript never moves."""
+        changed = bool(result.get("changed"))
+        self._remember_tape(result)
+        card = self._tape_last["card"]
+        if result.get("narrated") or result.get("yielded"):
+            return  # a narration came back (or yielded to a chat turn): the next rebuild tries again
+        if (changed or card is None) and not (card is not None and card.narrated):
+            self._queue_tape_narration(PRIORITY_REFRESH, "prefetch")
+
+    def maybe_prefetch_tape(self) -> None:
+        """Every 30 min in the session (06:00-13:00 PT): rebuild the regime pack off-thread."""
+        now = self._now()
+        if not self._tape_schedule.due(now):
+            return
+        self._tape_schedule.mark(now)
+        self.queue.submit("tape_prefetch", self._tape_job(narrate=False, source="prefetch"), priority=PRIORITY_REFRESH,
+                          key="tape-prefetch", on_done=self._bridge.tape_refreshed.emit)
+
+    def maybe_push_brief(self) -> None:
+        """06:30-07:30 PT: the one optional phone line (off by default); gated again inside brief_push."""
+        from mentor_app import brief_push
+
+        now = self._now()
+        local = now.astimezone(brief_push.PT)
+        if self._push_checked_day == local.date() or not (brief_push.SEND_FROM <= local.time() < brief_push.SEND_UNTIL):
+            return
+        self._push_checked_day = local.date()  # one job a day; brief_push keeps the persisted once-a-day mark
+        send = self._push_send
+
+        def job() -> str:
+            if not settings.push_brief_enabled():
+                return ""
+            last = self._tape_last
+            pack = last["pack"] if last is not None and now - last["at_utc"] < tape.REFRESH_EVERY else self._build_tape()
+            return brief_push.maybe_send(self.store, pack, now=now, enabled=True, send=send)
+
+        self.queue.submit("tape_push", job, priority=PRIORITY_REFRESH, key="tape-push")
 
     # ------------------------------------------------------------------ vetoes (P3)
     def _build_veto(self, day: str) -> Any:

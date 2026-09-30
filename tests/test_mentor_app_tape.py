@@ -172,3 +172,109 @@ def test_an_unmarkable_day_sends_nothing(store, monkeypatch):
     assert brief_push.maybe_send(store, regime_pack.fixture(), now=TUE_0631, enabled=True,
                                  send=lambda *a, **k: sent.append(a) or {"ok": True}) == ""
     assert sent == []
+
+
+# ---------------------------------------------------------------- the window
+@pytest.fixture
+def win(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    from mentor_app.prefetch import PrefetchQueue
+    from mentor_app.window import MentorWindow
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings, "gpu_block_reason", lambda now=None: "")
+    clock = {"now": datetime(2026, 9, 29, 7, 0, tzinfo=PT)}
+    calls: list = []
+    sent: list = []
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        return _reply()
+
+    window = MentorWindow(
+        store=MentorChatStore(tmp_path / "mentor_chat.sqlite3"), queue=PrefetchQueue(),
+        stream_post=lambda *a, **k: [], post=lambda *a, **k: {}, now=lambda: clock["now"], mentor_enabled=False,
+        tape_builder=lambda: regime_pack.build(now=clock["now"], sources=regime_pack.fixture_sources()),
+        tape_request=request, push_send=lambda title, line, **k: sent.append(line) or {"ok": True},
+    )
+    window.clock, window.calls, window.sent = clock, calls, sent
+    yield window
+    window.shutdown()
+    window.deleteLater()
+
+
+def _drain(window):
+    while window.queue.run_one():
+        pass
+
+
+def _up(window):
+    window._brain_ok, window._endpoint, window._model = True, "http://127.0.0.1:11436", "gemma3:12b"
+
+
+def test_tape_with_the_brain_off_is_the_pack_and_no_model_call(win):
+    win._brain_reason = "the night AI owns the GPU"
+    win.send("/tape")
+    _drain(win)
+    text = win.transcript.toPlainText()
+    assert "[tape:mode]" in text and "night AI owns the GPU" in text and win.calls == []
+
+
+def test_tape_narrates_once_then_answers_from_the_cache_fast(win):
+    _up(win)
+    win.send("/tape")
+    _drain(win)
+    assert len(win.calls) == 1 and "the read" in win.transcript.toPlainText()
+    assert "[tape:d1env]" in win.transcript.toPlainText()
+    import time
+
+    started = time.perf_counter()
+    win.send("/tape")
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    assert win.queue.pending() == [], "a fresh tape answers without a job"
+    assert elapsed_ms < 300 and win.transcript.toPlainText().count("Tape: the read") == 2
+    assert len(win.calls) == 1, "the cached read is not narrated again"
+    win._io.submit(lambda: None).result(5)
+    stored = [row for row in win.store.turns() if row["role"] == "assistant"]
+    assert stored and '"regime_pack"' in stored[-1]["tool_calls_json"]
+
+
+def test_the_prefetch_rebuilds_every_30_min_and_never_moves_the_transcript(win):
+    _up(win)
+    before = win.transcript.toPlainText()
+    win.maybe_prefetch_tape()
+    _drain(win)
+    assert len(win.calls) == 1 and win._tape_last["card"].narrated
+    win.clock["now"] += timedelta(minutes=10)
+    win.maybe_prefetch_tape()
+    assert win.queue.pending() == [], "not due yet"
+    win.clock["now"] += timedelta(minutes=21)
+    win.maybe_prefetch_tape()
+    _drain(win)
+    assert len(win.calls) == 1, "same hash: no second narration"
+    win.clock["now"] += timedelta(minutes=31)
+    win._tape_builder = lambda: regime_pack.build(now=win.clock["now"], sources=replace(
+        regime_pack.fixture_sources(), d1_env=lambda day: "bullish_trend"))
+    win.maybe_prefetch_tape()
+    _drain(win)
+    assert len(win.calls) == 2, "a changed pack is narrated again"
+    assert win.transcript.toPlainText() == before, "the prefetch never moves the transcript"
+
+
+def test_the_window_pushes_once_a_day_only_with_the_setting_on(win, monkeypatch):
+    win.clock["now"] = TUE_0631
+    monkeypatch.setattr(settings, "push_brief_enabled", lambda: False)
+    win.maybe_push_brief()
+    _drain(win)
+    assert win.sent == []
+    win._push_checked_day = None
+    monkeypatch.setattr(settings, "push_brief_enabled", lambda: True)
+    for minutes in (0, 1, 20):
+        win.clock["now"] = TUE_0631 + timedelta(minutes=minutes)
+        win.maybe_push_brief()
+        _drain(win)
+    win._push_checked_day = None  # even a restarted app (fresh memory) sends nothing twice
+    win.maybe_push_brief()
+    _drain(win)
+    assert len(win.sent) == 1 and win.sent[0].startswith("Tape: Auto DESK")
