@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
@@ -24,6 +25,8 @@ NO_NATIVE_TOOLS_MARKERS = ("gemma",)
 CHAT_REASONING_EFFORT = "low"
 STREAM_TIMEOUT = (10, 300)
 SELECT_TIMEOUT = 120
+#: How often a blocking one-shot call checks the Stop flag.
+CANCEL_POLL_SECONDS = 0.1
 
 StreamPost = Callable[[str, dict, Callable[[], bool]], Iterable[Any]]
 Post = Callable[[str, dict, float], Mapping[str, Any]]
@@ -153,6 +156,31 @@ SELECT_SCHEMA = {
 }
 
 
+def _cancellable_call(fn: Callable[[], Any], cancelled: Callable[[], bool]) -> tuple[bool, Any]:
+    """Run a blocking call on a daemon thread, polling ``cancelled``: (False, None) once it is set.
+
+    A cancelled call is abandoned; its thread ends when the request times out.
+    """
+    box: dict[str, Any] = {}
+    finished = threading.Event()
+
+    def target() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread
+            box["error"] = exc
+        finally:
+            finished.set()
+
+    threading.Thread(target=target, name="mentor-pack-choice", daemon=True).start()
+    while not finished.wait(CANCEL_POLL_SECONDS):
+        if cancelled():
+            return False, None
+    if "error" in box:
+        raise box["error"]
+    return True, box.get("value")
+
+
 def run_turn(
     messages: Sequence[Mapping[str, Any]],
     *,
@@ -202,8 +230,13 @@ def run_turn(
             f"- {tool['function']['name']}: {tool['function'].get('description', '')}" for tool in tools
         )
         ask = convo + [{"role": "user", "content": SELECT_PROMPT.format(cap=MAX_TOOL_CALLS, catalog=catalog)}]
+        select_payload = chat_payload(model, ask, stream=False, keep_alive=keep_alive, num_ctx=num_ctx, fmt=SELECT_SCHEMA)
         try:
-            reply = post(url, chat_payload(model, ask, stream=False, keep_alive=keep_alive, num_ctx=num_ctx, fmt=SELECT_SCHEMA), SELECT_TIMEOUT)
+            finished, reply = _cancellable_call(lambda: post(url, select_payload, SELECT_TIMEOUT), cancelled)
+            if not finished:
+                result["cancelled"] = True
+                result["total_ms"] = int((clock() - started) * 1000)
+                return result
             chosen = json.loads(str((reply.get("message") or {}).get("content") or "{}")).get("packs") or []
         except Exception as exc:  # noqa: BLE001 - no selection means answer without packs
             logging.info("Trade Mentor: pack selection skipped (%s)", exc)
@@ -259,9 +292,14 @@ def warm(endpoint: str, model: str, keep_alive: Any = -1, *, post: Post = defaul
     return post(f"{endpoint.rstrip('/')}/api/chat", {"model": model, "messages": [], "keep_alive": keep_alive}, 300)
 
 
-def unload(endpoint: str, model: str, *, post: Post = default_post) -> Mapping[str, Any]:
+def unload(endpoint: str, model: str, *, post: Post = default_post, timeout: float = 60) -> Mapping[str, Any]:
     """Hand the GPU back: keep_alive 0 unloads the model now."""
-    return post(f"{endpoint.rstrip('/')}/api/chat", {"model": model, "messages": [], "keep_alive": 0}, 60)
+    return post(f"{endpoint.rstrip('/')}/api/chat", {"model": model, "messages": [], "keep_alive": 0}, timeout)
+
+
+def unload_embedder(endpoint: str, model: str, *, post: Post = default_post, timeout: float = 60) -> Mapping[str, Any]:
+    """Unload an embedding model: it has no chat route, so an empty /api/embed carries keep_alive 0."""
+    return post(f"{endpoint.rstrip('/')}/api/embed", {"model": model, "input": [], "keep_alive": 0}, timeout)
 
 
 def embed(endpoint: str, texts: Sequence[str], *, model: str, post: Post = default_post) -> list[list[float]]:

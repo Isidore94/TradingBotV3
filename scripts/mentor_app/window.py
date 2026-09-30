@@ -40,6 +40,8 @@ CONTEXT_REFRESH_MS = 5 * 60 * 1000
 GPU_CHECK_MS = 60 * 1000
 #: How long after a failed connect the app waits before trying the host again.
 RECONNECT_BACKOFF_SECONDS = 10 * 60
+#: On close the app waits at most this long for each model unload.
+SHUTDOWN_UNLOAD_SECONDS = 4
 CHIP_KINDS = ("auto_mode", "d1_env", "regime")
 
 
@@ -107,6 +109,7 @@ class MentorWindow(QMainWindow):
         self._io = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mentor-store")
         self._threads: list[threading.Thread] = []
         self._focus_server = None
+        self._shut = False
         self._bridge = _Bridge(self)
         self._bridge.context_ready.connect(self._on_context)
         self._bridge.brain_state.connect(self._on_brain_state)
@@ -222,12 +225,24 @@ class MentorWindow(QMainWindow):
         self.connect_brain()
 
     def shutdown(self) -> None:
+        if self._shut:
+            return
+        self._shut = True
         self._context_timer.stop()
         self._gpu_timer.stop()
         if self._worker is not None:
             self._worker.cancel()
             self._worker.wait(3000)
         self.queue.stop()
+        if self._endpoint:
+            # Hand both models back before the tunnel closes; a dead host costs at most the timeout.
+            endpoint, model = self._endpoint, self._model
+            unloader = threading.Thread(
+                target=lambda: self._unload(endpoint, model, timeout=SHUTDOWN_UNLOAD_SECONDS),
+                name="mentor-unload-exit", daemon=True,
+            )
+            unloader.start()
+            unloader.join(SHUTDOWN_UNLOAD_SECONDS + 1)
         if self._tunnel is not None:
             self._tunnel.stop()
         self._io.shutdown(wait=True)
@@ -294,6 +309,11 @@ class MentorWindow(QMainWindow):
                 state["reason"] = status.reason
                 return
             state["endpoint"] = self._tunnel.endpoint
+            single = int(getattr(status, "slots", 2) or 2) == 1
+            if single:
+                # The night left Ollama running with one slot: background jobs yield fully.
+                logging.info("Trade Mentor: Ollama already running: 1 slot, night-started")
+            self.queue.set_single_slot(single)
             brain.warm(state["endpoint"], state["model"], settings.keep_alive(), post=self._post)
             self._install_recall(state["endpoint"])
             state["ok"] = True
@@ -340,11 +360,15 @@ class MentorWindow(QMainWindow):
             if time.monotonic() - self._last_connect >= RECONNECT_BACKOFF_SECONDS or self._last_connect == 0:
                 self.connect_brain()
 
-    def _unload(self, endpoint: str, model: str) -> None:
-        try:
-            brain.unload(endpoint, model, post=self._post)
-        except Exception as exc:  # noqa: BLE001
-            logging.warning("Trade Mentor: unload failed: %s", exc)
+    def _unload(self, endpoint: str, model: str, timeout: float = 60) -> None:
+        """Unload the chat model and the embedder (keep_alive 0)."""
+        for name, unload in ((model, brain.unload), (settings.EMBED_MODEL, brain.unload_embedder)):
+            if not name:
+                continue
+            try:
+                unload(endpoint, name, post=self._post, timeout=timeout)
+            except Exception as exc:  # noqa: BLE001
+                logging.warning("Trade Mentor: unload of %s failed: %s", name, exc)
 
     # ------------------------------------------------------------------ context
     def refresh_context(self) -> None:
@@ -531,6 +555,8 @@ class MentorWindow(QMainWindow):
         def job() -> int:
             done = 0
             for row in self.store.unembedded_turns(settings.EMBED_MODEL, limit=20):
+                if self.queue.should_yield():
+                    break  # one slot: the chat turn goes first; the rest embed after it
                 vectors = brain.embed(endpoint, [row["text"]], model=settings.EMBED_MODEL, post=self._post)
                 if vectors:
                     self.store.put_embedding("turn", row["id"], settings.EMBED_MODEL, vectors[0], text=row["text"][:2000])

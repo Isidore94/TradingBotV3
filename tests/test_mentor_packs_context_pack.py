@@ -47,6 +47,24 @@ def test_a_failing_source_is_unknown_never_a_guess():
     assert rows["ctx:d1_env"]["kind"] == "d1_env", "one broken source must not blank the others"
 
 
+def test_position_ids_are_the_journal_trade_id_not_the_row_number():
+    two = replace(
+        context_pack.fixture_sources(),
+        open_positions=lambda: [
+            {"trade_id": "T-77", "symbol": "AMD", "direction": "LONG", "quantity_opened": 10,
+             "quantity_closed": 0, "average_entry_price": 150, "opened_at": "2026-09-29T06:40:00-07:00"},
+            {"trade_id": "T-42", "symbol": "NVDA", "direction": "SHORT", "quantity_opened": 100,
+             "quantity_closed": 0, "average_entry_price": 120.5, "opened_at": "2026-09-29T07:05:00-07:00"},
+        ],
+    )
+    ids = [row["id"] for row in context_pack.build(now=NOW, sources=two).rows if row["kind"] == "position"]
+    assert ids == ["ctx:pos:T-77", "ctx:pos:T-42"]
+    # The same trade keeps its id when an earlier one closes.
+    one = replace(two, open_positions=lambda: two.open_positions()[1:])
+    ids = [row["id"] for row in context_pack.build(now=NOW, sources=one).rows if row["kind"] == "position"]
+    assert ids == ["ctx:pos:T-42"]
+
+
 def test_econ_events_past_seven_days_are_left_out():
     far = replace(
         context_pack.fixture_sources(),
@@ -68,16 +86,16 @@ def test_the_live_journal_read_is_read_only(tmp_path, monkeypatch):
     db = tmp_path / "trade_journal.sqlite3"
     conn = sqlite3.connect(db)
     conn.execute(
-        "CREATE TABLE trades (symbol TEXT, direction TEXT, status TEXT, quantity_opened REAL, "
+        "CREATE TABLE trades (trade_id TEXT, symbol TEXT, direction TEXT, status TEXT, quantity_opened REAL, "
         "quantity_closed REAL, average_entry_price REAL, opened_at TEXT, account_label TEXT)"
     )
-    conn.execute("INSERT INTO trades VALUES ('AMD','SHORT','OPEN',50,0,150.0,'2026-09-29T07:00','TFSA')")
+    conn.execute("INSERT INTO trades VALUES ('T-1','AMD','SHORT','OPEN',50,0,150.0,'2026-09-29T07:00','TFSA')")
     conn.commit()
     conn.close()
     before = db.stat().st_mtime_ns
     monkeypatch.setattr(project_paths, "JOURNAL_DB_FILE", db)
     rows = context_pack._live_open_positions()
-    assert rows and rows[0]["symbol"] == "AMD"
+    assert rows and rows[0]["symbol"] == "AMD" and rows[0]["trade_id"] == "T-1"
     assert db.stat().st_mtime_ns == before
     assert not (tmp_path / "trade_journal.sqlite3-wal").exists()
 

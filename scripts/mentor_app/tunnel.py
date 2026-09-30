@@ -29,6 +29,10 @@ SERVE_ANCHOR = 'tmux new -d -s ollama "'
 NUM_PARALLEL = 2
 HEALTH_TTL_SECONDS = 60.0
 TUNNEL_OPEN_WAIT_SECONDS = 30.0
+#: While the host is unreachable the watchdog only probes port 22 this often.
+HOST_PROBE_SECONDS = 5 * 60
+#: ollama_up.sh prints this when Ollama was already serving (started by the night, 1 slot).
+ALREADY_UP_MARKER = "already up"
 WAKE_TIMEOUT_SECONDS = 330
 SSH_OPTIONS = (
     "-o", "BatchMode=yes",
@@ -45,6 +49,8 @@ class TunnelStatus:
     reason: str
     host: str = ""
     woke: bool = False
+    #: Parallel slots on the host's serve: 1 when the app found Ollama already running.
+    slots: int = NUM_PARALLEL
 
 
 def tcp_open(host: str, port: int, timeout: float = 1.5) -> bool:
@@ -76,9 +82,10 @@ class Tunnel:
         popen: Callable[..., Any] = subprocess.Popen,
         get: Callable[..., Any] = requests.get,
         port_open: Callable[[str, int], bool] = tcp_open,
-        sleep: Callable[[float], None] = time.sleep,
+        sleep: Callable[[float], Any] | None = None,
         clock: Callable[[], float] = time.monotonic,
         wake_script: Path | None = None,
+        blocked: Callable[[], str] = lambda: "",
     ) -> None:
         self.alias = str(alias)
         self.port = int(port)
@@ -86,10 +93,13 @@ class Tunnel:
         self._popen = popen
         self._get = get
         self._port_open = port_open
-        self._sleep = sleep
         self._clock = clock
+        self._blocked = blocked
         self._wake_script = wake_script or (Path.home() / "bin" / "host-on.ps1")
         self._stop = threading.Event()
+        # The default pause wakes at once when the tunnel is stopped.
+        self._sleep = sleep or self._stop.wait
+        self.host = ""
         self._proc: Any = None
         self._watchdog: threading.Thread | None = None
         self._checked_at: float | None = None
@@ -147,8 +157,33 @@ class Tunnel:
             "-o", "ExitOnForwardFailure=yes", *SSH_OPTIONS, self.alias,
         ]
 
+    def _night(self) -> bool:
+        reason = self._blocked()
+        if reason:
+            logging.info("Trade Mentor: tunnel watchdog stops (%s)", reason)
+        return bool(reason)
+
+    def _wait_for_host(self) -> bool:
+        """After a drop: True once the host answers on 22, probing every HOST_PROBE_SECONDS.
+
+        No ssh is spawned while the host is unreachable. False (stop watching) when
+        the tunnel is stopped or the night window opens.
+        """
+        if not self.host:
+            return True
+        while not self._stop.is_set():
+            if self._night():
+                return False
+            if self._port_open(self.host, 22):
+                return True
+            logging.info("Trade Mentor: %s is unreachable; next probe in %ss", self.host, HOST_PROBE_SECONDS)
+            self._sleep(HOST_PROBE_SECONDS)
+        return False
+
     def _watch(self) -> None:
         while not self._stop.is_set():
+            if self._night():
+                break
             try:
                 self._proc = self._popen(
                     self.tunnel_command(),
@@ -162,6 +197,8 @@ class Tunnel:
                 break
             self.restarts += 1
             self._checked_at = None
+            if not self._wait_for_host():
+                break
             self._sleep(2.0)
 
     def open(self) -> bool:
@@ -195,6 +232,7 @@ class Tunnel:
         if not self.alias:
             return TunnelStatus(False, "no GPU host is set (ai_remote_gpu_ssh_alias)")
         host = self.resolve_host()
+        self.host = host
         if not host:
             return TunnelStatus(False, f"cannot resolve ssh alias {self.alias!r}")
         up, woke = self.ensure_host_up(host)
@@ -207,7 +245,8 @@ class Tunnel:
             return TunnelStatus(False, f"the tunnel to {self.alias} did not open on {self.port}", host, woke)
         if not self.alive():
             return TunnelStatus(False, "the tunnel is open but Ollama does not answer", host, woke)
-        return TunnelStatus(True, note or "ready", host, woke)
+        slots = 1 if ALREADY_UP_MARKER in note.lower() else NUM_PARALLEL
+        return TunnelStatus(True, note or "ready", host, woke, slots)
 
     def stop(self) -> None:
         self._stop.set()
@@ -220,4 +259,5 @@ class Tunnel:
 
 
 def from_settings(**kwargs: Any) -> Tunnel:
+    kwargs.setdefault("blocked", settings.gpu_block_reason)
     return Tunnel(settings.ssh_alias(), settings.tunnel_port(), **kwargs)

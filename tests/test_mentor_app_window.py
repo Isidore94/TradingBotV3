@@ -113,10 +113,65 @@ def test_the_night_takes_the_model_back(window, monkeypatch):
     for thread in window._threads:
         thread.join(5)
     assert not window._brain_ok
-    url, payload = window.posted[-1]
+    url, payload = next((u, p) for u, p in window.posted if u.endswith("/api/chat"))
     assert url.endswith("/api/chat") and payload["keep_alive"] == 0 and payload["model"] == "gpt-oss:20b"
     window.send("still there?")
     assert "brain is off" in _text(window).lower()
+
+
+def _unloaded(win):
+    return sorted(
+        p["model"] for url, p in win.posted if url.endswith(("/api/chat", "/api/embed")) and p.get("keep_alive") == 0
+    )
+
+
+def test_at_2145_both_the_chat_model_and_the_embedder_are_unloaded(window, monkeypatch):
+    window._brain_ok, window._endpoint, window._model = True, "http://127.0.0.1:11436", "gpt-oss:20b"
+    monkeypatch.setattr(settings, "gpu_block_reason", lambda now=None: "the night AI starts within 15 minutes")
+    window.check_gpu_share()
+    for thread in window._threads:
+        thread.join(5)
+    assert _unloaded(window) == sorted(["gpt-oss:20b", settings.EMBED_MODEL])
+
+
+def test_closing_the_app_unloads_both_models_and_stops_the_tunnel(app, tmp_path, monkeypatch):
+    from mentor_app.window import MentorWindow
+
+    monkeypatch.setattr(settings, "gpu_block_reason", lambda now=None: "")
+    posted: list = []
+    stopped: list = []
+    win = MentorWindow(
+        store=MentorChatStore(tmp_path / "mentor_chat.sqlite3"),
+        queue=PrefetchQueue(),
+        tunnel=SimpleNamespace(stop=lambda: stopped.append(1)),
+        post=lambda url, payload, timeout: posted.append((url, payload)) or {},
+    )
+    win._brain_ok, win._endpoint, win._model = True, "http://127.0.0.1:11436", "gemma3:12b"
+    win.posted = posted
+    win.shutdown()
+    win.deleteLater()
+    assert _unloaded(win) == sorted(["gemma3:12b", settings.EMBED_MODEL])
+    assert stopped == [1]
+
+
+def test_a_night_started_ollama_makes_the_queue_yield_fully(window, monkeypatch, app, caplog):
+    window._tunnel = SimpleNamespace(
+        preflight=lambda: SimpleNamespace(ok=True, reason="ollama: already up", host="192.168.0.220", slots=1),
+        endpoint="http://127.0.0.1:11436",
+        stop=lambda: None,
+    )
+    monkeypatch.setattr(settings, "mentor_model", lambda: "gpt-oss:20b")
+    window._connecting = True
+    with caplog.at_level("INFO"):
+        window._connect_worker()
+    app.processEvents()
+    assert "1 slot, night-started" in caplog.text
+    assert window.queue.single_slot
+    window.queue.begin_interactive()
+    assert window.queue.should_yield()
+    from mentor_packs import recall
+
+    recall.set_searcher(None)
 
 
 def test_connect_refuses_in_the_night_without_touching_the_host(window, monkeypatch):

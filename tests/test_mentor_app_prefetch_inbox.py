@@ -44,6 +44,16 @@ def test_background_model_jobs_wait_while_a_chat_turn_is_in_flight():
     assert queue.run_one() and queue.ran[-1] == "assess"
 
 
+def test_one_slot_mode_asks_a_running_model_job_to_yield_to_a_chat_turn():
+    queue = prefetch.PrefetchQueue()
+    queue.begin_interactive()
+    assert not queue.should_yield(), "two slots: the chat turn has its own slot"
+    queue.set_single_slot(True)
+    assert queue.should_yield(), "one slot (night-started serve): a running job stops at its next step"
+    queue.end_interactive()
+    assert not queue.should_yield()
+
+
 def test_model_jobs_pause_in_the_night_window_and_deterministic_ones_run():
     reason = {"text": "night"}
     queue = prefetch.PrefetchQueue(blocked=lambda: reason["text"])

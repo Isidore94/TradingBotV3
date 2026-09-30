@@ -151,6 +151,32 @@ def test_cancel_stops_at_the_next_chunk():
     assert seen == ["one"] and result["cancelled"] is True
 
 
+def test_stop_during_the_gemma_pack_choice_returns_within_two_seconds():
+    import threading
+    import time
+
+    release = threading.Event()
+    streamed: list = []
+    flag = {"stop": False}
+
+    def slow_post(url, payload, timeout):
+        release.wait(10)  # a pack-choice call that hangs on a busy host
+        return {"message": {"content": json.dumps({"packs": []})}}
+
+    threading.Timer(0.2, lambda: flag.update(stop=True)).start()
+    started = time.monotonic()
+    try:
+        result = brain.run_turn(
+            [{"role": "user", "content": "mode?"}], model="gemma3:12b", endpoint="http://x", tools=TOOLS,
+            post=slow_post, stream_post=lambda u, p, c: streamed.append(p) or _answer("x"),
+            cancelled=lambda: flag["stop"],
+        )
+    finally:
+        release.set()
+    assert time.monotonic() - started < 2.0
+    assert result["cancelled"] is True and streamed == [], "no answer is streamed after Stop"
+
+
 def test_an_ollama_error_line_raises():
     import pytest
 

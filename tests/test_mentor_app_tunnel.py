@@ -196,3 +196,83 @@ def test_a_passing_health_check_is_trusted_for_sixty_seconds():
     assert hits == ["http://127.0.0.1:11436/api/version"]
     now["t"] += 61
     assert t.alive() and len(hits) == 2
+
+
+def test_an_unreachable_host_is_probed_every_five_minutes_without_respawning_ssh():
+    starts: list = []
+    pauses: list = []
+    probes = {"n": 0}
+    t = tunnel.Tunnel("claude-host", 11436)
+    t.host = "192.168.0.220"
+
+    def port_open(host, port):
+        probes["n"] += 1
+        if probes["n"] >= 4:
+            t._stop.set()
+        return False
+
+    def popen(cmd, **kwargs):
+        starts.append(cmd)
+        if len(starts) >= 3:  # a respawning watchdog would loop forever; end the test
+            t._stop.set()
+        return _Proc()
+
+    t._popen = popen
+    t._port_open = port_open
+    t._sleep = pauses.append
+    t._watch()
+    assert len(starts) == 1, "ssh -N must not be respawned while the host is unreachable"
+    assert pauses and all(p == tunnel.HOST_PROBE_SECONDS == 300 for p in pauses)
+
+
+def test_the_watchdog_respawns_once_the_host_answers_again():
+    starts: list = []
+    answers = iter([False, True])
+    t = tunnel.Tunnel("claude-host", 11436, sleep=lambda s: None)
+    t.host = "192.168.0.220"
+
+    def popen(cmd, **kwargs):
+        starts.append(cmd)
+        if len(starts) >= 2:
+            t._stop.set()
+        return _Proc()
+
+    t._popen = popen
+    t._port_open = lambda host, port: next(answers)
+    t._watch()
+    assert len(starts) == 2
+
+
+def test_the_watchdog_stops_entirely_inside_the_night_window():
+    starts: list = []
+    state = {"night": ""}
+    t = tunnel.Tunnel("claude-host", 11436, sleep=lambda s: None, blocked=lambda: state["night"])
+    t.host = "192.168.0.220"
+
+    def popen(cmd, **kwargs):
+        starts.append(cmd)
+        state["night"] = "the night AI owns the GPU"
+        if len(starts) >= 3:  # a watchdog that ignores the night would loop forever
+            t._stop.set()
+        return _Proc()
+
+    t._popen = popen
+    t._port_open = lambda host, port: True
+    t._watch()  # returns by itself: no respawn once the night opens
+    assert len(starts) == 1
+    assert tunnel.from_settings()._blocked is settings.gpu_block_reason
+
+
+def test_a_night_started_ollama_reports_one_slot(tmp_path):
+    def run(cmd, **kwargs):
+        if cmd[:2] == ["ssh", "-G"]:
+            return SimpleNamespace(stdout="hostname 192.168.0.220\n", returncode=0)
+        return SimpleNamespace(stdout=b"ollama: already up\n", returncode=0)
+
+    common = dict(
+        port_open=lambda host, port: True, get=lambda url, timeout: SimpleNamespace(status_code=200),
+        sleep=lambda s: None, wake_script=tmp_path / "missing.ps1",
+    )
+    status = tunnel.Tunnel("claude-host", 11436, run=run, **common).preflight()
+    assert status.ok and status.slots == 1
+    assert tunnel.Tunnel("claude-host", 11436, run=_fake_run([]), **common).preflight().slots == 2

@@ -48,6 +48,8 @@ class PrefetchQueue:
         self._seq = itertools.count()
         self._lock = threading.Condition()
         self._interactive = 0
+        #: True when the host's serve has one slot (found running, night-started).
+        self.single_slot = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.ran: list[str] = []
@@ -86,6 +88,15 @@ class PrefetchQueue:
         with self._lock:
             self._interactive = max(0, self._interactive - 1)
             self._lock.notify_all()
+
+    def set_single_slot(self, single: bool) -> None:
+        with self._lock:
+            self.single_slot = bool(single)
+
+    def should_yield(self) -> bool:
+        """True when a running model job must stop at its next step: one slot and a chat turn waits."""
+        with self._lock:
+            return self.single_slot and self._interactive > 0
 
     def pending(self) -> list[str]:
         with self._lock:

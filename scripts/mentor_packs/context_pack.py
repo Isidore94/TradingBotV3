@@ -80,7 +80,7 @@ def _live_regime_rows() -> list[Mapping[str, Any]]:
 
 def _live_open_positions() -> list[Mapping[str, Any]]:
     return _journal_rows(
-        "SELECT symbol, direction, quantity_opened, quantity_closed, average_entry_price, opened_at, "
+        "SELECT trade_id, symbol, direction, quantity_opened, quantity_closed, average_entry_price, opened_at, "
         "account_label FROM trades WHERE status = 'OPEN' ORDER BY opened_at"
     )
 
@@ -168,11 +168,13 @@ def build(*, now: datetime | None = None, sources: Sources | None = None) -> Pac
         positions = list(src.open_positions())
         if not positions:
             rows.append({"id": "ctx:positions", "kind": "positions", "text": "Open journal positions: none"})
-        for index, pos in enumerate(positions, start=1):
+        for pos in positions:
             qty = float(pos.get("quantity_opened") or 0) - float(pos.get("quantity_closed") or 0)
+            # The journal trade id keeps a position's evidence id stable across rebuilds.
+            trade_id = str(pos.get("trade_id") or "").strip() or f"{pos.get('symbol')}@{pos.get('opened_at')}"
             rows.append(
                 {
-                    "id": f"ctx:pos:{index}",
+                    "id": f"ctx:pos:{trade_id}",
                     "kind": "position",
                     "symbol": str(pos.get("symbol") or ""),
                     "text": (
@@ -230,6 +232,7 @@ def fixture_sources() -> Sources:
         ],
         open_positions=lambda: [
             {
+                "trade_id": "T-NVDA-1",
                 "symbol": "NVDA",
                 "direction": "SHORT",
                 "quantity_opened": 100,
