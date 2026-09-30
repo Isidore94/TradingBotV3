@@ -129,18 +129,18 @@ def test_dip_boxes_read_the_swing_lists_and_name_their_own_anchor(app):
     assert _section_symbols(widget.strong) == ["LEAD"]
     assert _section_symbols(widget.weak) == ["LAG"]
     strong, weak = widget.strong.title_label.text(), widget.weak.title_label.text()
-    # Trader 2026-09-29: longs from SPY's low after the dip, shorts from its high.
-    assert strong.startswith("Dip-strong") and "since SPY's low" in strong
-    assert "not lit" not in strong and "high" not in strong
-    assert weak.startswith("Dip-weak") and "since SPY's high" in weak and "low" not in weak
+    # Trader 2026-09-30: longs from SPY's high after the rip, shorts from its low.
+    assert strong.startswith("Dip-strong") and "since SPY's high" in strong
+    assert "not lit" not in strong and "low" not in strong
+    assert weak.startswith("Dip-weak") and "since SPY's low" in weak and "high" not in weak
     assert strong != weak  # each box names its own swing
     # No major move yet: the low / high of day, said so.
-    board["swing_anchor"]["long"]["kind"] = "lod"
-    board["swing_anchor"]["short"]["kind"] = "hod"
+    board["swing_anchor"]["long"]["kind"] = "hod"
+    board["swing_anchor"]["short"]["kind"] = "lod"
     widget.update_board(board)
     widget.flush_pending_refresh()
-    assert "low of day so far" in widget.strong.title_label.text()
-    assert "high of day so far" in widget.weak.title_label.text()
+    assert "high of day so far" in widget.strong.title_label.text()
+    assert "low of day so far" in widget.weak.title_label.text()
     # Too early for either: the open.
     board["swing_anchor"]["long"]["kind"] = "open"
     board["swing_anchor"]["short"]["kind"] = "open"

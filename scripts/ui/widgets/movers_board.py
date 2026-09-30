@@ -153,7 +153,7 @@ def _swing_title(side: str, anchor: dict[str, Any] | None) -> str:
         return f"{name} · no SPY bars today yet"
     when = _local_clock(anchor.get("dt")) or anchor.get("time") or ""
     verb = "beating" if side == "long" else "lagging"
-    point = "low" if side == "long" else "high"
+    point = "high" if side == "long" else "low"
     kind = anchor.get("kind")
     if kind == "open":
         since = "the open"
@@ -1345,10 +1345,10 @@ class MoversBoard(QWidget):
         if "swing" in (self._board or {}):
             if name == "strong":
                 return "" if (self._board.get("swing_anchor") or {}).get("long") is None else (
-                    "No name is beating SPY since the low.")
+                    "No name is beating SPY since the high.")
             if name == "weak":
                 return "" if (self._board.get("swing_anchor") or {}).get("short") is None else (
-                    "No name is lagging SPY since the high.")
+                    "No name is lagging SPY since the low.")
         if name in ("strong", "weak") and not self._dip_live():
             return ""  # the box title says it is not lit
         if name == "strong":

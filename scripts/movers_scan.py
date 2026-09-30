@@ -14,9 +14,9 @@ Rules kept here:
 - Missing data is UNKNOWN: an unmeasurable RVOL is None (neutral weight, shown
   "—"), an unmeasurable ATR drops the row from the ranked lists, missing SPY
   bars make the market state "unknown" and light nothing.
-- Dip boxes (trader, 2026-09-29): Dip-strong measures every name against SPY
-  from SPY's lowest low since its last major M5 dip began, Dip-weak from its
-  highest high since the last major rip began (else the low / high of day so
+- Dip boxes (trader, 2026-09-30): Dip-strong measures every name against SPY
+  from SPY's highest high since its last major M5 rip began, Dip-weak from its
+  lowest low since the last major dip began (else the high / low of day so
   far). A major move is a run of SWING_HA_RUN same-colour Heikin-Ashi candles
   on SPY's completed M5 bars, so the anchors shift as new runs form. An anchor
   under SWING_MIN_AGE_MIN old keeps last tick's (`previous_anchors`), else the
@@ -524,10 +524,11 @@ def swing_anchors(
     """Where each Dip box measures from, off SPY's completed M5 bars (normalised).
 
     A major move is a run of SWING_HA_RUN+ same-colour Heikin-Ashi candles today
-    (it counts while still running). Longs measure from the lowest low since the
-    last major dip began; shorts from the highest high since the last major rip
-    began. No major dip yet: longs use the low of day so far (`kind` "lod"); no
-    major rip yet: shorts use the high of day ("hod"). Ties take the later bar.
+    (it counts while still running). Longs measure from the highest high since the
+    last major rip began (who held up in the drop from it); shorts from the lowest
+    low since the last major dip began (who lagged the lift off it). No major rip
+    yet: longs use the high of day so far (`kind` "hod"); no major dip yet: shorts
+    use the low of day ("lod"). Ties take the later bar.
 
     An anchor bar must be SWING_MIN_AGE_MIN old at `now` (default: the last bar's
     end). A younger one yields to `previous_anchors[side]` (last tick's, today
@@ -558,14 +559,15 @@ def swing_anchors(
             start = index
 
     def extreme(side: str, window: range) -> int:
-        if side == "long":
+        # Longs measure from a high, shorts from a low; ties take the later bar.
+        if side == "short":
             return min(window, key=lambda i: (bars[i]["low"], -i))
         return max(window, key=lambda i: (bars[i]["high"], i))
 
     def pack(at: int, kind: str, price: float | None = None) -> dict[str, Any]:
         stamp = bars[at]["dt"]
         if price is None:
-            price = bars[at]["low"] if kind in ("swing_long", "lod") else bars[at]["high"]
+            price = bars[at]["low"] if kind in ("swing_short", "lod") else bars[at]["high"]
         return {"dt": stamp.isoformat(timespec="seconds"), "time": stamp.strftime("%H:%M"),
                 "price": price, "kind": "swing" if kind.startswith("swing") else kind,
                 "held_from_previous": False, "_dt": stamp}
@@ -596,8 +598,8 @@ def swing_anchors(
         return out
 
     def anchor(side: str) -> dict[str, Any]:
-        move = RED if side == "long" else GREEN
-        day_kind = "lod" if side == "long" else "hod"
+        move = GREEN if side == "long" else RED
+        day_kind = "hod" if side == "long" else "lod"
         last = next((r for r in reversed(runs) if r[0] == move), None)
         if last is None:
             at, kind = extreme(side, range(first, len(bars))), day_kind
