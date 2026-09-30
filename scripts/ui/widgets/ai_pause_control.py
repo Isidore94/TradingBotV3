@@ -31,9 +31,9 @@ PAUSE_TIP = (
 )
 
 
-def _paused_text() -> str:
+def _paused_text(now: object = None) -> str:
     try:
-        return ai_pause.reason()
+        return ai_pause.reason(now)
     except Exception:  # noqa: BLE001 - a label never breaks the page
         logging.debug("Pause AI: the setting could not be read.", exc_info=True)
         return ""
@@ -73,7 +73,8 @@ class AiPauseButton(QPushButton):
         self.changed.emit()
 
     def refresh(self) -> None:
-        paused = bool(_paused_text())
+        # The owner's clock, the same one the pause was set on (the app's is injectable).
+        paused = bool(_paused_text(self._now() if self._now else None))
         self.setText("AI paused" if paused else "Pause AI")
         self.resume_action.setEnabled(paused)
 

@@ -135,6 +135,20 @@ def test_ai_off_unloads_both_models_closes_the_tunnel_and_shows_paused(window):
     assert window.ai_pause_button.text() == "AI paused"
 
 
+def test_the_pause_button_reads_its_owners_clock_not_the_wall_clock():
+    """A pause set on the app's clock shows "AI paused" whatever the wall clock says (it failed after 12:00 PT)."""
+    from ui.widgets.ai_pause_control import AiPauseButton
+
+    QApplication.instance() or QApplication([])
+    long_ago = datetime(2020, 1, 8, 10, 0, tzinfo=PT)
+    button = AiPauseButton(now=lambda: long_ago)
+    button.pause("2h")
+    assert ai_pause.is_paused(long_ago)
+    button.refresh()
+    assert button.text() == "AI paused" and button.resume_action.isEnabled()
+    button.deleteLater()
+
+
 def test_a_pause_also_unloads_the_nights_model_tags(window):
     project_paths.save_local_settings({"ai_local_model_medium": "gemma3:12b", "ai_local_model_large": "gpt-oss:120b"})
     _up(window)
