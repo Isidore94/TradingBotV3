@@ -386,6 +386,20 @@ def read_published(root: Path, stem: str, *, limit: int = 5) -> list[dict[str, A
 # ---------------------------------------------------------------------------
 # the slot
 # ---------------------------------------------------------------------------
+def capped_post(post: Callable[..., Any], *, model: str) -> Callable[..., Any]:
+    """Wrap ``post``: at most MAX_OUTPUT_TOKENS, and high reasoning effort for gpt-oss tags (Qt-free)."""
+
+    def wrapped(url: str, **kwargs: Any) -> Any:
+        payload = dict(kwargs.get("json") or {})
+        payload["max_tokens"] = min(int(payload.get("max_tokens") or MAX_OUTPUT_TOKENS), MAX_OUTPUT_TOKENS)
+        if str(model or "").strip().lower().startswith("gpt-oss"):
+            payload["reasoning_effort"] = EFFORT
+        kwargs["json"] = payload
+        return post(url, **kwargs)
+
+    return wrapped
+
+
 def model_wanted(*, session_date: str = "", chat_db: Path | str | None = None, **_ignored: Any) -> bool:
     """False when the chat DB has no turn on this PT day, so no model is loaded to probe."""
     path = _chat_path(chat_db)
@@ -478,8 +492,6 @@ def run_mentor_review(
     import ai_summary
     import requests
 
-    from mentor_app.assess import effort_post
-
     if request is None:
         request = ai_summary.request_ai_summary
     try:
@@ -490,7 +502,7 @@ def run_mentor_review(
         result = request(
             provider="local", model=model, api_key="", evidence=build_evidence(inputs),
             timeout_seconds=TIMEOUT_SECONDS,
-            post=effort_post(post or requests.post, model=model, effort=EFFORT, max_tokens=MAX_OUTPUT_TOKENS),
+            post=capped_post(post or requests.post, model=model),
             schema=DIGEST_JSON_SCHEMA, schema_name=SCHEMA_NAME, prompt_version=PROMPT_VERSION,
         )
     except Exception as exc:  # noqa: BLE001 - the last digest stays

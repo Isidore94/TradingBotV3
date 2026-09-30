@@ -193,6 +193,15 @@ def test_a_model_that_fails_leaves_the_facts_and_is_degraded(chat, tmp_path):
     assert (tmp_path / "ai" / f"mentor_day_facts_{SESSION}.json").exists()
 
 
+def test_the_model_call_is_capped_at_600_output_tokens():
+    sent = {}
+    wrapped = mentor_review.capped_post(lambda url, **kw: sent.update(kw["json"]), model="gpt-oss:20b")
+    wrapped("http://h/v1/chat/completions", json={"max_tokens": 4000})
+    assert sent == {"max_tokens": 600, "reasoning_effort": "high"}
+    mentor_review.capped_post(lambda url, **kw: sent.update(kw["json"]), model="gemma3:12b")("u", json={})
+    assert sent["max_tokens"] == 600
+
+
 def test_no_chat_store_is_a_skip(tmp_path):
     out = mentor_review.run_mentor_review(session_date=SESSION, now=NIGHT, chat_db=tmp_path / "none.sqlite3",
                                           ai_root=tmp_path / "ai")
