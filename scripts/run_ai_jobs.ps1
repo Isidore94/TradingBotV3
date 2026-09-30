@@ -196,6 +196,20 @@ function Invoke-RemoteGpuPreflight {
     return $true
 }
 
+# Pause AI: the saved `ai_paused_until` while it is in the future, else ''. Same rule as
+# scripts/ai_pause.py: only ISO-8601 ending in Z or +HH:MM counts; naive, garbage, past or
+# missing = not paused.
+function Get-AiPausedUntil {
+    param([string]$Path)
+    try {
+        if (-not (Test-Path $Path)) { return '' }
+        $raw = ([string]((Get-Content $Path -Raw | ConvertFrom-Json).ai_paused_until)).Trim()
+        if ($raw -notmatch '(Z|[+-]\d{2}:\d{2})$') { return '' }
+        if ([DateTimeOffset]::Parse($raw, [Globalization.CultureInfo]::InvariantCulture) -gt [DateTimeOffset]::Now) { return $raw }
+    } catch { $null = $_ }
+    return ''
+}
+
 function Stop-RemoteGpuTunnel {
     if (-not $script:watchdog) { return }
     Get-CimInstance Win32_Process -Filter "ParentProcessId=$($script:watchdog.Id)" -ErrorAction SilentlyContinue |
@@ -213,13 +227,20 @@ try {
     $settingsPath = Join-Path $env:LOCALAPPDATA 'TradingBotV3\local_settings.json'
     $endpoint = ''
     $remoteReady = $false
+    $aiPausedUntil = ''
     if (Test-Path $settingsPath) {
         $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
         $endpoint = $settings.ai_local_endpoint_url
         $script:remoteAlias = [string]$settings.ai_remote_gpu_ssh_alias
         $script:aiStoreDir = [string]$settings.ai_store_dir
     }
-    if ([string]::IsNullOrWhiteSpace($endpoint)) {
+    # Pause AI: a future `ai_paused_until` means this run leaves the 5080 alone.
+    $aiPausedUntil = Get-AiPausedUntil -Path $settingsPath
+    if ($aiPausedUntil) {
+        # No WOL, no host script, no tunnel, no warm-up, no override, no mirror and no power-off.
+        $noModelRun = $true
+        Write-Log "AI paused until $aiPausedUntil; remote GPU untouched"
+    } elseif ([string]::IsNullOrWhiteSpace($endpoint)) {
         Write-Log "local inference: no endpoint configured; narration is off by design"
     } elseif ($noModelRun -and -not [string]::IsNullOrWhiteSpace($script:remoteAlias)) {
         Write-Log "remote GPU: this run needs no model; the host is not touched"
@@ -318,6 +339,21 @@ foreach ($stream in @(@{ Path = $stdout; Tag = 'out' }, @{ Path = $stderr; Tag =
 }
 $code = $process.ExitCode
 
+# Pause AI set while the jobs ran (the trader started gaming): free the night's model, then
+# leave the host alone (no log mirror, no power-off).
+$midRunPause = (-not $aiPausedUntil) -and [bool](Get-AiPausedUntil -Path $settingsPath)
+if ($midRunPause) {
+    if ($remoteReady) {
+        try {
+            $unload = @{ model = $model; keep_alive = 0 } | ConvertTo-Json
+            Invoke-RestMethod "http://127.0.0.1:$tunnelPort/api/generate" -Method Post -Body $unload -ContentType 'application/json' -TimeoutSec 30 | Out-Null
+            Write-Log "remote GPU: '$model' unloaded from the host"
+        } catch { Write-Log "remote GPU: model unload failed (ignored): $($_.Exception.Message)" }
+    }
+    $noModelRun = $true
+    Write-Log "AI paused mid-run; host left on"
+}
+
 # Bring the host's model/GPU log back beside this run's log and into the AI
 # store on the mini PC. Best effort: a mirror problem is never a job outcome.
 if ($script:remoteAlias -and -not $noModelRun) {
@@ -362,7 +398,7 @@ if ($scheduled -and $code -in @(0, 1)) {
 $offAfter = if ($settings.ai_remote_gpu_off_after) { [string]$settings.ai_remote_gpu_off_after } else { '05:30' }
 $now = Get-Date
 $morning = $now.TimeOfDay -ge ([datetime]::ParseExact($offAfter, 'HH:mm', $null)).TimeOfDay -and $now.Hour -lt 12
-$hostFinished = $script:remoteAlias -and -not $noModelRun -and ($nightDone -or ($scheduled -and $morning))
+$hostFinished = $script:remoteAlias -and -not $noModelRun -and -not $midRunPause -and ($nightDone -or ($scheduled -and $morning))
 
 # Free the 5080's memory as soon as the night is over, even on a host left on.
 if ($hostFinished -and $remoteReady) {

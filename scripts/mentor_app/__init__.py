@@ -47,8 +47,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     theme.apply_theme(app, "dark")
 
     from mentor_app.window import MentorWindow
+    from ui.services.mentor_launcher import FOLLOW_DESK_FLAG
 
-    window = MentorWindow()
+    # Launched by the desk (the flag): close when the desk closes. By hand: never auto-exit.
+    window = MentorWindow(follow_desk=FOLLOW_DESK_FLAG in list(argv or ()))
     window.show()
     window.start_background()
     try:

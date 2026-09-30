@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import ai_pause
 from mentor_app import assess as pick_assess
 from mentor_app import brain, challenge, commands, grounding, memory, pick_jobs, settings, tape
 from mentor_app.chat_model import ChatModel
@@ -48,6 +49,11 @@ CONTEXT_REFRESH_MS = 5 * 60 * 1000
 #: The /check narration's output cap (gate.MAX_OUTPUT_TOKENS).
 MAX_GATE_TOKENS = 600
 GPU_CHECK_MS = 60 * 1000
+#: How often the app looks at the Pause AI switch (the desk may flip it).
+PAUSE_CHECK_MS = 5 * 1000
+#: A desk-launched app looks at the desk's slot this often; this many free checks in a row = the desk closed.
+DESK_CHECK_MS = 30 * 1000
+DESK_FREE_CHECKS = 2
 PICK_CHECK_MS = 60 * 1000
 #: How long a live narration may wait for the model before the card shows the evidence alone.
 ASSESS_WAIT_MS = 90 * 1000
@@ -58,6 +64,21 @@ SHUTDOWN_UNLOAD_SECONDS = 4
 CHIP_KINDS = ("auto_mode", "d1_env", "regime")
 #: A background tape narration that fails is tried once more for the same pack hash, then not again.
 TAPE_MAX_FAILURES_PER_HASH = 2
+
+
+def _desk_slot_is_free() -> bool | None:
+    """True when no desk holds its single-instance slot; None when unknown."""
+    from single_instance import DESK_LOCK_KEY, slot_is_free
+
+    return slot_is_free(DESK_LOCK_KEY)
+
+
+def _quit_qt() -> None:
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is not None:
+        app.quit()
 
 
 class _Bridge(QObject):
@@ -79,6 +100,7 @@ class _Bridge(QObject):
     tape_ready = Signal(object)
     tape_refreshed = Signal(object)
     check_card = Signal(object)
+    desk_state = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -121,6 +143,9 @@ class MentorWindow(QMainWindow):
         push_send: Callable[..., Any] | None = None,
         gate_builder: Callable[..., Any] | None = None,
         gate_request: Callable[..., Any] | None = None,
+        follow_desk: bool = False,
+        desk_probe: Callable[[], bool | None] | None = None,
+        quit_app: Callable[[], Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -139,7 +164,9 @@ class MentorWindow(QMainWindow):
         self._model = ""
         self._endpoint = ""
         self._latency_ms: int | None = None
-        self.queue = queue or PrefetchQueue(blocked=self._gpu_reason, model_ready=lambda: self._brain_ok)
+        #: When the Pause AI switch ends, as last seen; None = AI on.
+        self._paused_until: datetime | None = None
+        self.queue =queue or PrefetchQueue(blocked=self._gpu_reason, model_ready=lambda: self._brain_ok)
         self.inbox = inbox or Inbox(per_day_cap=settings.proactive_per_day(), now=self._now)
         self.chat = ChatModel()
         self._context_pack: Any = None
@@ -231,6 +258,18 @@ class MentorWindow(QMainWindow):
         self._gpu_timer = QTimer(self)
         self._gpu_timer.setInterval(GPU_CHECK_MS)
         self._gpu_timer.timeout.connect(self.check_gpu_share)
+        self._pause_timer = QTimer(self)
+        self._pause_timer.setInterval(PAUSE_CHECK_MS)
+        self._pause_timer.timeout.connect(self.check_ai_pause)
+        # Follow the desk: only a desk-launched app (--follow-desk) exits when the desk closes.
+        self._follow_desk = bool(follow_desk)
+        self._desk_probe = desk_probe or _desk_slot_is_free
+        self._quit_app = quit_app or _quit_qt
+        self._desk_free_checks = 0
+        self._bridge.desk_state.connect(self._on_desk_state)
+        self._desk_timer = QTimer(self)
+        self._desk_timer.setInterval(DESK_CHECK_MS)
+        self._desk_timer.timeout.connect(self.check_desk)
         self._pick_timer = QTimer(self)
         self._pick_timer.setInterval(PICK_CHECK_MS)
         self._pick_timer.timeout.connect(self.maybe_prefetch_picks)
@@ -299,8 +338,18 @@ class MentorWindow(QMainWindow):
         input_row.addWidget(self.input, 1)
         input_row.addLayout(buttons)
 
+        from ui.widgets.ai_pause_control import AiPauseButton
+
+        # The header: Pause AI (frees the GPU host; the questions keep working).
+        self.ai_pause_button = AiPauseButton(self, now=self._now)
+        self.ai_pause_button.changed.connect(self.check_ai_pause)
+        header = QHBoxLayout()
+        header.addStretch(1)
+        header.addWidget(self.ai_pause_button)
+
         left = QWidget()
         left_layout = QVBoxLayout(left)
+        left_layout.addLayout(header)
         left_layout.addWidget(self.banner)
         left_layout.addWidget(self.transcript, 3)
         if self.card_host is not None:
@@ -348,6 +397,16 @@ class MentorWindow(QMainWindow):
         self._add_block(f"*Mentor (desk):* {markdown}")
 
     def _sync_status(self) -> None:
+        if self._paused_until is not None:
+            # Paused is its own state, not "down": the pill and banner say so.
+            until = ai_pause.until_text(self._paused_until, self._now())
+            self.status_pill.setText(f"AI paused {until}")
+            self.banner.setVisible(True)
+            self.banner.setText(
+                f"AI is paused {until}. Packs and Trade Mentor questions still work. `/ai on` resumes."
+            )
+            self.ai_pause_button.refresh()
+            return
         model = self._model or "model?"
         host = self._host or "no host"
         latency = f"{self._latency_ms} ms" if self._latency_ms is not None else "-"
@@ -355,6 +414,7 @@ class MentorWindow(QMainWindow):
         self.status_pill.setText(f"{host} · {model} · {latency} · brain {state}")
         self.banner.setVisible(not self._brain_ok)
         self.banner.setText(f"Brain is off: {self._brain_reason}. Packs still work: try /tape.")
+        self.ai_pause_button.refresh()
 
     # ------------------------------------------------------------------ lifecycle
     def start_background(self) -> None:
@@ -367,10 +427,19 @@ class MentorWindow(QMainWindow):
             self.card_host.start()
         self._context_timer.start()
         self._gpu_timer.start()
+        self._pause_timer.start()
+        if self._follow_desk:
+            self._desk_timer.start()
         self._pick_timer.start()
         self.install_recall_fallback()
         self._submit_io(self._open_session)
         self.refresh_context()
+        self._paused_until = self._ai_paused_until()
+        if self._paused_until is not None:
+            # Started while paused: no tunnel, no warm-up, no model.
+            self._brain_reason = self._pause_reason()
+            self._sync_status()
+            return
         self.connect_brain()
 
     def shutdown(self) -> None:
@@ -379,6 +448,8 @@ class MentorWindow(QMainWindow):
         self._shut = True
         self._context_timer.stop()
         self._gpu_timer.stop()
+        self._pause_timer.stop()
+        self._desk_timer.stop()
         self._pick_timer.stop()
         from mentor_packs import recall
 
@@ -390,7 +461,7 @@ class MentorWindow(QMainWindow):
         self.queue.stop()
         if self.card_host is not None:
             self.card_host.shutdown()
-        if self._endpoint:
+        if self._endpoint and self._paused_until is None:
             # Hand both models back before the tunnel closes; a dead host costs at most the timeout.
             endpoint, model = self._endpoint, self._model
             unloader = threading.Thread(
@@ -406,6 +477,31 @@ class MentorWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
         self.shutdown()
         super().closeEvent(event)
+
+    # ------------------------------------------------------------------ follow the desk
+    def check_desk(self) -> None:
+        """Every 30 s (desk-launched only): probe the desk's slot off the Qt thread."""
+        if not self._follow_desk or self._shut:
+            return
+        probe, emit = self._desk_probe, self._bridge.desk_state.emit
+
+        def run() -> None:
+            try:
+                free = probe()
+            except Exception:  # noqa: BLE001 - a broken probe is "unknown", never "closed"
+                free = None
+            emit(free)
+
+        threading.Thread(target=run, name="mentor-desk-probe", daemon=True).start()
+
+    def _on_desk_state(self, free: Any) -> None:
+        """Two free checks in a row: the desk closed, so hand the GPU back and exit."""
+        self._desk_free_checks = self._desk_free_checks + 1 if free is True else 0
+        if not self._follow_desk or self._shut or self._desk_free_checks < DESK_FREE_CHECKS:
+            return
+        logging.info("desk closed; Trade Mentor following")
+        self.shutdown()
+        self._quit_app()
 
     def bring_to_front(self) -> None:
         if self.isMinimized():
@@ -443,9 +539,103 @@ class MentorWindow(QMainWindow):
     # ------------------------------------------------------------------ brain
     def _gpu_reason(self) -> str:
         try:
-            return settings.gpu_block_reason(self._now())
+            return self._pause_reason() or settings.gpu_block_reason(self._now())
         except Exception as exc:  # noqa: BLE001 - an unreadable clock keeps the model off
             return f"the GPU window could not be read ({type(exc).__name__})"
+
+    # ------------------------------------------------------------------ Pause AI
+    def _ai_paused_until(self) -> datetime | None:
+        try:
+            return ai_pause.paused_until(self._now())
+        except Exception:  # noqa: BLE001 - an unreadable switch reads as "not paused", like the helper
+            logging.warning("Trade Mentor: the Pause AI setting could not be read.", exc_info=True)
+            return None
+
+    def _pause_reason(self) -> str:
+        """``AI paused until HH:MM`` while paused, else ""."""
+        until = self._ai_paused_until()
+        return f"AI paused {ai_pause.until_text(until, self._now())}" if until is not None else ""
+
+    def _offline_why(self) -> str:
+        """Why a card shows its evidence without a narration."""
+        return self._pause_reason() or f"the brain is off: {self._brain_reason or 'not connected'}"
+
+    def check_ai_pause(self) -> None:
+        """Every 5 s (and on the button or `/ai`): act on a change of the Pause AI switch."""
+        until = self._ai_paused_until()
+        was, self._paused_until = self._paused_until, until
+        if until is not None and was is None:
+            self._enter_pause()
+        elif until is None and was is not None:
+            self._leave_pause()
+        elif until != was:
+            self._sync_status()
+
+    def _enter_pause(self) -> None:
+        """Stop the turn, unload both models through the tunnel, then close the tunnel."""
+        self._brain_reason = self._pause_reason()
+        if self._worker is not None:
+            self._worker.cancel()
+        from mentor_packs import recall
+
+        recall.set_searcher(None)
+        self._brain_ok = False
+        endpoint, tunnel = self._endpoint, self._tunnel
+        models = self._pause_unload_models()
+
+        def release() -> None:
+            if endpoint:
+                self._unload(endpoint, models[0], extra=models[1:])
+            if tunnel is not None:
+                tunnel.stop()
+
+        self._spawn("mentor-pause", release)
+        self._sync_status()
+
+    def _pause_unload_models(self) -> tuple[str, ...]:
+        """The app's chat model (the setting when none is known yet), then the night's model
+        tags: a pause frees the GPU of all of them (unloading an idle model is harmless)."""
+        import ai_summary
+
+        names: list[str] = []
+        for read in (lambda: self._model or settings.mentor_model(),
+                     lambda: ai_summary.local_model("medium"),
+                     lambda: ai_summary.local_model("large")):
+            try:
+                name = str(read() or "").strip()
+            except Exception:  # noqa: BLE001 - an unreadable tag is skipped, never fatal
+                logging.debug("Trade Mentor: a model tag could not be read.", exc_info=True)
+                continue
+            if name and name not in names:
+                names.append(name)
+        return tuple(names) or ("",)
+
+    def _leave_pause(self) -> None:
+        """AI is back: the normal start (tunnel, warm-up, prefetch), subject to the night window."""
+        self._brain_reason = "connecting to the GPU host..."
+        self._last_connect = 0.0
+        self._sync_status()
+        reason = self._gpu_reason()
+        if reason:
+            self._brain_reason = reason
+            self._sync_status()
+        elif not self._connecting:
+            self.connect_brain()
+
+    def set_ai_pause(self, choice: Any) -> None:
+        """`/ai off ...`: write the switch and act on it now."""
+        until = ai_pause.pause_for(choice, self._now())
+        self.check_ai_pause()
+        self._add_note(
+            f"AI paused {ai_pause.until_text(until, self._now())}. The GPU host is free; "
+            "packs and Trade Mentor questions still work. `/ai on` resumes."
+        )
+
+    def resume_ai(self) -> None:
+        ai_pause.resume()
+        self.check_ai_pause()
+        self._add_note("AI is on again: reconnecting to the GPU host." if not self._gpu_reason()
+                       else f"AI is on again, but {self._gpu_reason()}.")
 
     def connect_brain(self) -> None:
         if self._connecting:
@@ -477,13 +667,28 @@ class MentorWindow(QMainWindow):
                 # The night left Ollama running with one slot: background jobs yield fully.
                 logging.info("Trade Mentor: Ollama already running: 1 slot, night-started")
             self.queue.set_single_slot(single)
+            if self._paused_while_connecting(state, warmed=False):
+                return
             brain.warm(state["endpoint"], state["model"], settings.keep_alive(), post=self._post)
+            if self._paused_while_connecting(state, warmed=True):
+                return
             self._install_recall(state["endpoint"])
             state["ok"] = True
         except Exception as exc:  # noqa: BLE001 - any failure is "brain off", with the reason
             state["reason"] = f"{type(exc).__name__}: {exc}"
         finally:
             self._bridge.brain_state.emit(state)
+
+    def _paused_while_connecting(self, state: dict[str, Any], *, warmed: bool) -> bool:
+        """Connect thread: AI was paused mid-connect, so hand back what was taken and stop."""
+        reason = self._pause_reason()
+        if not reason:
+            return False
+        state["reason"] = reason
+        if warmed:
+            self._unload(state["endpoint"], state["model"])
+        self._tunnel.stop()
+        return True
 
     def install_recall_fallback(self) -> None:
         """With the brain down, /recall and the recall tool still answer by plain substring."""
@@ -509,6 +714,18 @@ class MentorWindow(QMainWindow):
 
     def _on_brain_state(self, state: dict) -> None:
         self._connecting = False
+        paused = self._pause_reason()
+        if state.get("ok") and paused:
+            # Paused in the last instant of a connect: hand the model back now.
+            endpoint, model, tunnel = str(state.get("endpoint") or ""), str(state.get("model") or ""), self._tunnel
+
+            def release() -> None:
+                self._unload(endpoint, model)
+                if tunnel is not None:
+                    tunnel.stop()
+
+            self._spawn("mentor-pause", release)
+            state = {**state, "ok": False, "reason": paused}
         if state.get("ok") and not self._brain_ok:
             self._tape_failures.clear()  # the brain is back: a failed tape may be read again
         self._brain_ok = bool(state.get("ok"))
@@ -527,6 +744,10 @@ class MentorWindow(QMainWindow):
 
     def check_gpu_share(self) -> None:
         """Every minute: hand the GPU back before the night, take it again after."""
+        was_paused = self._paused_until is not None
+        self.check_ai_pause()
+        if was_paused or self._paused_until is not None:
+            return  # paused (or just resumed, already reconnecting): not an outage minute
         reason = self._gpu_reason()
         if reason and self._brain_ok:
             self._brain_ok = False
@@ -546,9 +767,10 @@ class MentorWindow(QMainWindow):
             if time.monotonic() - self._last_connect >= RECONNECT_BACKOFF_SECONDS or self._last_connect == 0:
                 self.connect_brain()
 
-    def _unload(self, endpoint: str, model: str, timeout: float = 60) -> None:
-        """Unload the chat model and the embedder (keep_alive 0)."""
-        for name, unload in ((model, brain.unload), (settings.EMBED_MODEL, brain.unload_embedder)):
+    def _unload(self, endpoint: str, model: str, timeout: float = 60, extra: tuple[str, ...] = ()) -> None:
+        """Unload the chat model, any ``extra`` chat models, and the embedder (keep_alive 0)."""
+        chats = [(name, brain.unload) for name in (model, *extra)]
+        for name, unload in (*chats, (settings.EMBED_MODEL, brain.unload_embedder)):
             if not name:
                 continue
             try:
@@ -673,6 +895,10 @@ class MentorWindow(QMainWindow):
             return
         self._add_block(f"**You:** {text}")
         self._store_turn("user", text)
+        paused = self._ai_paused_until()
+        if paused is not None:
+            self._add_note(f"AI is paused {ai_pause.until_text(paused, self._now())} — `/ai on` to resume.")
+            return
         if not self._brain_ok:
             self._add_note(f"The brain is off: {self._brain_reason or 'not connected'}. Packs still work: try `/tape`.")
             return
@@ -760,6 +986,14 @@ class MentorWindow(QMainWindow):
             self.show_tape()
         elif result.action == "check":
             self.show_check(result.arg)
+        elif result.action == "ai_off":
+            self.set_ai_pause(result.arg)
+        elif result.action == "ai_on":
+            self.resume_ai()
+        elif result.action == "ai_status":
+            paused = self._pause_reason()
+            self._add_note(f"{paused}. `/ai on` resumes." if paused else
+                           f"AI is on (brain {'ready' if self._brain_ok else 'off: ' + (self._brain_reason or 'not connected')}).")
         else:
             self._add_note(result.reply)
 
@@ -986,7 +1220,7 @@ class MentorWindow(QMainWindow):
         if not self._brain_ok:
             offline = pick_assess.Assessment(
                 symbol=symbol, pack_hash=digest, pack_json=built["pack"].as_json(),
-                error=f"the brain is off: {self._brain_reason or 'not connected'}",
+                error=self._offline_why(),
             )
             self._show_pick_card({**built, "assessment": offline})
             return
@@ -1207,7 +1441,8 @@ class MentorWindow(QMainWindow):
         self._check_blocks[seq] = len(self._blocks)
         self._add_block(f"**Check {request.side} {request.symbol}**: building...")
         live = self._brain_ok and bool(self._endpoint) and not self._gpu_reason()
-        why = "" if live else (self._gpu_reason() or self._brain_reason or "the brain is off")
+        paused = self._pause_reason()
+        why = "" if live else (paused or f"the brain is off: {self._gpu_reason() or self._brain_reason or 'not connected'}")
         endpoint, model, gate_request, store, now = self._endpoint, self._model, self._gate_request, self.store, self._now
 
         def job() -> dict:
@@ -1223,7 +1458,7 @@ class MentorWindow(QMainWindow):
                 gate.record(store, card, request, digest)
             else:
                 card = _assess.Assessment(symbol=request.symbol, pack_hash=digest, pack_json=pack.as_json(),
-                                          error=f"the brain is off: {why}")
+                                          error=why)
             return {"seq": seq, "markdown": gate.card_markdown(card, request, pack), "pack": pack}
 
         from mentor_app.gate import FOOTER as gate_footer
@@ -1249,7 +1484,7 @@ class MentorWindow(QMainWindow):
         self.chat.add("assistant", markdown)
 
     def _tape_why(self) -> str:
-        return "" if self._brain_ok else (self._brain_reason or "the brain is off")
+        return "" if self._brain_ok else (self._pause_reason() or self._brain_reason or "the brain is off")
 
     def _queue_tape_narration(self, priority: int, source: str) -> None:
         if self._tape_narrator() is None:
@@ -1418,7 +1653,7 @@ class MentorWindow(QMainWindow):
             return
         if not self._brain_ok:
             offline = challenge.VetoCard(session=built["session"], pack_hash=built["hash"], pack_json=pack.as_json(),
-                                         error=f"the brain is off: {self._brain_reason or 'not connected'}")
+                                         error=self._offline_why())
             self._show_veto_card({**built, "card": offline})
             return
         self._replace_veto_block("**Vetoes**: wording the challenges...")

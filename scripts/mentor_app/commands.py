@@ -22,7 +22,12 @@ HELP_TEXT = (
     "- `/vetoes [YYYY-MM-DD]` the last session's vetoes (or that one's), each with its slice and any challenge\n"
     "- `/check short NVDA 400 stop 3.20 entry 3.05` check a trade before you take it (advice only; it never orders)\n"
     "- `/scorecard` how the challenges have done by kind, with n, and how the app itself is doing\n"
+    "- `/ai off [2h|4h|tonight]` pause every local-AI use of the GPU host (default: until 06:00);"
+    " `/ai on` resumes; `/ai` says which\n"
 )
+AI_USAGE = "Try `/ai off 2h`, `/ai off tonight`, `/ai on` or `/ai`."
+#: `/ai off` words for "until I resume".
+FOREVER_WORDS = ("until_resumed", "forever", "indefinitely", "resume")
 MAX_QUIET = timedelta(hours=12)
 
 
@@ -106,4 +111,26 @@ def handle(text: str) -> CommandResult | None:
         return CommandResult("check", "", request)
     if name == "scorecard":
         return CommandResult("scorecard")
+    if name == "ai":
+        return _ai_command(rest)
     return CommandResult("error", f"I don't know `/{name}`. Type `/help`.")
+
+
+def _ai_command(rest: str) -> CommandResult:
+    """``/ai`` status, ``/ai on``, ``/ai off [2h|4h|tonight|30m|forever]`` (Pause AI, not `/pause`)."""
+    words = rest.lower().split()
+    if not words:
+        return CommandResult("ai_status")
+    if words == ["on"]:
+        return CommandResult("ai_on")
+    if words[0] != "off" or len(words) > 2:
+        return CommandResult("error", AI_USAGE)
+    arg = words[1] if len(words) > 1 else "tonight"
+    if arg in FOREVER_WORDS:
+        return CommandResult("ai_off", "", "until_resumed")
+    if arg in ("tonight", "06:00", "6am"):
+        return CommandResult("ai_off", "", "tonight")
+    duration = parse_duration(arg)
+    if duration is None:
+        return CommandResult("error", AI_USAGE)
+    return CommandResult("ai_off", "", duration)

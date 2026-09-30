@@ -39,7 +39,8 @@ def test_the_click_handler_returns_in_under_50_ms(monkeypatch):
     elapsed_ms = (time.perf_counter() - t0) * 1000
     assert elapsed_ms < 50, f"the desk's click took {elapsed_ms:.0f} ms"
     started[0].join(5)
-    assert calls and calls[0][0][-1].endswith("launch_mentor.py")
+    assert calls and calls[0][0][1].endswith("launch_mentor.py")
+    assert calls[0][0][-1] == mentor_launcher.FOLLOW_DESK_FLAG
 
 
 def test_a_free_slot_launches_the_app_from_the_repo_root():

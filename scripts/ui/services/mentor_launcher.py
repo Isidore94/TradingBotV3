@@ -20,6 +20,8 @@ _DETACHED = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CR
 #: Local setting: on = the Trade Mentor app owns the Mentor (card, slots file, journal
 #: events) and the desk builds none of it. Default off = the desk's own Mentor popup.
 MENTOR_APP_ENABLED_KEY = "mentor_app_enabled"
+#: Passed only by the desk's launch: the app exits after the desk does.
+FOLLOW_DESK_FLAG = "--follow-desk"
 
 
 def mentor_app_enabled() -> bool:
@@ -63,7 +65,8 @@ def _work(popen: Callable[..., Any], probe: Callable[[], bool | None], ping: Cal
             # Running already: bring it forward. A failed ping means it is still starting.
             return "focused" if ping() else "starting"
         entry = _entry()
-        popen([_python(), str(entry)], cwd=str(entry.parent), close_fds=True, creationflags=_DETACHED)
+        # Launched by the desk: the app closes itself once the desk has closed.
+        popen([_python(), str(entry), FOLLOW_DESK_FLAG], cwd=str(entry.parent), close_fds=True, creationflags=_DETACHED)
         return "launched"
     except Exception as exc:  # noqa: BLE001 - a failed launch is logged, never raised into the desk
         logging.warning("Trade Mentor launch failed: %s", exc)

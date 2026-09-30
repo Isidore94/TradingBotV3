@@ -206,6 +206,8 @@ def _already_flagged(job: str, session_date: str, flag: str, *, path=None) -> bo
 
 #: Ledger flag on a model slot skipped because the night-start Ollama probe failed.
 MODEL_DOWN_FLAG = "model_down"
+#: Ledger flag on a model slot skipped (or run as its deterministic half) while Pause AI is on.
+AI_PAUSED_FLAG = "ai_paused"
 
 #: P1-3 3a. Minutes a weeknight may spend, counted from its first ledger row.
 NIGHT_BUDGET_SETTING = "ai_night_budget_minutes"
@@ -574,6 +576,32 @@ def _run_slots_locked(
             logging.info("AI job %s skipped: %s", slot.name, reason)
             continue
 
+        # Pause AI: no local inference; a deterministic half still runs, once per session.
+        paused_cut = ""
+        if slot.uses_model and not model_free:
+            pause_reason = _ai_pause_reason(moment)
+            already_paused = pause_reason and _already_flagged(
+                slot.name, run_session, AI_PAUSED_FLAG, path=ledger_path
+            )
+            if pause_reason and slot.model_free_kwargs and not already_paused:
+                model_free = True
+                paused_cut = pause_reason
+            elif pause_reason:
+                reason = f"{pause_reason}; model slot skipped"
+                if not already_paused:
+                    row = _slot_record(
+                        slot,
+                        job=slot.name,
+                        status=ledger.STATUS_SKIPPED,
+                        session_date=run_session,
+                        reason=reason,
+                        path=ledger_path,
+                        extra={AI_PAUSED_FLAG: True},
+                    )
+                    report.results.append(row)
+                logging.info("AI job %s skipped: %s", slot.name, reason)
+                continue
+
         # P1-3 3a: the night budget, with room held for higher-priority model slots.
         budget_cut = ""
         if budget and slot.uses_model and not model_free:
@@ -694,7 +722,14 @@ def _run_slots_locked(
                 # coverage. Degraded and failed keep their own meaning.
                 status = ledger.STATUS_MANUAL
             row_reason = _failure_reason(slot.name, status, outcome)
-            if budget_cut:
+            if paused_cut:
+                # Facts only because AI is paused: degraded, so a firing after the pause narrates.
+                if status in (ledger.STATUS_OK, ledger.STATUS_MANUAL):
+                    status = ledger.STATUS_DEGRADED
+                row_reason = (
+                    f"{row_reason} [{paused_cut}: deterministic facts only, narration left out]"
+                ).strip()
+            elif budget_cut:
                 # Facts only because the budget could not hold the narration.
                 if status in (ledger.STATUS_OK, ledger.STATUS_MANUAL):
                     status = ledger.STATUS_DEGRADED
@@ -732,7 +767,9 @@ def _run_slots_locked(
                 # the daily summary adds `completion`. `ledger.record` only ever
                 # ADDS (setdefault), so a slot cannot overwrite a ledger field.
                 extra=(
-                    {**dict(outcome.get("extra") or {}), NIGHT_BUDGET_FLAG: True}
+                    {**dict(outcome.get("extra") or {}), AI_PAUSED_FLAG: True}
+                    if paused_cut
+                    else {**dict(outcome.get("extra") or {}), NIGHT_BUDGET_FLAG: True}
                     if budget_cut
                     else outcome.get("extra") or None
                 ),
@@ -825,6 +862,17 @@ def _budget_refusal(
             + ", ".join(item.name for item in held)
         )
     return text + "; skipped"
+
+
+def _ai_pause_reason(moment: datetime) -> str:
+    """``AI paused until ...`` while Pause AI is on, else "". Never raises."""
+    try:
+        import ai_pause
+
+        return ai_pause.reason(moment)
+    except Exception:  # noqa: BLE001 - an unreadable switch reads as "not paused", like the helper
+        logging.warning("AI jobs: the Pause AI setting could not be read.", exc_info=True)
+        return ""
 
 
 def _model_wanted(slot: JobSlot, session_date: str) -> bool:
