@@ -17,8 +17,8 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   worker-lifetime crashes.
 - **Merged 2026-09-30, live at the next desk restart:** Trade Mentor app P0-P12 (`370c6efb`, `8f7664fc` Pause AI, `e9c77690` P7-P12, `152e765f` plan inference): chat, `/plan` `/drop` (plan lines inferred from chat), `/pick`, `/vetoes`, `/tape`, `/check`, `/news`, `/book` (Questrade + IBKR read-only), `/mirror`, `/tilt`, `/debate`, `/hypotheses`; gates #311-#318, #321-#327. `mentor_app_enabled` off until gate #312; frontier OFF (trader's word).
 - **Desk:** next launch uses main; live checks are in GATES.
-- **Night throughput (merged 2026-09-30, trader's word):** verified retries (3 tries per slot, gate #328 briefs), ticker briefs nightly, budget 360 min. In flight: Mentor night recall index (`claude/mentor-app-p12-night-recall-2026-09-30`). Next: every Focus name briefed nightly, per-setup condition reports, morning pre-brief queue.
-- **gpt-oss:20b:** trader's word given 2026-09-30; live effort `high`, 8k thinking tokens; pulled on the mini-PC. Probe 2 on 10-01 02:05, then flip `ai_local_model_medium`.
+- **Night throughput (2026-09-30):** slot retries x3, briefs nightly, budget 360 (#328). In flight: Mentor night recall index. Next: all Focus names briefed nightly, per-setup condition reports, morning pre-brief queue.
+- **gpt-oss:20b:** trader's word 2026-09-30; effort `high`, 8k think tokens live; on the mini-PC too. Probe 2 10-01 02:05, then flip `ai_local_model_medium`.
 - **Night window:** the night AI starts 22:00 PT. Its model runs on the RTX 5080 host
   (`ai_remote_gpu_ssh_alias` = `claude-host`, ssh tunnel on 11435); falls back to local Ollama
   (also mid-run). One pass + one recheck, then unload and shut down; last firing 05:30. No builders, merges or test runs
