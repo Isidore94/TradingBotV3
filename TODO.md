@@ -15,7 +15,9 @@ here.
   (`claude/mentor-app-p3-vetoes-2026-09-30`, gate #314). P4 night memory built
   (`claude/mentor-app-p4-night-memory-2026-09-30`, gate #315). P5 tape built
   (`claude/mentor-app-p5-tape-2026-09-30`, gate #316). P6 gate built
-  (`claude/mentor-app-p6-gate-2026-09-30`, gate #317). Next: P7 news, by the trader's word only.
+  (`claude/mentor-app-p6-gate-2026-09-30`, gate #317). P7 news built
+  (`claude/mentor-app-p7-news-2026-09-30`, gate #319). Next: P8 book-aware (Questrade
+  read-only; design the single-use token refresh first; ask first).
 
 ## Plan to 8/10, round 2 (trader's brief, 2026-09-25 evening)
 
