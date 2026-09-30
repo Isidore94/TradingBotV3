@@ -2,7 +2,7 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-09-28 20:45 PT (night AI model on the RTX 5080 host, trader's word)
+**Updated:** 2026-09-30 PT (Mentor P6)
 
 - **Live on `main`:** round 1, round 2 Phase A (`81272d42`), Phase B + S (`2d59aace`),
   S10a + S7 (`3802c0d7`), p9 phase 1 regime frame (`849390a2`), p9 phase 2 long
@@ -13,11 +13,10 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   (`13b2e2cb`), Yahoo download guard (`56ce3965`),
   Movers boxes + Dip anchors, daytime focus preview, night AI idle-probe skip +
   Saturday summary reads every slice (`1751c338`); gates #257-#306.
-- **GUI/startup delivery:** approved 4K GUI design in gui.md; Journal, Research,
-  Day Review, supporting pages and Desk polish; Windows font-startup fix.
-  Source and frozen selftests 105/105. Long combined Qt test runs still hit
+- **GUI:** 4K design live; selftests 105/105; long combined Qt runs still hit
   worker-lifetime crashes.
-- **Desk:** next launch uses main; live 4K/resource and first-usable checks are in GATES.
+- **In flight:** Trade Mentor app P0-P6 (shell to `/check` gate) (#311-#317); stacked `claude/mentor-app-p*-2026-09-30` branches, none merged.
+- **Desk:** next launch uses main; live checks are in GATES.
 - **Night window:** the night AI starts 22:00 PT. Its model runs on the RTX 5080 host
   (`ai_remote_gpu_ssh_alias` = `claude-host`, ssh tunnel on 11435); falls back to local Ollama
   (also mid-run). One pass + one recheck, then unload and shut down; last firing 05:30. No builders, merges or test runs
@@ -26,10 +25,9 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   setup_group_context, D1 group strength; bounce CSV lacks `rrs_engine`, ask first); TLT/USO/HYG daily bars (scan-side, ask first); halted-name refetch; movers
   summary into the night AI; phone-brief rule line; pre-Aug entry_at (outcome code, ask
   first); review of the per-trade Mentor Save (`182f3e08`); weekly-options facet needs a
-  theta store (43 of 6,462 picks quoted).
-- **Night read 2026-09-28:** econ brief rejected 4 nights ("1 p.m." auction time, P4b);
-  Sat day_review_show (names XLK) and regime_read ("W bearish") rejected twice, reply text
-  not kept; setup_research narration absent. #264 Health rows need a desk session.
+  theta store.
+- **Night read 2026-09-28:** econ brief rejected 4 nights (P4b); Sat day_review_show and
+  regime_read rejected twice; setup_research narration absent. #264 needs a desk session.
 - **Next action:** Tue 07:30 gate #305; gates #300-#301 (rolling RRS, Movers); gates #297-#298 (runner dips armed, a fire in the Alert Center); `desk_perf_report.py --day 2026-09-28 --compare 2026-09-24`,
   gates #258-#287. Left: B10, B2, C4a, Phase C.
 - **Trader actions owed:** set Risk per trade ($) in Settings > General; fill

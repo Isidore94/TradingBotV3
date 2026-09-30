@@ -443,6 +443,9 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         "exit_note_fields",
         # LEAD AMENDMENT 2026-09-24 (WISHLIST P1-3 3b, trader decision):
         # `ticker_briefs` is Saturday-only, so it left this slate.
+        # Mentor app P4 (2026-09-30): `mentor_review`, registered directly after
+        # the briefs, so on a weeknight it follows the exit-note reader.
+        "mentor_review",
         # Econ morning brief (2026-09-24): a stage 2 model slot directly after
         # the briefs.
         "econ_brief",

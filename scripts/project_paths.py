@@ -863,6 +863,8 @@ MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "maste
 MASTER_AVWAP_SCORING_TUNER_REPORT_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_scoring_tuner_report.txt"
 MASTER_AVWAP_USER_FAVORITES_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_user_favorites.csv"
 JOURNAL_DB_FILE = PERSISTENT_RUNTIME_DATA_DIR / "trade_journal.sqlite3"
+#: The Trade Mentor app's chat log, caches and memory. Single owner: the mentor app.
+MENTOR_CHAT_DB_FILE = PERSISTENT_RUNTIME_DATA_DIR / "mentor_chat.sqlite3"
 #: Weekend Prep stepper progress (R8). Compact operational state, so it
 #: belongs in the shared home folder beside the journal rather than in a
 #: per-machine cache - a routine half-finished on Saturday is still

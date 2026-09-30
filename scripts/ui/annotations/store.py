@@ -49,7 +49,7 @@ import os
 import uuid
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from local_writer_lock import LocalLockUnavailable, local_writer_lock, lock_key_for_path
 from project_paths import TRADER_ANNOTATIONS_FILE
@@ -184,56 +184,15 @@ class AnnotationError(ValueError):
     """
 
 
-#: The ADDITIVE field TJ-11 writes beside `session_date`: the exchange session
-#: the decision JUDGED, which for a call made after Friday's close is FRIDAY's
-#: (TJ-11F, trader 2026-09-19). `session_date` keeps its own meaning and its own
-#: value for every writer and every reader; an old row simply lacks this key and
-#: is never rewritten, and only TJ-11's own readers look at it.
-DECISION_SESSION_FIELD = "decision_session"
-
-#: Which RULE computed :data:`DECISION_SESSION_FIELD` on this row. Rows written
-#: between wave 1 going live (2026-09-19 16:03 PDT) and TJ-11F could hold a
-#: FORWARD-mapped value, and no row is ever rewritten - so a stored session is
-#: believed only when the row also says the judged-session rule wrote it, and a
-#: value without the marker is recomputed from the row's own stamp. This is a
-#: schema stamp, not a vocabulary version.
-DECISION_SESSION_RULE_FIELD = "decision_session_rule"
-DECISION_SESSION_RULE = "judged_session_v2"
-
-
-def _judged_session(value: Any) -> str:
-    """The exchange session a stamp JUDGED, or ``""`` when unanswerable.
-
-    One seam, `market_calendar.decision_session`. A date that IS a session comes
-    back unchanged, so this only ever walks a weekend, an evening after the
-    close or a holiday BACK to the session it was made on. Answering ``""``
-    rather than guessing is the point: a row that cannot be placed carries no
-    claim about where it belongs.
-    """
-    try:
-        from market_calendar import decision_session
-
-        answer = decision_session(value)
-    except Exception:  # noqa: BLE001 - a calendar that cannot answer never guesses
-        return ""
-    return answer.isoformat() if answer is not None else ""
-
-
-def row_decision_session(row: Mapping[str, Any]) -> str:
-    """Which exchange session one annotation row's decision JUDGED.
-
-    TJ-11's ONE reader-side seam, and nothing outside TJ-11 calls it. A stored
-    :data:`DECISION_SESSION_FIELD` is believed only when the row also carries
-    :data:`DECISION_SESSION_RULE` - without it the value came from the forward
-    rule TJ-11F reversed. Otherwise the row's own stamp (`created_at`, else
-    `session_date`) is mapped through the calendar. The row is never rewritten
-    either way: a reader maps, it does not repair.
-    """
-    stored = str(row.get(DECISION_SESSION_FIELD) or "").strip()
-    rule = str(row.get(DECISION_SESSION_RULE_FIELD) or "").strip()
-    if stored and rule == DECISION_SESSION_RULE:
-        return stored[:10]
-    return _judged_session(row.get("created_at") or row.get("session_date"))
+# The decision-session seam lives in `annotations_reader` (pure, Qt-free) and is
+# re-exported here unchanged, so every existing caller keeps its import.
+from annotations_reader import (  # noqa: E402, F401 - re-exported
+    DECISION_SESSION_FIELD,
+    DECISION_SESSION_RULE,
+    DECISION_SESSION_RULE_FIELD,
+    _judged_session,
+    row_decision_session,
+)
 
 
 def _session_date_text(session_date: Any = None) -> str:

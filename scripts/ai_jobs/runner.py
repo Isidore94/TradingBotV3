@@ -229,10 +229,14 @@ MODEL_SLOT_PRIORITY = (
     "observation_tags",
 )
 LAST_PRIORITY_SLOT = "ticker_briefs"
+#: Ranked after `ticker_briefs`: the first model slot the budget cuts (its facts half still runs).
+CUT_FIRST_SLOTS = ("mentor_review",)
 
 
 def model_slot_priority(name: str) -> int:
     """Lower is more important. Unlisted model slots rank after the list."""
+    if name in CUT_FIRST_SLOTS:
+        return len(MODEL_SLOT_PRIORITY) + 2 + CUT_FIRST_SLOTS.index(name)
     if name == LAST_PRIORITY_SLOT:
         return len(MODEL_SLOT_PRIORITY) + 1
     if name in MODEL_SLOT_PRIORITY:
@@ -1056,6 +1060,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         market_regime_table,
         market_story_narration,
         measured_report_publish,
+        mentor_review,
         miss_contrast,
         observation_tags,
         outcome_sweep,
@@ -1684,6 +1689,24 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description="Medium-tier advisory briefs for the week's picked, alerted and traded names",
             max_attempts=briefs.TICKER_BRIEFS_MAX_ATTEMPTS,
             uses_model=True,
+        ),
+        # Trade Mentor app P4 (2026-09-30), directly after `ticker_briefs`. Deterministic half
+        # (`ask=False`): grade open challenges 22:00-06:00 PT and publish the day's facts. Model
+        # half: one cited day digest to the ai_store. Cut first by the night budget
+        # (`CUT_FIRST_SLOTS`). Its only chat-DB write is the grading columns.
+        JobSlot(
+            name="mentor_review",
+            goal="journal",
+            run=mentor_review.run_mentor_review,
+            reserve_minutes=mentor_review.RESERVE_MINUTES,
+            description=(
+                "Trade Mentor app's day: grade open challenges, publish the day's facts, "
+                "and a cited digest the app loads as memory"
+            ),
+            max_attempts=2,
+            uses_model=True,
+            model_free_kwargs={"ask": False},
+            model_wanted=mentor_review.model_wanted,
         ),
         # Econ morning brief (trader, 2026-09-24): "what to watch today" from the
         # newest pasted brief, for the Mentor's first card of the next session.
