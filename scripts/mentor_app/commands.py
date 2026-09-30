@@ -19,6 +19,7 @@ HELP_TEXT = (
     "- `/read` give a market read now (Trade Mentor card)\n"
     "- `/pause` no Trade Mentor questions for the rest of today\n"
     "- `/pick SYM` what the desk knows about a pick, narrated (or tap a Focus chip)\n"
+    "- `/news SYM [days]` the stored headlines for a stock (title, source, time, link; 3 days unless you say)\n"
     "- `/vetoes [YYYY-MM-DD]` the last session's vetoes (or that one's), each with its slice and any challenge\n"
     "- `/check short NVDA 400 stop 3.20 entry 3.05` check a trade before you take it (advice only; it never orders)\n"
     "- `/scorecard` how the challenges have done by kind, with n, and how the app itself is doing\n"
@@ -98,6 +99,15 @@ def handle(text: str) -> CommandResult | None:
             return CommandResult("error", "Try `/pick NVDA` (or `/pick NVDA short`).")
         side = parts[1] if len(parts) > 1 and parts[1] in ("LONG", "SHORT") else ""
         return CommandResult("pick", "", (symbol, side))
+    if name == "news":
+        from news_feed import clean_symbol
+
+        parts = rest.split()
+        symbol = clean_symbol(parts[0]) if parts else ""
+        days_text = parts[1].lower().removesuffix("d") if len(parts) > 1 else "3"
+        if not symbol or len(parts) > 2 or not days_text.isdigit() or not 1 <= int(days_text) <= 14:
+            return CommandResult("error", "Try `/news NVDA` or `/news NVDA 7` (1 to 14 days).")
+        return CommandResult("news", "", (symbol, int(days_text)))
     if name == "vetoes":
         if rest and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", rest):
             return CommandResult("error", "Try `/vetoes` or `/vetoes 2026-09-29`.")

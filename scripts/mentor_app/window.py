@@ -101,6 +101,7 @@ class _Bridge(QObject):
     tape_refreshed = Signal(object)
     check_card = Signal(object)
     desk_state = Signal(object)
+    news_card = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -146,6 +147,8 @@ class MentorWindow(QMainWindow):
         follow_desk: bool = False,
         desk_probe: Callable[[], bool | None] | None = None,
         quit_app: Callable[[], Any] | None = None,
+        news_fetcher: Any = None,
+        news_open_symbols: Callable[[], Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -276,6 +279,19 @@ class MentorWindow(QMainWindow):
         self._pick_timer.timeout.connect(self.maybe_veto_card)
         self._pick_timer.timeout.connect(self.maybe_prefetch_tape)
         self._pick_timer.timeout.connect(self.maybe_push_brief)
+        # P7 news: the fetcher and the open-book reader are injectable; no model, never the Inbox.
+        from mentor_app import news_jobs
+        from news_feed import NewsFetcher
+
+        self._news_fetcher = news_fetcher or NewsFetcher()
+        self._news_open_symbols = news_open_symbols
+        self._news_named: list[str] = []
+        self._news_seeded = False
+        self._news_schedule = news_jobs.NewsSchedule()
+        self._news_blocks: dict[int, int] = {}
+        self._news_seq = 0
+        self._bridge.news_card.connect(self._on_news_card)
+        self._pick_timer.timeout.connect(self.maybe_refresh_news)
         self._add_note("Hi. Ask me anything, or type `/help`.")
 
     # ------------------------------------------------------------------ UI
@@ -976,7 +992,11 @@ class MentorWindow(QMainWindow):
             self._add_note("No more Trade Mentor questions today.")
         elif result.action == "pick":
             symbol, side = result.arg
+            self._name_for_news(symbol)
             self.show_pick(symbol, side)
+        elif result.action == "news":
+            symbol, days = result.arg
+            self.show_news(symbol, days)
         elif result.action == "vetoes":
             self.show_vetoes(str(result.arg or ""))
         elif result.action == "scorecard":
@@ -985,6 +1005,7 @@ class MentorWindow(QMainWindow):
         elif result.action == "tape":
             self.show_tape()
         elif result.action == "check":
+            self._name_for_news(result.arg.symbol)
             self.show_check(result.arg)
         elif result.action == "ai_off":
             self.set_ai_pause(result.arg)
@@ -1573,6 +1594,113 @@ class MentorWindow(QMainWindow):
             return line
 
         self.queue.submit("tape_push", job, priority=PRIORITY_REFRESH, key="tape-push")
+
+    # ------------------------------------------------------------------ news (P7)
+    def _name_for_news(self, symbol: str) -> None:
+        """A symbol the trader typed joins today's news scope (named names go first)."""
+        from news_feed import clean_symbol
+
+        sym = clean_symbol(symbol)
+        if sym and sym not in self._news_named:
+            self._news_named.append(sym)
+
+    def _seed_news(self) -> None:
+        """Queue thread, once: the store's last-fetch stamps keep the 30-min spacing across a restart."""
+        if not self._news_seeded:
+            from mentor_app import news_jobs
+
+            news_jobs.seed_fetcher(self._news_fetcher, self.store)
+            self._news_seeded = True
+
+    def _open_book_symbols(self) -> list[str]:
+        if self._news_open_symbols is not None:
+            return list(self._news_open_symbols() or ())
+        from pathlib import Path
+
+        from mentor_packs import gate_pack
+        from project_paths import JOURNAL_DB_FILE
+
+        return [str(row.get("symbol") or "") for row in gate_pack.read_open_trades(Path(JOURNAL_DB_FILE))]
+
+    def show_news(self, symbol: str, days: int = 3) -> None:
+        """/news: the stored headlines at once off-thread; a never-fetched symbol is fetched once first. No model."""
+        from mentor_app import news_jobs
+
+        self._name_for_news(symbol)
+        self._news_seq += 1
+        seq = self._news_seq
+        self._news_blocks[seq] = len(self._blocks)
+        self._add_block(f"**News {symbol}**: reading...")
+        store, fetcher, now = self.store, self._news_fetcher, self._now
+
+        def job() -> dict:
+            self._seed_news()
+            return {**news_jobs.news_card(symbol, days, store=store, fetcher=fetcher, now=now()), "seq": seq}
+
+        def failed(exc: BaseException) -> None:
+            self._bridge.news_card.emit({"seq": seq, "markdown": (
+                f"**News {symbol}**: could not be read ({type(exc).__name__}: {exc}).")})
+
+        self.queue.submit(f"news {symbol}", job, priority=PRIORITY_INTERACTIVE, key=f"news-live:{seq}",
+                          on_done=self._bridge.news_card.emit, on_error=failed)
+
+    def _on_news_card(self, done: dict) -> None:
+        index = self._news_blocks.pop(done.get("seq"), None)
+        markdown = str(done.get("markdown") or "")
+        if index is not None and index < len(self._blocks):
+            self._blocks[index] = markdown
+            self._render()
+        else:
+            self._add_block(markdown)
+        # The card joins the conversation, so a follow-up sees it (news_pack stays a tool).
+        self.chat.add("assistant", markdown)
+        pack = done.get("pack")
+        self._store_turn("assistant", markdown, pack_ids=getattr(pack, "ids", ()),
+                         tool_calls=[{"name": "news_pack", "arguments": {"symbol": done.get("symbol")}}])
+
+    def maybe_refresh_news(self) -> None:
+        """Every 30 min, 06:00-13:30 PT weekdays: fetch the scope's headlines off-thread. Runs while AI is
+        paused (news is not the GPU); skipped while the desk is closed. Never the Inbox, never the transcript."""
+        from mentor_app import news_jobs
+
+        now = self._now()
+        if self._shut or not self._news_schedule.due(now):
+            return
+        self._news_schedule.mark(now)
+        probe, named = self._desk_probe, list(self._news_named)
+
+        def plan() -> int:
+            try:
+                closed = probe() is True
+            except Exception:  # noqa: BLE001 - a broken probe is "unknown", never "closed"
+                closed = False
+            if closed:
+                logging.info("Trade Mentor news: the desk is closed; no fetch this cycle")
+                return 0
+            self._seed_news()
+            try:
+                book = self._open_book_symbols()
+            except Exception as exc:  # noqa: BLE001 - an unreadable journal leaves the other names
+                logging.warning("Trade Mentor news: open book unreadable (%s)", exc)
+                book = []
+            liked = [sym for sym, _ in self._liked()]
+            scope = news_jobs.news_scope(named=named, open_book=book, liked=liked)
+            queued = 0
+            for symbol in scope:
+                if not self._news_fetcher.due(symbol, self._now()):
+                    continue
+                self.queue.submit(
+                    f"news_fetch {symbol}",
+                    lambda symbol=symbol: news_jobs.refresh_symbol(symbol, store=self.store,
+                                                                   fetcher=self._news_fetcher, now=self._now()),
+                    priority=PRIORITY_REFRESH, key=f"news-fetch:{symbol}",
+                )
+                queued += 1
+            logging.info("Trade Mentor news cycle: %d in scope, %d due and queued (cap %d per 30 min)",
+                         len(scope), queued, self._news_fetcher.max_per_cycle)
+            return queued
+
+        self.queue.submit("news_plan", plan, priority=PRIORITY_REFRESH, key="news-plan")
 
     # ------------------------------------------------------------------ vetoes (P3)
     def _build_veto(self, day: str) -> Any:

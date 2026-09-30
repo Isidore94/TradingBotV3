@@ -11,7 +11,6 @@ only show inside pick/check cards and ``/news``.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Callable, Iterable
@@ -84,24 +83,6 @@ def refresh_symbol(symbol: str, *, store: Any, fetcher: Any, now: datetime) -> d
         store.set_news_fetched(result.symbol, stamp)
     return {"symbol": result.symbol, "fetched": result.fetched, "reason": result.reason,
             "errors": dict(result.errors), "added": added}
-
-
-def run_cycle(symbols: Iterable[str], *, store: Any, fetcher: Any, now: Callable[[], datetime],
-              should_stop: Callable[[], bool] = lambda: False) -> dict[str, Any]:
-    """One cycle over ``symbols`` in order; logs how many were fetched against the cap."""
-    fetched, skipped, added = [], [], 0
-    for symbol in symbols:
-        if should_stop():
-            break
-        out = refresh_symbol(symbol, store=store, fetcher=fetcher, now=now())
-        if out["fetched"]:
-            fetched.append(out["symbol"])
-            added += int(out["added"])
-        else:
-            skipped.append((out["symbol"], out["reason"]))
-    logging.info("Trade Mentor news cycle: %d symbols fetched (cap %d per 30 min), %d new headlines, %d skipped",
-                 len(fetched), getattr(fetcher, "max_per_cycle", 0), added, len(skipped))
-    return {"fetched": fetched, "skipped": skipped, "added": added}
 
 
 def news_card(symbol: str, days: int = DEFAULT_DAYS, *, store: Any, fetcher: Any, now: datetime,

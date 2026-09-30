@@ -45,6 +45,8 @@ TASK = (
     "a bullet with no source_id is thrown away. Say n and the floor when you use a win rate. "
     "rule_flags: only for plan lines listed (their plan_id), breaks=true when this trade breaks it. "
     "Never size, never place an order, never suggest changing the plan, a detector, a score or an alert. "
+    "A headline row is a title and a link only: cite its id, never say more than its title, and never "
+    "mention news that is not a row here. "
     "verdict: 'go', 'wait' or 'breaks a rule'."
 )
 
@@ -166,9 +168,9 @@ def card_markdown(assessment: assess.Assessment, request: CheckRequest, pack: Pa
                 lines.append(f"- [{row['id']}] {row.get('text', '')}")
         return "\n".join(lines + ["", FOOTER])
     lines = [f"{head}: **{assessment.verdict}**", ""]
+    card_pack = pack if pack is not None else assessment.pack()
     for bullet in assessment.bullets:
-        refs = " ".join(f"[{ref}]" for ref in bullet.get("evidence_refs") or ())
-        lines.append(f"- {bullet.get('text', '')} {refs}".rstrip())
+        lines.append(assess.bullet_line(bullet, card_pack))
     for flag in assessment.rule_flags:
         word = "breaks" if flag.get("breaks") else "keeps"
         lines.append(f"- Plan {word} [{flag['plan_id']}]: {flag.get('text', '')}".rstrip(": "))
