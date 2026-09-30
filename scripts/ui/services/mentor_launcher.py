@@ -17,6 +17,20 @@ from typing import Any, Callable
 
 _DETACHED = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
+#: Local setting: on = the Trade Mentor app owns the Mentor (card, slots file, journal
+#: events) and the desk builds none of it. Default off = the desk's own Mentor popup.
+MENTOR_APP_ENABLED_KEY = "mentor_app_enabled"
+
+
+def mentor_app_enabled() -> bool:
+    """True only for an explicit on (``true``/``1``/``yes``/``on``); anything else is off."""
+    from project_paths import get_local_setting
+
+    raw = get_local_setting(MENTOR_APP_ENABLED_KEY, False)
+    if isinstance(raw, bool):
+        return raw
+    return str(raw or "").strip().lower() in ("1", "true", "yes", "on")
+
 
 def _python() -> str:
     """pythonw beside the desk's interpreter when there is one (no console window)."""
