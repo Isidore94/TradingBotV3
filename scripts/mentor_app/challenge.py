@@ -354,7 +354,8 @@ def grade_open(store: Any, now: datetime, *, veto_outcomes: Path | str | None = 
     """Fill each open veto challenge's matured side returns; ``graded_utc`` once all four horizons are in.
 
     A challenge with no cohort row yet stays open, its outcome saying why. Open ``gate`` challenges
-    are graded from the journal (``gate.grade_open``). Returns rows updated.
+    are graded from the journal (``gate.grade_open``), open ``tilt`` rows once their day is over
+    (``tilt_watch.grade_open``). Returns rows updated.
     """
     import annotations_reader
 
@@ -396,13 +397,20 @@ def grade_open(store: Any, now: datetime, *, veto_outcomes: Path | str | None = 
         updated += gate.grade_open(store, moment, journal=journal)
     except Exception as exc:  # noqa: BLE001 - a gate grading failure never costs the veto grades
         logging.warning("Trade Mentor gate grading failed: %s", exc)
+    try:
+        from mentor_app import tilt_watch
+
+        updated += tilt_watch.grade_open(store, moment, journal=journal)
+    except Exception as exc:  # noqa: BLE001 - a tilt grading failure never costs the other grades
+        logging.warning("Trade Mentor tilt grading failed: %s", exc)
     return updated
 
 
 #: Kinds the scorecard always lists, even at n=0; any other kind found is listed too.
-SCORECARD_KINDS = ("veto", "gate")
+SCORECARD_KINDS = ("veto", "gate", "tilt")
 #: A kind whose hit is not the 5-session return says what it counts.
-HIT_LABELS = {"gate": "win rate of taken trades (R > 0)"}
+HIT_LABELS = {"gate": "win rate of taken trades (R > 0)",
+              "tilt": "red rest of day after the observation (does the pattern predict anything?)"}
 SERVICE_DAYS = 7
 
 

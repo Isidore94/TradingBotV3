@@ -105,6 +105,10 @@ class _Bridge(QObject):
     desk_state = Signal(object)
     news_card = Signal(object)
     book_card = Signal(object)
+    mirror_card = Signal(object)
+    mirror_week = Signal(object)
+    tilt_ready = Signal(object)
+    tilt_card = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -155,6 +159,10 @@ class MentorWindow(QMainWindow):
         news_queue: PrefetchQueue | None = None,
         book_fetch: Callable[..., Any] | None = None,
         book_sources: Callable[[], Any] | None = None,
+        mirror_builder: Callable[[int], Any] | None = None,
+        mirror_request: Callable[..., Any] | None = None,
+        tilt_builder: Callable[[], Any] | None = None,
+        tilt_journal: Any = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -312,6 +320,35 @@ class MentorWindow(QMainWindow):
         self._book_lock = threading.Lock()
         self._bridge.book_card.connect(self._on_book_card)
         self._pick_timer.timeout.connect(self.maybe_fetch_book)
+        # P9 mirror: /mirror and the weekly Inbox card; the pack builder and the narration call are injectable.
+        from mentor_app import mirror as mirror_mod
+
+        self._mirror_builder = mirror_builder
+        self._mirror_request = mirror_request
+        self._mirror_blocks: dict[int, int] = {}
+        self._mirror_seq = 0
+        self._mirror_schedule = mirror_mod.WeeklySchedule()
+        #: (ISO week, PT day queued, card markdown); held through quiet hours or a mute, never past the day.
+        self._mirror_waiting: list[tuple[str, Any, str]] = []
+        self._bridge.mirror_card.connect(self._on_mirror_card)
+        self._bridge.mirror_week.connect(self._on_mirror_week)
+        self._pick_timer.timeout.connect(self.maybe_mirror_week)
+        # P9 tilt watch: every 2 min in the session on the news thread (no model); one Inbox item per 30 min.
+        from mentor_app import tilt_watch
+
+        self._tilt_builder = tilt_builder
+        self._tilt_journal = tilt_journal
+        self._tilt_schedule = tilt_watch.TiltSchedule()
+        self._tilt_blocks: dict[int, int] = {}
+        self._tilt_seq = 0
+        #: Observations waiting for the Inbox (quiet hours, a mute or the 30-min spacing), with their PT day.
+        self._tilt_waiting: list[tuple[Any, dict]] = []
+        self._tilt_last_post = ""
+        self._bridge.tilt_ready.connect(self._on_tilt_ready)
+        self._bridge.tilt_card.connect(self._on_tilt_card)
+        self._tilt_timer = QTimer(self)
+        self._tilt_timer.setInterval(tilt_watch.CHECK_MS)
+        self._tilt_timer.timeout.connect(self.maybe_watch_tilt)
         self._add_note("Hi. Ask me anything, or type `/help`.")
 
     # ------------------------------------------------------------------ UI
@@ -468,6 +505,7 @@ class MentorWindow(QMainWindow):
         if self._follow_desk:
             self._desk_timer.start()
         self._pick_timer.start()
+        self._tilt_timer.start()
         self.install_recall_fallback()
         self._submit_io(self._open_session)
         self.refresh_context()
@@ -488,6 +526,7 @@ class MentorWindow(QMainWindow):
         self._pause_timer.stop()
         self._desk_timer.stop()
         self._pick_timer.stop()
+        self._tilt_timer.stop()
         from mentor_packs import recall
 
         recall.set_fallback(None)
@@ -1031,6 +1070,10 @@ class MentorWindow(QMainWindow):
             self.show_check(result.arg)
         elif result.action == "book":
             self.show_book()
+        elif result.action == "mirror":
+            self.show_mirror(int(result.arg or 6))
+        elif result.action == "tilt":
+            self.show_tilt()
         elif result.action == "ai_off":
             self.set_ai_pause(result.arg)
         elif result.action == "ai_on":
@@ -2029,3 +2072,230 @@ class MentorWindow(QMainWindow):
             self._veto_inbox_waiting.pop(0)
             self._inbox_cards[item.id] = markdown
             self.refresh_inbox()
+
+    # ------------------------------------------------------------------ mirror (P9)
+    def _build_mirror(self, weeks: int) -> Any:
+        if self._mirror_builder is not None:
+            return self._mirror_builder(weeks)
+        from mentor_packs import mirror_pack
+
+        return mirror_pack.build(weeks)
+
+    def _mirror_narrator(self) -> Callable[[Any, str], Any] | None:
+        """The narration call while the brain is up; None = the pack alone."""
+        if not self._brain_ok or not self._endpoint or self._gpu_reason():
+            return None
+        from mentor_app import mirror as mirror_mod
+
+        endpoint, model, request = self._endpoint, self._model, self._mirror_request
+
+        def narrate(pack: Any, digest: str) -> Any:
+            return mirror_mod.narrate(pack, pack_hash=digest, model=model, endpoint=endpoint, request=request,
+                                      now=self._now)
+
+        return narrate
+
+    def _mirror_job(self, weeks: int, *, narrate: Callable[[Any, str], Any] | None, extra: dict) -> Callable[[], dict]:
+        from mentor_app import mirror as mirror_mod
+
+        def job() -> dict:
+            result = mirror_mod.run_mirror_job(store=self.store, build_pack=lambda: self._build_mirror(weeks),
+                                               narrate=narrate)
+            return {**result, **extra, "weeks": weeks}
+
+        return job
+
+    def show_mirror(self, weeks: int = 6) -> None:
+        """/mirror: the pack off-thread, narrated once per pack hash (cached); brain down = the pack alone."""
+        from mentor_app import mirror as mirror_mod
+
+        self._mirror_seq += 1
+        seq = self._mirror_seq
+        self._mirror_blocks[seq] = len(self._blocks)
+        self._add_block("**Mirror**: reading your record...")
+        narrate = self._mirror_narrator()
+
+        def failed(exc: BaseException) -> None:
+            self._bridge.mirror_card.emit({"seq": seq, "error": f"{type(exc).__name__}: {exc}"})
+
+        self.queue.submit("mirror", self._mirror_job(weeks, narrate=narrate, extra={"seq": seq}),
+                          priority=PRIORITY_INTERACTIVE, needs_model=narrate is not None,
+                          max_tokens=mirror_mod.MAX_OUTPUT_TOKENS, key=f"mirror:{seq}",
+                          on_done=self._bridge.mirror_card.emit, on_error=failed)
+
+    def _on_mirror_card(self, done: dict) -> None:
+        from mentor_app import mirror as mirror_mod
+
+        index = self._mirror_blocks.pop(done.get("seq"), None)
+        if done.get("error"):
+            markdown = f"**Mirror**: could not be built ({done['error']}).\n\n{mirror_mod.FOOTER}"
+        else:
+            markdown = mirror_mod.card_markdown(done["pack"], done.get("card"), brain_reason=self._tape_why())
+        if index is not None and index < len(self._blocks):
+            self._blocks[index] = markdown
+            self._render()
+        else:
+            self._add_block(markdown)
+        if done.get("error"):
+            return
+        # The card joins the conversation, so a follow-up sees it (mirror_pack stays a tool).
+        self.chat.add("assistant", markdown)
+        card = done.get("card")
+        self._store_turn("assistant", markdown, pack_ids=getattr(done.get("pack"), "ids", ()),
+                         model=getattr(card, "model", "") or "",
+                         tool_calls=[{"name": "mirror_pack", "arguments": {"weeks": done.get("weeks")},
+                                      "hash": done.get("hash"), "error": getattr(card, "error", "")}])
+
+    def maybe_mirror_week(self) -> None:
+        """Every minute: deliver a waiting weekly card; from 06:50 PT on the week's first session day, build it."""
+        from mentor_app import mirror as mirror_mod
+
+        now = self._now()
+        self._deliver_mirror_inbox()
+        if self._shut or not self._mirror_schedule.due(now):
+            return
+        self._mirror_schedule.mark(now)
+        week = mirror_mod.week_key(now)
+        narrate = self._mirror_narrator()
+        store = self.store
+
+        def job() -> dict:
+            posted = store.get_state(mirror_mod.POSTED_KEY)
+            if posted == week:
+                return {"week": week, "posted": posted}
+            result = self._mirror_job(6, narrate=narrate, extra={})()
+            return {**result, "week": week, "posted": posted}
+
+        self.queue.submit("mirror_week", job, priority=PRIORITY_REFRESH, needs_model=narrate is not None,
+                          max_tokens=mirror_mod.MAX_OUTPUT_TOKENS, key="mirror-week",
+                          on_done=self._bridge.mirror_week.emit)
+
+    def _on_mirror_week(self, built: dict) -> None:
+        from mentor_app import mirror as mirror_mod
+
+        if built.get("posted") == built.get("week") or "pack" not in built:
+            return  # this week's card was posted before a restart
+        markdown = mirror_mod.card_markdown(built["pack"], built.get("card"), brain_reason=self._tape_why(),
+                                            title=mirror_mod.INBOX_LINE)
+        self._mirror_waiting.append((str(built["week"]), self._now().astimezone(challenge.PT).date(), markdown))
+        self._deliver_mirror_inbox()
+
+    def _deliver_mirror_inbox(self) -> None:
+        """Post the waiting weekly card once quiet hours or a mute end; a used cap or a new day drops it."""
+        from mentor_app import mirror as mirror_mod
+
+        today = self._now().astimezone(challenge.PT).date()
+        while self._mirror_waiting:
+            week, day, markdown = self._mirror_waiting[0]
+            if day != today:
+                logging.info("Trade Mentor: the mirror card for %s was dropped (held past its day)", week)
+                self._mirror_waiting.pop(0)
+                continue
+            if not self.inbox.refusal():
+                # The marker is queued before the item shows: a quit between the two never reposts the card.
+                self._submit_io(lambda week=week: self.store.set_state(mirror_mod.POSTED_KEY, week))
+            item = self.inbox.add("mirror", mirror_mod.INBOX_LINE)
+            if item is None:
+                if "cap" in self.inbox.last_refusal:
+                    logging.info("Trade Mentor: the mirror card was dropped (%s)", self.inbox.last_refusal)
+                    self._mirror_waiting.pop(0)
+                    continue
+                return  # quiet hours or muted: try again next minute
+            self._mirror_waiting.pop(0)
+            self._inbox_cards[item.id] = markdown
+            self.refresh_inbox()
+
+    # ------------------------------------------------------------------ tilt watch (P9)
+    def _build_tilt(self) -> Any:
+        if self._tilt_builder is not None:
+            return self._tilt_builder()
+        from mentor_packs import tilt_pack
+
+        return tilt_pack.build(now=self._now(), journal=self._tilt_journal)
+
+    def _tilt_signature(self) -> Callable[[], Any] | None:
+        if self._tilt_builder is not None and self._tilt_journal is None:
+            return None
+        from mentor_packs import journal_read, tilt_pack
+
+        journal = self._tilt_journal if self._tilt_journal is not None else tilt_pack.live_journal()
+        day = self._now().astimezone(journal_read.ET).date().isoformat()
+        return lambda: journal_read.leg_signature(journal, day)
+
+    def maybe_watch_tilt(self) -> None:
+        """Every 2 min in 06:30-13:00 PT weekdays: run the tilt pack on the news thread (no model, no GPU)."""
+        from mentor_app import tilt_watch
+
+        now = self._now()
+        self._deliver_tilt()
+        if self._shut or not self._tilt_schedule.due(now):
+            return
+        store, signature = self.store, self._tilt_signature()
+        self.news_queue.submit("tilt_watch", lambda: tilt_watch.run_watch(store, now, build=self._build_tilt,
+                                                                          signature=signature),
+                               priority=PRIORITY_REFRESH, key="tilt-watch", on_done=self._bridge.tilt_ready.emit)
+
+    def _on_tilt_ready(self, result: dict) -> None:
+        """New observations wait for the Inbox; they are posted as ONE item at most every 30 min."""
+        stored = str(result.get("last_post") or "")
+        if stored > self._tilt_last_post:
+            self._tilt_last_post = stored
+        day = self._now().astimezone(challenge.PT).date()
+        self._tilt_waiting.extend((day, row) for row in result.get("new") or [])
+        self._deliver_tilt()
+
+    def _deliver_tilt(self) -> None:
+        """Post the waiting observations as one item once the 30 min, quiet hours or a mute allow it.
+
+        A used daily cap or a new day drops them (``/tilt`` still shows them). Never pops, never moves
+        the transcript."""
+        from mentor_app import tilt_watch
+
+        today = self._now().astimezone(challenge.PT).date()
+        self._tilt_waiting = [(day, row) for day, row in self._tilt_waiting if day == today]
+        if not self._tilt_waiting or not tilt_watch.may_post(self._tilt_last_post or None, self._now()):
+            return
+        item = self.inbox.add("tilt", tilt_watch.inbox_text([row for _, row in self._tilt_waiting]))
+        if item is None:
+            if "cap" in self.inbox.last_refusal:
+                logging.info("Trade Mentor: tilt observations stayed out of the Inbox (%s)", self.inbox.last_refusal)
+                self._tilt_waiting = []
+            return  # quiet hours or muted: try again at the next watch
+        self._tilt_waiting = []
+        stamp = self._now().astimezone(timezone.utc).isoformat(timespec="seconds")
+        self._tilt_last_post = stamp
+        self._submit_io(lambda: self.store.set_state(tilt_watch.LAST_POST_KEY, stamp))
+        self.refresh_inbox()
+
+    def show_tilt(self) -> None:
+        """/tilt: today's observations and the base rates, built on the news thread. No model."""
+        from mentor_app import tilt_watch
+
+        self._tilt_seq += 1
+        seq = self._tilt_seq
+        self._tilt_blocks[seq] = len(self._blocks)
+        self._add_block("**Tilt**: reading today's journal...")
+
+        def job() -> dict:
+            pack = self._build_tilt()
+            return {"seq": seq, "pack": pack, "markdown": tilt_watch.card_markdown(pack)}
+
+        def failed(exc: BaseException) -> None:
+            self._bridge.tilt_card.emit({"seq": seq, "markdown": f"**Tilt**: could not be read ({type(exc).__name__})."})
+
+        self.news_queue.submit("tilt", job, priority=PRIORITY_INTERACTIVE, key=f"tilt:{seq}",
+                               on_done=self._bridge.tilt_card.emit, on_error=failed)
+
+    def _on_tilt_card(self, done: dict) -> None:
+        index = self._tilt_blocks.pop(done.get("seq"), None)
+        markdown = str(done.get("markdown") or "")
+        if index is not None and index < len(self._blocks):
+            self._blocks[index] = markdown
+            self._render()
+        else:
+            self._add_block(markdown)
+        pack = done.get("pack")
+        if pack is not None:
+            self.chat.add("assistant", markdown)
+            self._store_turn("assistant", markdown, pack_ids=getattr(pack, "ids", ()),
+                             tool_calls=[{"name": "tilt_pack", "arguments": {}}])

@@ -22,6 +22,7 @@ PACK_MODULES: tuple[str, ...] = (
     "mentor_packs.news_pack",
     "mentor_packs.book_pack",
     "mentor_packs.mirror_pack",
+    "mentor_packs.tilt_pack",
 )
 
 

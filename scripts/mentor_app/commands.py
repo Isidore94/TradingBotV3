@@ -23,6 +23,10 @@ HELP_TEXT = (
     "- `/vetoes [YYYY-MM-DD]` the last session's vetoes (or that one's), each with its slice and any challenge\n"
     "- `/check short NVDA 400 stop 3.20 entry 3.05` check a trade before you take it (advice only; it never orders)\n"
     "- `/book` your open positions by account (Questrade when it can be read, else the journal; read-only)\n"
+    "- `/mirror [weeks]` your own record in cuts with n: likes vs the scan, vetoes, journal, regime (6 weeks"
+    " unless you say)\n"
+    "- `/tilt` today's patterns after a loss (observations with leg ids) and how often they led to a red rest"
+    " of day\n"
     "- `/scorecard` how the challenges have done by kind, with n, and how the app itself is doing\n"
     "- `/ai off [2h|4h|tonight]` pause every local-AI use of the GPU host (default: until 06:00);"
     " `/ai on` resumes; `/ai` says which\n"
@@ -122,6 +126,14 @@ def handle(text: str) -> CommandResult | None:
         return CommandResult("check", "", request)
     if name == "scorecard":
         return CommandResult("scorecard")
+    if name == "mirror":
+        if rest and not (rest.isdigit() and 1 <= int(rest) <= 52):
+            return CommandResult("error", "Try `/mirror` or `/mirror 8` (1 to 52 weeks).")
+        return CommandResult("mirror", "", int(rest) if rest else 6)
+    if name == "tilt":
+        if rest:
+            return CommandResult("error", "Try `/tilt` (no arguments).")
+        return CommandResult("tilt")
     if name == "book":
         if rest:
             return CommandResult("error", "Try `/book` (no arguments).")
