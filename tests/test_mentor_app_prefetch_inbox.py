@@ -129,10 +129,19 @@ def test_quiet_command_mutes_and_items_expire():
 
 
 def test_the_app_never_pops_beeps_or_pushes():
-    banned = re.compile(r"send_push|push_notify|QSystemTrayIcon|showMessage|\.beep\(|QSound|QSoundEffect|winsound")
+    """P5: exactly one module, brief_push.py (the optional 06:30 tape line), may push; nothing pops or beeps."""
+    banned = re.compile(r"QSystemTrayIcon|showMessage|\.beep\(|QSound|QSoundEffect|winsound")
+    push = re.compile(r"send_push|push_notify")
+    pushers = []
     for path in sorted((SCRIPTS_DIR / "mentor_app").glob("*.py")):
         text = path.read_text(encoding="utf-8")
-        assert not banned.search(text), f"{path.name} may not pop, beep or push"
+        assert not banned.search(text), f"{path.name} may not pop or beep"
+        if push.search(text):
+            pushers.append(path.name)
+    assert pushers == ["brief_push.py"], f"only brief_push.py may push: {pushers}"
+    for folder in ("mentor_packs",):
+        for path in sorted((SCRIPTS_DIR / folder).glob("*.py")):
+            assert not push.search(path.read_text(encoding="utf-8")), f"{path.name} may not push"
 
 
 def test_the_app_never_touches_order_code():

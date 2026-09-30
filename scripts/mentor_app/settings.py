@@ -112,6 +112,14 @@ def prefetch_scope() -> str:
     return raw if raw in PREFETCH_SCOPES else "liked"
 
 
+PUSH_BRIEF_KEY = "mentor_push_brief"
+
+
+def push_brief_enabled() -> bool:
+    """The one 06:30 PT tape line to the phone; off unless the setting is exactly true."""
+    return _setting(PUSH_BRIEF_KEY, False) is True
+
+
 LIKED_SOURCES_KEY = "mentor_liked_sources"
 DEFAULT_LIKED_SOURCES = "claims,likes,favorites"
 
