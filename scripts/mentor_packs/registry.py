@@ -16,6 +16,7 @@ PACK_MODULES: tuple[str, ...] = (
     "mentor_packs.plan_lines",
     "mentor_packs.recall",
     "mentor_packs.pick_pack",
+    "mentor_packs.veto_pack",
 )
 
 
