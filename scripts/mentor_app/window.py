@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QKeyEvent, QTextCursor
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -24,20 +24,23 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
 
-from mentor_app import brain, commands, settings
+from mentor_app import assess as pick_assess
+from mentor_app import brain, commands, grounding, pick_jobs, settings
 from mentor_app.chat_model import ChatModel
 from mentor_app.inbox import Inbox
-from mentor_app.prefetch import PRIORITY_EMBED, PRIORITY_REFRESH, PrefetchQueue
+from mentor_app.prefetch import PRIORITY_EMBED, PRIORITY_INTERACTIVE, PRIORITY_REFRESH, PrefetchQueue
 from mentor_app.store import MentorChatStore
 
 CONTEXT_REFRESH_MS = 5 * 60 * 1000
 GPU_CHECK_MS = 60 * 1000
+PICK_CHECK_MS = 60 * 1000
 #: How long after a failed connect the app waits before trying the host again.
 RECONNECT_BACKOFF_SECONDS = 10 * 60
 #: On close the app waits at most this long for each model unload.
@@ -52,6 +55,8 @@ class _Bridge(QObject):
     brain_state = Signal(dict)
     memory_ready = Signal(str)
     note = Signal(str)
+    pick_built = Signal(object)
+    pick_card = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -81,6 +86,9 @@ class MentorWindow(QMainWindow):
         now: Callable[[], datetime] | None = None,
         card_host: Any = None,
         mentor_enabled: bool | None = None,
+        pick_builder: Callable[[str, str], Any] | None = None,
+        assess_request: Callable[..., Any] | None = None,
+        focus_source: Callable[[], Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -117,6 +125,16 @@ class MentorWindow(QMainWindow):
         self._bridge.brain_state.connect(self._on_brain_state)
         self._bridge.memory_ready.connect(self._on_memory)
         self._bridge.note.connect(self._add_note)
+        self._bridge.pick_built.connect(self._on_pick_built)
+        self._bridge.pick_card.connect(self._on_pick_card)
+        # P2 pick assessments: the pack builder, the narration call and the Focus reader are injectable.
+        self._pick_builder = pick_builder
+        self._assess_request = assess_request
+        self._focus_source = focus_source
+        self._pick_cards: dict[str, Any] = {}
+        self._pick_packs: dict[tuple[str, str], Any] = {}
+        self._pick_blocks: dict[str, int] = {}
+        self._pick_schedule = pick_jobs.PickSchedule()
         # P1: with `mentor_app_enabled` on, this process owns the Trade Mentor card.
         self.card_host = card_host
         if self.card_host is None:
@@ -135,6 +153,9 @@ class MentorWindow(QMainWindow):
         self._gpu_timer = QTimer(self)
         self._gpu_timer.setInterval(GPU_CHECK_MS)
         self._gpu_timer.timeout.connect(self.check_gpu_share)
+        self._pick_timer = QTimer(self)
+        self._pick_timer.setInterval(PICK_CHECK_MS)
+        self._pick_timer.timeout.connect(self.maybe_prefetch_picks)
         self._add_note("Hi. Ask me anything, or type `/help`.")
 
     # ------------------------------------------------------------------ UI
@@ -146,6 +167,8 @@ class MentorWindow(QMainWindow):
         self.transcript = QTextBrowser()
         self.transcript.setObjectName("MentorTranscript")
         self.transcript.setOpenExternalLinks(False)
+        self.transcript.setOpenLinks(False)
+        self.transcript.anchorClicked.connect(self._on_anchor)
         self.chip_row = QHBoxLayout()
         self.chip_row.setSpacing(6)
         self.chips: dict[str, QPushButton] = {}
@@ -157,6 +180,19 @@ class MentorWindow(QMainWindow):
             self.chips[kind] = chip
             self.chip_row.addWidget(chip)
         self.chip_row.addStretch(1)
+        # One chip per Focus name: its pick card (P2).
+        self.pick_chips: dict[str, QPushButton] = {}
+        pick_strip = QWidget()
+        self.pick_chip_row = QHBoxLayout(pick_strip)
+        self.pick_chip_row.setContentsMargins(0, 0, 0, 0)
+        self.pick_chip_row.setSpacing(4)
+        self.pick_chip_row.addStretch(1)
+        self.pick_scroll = QScrollArea()
+        self.pick_scroll.setWidget(pick_strip)
+        self.pick_scroll.setWidgetResizable(True)
+        self.pick_scroll.setFixedHeight(38)
+        self.pick_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.pick_scroll.setVisible(False)
         self.input = InputBox()
         self.input.setPlaceholderText("Ask the mentor... (Enter sends, Shift+Enter new line, Win+H to dictate)")
         self.input.setFixedHeight(84)
@@ -188,6 +224,7 @@ class MentorWindow(QMainWindow):
             self.card_host.cardShown.connect(self._on_card_shown)
             self.card_host.dock.mentor_card.set_ai_request_provider(self._brain_fill_request)
         left_layout.addLayout(self.chip_row)
+        left_layout.addWidget(self.pick_scroll)
         left_layout.addLayout(input_row)
 
         self.inbox_header = QLabel("Inbox")
@@ -245,6 +282,7 @@ class MentorWindow(QMainWindow):
             self.card_host.start()
         self._context_timer.start()
         self._gpu_timer.start()
+        self._pick_timer.start()
         self._submit_io(self._open_session)
         self.refresh_context()
         self.connect_brain()
@@ -255,6 +293,7 @@ class MentorWindow(QMainWindow):
         self._shut = True
         self._context_timer.stop()
         self._gpu_timer.stop()
+        self._pick_timer.stop()
         if self._worker is not None:
             self._worker.cancel()
             self._worker.wait(3000)
@@ -425,6 +464,7 @@ class MentorWindow(QMainWindow):
             for row in rows if row.get("kind") == "focus"
         )
         self.chips["focus"].setText(f"Focus: {focus}")
+        self._sync_pick_chips(rows)
 
     def _show_chip(self, kind: str) -> None:
         if self._context_pack is None:
@@ -547,6 +587,9 @@ class MentorWindow(QMainWindow):
         elif result.action == "pause":
             self.card_host.pause_today()
             self._add_note("No more Trade Mentor questions today.")
+        elif result.action == "pick":
+            symbol, side = result.arg
+            self.show_pick(symbol, side)
         elif result.action == "tape":
             if self._context_pack is None:
                 self._add_note("The desk context is still loading; try again in a moment.")
@@ -581,7 +624,9 @@ class MentorWindow(QMainWindow):
         text = str(result.get("text") or "")
         if result.get("cancelled"):
             text += " *(stopped)*"
-        self._blocks[-1] = f"**Mentor:** {text}"
+        # Guardrail 2: a number no pack sent this turn is grey, never hidden.
+        shown = grounding.mark_uncited_numbers(text, [self._context_text, *(result.get("pack_texts") or ())])
+        self._blocks[-1] = f"**Mentor:** {shown}"
         self._render()
         self.chat.add("assistant", text)
         self._latency_ms = result.get("first_token_ms")
@@ -626,3 +671,196 @@ class MentorWindow(QMainWindow):
         self._submit_io(
             lambda: self.queue.submit("embed_turns", job, priority=PRIORITY_EMBED, needs_model=True, key="embed_turns")
         )
+
+    # ------------------------------------------------------------------ picks (P2)
+    def _build_pick(self, symbol: str, side: str) -> Any:
+        if self._pick_builder is not None:
+            return self._pick_builder(symbol, side)
+        from mentor_packs import pick_pack
+
+        return pick_pack.build(symbol, side)
+
+    def _narrator(self, symbol: str, *, live: bool) -> Callable[[Any, str], Any]:
+        endpoint, model, request = self._endpoint, self._model, self._assess_request
+
+        def narrate(pack: Any, digest: str) -> Any:
+            return pick_assess.assess(
+                pack, symbol=symbol, pack_hash=digest, model=model, endpoint=endpoint, live=live, request=request
+            )
+
+        return narrate
+
+    def _sync_pick_chips(self, rows: list[dict]) -> None:
+        wanted: list[tuple[str, str]] = []
+        for row in rows:
+            if row.get("kind") == "focus":
+                for name in row.get("names") or ():
+                    symbol = str(name or "").upper()
+                    if symbol and symbol not in {sym for sym, _ in wanted}:
+                        wanted.append((symbol, str(row.get("side") or "").upper()))
+        if [(sym, chip.property("side")) for sym, chip in self.pick_chips.items()] == wanted:
+            return
+        for chip in self.pick_chips.values():
+            self.pick_chip_row.removeWidget(chip)
+            chip.deleteLater()
+        self.pick_chips = {}
+        for index, (symbol, side) in enumerate(wanted):
+            chip = QPushButton(f"{symbol} {side[:1]}".strip())
+            chip.setObjectName("MentorPickChip")
+            chip.setFlat(True)
+            chip.setProperty("side", side)
+            chip.setToolTip(f"{symbol} {side.lower()}: what the desk knows, narrated")
+            chip.clicked.connect(lambda _=False, sym=symbol, sd=side: self.show_pick(sym, sd))
+            self.pick_chip_row.insertWidget(index, chip)
+            self.pick_chips[symbol] = chip
+        self.pick_scroll.setVisible(bool(wanted))
+
+    def show_pick(self, symbol: str, side: str = "") -> None:
+        """The pick's card: the cached one at once, then a rebuild off-thread; narrate if the pack changed."""
+        symbol = str(symbol or "").upper()
+        self._pick_blocks[symbol] = len(self._blocks)
+        cached = self._pick_cards.get(symbol)
+        if cached is not None:
+            self._add_block(pick_assess.card_markdown(cached, side=side))
+            self.activity_label.setText(f"checking {symbol} for changes...")
+        else:
+            self._add_block(f"**Pick {symbol}**: building...")
+            self.activity_label.setText(f"building {symbol}...")
+
+        def job() -> dict:
+            from mentor_packs import pick_pack
+
+            pack = self._build_pick(symbol, side)
+            digest = pick_pack.pack_hash(pack)
+            found = pick_jobs.cached_assessment(self.store, symbol, digest)
+            return {"symbol": symbol, "side": side, "pack": pack, "hash": digest, "assessment": found}
+
+        self.queue.submit(f"pick_pack {symbol}", job, priority=PRIORITY_INTERACTIVE, key=f"pick-live:{symbol}",
+                          on_done=self._bridge.pick_built.emit)
+
+    def _on_pick_built(self, built: dict) -> None:
+        symbol, digest = built["symbol"], built["hash"]
+        self._pick_packs[(symbol, digest)] = built["pack"]
+        found = built.get("assessment")
+        shown = self._pick_cards.get(symbol)
+        if shown is not None and shown.pack_hash == digest:
+            # The card already on screen still fits the evidence.
+            self._pick_blocks.pop(symbol, None)
+            self.activity_label.setText("")
+            return
+        if found is not None and found.narrated:
+            self._show_pick_card(built)
+            return
+        if not self._brain_ok:
+            offline = pick_assess.Assessment(
+                symbol=symbol, pack_hash=digest, pack_json=built["pack"].as_json(),
+                error=f"the brain is off: {self._brain_reason or 'not connected'}",
+            )
+            self._show_pick_card({**built, "assessment": offline})
+            return
+        if shown is not None:
+            self._add_note(f"{symbol}'s evidence changed since that card; re-assessing.")
+            self._pick_blocks[symbol] = len(self._blocks)
+            self._add_block(f"**Pick {symbol}**: narrating...")
+        else:
+            self._replace_pick_block(symbol, f"**Pick {symbol}**: narrating...")
+        self.activity_label.setText(f"narrating {symbol}...")
+        narrate = self._narrator(symbol, live=True)
+        pack, side = built["pack"], built["side"]
+
+        def job() -> dict:
+            assessment = narrate(pack, digest)
+            if assessment.narrated:
+                self.store.put_pack(pick_assess.CACHE_NAME, pick_jobs.cache_key(symbol, digest),
+                                    assessment.to_json(), assessment.built_utc)
+            return {"symbol": symbol, "side": side, "pack": pack, "hash": digest, "assessment": assessment}
+
+        self.queue.submit(f"pick_assess {symbol}", job, priority=PRIORITY_INTERACTIVE, needs_model=True,
+                          max_tokens=pick_assess.MAX_OUTPUT_TOKENS, key=f"pick-assess:{symbol}",
+                          on_done=self._bridge.pick_card.emit)
+
+    def _on_pick_card(self, done: dict) -> None:
+        """A live or prefetched narration finished."""
+        assessment = done.get("assessment")
+        if assessment is None:
+            return
+        self._pick_packs[(done["symbol"], done["hash"])] = done["pack"]
+        if done["symbol"] in self._pick_blocks:
+            self._show_pick_card(done)
+        elif assessment.narrated:
+            # A prefetched card waits in memory; the transcript only moves when the trader asks.
+            self._pick_cards[done["symbol"]] = assessment
+
+    def _replace_pick_block(self, symbol: str, markdown: str) -> None:
+        index = self._pick_blocks.get(symbol)
+        if index is not None and index < len(self._blocks):
+            self._blocks[index] = markdown
+            self._render()
+        else:
+            self._pick_blocks[symbol] = len(self._blocks)
+            self._add_block(markdown)
+
+    def _show_pick_card(self, done: dict) -> None:
+        symbol, assessment = done["symbol"], done["assessment"]
+        card = pick_assess.card_markdown(assessment, side=done.get("side") or "")
+        self._replace_pick_block(symbol, card)
+        self._pick_blocks.pop(symbol, None)
+        self.activity_label.setText("")
+        if assessment.narrated:
+            self._pick_cards[symbol] = assessment
+        # The card joins the conversation, so a follow-up question sees it (pick_pack stays a tool).
+        self.chat.add("assistant", card)
+        pack = done.get("pack")
+        self._store_turn(
+            "assistant", card, pack_ids=getattr(pack, "ids", ()), model=assessment.model or "",
+            tool_calls=[{"name": "pick_pack", "arguments": {"symbol": symbol}, "hash": done["hash"],
+                         "effort": assessment.effort, "dropped": assessment.dropped, "error": assessment.error}],
+        )
+
+    def _on_anchor(self, url: QUrl) -> None:
+        text = url.toString()
+        if not text.startswith("evidence:"):
+            return
+        _, symbol, digest = (text.split(":", 2) + ["", ""])[:3]
+        pack = self._pick_packs.get((symbol, digest))
+        if pack is None:
+            card = self._pick_cards.get(symbol)
+            pack = card.pack() if card is not None and card.pack_hash == digest else None
+        if pack is None:
+            self._add_note(f"The evidence for {symbol} is gone; try `/pick {symbol}` again.")
+            return
+        self._add_note(pack.as_text().replace("\n", "\n\n"))
+
+    def maybe_prefetch_picks(self) -> None:
+        """06:15 PT: every Focus name; then hourly, only names whose pack changed."""
+        now = self._now()
+        kind = self._pick_schedule.due(now)
+        if not kind or not self._brain_ok or self._gpu_reason():
+            return
+        self._pick_schedule.mark(kind, now)
+        source = self._focus_source
+        if source is None:
+            from mentor_packs import context_pack
+
+            source = context_pack._live_focus
+
+        def plan() -> int:
+            from mentor_packs import pick_pack
+
+            names = pick_jobs.focus_names(source())
+            for symbol, side in names:
+                narrate = self._narrator(symbol, live=False)
+
+                def run(symbol=symbol, side=side, narrate=narrate) -> dict:
+                    return pick_jobs.run_pick_job(
+                        symbol, side, kind=kind, store=self.store, build_pack=self._build_pick,
+                        pack_hash=pick_pack.pack_hash, narrate=narrate, now=self._now,
+                        should_yield=self.queue.should_yield,
+                    )
+
+                self.queue.submit(f"pick_prefetch {symbol}", run, priority=PRIORITY_REFRESH, needs_model=True,
+                                  max_tokens=pick_assess.MAX_OUTPUT_TOKENS, key=f"pick-prefetch:{symbol}",
+                                  on_done=self._bridge.pick_card.emit)
+            return len(names)
+
+        self.queue.submit("pick_prefetch_plan", plan, priority=PRIORITY_REFRESH, key="pick_prefetch_plan")

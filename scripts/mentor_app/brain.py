@@ -210,6 +210,8 @@ def run_turn(
         "completion_tokens": 0,
         "tool_calls": [],
         "pack_ids": [],
+        #: Every pack text sent this turn (guardrail 2 greys numbers found in none of them).
+        "pack_texts": [],
         "cancelled": False,
     }
     emitted: list[str] = []
@@ -219,6 +221,8 @@ def run_turn(
         result["tool_calls"].append(call)
         on_tool_call(call)
         pack = build_pack(name, args)
+        if hasattr(pack, "as_text"):
+            result["pack_texts"].append(pack.as_text())
         for pack_id in getattr(pack, "ids", ()):
             if pack_id not in result["pack_ids"]:
                 result["pack_ids"].append(pack_id)

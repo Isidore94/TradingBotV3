@@ -159,7 +159,8 @@ def test_commands_route_and_stub():
     assert commands.handle("/remember I stop after two losses").arg == "I stop after two losses"
     assert commands.handle("/remember").action == "error"
     assert commands.handle("/tape").action == "tape"
-    assert "Phase 2" in commands.handle("/pick nvda").reply and "NVDA" in commands.handle("/pick nvda").reply
+    # P2 built /pick: it routes to the window with the symbol (was a Phase 2 stub).
+    assert commands.handle("/pick nvda").action == "pick" and commands.handle("/pick nvda").arg == ("NVDA", "")
     assert "Phase 3" in commands.handle("/vetoes").reply
     assert commands.handle("/nope").action == "error"
 

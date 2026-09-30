@@ -194,6 +194,9 @@ def build(*, now: datetime | None = None, sources: Sources | None = None) -> Pac
                     {
                         "id": f"ctx:focus:{category}:{side}",
                         "kind": "focus",
+                        "category": category,
+                        "side": side,
+                        "names": names,
                         "text": f"Focus {category} {side}s ({len(names)}): {', '.join(names) or 'none'}",
                     }
                 )

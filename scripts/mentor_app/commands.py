@@ -15,7 +15,7 @@ HELP_TEXT = (
     "- `/tape` the desk right now (works with the brain off)\n"
     "- `/read` give a market read now (Trade Mentor card)\n"
     "- `/pause` no Trade Mentor questions for the rest of today\n"
-    "- `/pick SYM` pick assessment (coming in Phase 2)\n"
+    "- `/pick SYM` what the desk knows about a pick, narrated (or tap a Focus chip)\n"
     "- `/vetoes` veto challenges (coming in Phase 3)\n"
 )
 MAX_QUIET = timedelta(hours=12)
@@ -69,8 +69,12 @@ def handle(text: str) -> CommandResult | None:
     if name == "pause":
         return CommandResult("pause")
     if name == "pick":
-        symbol = rest.split()[0].upper() if rest else ""
-        return CommandResult("stub", f"`/pick {symbol or 'SYM'}` is coming in Phase 2.")
+        parts = rest.upper().split()
+        symbol = parts[0] if parts else ""
+        if not symbol or not symbol.replace(".", "").replace("-", "").isalnum():
+            return CommandResult("error", "Try `/pick NVDA` (or `/pick NVDA short`).")
+        side = parts[1] if len(parts) > 1 and parts[1] in ("LONG", "SHORT") else ""
+        return CommandResult("pick", "", (symbol, side))
     if name == "vetoes":
         return CommandResult("stub", "`/vetoes` is coming in Phase 3.")
     return CommandResult("error", f"I don't know `/{name}`. Type `/help`.")
