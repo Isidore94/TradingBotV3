@@ -415,18 +415,22 @@ def run_market_story_narration(
                 "outputs": [],
             }
         request = ai_summary.request_ai_summary
-    try:
-        result = request(
+    from ai_jobs import attempts
+
+    def _ask(seen: Mapping[str, Any]) -> Mapping[str, Any]:
+        return request(
             provider="local",
             model=ai_summary.local_model("medium"),
             api_key="",
-            evidence=evidence,
+            evidence=dict(seen),
             timeout_seconds=900,
             schema=NARRATION_JSON_SCHEMA,
             schema_name="tradingbot_market_story_narration",
             prompt_version=PROMPT_VERSION,
         )
-        narration = result.get("summary") if isinstance(result, Mapping) else None
+
+    def _check(answer: Mapping[str, Any]) -> Mapping[str, Any]:
+        narration = answer.get("summary") if isinstance(answer, Mapping) else None
         if not isinstance(narration, Mapping):
             raise ValueError("local AI returned no narration")
         allowed = set(evidence["allowed_source_ids"])
@@ -436,6 +440,17 @@ def run_market_story_narration(
         _check_inline_sources(narration, allowed)
         _check_directions(narration, packs)
         _check_mentor_question_options(narration)
+        return narration
+
+    try:
+        # A rejected narration is asked again with its reason, up to VERIFIED_ATTEMPTS.
+        verified = attempts.verified_attempts(
+            _ask,
+            _check,
+            evidence=evidence,
+            may_retry=attempts.night_window_gate(now, reserve_minutes=15),
+        )
+        result, narration = verified.result, verified.value
         moment = now or datetime.now(timezone.utc)
         if moment.tzinfo is None:
             moment = moment.replace(tzinfo=timezone.utc)
@@ -462,7 +477,7 @@ def run_market_story_narration(
     return {
         "status": "ok",
         "model": str(result.get("model") or ""),
-        "reason": "grounded market-story narration written",
+        "reason": f"grounded market-story narration written ({verified.label})",
         "outputs": [str(destination)],
     }
 

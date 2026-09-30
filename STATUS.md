@@ -12,12 +12,13 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   `TRADINGBOTV3_RRS_ENGINE=desk` = old formulas; Movers side tint + D1 SMA trend gate
   (`13b2e2cb`), Yahoo download guard (`56ce3965`),
   Movers boxes + Dip anchors, daytime focus preview, night AI idle-probe skip +
-  Saturday summary reads every slice (`1751c338`); gates #257-#306.
+  Saturday summary reads every slice (`1751c338`); gates #257-#306, #328.
 - **GUI:** 4K design live; selftests 105/105; long combined Qt runs still hit
   worker-lifetime crashes.
 - **Merged 2026-09-30, live at the next desk restart:** Trade Mentor app P0-P12 (`370c6efb`, `8f7664fc` Pause AI, `e9c77690` P7-P12, `152e765f` plan inference): chat, `/plan` `/drop` (plan lines inferred from chat), `/pick`, `/vetoes`, `/tape`, `/check`, `/news`, `/book` (Questrade + IBKR read-only), `/mirror`, `/tilt`, `/debate`, `/hypotheses`; gates #311-#318, #321-#327. `mentor_app_enabled` off until gate #312; frontier OFF (trader's word).
 - **Desk:** next launch uses main; live checks are in GATES.
-- **gpt-oss:20b:** code merged, inert for gemma3; probe 2 on 10-01 02:05, then the trader's word.
+- **Night throughput (2026-09-30):** slot retries x3, briefs nightly, budget 360 (#328). In flight: Mentor night recall index. Next: all Focus names briefed nightly, per-setup condition reports, morning pre-brief queue.
+- **gpt-oss:20b:** trader's word 2026-09-30; effort `high`, 8k think tokens live; on the mini-PC too. Probe 2 10-01 02:05, then flip `ai_local_model_medium`.
 - **Night window:** the night AI starts 22:00 PT. Its model runs on the RTX 5080 host
   (`ai_remote_gpu_ssh_alias` = `claude-host`, ssh tunnel on 11435); falls back to local Ollama
   (also mid-run). One pass + one recheck, then unload and shut down; last firing 05:30. No builders, merges or test runs
