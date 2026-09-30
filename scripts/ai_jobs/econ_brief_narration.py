@@ -4,8 +4,9 @@ The pack is deterministic (`econ_brief.build_pack`: the next session's timed
 events, the week's, the bottom line, ranked signals, turbulence, playbook).
 The local model only words 3-6 short lines over it. A reply is kept only if
 every event it cites is in the pack and every clock time it writes is the
-time of an event it cites - a model never supplies a time. A failed or
-invalid reply writes nothing: the last good file stays and the Mentor falls
+time of an event it cites - a model never supplies a time. A rejected reply
+is asked again with its rejection quoted (`ai_jobs.attempts`, at most
+`VERIFIED_ATTEMPTS` calls). A failed call or all attempts rejected writes nothing: the last good file stays and the Mentor falls
 back to the brief's own lines.
 """
 
@@ -152,11 +153,34 @@ def prior_rejected_sentences(session_date: str, *, ledger_path: Path | None = No
         return []
     out: list[str] = []
     for row in rows:
-        match = _REJECTED_SENTENCE.search(str(row.get("reason") or ""))
-        sentence = (match.group("a") or match.group("b")) if match else ""
-        if sentence and sentence not in out:
-            out.append(sentence)
+        for sentence in _rejected_sentences(str(row.get("reason") or "")):
+            if sentence not in out:
+                out.append(sentence)
     return out
+
+
+def _rejected_sentences(reason: str) -> list[str]:
+    """Every sentence a reason quotes as rejected (one per attempt it names)."""
+    return [
+        match.group("a") or match.group("b") for match in _REJECTED_SENTENCE.finditer(reason)
+    ]
+
+
+def _retry_evidence(pack: Mapping[str, Any], prior: list[str]):
+    """`with_feedback` for verified retries: quote each rejected sentence, else the reason."""
+    from ai_jobs import attempts
+
+    def _feedback(_first: Mapping[str, Any], reasons) -> dict[str, Any]:
+        sentences = list(prior)
+        unquoted: list[str] = []
+        for reason in reasons:
+            found = _rejected_sentences(reason)
+            sentences += [item for item in found if item not in sentences]
+            if not found:
+                unquoted.append(reason)
+        return attempts.instructions_feedback(_evidence(pack, sentences), unquoted)
+
+    return _feedback
 
 
 def _evidence(pack: Mapping[str, Any], rejected: list[str] | None = None) -> dict[str, Any]:
@@ -225,7 +249,8 @@ def run_econ_brief(
             "outputs": [],
         }
     # A retry quotes what the earlier attempts were rejected for, so the model does not repeat it.
-    evidence = _evidence(pack, prior_rejected_sentences(day, ledger_path=ledger_path))
+    prior = prior_rejected_sentences(day, ledger_path=ledger_path)
+    evidence = _evidence(pack, prior)
     destination = econ_brief.night_dir(out_dir) / f"{target}.json"
     existing = econ_brief.read_night(target, out_dir=out_dir)
     if (
@@ -251,19 +276,33 @@ def run_econ_brief(
                 "outputs": [],
             }
         request = ai_summary.request_ai_summary
-    try:
-        result = request(
+    from ai_jobs import attempts
+
+    def _ask(seen: Mapping[str, Any]) -> Mapping[str, Any]:
+        return request(
             provider="local",
             model=ai_summary.local_model("medium"),
             api_key="",
-            evidence=evidence,
+            evidence=dict(seen),
             timeout_seconds=600,
             schema=NARRATION_JSON_SCHEMA,
             schema_name="tradingbot_econ_brief",
             prompt_version=PROMPT_VERSION,
         )
-        narration = result.get("summary") if isinstance(result, Mapping) else None
-        lines = validate(narration, pack)
+
+    def _check(answer: Mapping[str, Any]) -> list[str]:
+        return validate(answer.get("summary") if isinstance(answer, Mapping) else None, pack)
+
+    try:
+        # Each rejected reply is asked again with its reason quoted, up to VERIFIED_ATTEMPTS.
+        verified = attempts.verified_attempts(
+            _ask,
+            _check,
+            evidence=evidence,
+            with_feedback=_retry_evidence(pack, prior),
+            may_retry=attempts.night_window_gate(now, reserve_minutes=10),
+        )
+        result, lines = verified.result, verified.value
         moment = now or datetime.now(timezone.utc)
         if moment.tzinfo is None:
             moment = moment.replace(tzinfo=timezone.utc)
@@ -290,6 +329,6 @@ def run_econ_brief(
     return {
         "status": "ok",
         "model": str(result.get("model") or ""),
-        "reason": f"econ summary for {target} written",
+        "reason": f"econ summary for {target} written ({verified.label})",
         "outputs": [str(destination)],
     }

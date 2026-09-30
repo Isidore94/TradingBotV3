@@ -37,6 +37,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from ai_jobs import attempts
+
 _log = logging.getLogger(__name__)
 
 #: A session folder's name. Anything else beside the packs is not a queue entry.
@@ -995,6 +997,13 @@ def _window_allows(clock: Callable[[], datetime]) -> tuple[bool, str]:
         return False, f"the night window could not be read: {exc}"
 
 
+def _retry_gate(clock: Callable[[], datetime] | None):
+    """`may_retry` for verified retries: a retry is another model call, so it asks the window."""
+    if clock is None:
+        return None
+    return lambda: _window_allows(clock)
+
+
 def queued_sessions(root: Path | None = None, *, skip: str = "") -> list[str]:
     """Sessions with a `redo_requested` marker on disk, OLDEST first.
 
@@ -1070,7 +1079,7 @@ def run_day_review_narration(
         reasons.append(f"no day pack for {session}; nothing to narrate")
     else:
         story = _run_day_story(
-            session, pack, base, now=now, request=request, redo=redo
+            session, pack, base, now=now, request=request, redo=redo, clock=tick
         )
         outputs.extend(story["outputs"])
         reasons.append(story["reason"])
@@ -1164,7 +1173,9 @@ def _sweep_queued(
             closed = why
             left = queued[index:]
             break
-        outcome = _run_day_story(day, pack, root, now=now, request=request, redo=True)
+        outcome = _run_day_story(
+            day, pack, root, now=now, request=request, redo=True, clock=clock
+        )
         outputs.extend(outcome["outputs"])
         model = model or outcome["model"]
         if outcome["status"] == "ok":
@@ -1206,6 +1217,7 @@ def _run_day_story(
     now: datetime | None,
     request: Callable[..., Mapping[str, Any]] | None,
     redo: bool,
+    clock: Callable[[], datetime] | None = None,
 ) -> dict[str, Any]:
     destination = narration_path(session, root=root)
     existing = _read_json(destination) or {}
@@ -1237,32 +1249,44 @@ def _run_day_story(
         schema = _narration_schema_for(pack)
         evidence = _day_evidence(pack, root)
         size = sent_size(evidence, schema)
-        result = _call(
-            caller,
-            evidence=evidence,
-            schema=schema,
-            prompt_version=PROMPT_VERSION,
-            schema_name="tradingbot_day_review_narration",
+        dropped = _dropped_source_ids(pack, evidence.get("pack_trimmed"))
+
+        def _ask(seen: Mapping[str, Any]) -> Mapping[str, Any]:
+            return _call(
+                caller,
+                evidence=seen,
+                schema=schema,
+                prompt_version=PROMPT_VERSION,
+                schema_name="tradingbot_day_review_narration",
+            )
+
+        def _check(result: Mapping[str, Any]) -> dict[str, Any]:
+            reply = result.get("summary") if isinstance(result, Mapping) else None
+            if not isinstance(reply, Mapping):
+                raise NarrationRejected("the day story was not an object")
+            has_v2 = "read_explanations" in reply
+            has_legacy = "were_you_right" in reply
+            if has_v2 and has_legacy:
+                raise NarrationRejected("the reply mixed v1 claims with v2 explanations")
+            if has_v2:
+                narration = _materialize_v2_narration(
+                    _validate(reply, schema, name="day story"), pack
+                )
+            else:
+                # Existing saved/provider fixtures are still a hard v1 contract.
+                # They are checked just as strictly as before and never repaired.
+                narration = _validate(
+                    reply, _legacy_narration_schema_for(pack), name="legacy day story"
+                )
+            _check_not_dropped(narration, dropped)
+            _check_day_narration(narration, pack)
+            return narration
+
+        # A rejected story is asked again with its reason; each retry re-asks the window.
+        verified = attempts.verified_attempts(
+            _ask, _check, evidence=evidence, may_retry=_retry_gate(clock)
         )
-        reply = result.get("summary") if isinstance(result, Mapping) else None
-        if not isinstance(reply, Mapping):
-            raise NarrationRejected("the day story was not an object")
-        has_v2 = "read_explanations" in reply
-        has_legacy = "were_you_right" in reply
-        if has_v2 and has_legacy:
-            raise NarrationRejected("the reply mixed v1 claims with v2 explanations")
-        if has_v2:
-            narration = _materialize_v2_narration(
-                _validate(reply, schema, name="day story"), pack
-            )
-        else:
-            # Existing saved/provider fixtures are still a hard v1 contract.
-            # They are checked just as strictly as before and never repaired.
-            narration = _validate(
-                reply, _legacy_narration_schema_for(pack), name="legacy day story"
-            )
-        _check_not_dropped(narration, _dropped_source_ids(pack, evidence.get("pack_trimmed")))
-        _check_day_narration(narration, pack)
+        result, narration = verified.result, verified.value
         payload = {
             "schema": SCHEMA,
             "session_date": session,
@@ -1295,7 +1319,8 @@ def _run_day_story(
     return {
         "status": "ok",
         "model": str(result.get("model") or ""),
-        "reason": f"grounded day story written for {session}{_size_note(size, evidence)}",
+        "reason": f"grounded day story written for {session} ({verified.label})"
+        f"{_size_note(size, evidence)}",
         "outputs": [str(destination)],
     }
 
@@ -1363,17 +1388,28 @@ def _run_d1_view(
             "outputs": [],
         }
     schema = _d1_schema_for(items)
-    try:
-        result = _call(
+
+    def _ask(seen: Mapping[str, Any]) -> Mapping[str, Any]:
+        return _call(
             caller,
-            evidence=evidence,
+            evidence=seen,
             schema=schema,
             prompt_version=D1_VIEW_PROMPT_VERSION,
             schema_name="tradingbot_d1_view_narration",
         )
+
+    def _check(result: Mapping[str, Any]) -> dict[str, Any]:
         narration = result.get("summary") if isinstance(result, Mapping) else None
         narration = _validate(narration, schema, name="D1 view")
         _check_d1_narration(narration, set(evidence["allowed_source_ids"]))
+        return narration
+
+    try:
+        # A rejected view is asked again with its reason; each retry re-asks the window.
+        verified = attempts.verified_attempts(
+            _ask, _check, evidence=evidence, may_retry=_retry_gate(clock)
+        )
+        result, narration = verified.result, verified.value
         payload = {
             "schema": D1_VIEW_SCHEMA,
             "session_date": session,
@@ -1395,7 +1431,7 @@ def _run_d1_view(
     return {
         "status": "ok",
         "model": str(result.get("model") or ""),
-        "reason": "rolling D1 view refreshed",
+        "reason": f"rolling D1 view refreshed ({verified.label})",
         "outputs": [str(destination)],
     }
 

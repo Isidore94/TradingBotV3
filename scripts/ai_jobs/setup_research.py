@@ -1266,19 +1266,54 @@ def _keep_quoted_statements(summary: Mapping[str, Any], view: Any) -> dict[str, 
     return kept
 
 
-def _narrate(pack: Mapping[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+def _caveat_feedback(package: Mapping[str, Any], reasons) -> dict[str, Any]:
+    """The package with each rejection reason added as a scope caveat (hash and id unchanged)."""
+    from ai_jobs import attempts
+
+    out = dict(package)
+    out["scope_caveats"] = list(package.get("scope_caveats") or ()) + [
+        attempts.feedback_line(reason).strip() for reason in reasons
+    ]
+    return out
+
+
+def _narrate(
+    pack: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+    attempt_label: list[str] | None = None,
+) -> dict[str, Any]:
+    """Words over the pack already in memory; a numberless reply is asked again, never the lake."""
     import ai_summary
+    from ai_jobs import attempts
 
     if not ai_summary.local_provider_enabled():
         raise RuntimeError("local AI provider is not configured; deterministic facts still exist")
     package = _evidence_package(pack)
-    result = ai_summary.request_ai_summary(
-        provider="local",
-        model=ai_summary.local_model("medium"),
-        api_key="",
+    facts = package["sources"][0]["content"]
+
+    def _ask(seen: Mapping[str, Any]) -> Mapping[str, Any]:
+        return ai_summary.request_ai_summary(
+            provider="local",
+            model=ai_summary.local_model("medium"),
+            api_key="",
+            evidence=dict(seen),
+            timeout_seconds=900,
+        )
+
+    def _check(answer: Mapping[str, Any]) -> dict[str, Any]:
+        return _keep_quoted_statements(answer.get("summary") or {}, facts)
+
+    verified = attempts.verified_attempts(
+        _ask,
+        _check,
         evidence=package,
-        timeout_seconds=900,
+        with_feedback=_caveat_feedback,
+        may_retry=attempts.night_window_gate(now, reserve_minutes=15),
     )
+    result = verified.result
+    if attempt_label is not None:
+        attempt_label.append(verified.label)
     return {
         "schema": NARRATION_SCHEMA,
         "generated_at": _now(now).isoformat(timespec="seconds"),
@@ -1289,7 +1324,7 @@ def _narrate(pack: Mapping[str, Any], *, now: datetime | None = None) -> dict[st
         # who opens the narration alone and never the pack must still be able to
         # see that it was written over K of N cells and on what basis.
         "narrated": dict(package["sources"][0]["content"]["narrated"]),
-        "narration": _keep_quoted_statements(result.get("summary") or {}, package["sources"][0]["content"]),
+        "narration": verified.value,
         "note": "Advisory words over deterministic facts. No live rule was changed.",
     }
 
@@ -1543,8 +1578,9 @@ def run_setup_research(
     if not pack["gate"]["met"] or not narrate:
         suffix = "; no model called below the evidence floor" if not pack["gate"]["met"] else ""
         return {"status": "ok", "model": "", "reason": base + suffix, "outputs": outputs}
+    told_attempt: list[str] = []
     try:
-        narration = _narrate(pack, now=moment)
+        narration = _narrate(pack, now=moment, attempt_label=told_attempt)
         narration_path = _superseding(json_path.with_name(f"{json_path.stem}.narration.json"))
         outputs.append(str(_publish(narration_path, json.dumps(narration, indent=1, sort_keys=True, default=str) + "\n")))
     except Exception as exc:  # noqa: BLE001
@@ -1562,8 +1598,8 @@ def run_setup_research(
         # one is not, so this returns ok rather than a status the runner will
         # re-attempt at all.
         #
-        # If a narration retry is ever wanted it must read the pack already on
-        # disk and call the model again. It must never re-enter the lake.
+        # The narration's own retries live inside `_narrate` (verified
+        # attempts over the pack already in memory); they never re-enter the lake.
         _log.info("Setup research narration unavailable (%s).", exc)
         return {
             "status": "ok",
@@ -1579,7 +1615,7 @@ def run_setup_research(
         f"{_int_or_zero(covered.get('of'))} eligible cell(s)"
         if covered
         else "; narrated"
-    )
+    ) + "".join(f" ({label})" for label in told_attempt)
     return {"status": "ok", "model": str(narration.get("model") or ""), "reason": base + told, "outputs": outputs}
 
 
