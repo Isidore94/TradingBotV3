@@ -29,3 +29,25 @@ def test_top_k_orders_by_cosine_and_caps():
     rows = [{"ref_id": i, "vector": vec} for i, vec in enumerate(([0, 1], [1, 0], [1, 1]))]
     ranked = recall.top_k([1.0, 0.0], rows, k=2)
     assert [row["ref_id"] for row in ranked] == [1, 2]
+
+
+def test_a_dropped_brain_falls_back_to_substring_search_and_logs_once(caplog):
+    def dropped(_texts):
+        raise ConnectionError("the tunnel is down")
+
+    searcher = recall.make_searcher(dropped, lambda: [])
+    recall.set_searcher(searcher)
+    recall.set_fallback(lambda query, k: [{"kind": "note", "ref_id": 7, "text": f"said {query}"}])
+    try:
+        with caplog.at_level("WARNING", logger=recall.__name__):
+            first = recall.build("NVDA")
+            second = recall.build("AMD")
+        assert first.ids == ("mem:note:7",) and "said NVDA" in first.as_text()
+        assert second.ids == ("mem:note:7",)
+        warned = [rec for rec in caplog.records if rec.name == recall.__name__]
+        assert len(warned) == 1, "one log line per drop, not one per call"
+        recall.set_fallback(None)
+        assert recall.build("NVDA").ids == (), "no fallback: an empty pack, never a raise"
+    finally:
+        recall.set_searcher(None)
+        recall.set_fallback(None)

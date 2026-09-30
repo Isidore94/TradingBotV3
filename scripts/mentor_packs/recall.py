@@ -8,6 +8,7 @@ the store are injected. Row ids are ``mem:<kind>:<id>``.
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -34,6 +35,8 @@ _searcher: Searcher | None = None
 
 
 _fallback: Searcher | None = None
+_drop_logged = False
+_log = logging.getLogger(__name__)
 FALLBACK_EMPTY = "nothing found (plain text search: the brain is off)"
 
 
@@ -79,6 +82,30 @@ def make_searcher(
     return search
 
 
+def _search_or_fall_back(search: Searcher, query: str, k: int) -> tuple[list[Mapping[str, Any]], bool] | None:
+    """(hits, fell_back): an embed searcher that raises hands this call to the substring search.
+
+    One warning per drop; None when there is no fallback to hand to.
+    """
+    global _drop_logged
+    try:
+        hits = list(search(query, k))
+    except Exception as exc:  # noqa: BLE001 - the brain can drop mid-day; recall never raises
+        if not _drop_logged:
+            _log.warning("recall: the embedding search failed (%s); using plain text search", exc)
+            _drop_logged = True
+        if _fallback is None or search is _fallback:
+            return None
+        try:
+            return list(_fallback(query, k)), True
+        except Exception:  # noqa: BLE001
+            _log.debug("recall: the substring search failed too.", exc_info=True)
+            return None
+    if search is not _fallback:
+        _drop_logged = False  # the brain is back: the next drop logs again
+    return hits, search is _fallback
+
+
 def build(query: str = "", k: int = DEFAULT_K, *, searcher: Searcher | None = None) -> Pack:
     search = searcher or _searcher
     empty = "nothing found"
@@ -88,7 +115,12 @@ def build(query: str = "", k: int = DEFAULT_K, *, searcher: Searcher | None = No
         return make_pack(NAME, (), empty_text="recall needs a query")
     if search is None:
         return make_pack(NAME, (), empty_text=OFF_TEXT)
-    hits = search(str(query), int(k))
+    found = _search_or_fall_back(search, str(query), int(k))
+    if found is None:
+        return make_pack(NAME, (), empty_text=OFF_TEXT)
+    hits, fell_back = found
+    if fell_back:
+        empty = FALLBACK_EMPTY
     rows = [
         {
             "id": f"mem:{hit.get('kind', 'turn')}:{hit.get('ref_id')}",
