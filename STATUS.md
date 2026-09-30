@@ -16,6 +16,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 - **GUI:** 4K design live; selftests 105/105; long combined Qt runs still hit
   worker-lifetime crashes.
 - **Merged 2026-09-30 (`370c6efb`), live at the next desk restart:** Trade Mentor app P0-P6 (shell to `/check` gate), gates #311-#317; `mentor_app_enabled` stays off until gate #312.
+- **In flight:** Pause AI (`claude/pause-ai-mode-2026-09-30`, gate #318), live at the next restart once merged.
 - **Desk:** next launch uses main; live checks are in GATES.
 - **Night window:** the night AI starts 22:00 PT. Its model runs on the RTX 5080 host
   (`ai_remote_gpu_ssh_alias` = `claude-host`, ssh tunnel on 11435); falls back to local Ollama

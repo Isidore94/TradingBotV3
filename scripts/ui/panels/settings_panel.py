@@ -203,6 +203,11 @@ class SettingsPanel(QFrame):
         mentor_row.addWidget(self.trade_mentor_app_line)
         mentor_row.addStretch(1)
         risk_form.addRow("", mentor_row)
+        # Pause AI: frees the GPU host (the app, the desk's AI fill, the night's model jobs).
+        from ui.widgets.ai_pause_control import AiPauseRow
+
+        self.ai_pause_row = AiPauseRow(self)
+        risk_form.addRow("Local AI", self.ai_pause_row)
         risk_form.addRow("Risk per trade ($)", self.risk_input)
         risk_form.addRow("", self.risk_hint)
         storage_form = QFormLayout()

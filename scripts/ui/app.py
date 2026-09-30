@@ -638,6 +638,11 @@ class MainWindow(MentorHostMixin, QMainWindow):
         self.bounce_status_proxy = BounceStatusProxy(self.trading_panel.bounce_panel, self)
         self.bounce_status_proxy.setVisible(False)
         status.addPermanentWidget(self.rule_chip)
+        # "AI paused" while Pause AI is on (read-only; a cheap 5 s settings read).
+        from ui.widgets.ai_pause_control import AiPausedPill
+
+        self.ai_paused_pill = AiPausedPill(self)
+        status.addPermanentWidget(self.ai_paused_pill)
         # P8 B4: "Inputs: N trades missing stop/setup"; hidden at 0. Read on its
         # worker, re-read (coalesced) when the journal or the Mentor changes.
         from ui.widgets.missing_inputs_chip import MissingInputsChip
