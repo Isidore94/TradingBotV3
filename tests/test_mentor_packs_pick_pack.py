@@ -278,6 +278,38 @@ def test_an_m5_pick_with_no_recent_alert_of_its_own_says_so(world):
     assert "no M5 alert for AMD SHORT in the last 60 days" in rows["pick:AMD:m5cell"]["text"]
 
 
+def test_the_650_mb_m5_outcome_store_is_never_opened(monkeypatch, tmp_path):
+    import builtins
+    import io
+
+    import project_paths
+
+    outcomes = tmp_path / "intraday_bounce_outcomes.csv"
+    outcomes.write_text("event_id\n", encoding="utf-8")
+    monkeypatch.setattr(project_paths, "INTRADAY_BOUNCE_OUTCOMES_FILE", outcomes)
+    opened: list[str] = []
+
+    def audit(real):
+        def wrapper(file, *args, **kwargs):
+            if "intraday_bounce_outcomes" in str(file):
+                opened.append(str(file))
+                raise AssertionError(f"pick_pack opened {file}")
+            return real(file, *args, **kwargs)
+        return wrapper
+
+    real_path_open = Path.open
+    monkeypatch.setattr(builtins, "open", audit(builtins.open))
+    monkeypatch.setattr(io, "open", audit(io.open))
+    monkeypatch.setattr(Path, "open", lambda self, *a, **k: audit(lambda f, *x, **y: real_path_open(self, *x, **y))(
+        self, *a, **k))
+    live = pick_pack.live_paths()  # builds the live path set only; nothing is read
+    assert outcomes not in {value for value in vars(live).values() if isinstance(value, Path)}
+    world = pick_pack.write_fixture_world(tmp_path / "desk")
+    for symbol in ("AMD", "NVDA", "TSLA"):
+        pick_pack.build(symbol, now=NOW, paths=world)
+    assert opened == []
+
+
 def test_a_swing_or_claimed_pick_stays_on_the_d1_branch(world):
     for symbol in ("NVDA", "TSLA"):
         ids = pick_pack.build(symbol, now=NOW, paths=world).ids

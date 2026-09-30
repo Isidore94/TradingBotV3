@@ -39,6 +39,13 @@ INDEX_SYMBOLS = frozenset({"SPY", "QQQ", "IWM", "DIA", "VIX"})
 NOT_TICKERS = frozenset({"I", "A", "AM", "PM", "ET", "PT", "EOD", "OK", "HOD", "LOD", "VWAP", "AVWAP", "RVOL",
                          "ATH", "ATR", "RRS", "D1", "M5", "R", "PNL", "USD", "CAD", "TFSA", "RRSP", "IRA", "LOL"})
 
+#: Lowercase ``$word`` forms that are ordinary English: a ticker only when in the trader's universe.
+COMMON_WORDS = frozenset({
+    "a", "all", "an", "and", "am", "are", "as", "at", "be", "by", "can", "do", "for", "go", "has", "he", "hi", "i",
+    "if", "in", "is", "it", "me", "my", "no", "not", "now", "of", "on", "or", "out", "so", "the", "to", "up", "us",
+    "was", "we", "you", "big", "low", "high", "run", "see", "new", "key", "real", "fast", "good", "well", "one",
+    "open", "next", "life", "love", "fun", "cash", "free", "any", "few", "true", "ever", "safe", "else",
+})
 _DOLLAR = re.compile(r"\$([A-Za-z]{1,5}(?:[.\-][A-Za-z]{1,2})?)(?![A-Za-z])")
 _PLAIN = re.compile(r"(?<![A-Za-z$.\-])([A-Z]{1,5}(?:[.\-][A-Z]{1,2})?)(?![A-Za-z])")
 _WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
@@ -61,7 +68,7 @@ _JOURNAL = re.compile(
     r"|\bmy (?:day|week|losses|wins|fills)\b|\bhow am i doing today\b|\bgreen or red\b|\bi took\b"
     r"|\bstop(?:ped)? me out\b|\bmy (?:entry|exit|stop) on\b"
 )
-_VETO = re.compile(r"\bveto(?:ed|es|s)?\b|\bpassed on\b|\bi passed\b|\bskipped\b")
+_VETO = re.compile(r"\bveto(?:ed|es|s)?\b|\bpassed on\b|\bi passed\b|\bskip(?:ped|ping|s)?\b")
 _TAPE = re.compile(r"\btape\b|\bmarket\b|\bspy\b|\bqqq\b|\biwm\b|\bregime\b|\bsectors?\b|\bbreadth\b|\bmacro\b"
                    r"|\bindex(?:es)?\b|\bfomc\b|\bcpi\b|\bjobs report\b|\bfed\b")
 _NEWS = re.compile(r"\bnews\b|\bearnings\b|\breporting\b|\breports?\b|\bheadlines?\b|\bcatalysts?\b")
@@ -150,7 +157,12 @@ def find_symbols(text: str, known_symbols: Mapping[str, Any] | Iterable[str]) ->
     known = _normalise_known(known_symbols)
     hits: list[tuple[int, str]] = []
     for match in _DOLLAR.finditer(text or ""):
-        hits.append((match.start(), match.group(1).upper()))
+        typed = match.group(1)
+        sym = typed.upper()
+        # `$IT` typed in capitals is a ticker; `$it` is a common word, a ticker only inside the universe.
+        if typed != sym and typed.lower() in COMMON_WORDS and sym not in known:
+            continue
+        hits.append((match.start(), sym))
     for match in _PLAIN.finditer(text or ""):
         token = match.group(1)
         if token in known and token not in NOT_TICKERS:

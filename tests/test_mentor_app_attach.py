@@ -40,6 +40,18 @@ def test_all_v_and_it_are_tickers_only_inside_the_traders_universe():
     assert attach.find_symbols("I think A is fine", {"I": "", "A": ""}) == [], "desk words are never tickers"
 
 
+def test_a_dollar_common_word_is_a_ticker_only_in_capitals_or_inside_the_universe():
+    assert attach.find_symbols("what about $IT", {}) == ["IT"], "capitals: a ticker anywhere"
+    assert attach.find_symbols("is $it worth it, $all of it?", {}) == [], "lowercase English words are not tickers"
+    assert attach.find_symbols("is $it worth it", {"IT": "LONG"}) == ["IT"], "inside the universe it is"
+    assert attach.find_symbols("$pltr and $Nvda", {}) == ["PLTR", "NVDA"], "not a common word: any case"
+
+
+def test_skip_and_skipping_are_veto_words():
+    for question in ("what did I skip monday", "was skipping AMD right", "I skip too many"):
+        assert any(r.name == "veto_pack" for r in attach.plan_attachments(question, KNOWN, NOW)), question
+
+
 def test_at_most_three_symbols():
     got = attach.plan_attachments("NVDA AMD TSLA MSFT ALL", KNOWN, NOW)
     assert len({r.args["symbol"] for r in got if r.name == "news_pack"}) == 3
@@ -176,6 +188,27 @@ def test_the_budget_drops_the_lowest_priority_pack_first():
                             stream_post=lambda u, p, c: _answer("ok"))
     kept = {a["name"]: a["dropped"] for a in result["attached"]}
     assert kept == {"gate_pack": False, "regime_pack": False, "news_pack": True}
+
+
+def test_a_smaller_lower_priority_pack_never_displaces_a_higher_one():
+    sizes = {"gate_pack": 2278, "journal_pack": 4027, "pick_pack": 278}  # tokens, the reviewer's repro
+
+    def sized(name, args):
+        rows = sizes[name] * 4 // 100
+        return make_pack(name, [{"id": f"{name}:{i}", "text": "x" * 92} for i in range(rows)])
+
+    requests = [attach.AttachRequest("pick_pack", {"symbol": "ALL"}, 2), attach.AttachRequest("gate_pack", {}, 0),
+                attach.AttachRequest("journal_pack", {"day": "today"}, 1)]
+    sent: list[dict] = []
+    result = brain.run_turn(_messages("x"), model="m", endpoint="http://x", native_tools=True, tools=TOOLS,
+                            build_pack=sized, attachments=requests, attach_budget_tokens=6000,
+                            stream_post=lambda u, p, c: sent.append(p) or _answer("ok"))
+    by_name = {a["name"]: a for a in result["attached"]}
+    assert not by_name["gate_pack"]["dropped"] and not by_name["gate_pack"]["truncated"]
+    assert not by_name["journal_pack"]["dropped"] and by_name["journal_pack"]["truncated"]
+    assert by_name["pick_pack"]["dropped"], "the lowest priority goes first"
+    assert sum(a["tokens"] for a in result["attached"] if not a["dropped"]) <= 6000
+    assert [m.get("tool_name") for m in sent[0]["messages"] if m["role"] == "tool"] == ["gate_pack", "journal_pack"]
 
 
 def test_rows_cited_in_the_last_turns_are_not_reattached_unless_the_question_names_them():

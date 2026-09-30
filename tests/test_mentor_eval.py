@@ -31,6 +31,7 @@ def test_offline_attach_recall_is_at_least_ninety_percent():
     report = mentor_eval.offline_report(mentor_eval.load_fixture())
     assert report["questions"] == 40
     assert report["attach_recall"] >= 0.90, [row for row in report["rows"] if row["missed"]]
+    assert report["attach_recall"] == 1.0, [row for row in report["rows"] if row["missed"]]
 
 
 def test_the_trader_s_two_first_day_questions_attach_the_right_packs():

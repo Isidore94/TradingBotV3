@@ -28,6 +28,8 @@ CAPS_STATE_PREFIX = "model_caps:"
 SHOW_TIMEOUT = 20
 #: The app's auto-attached packs share this many tokens; lower-priority packs are dropped first.
 ATTACH_BUDGET_TOKENS = 6000
+#: Room below this is not worth a cut pack: the pack is dropped instead.
+MIN_TRUNCATED_TOKENS = 300
 CHAT_REASONING_EFFORT = "low"
 STREAM_TIMEOUT = (10, 300)
 SELECT_TIMEOUT = 120
@@ -454,24 +456,31 @@ def _attach(
         rows = [dict(row) for row in getattr(pack, "rows", ()) or ()]
         shown = [row for row in rows if str(row.get("id")) not in seen_ids or names_subject(question, str(row.get("id")))]
         built.append((request, pack, shown, len(rows) - len(shown)))
+    # Strict priority: keep packs in order while they fit; the first that does not fit is cut to the room
+    # left (its first rows), and every lower-priority pack after it is dropped, whatever its size.
     kept: list[tuple[Any, str]] = []
     used = 0
+    full = False
     for request, pack, shown, hidden in built:
         text = _render(getattr(pack, "name", request.name), shown, getattr(pack, "empty_text", ""), hidden)
         cost = estimate_tokens(text)
-        dropped = False
-        if used + cost > budget:
-            if kept:
+        dropped = truncated = False
+        room = budget - used
+        if full:
+            dropped = True
+        elif cost > room:
+            full = True
+            if kept and room < MIN_TRUNCATED_TOKENS:
                 dropped = True
-            else:  # the most important pack alone is too big: keep its first rows
+            else:
                 lines = text.split("\n")
-                while lines and estimate_tokens("\n".join(lines)) > budget:
+                while lines and estimate_tokens("\n".join(lines)) > room:
                     lines.pop()
                 shown = [row for row in shown if f"[{row['id']}]" in "\n".join(lines)]
-                text = "\n".join(lines)
-                cost = estimate_tokens(text)
+                text, cost, truncated = "\n".join(lines), estimate_tokens("\n".join(lines)), True
         entry = {"name": request.name, "arguments": dict(request.args), "reason": getattr(request, "reason", ""),
-                 "source": "auto", "rows": len(shown), "hidden": hidden, "tokens": cost, "dropped": dropped}
+                 "source": "auto", "rows": len(shown), "hidden": hidden, "tokens": cost, "dropped": dropped,
+                 "truncated": truncated}
         result["attached"].append(entry)
         if dropped:
             continue
