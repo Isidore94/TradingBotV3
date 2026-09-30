@@ -12,7 +12,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 - **GUI:** 4K design live; selftests 105/105; long combined Qt runs still hit
   worker-lifetime crashes.
 - **Merged 2026-09-30, live at the next desk restart:** Trade Mentor app P0-P13 (`370c6efb`, `8f7664fc` Pause AI, `e9c77690` P7-P12, `152e765f` plan inference, `e864ddb9` P13 plain-language routing): chat, `/plan` `/drop`, `/pick`, `/vetoes`, `/tape`, `/check`, `/news`, `/book` (Questrade + IBKR), `/mirror`, `/tilt`, `/debate`, `/hypotheses`; gates #311-#318, #321-#327, #329. `mentor_app_enabled` off until #312; frontier OFF.
-- **In flight:** Mentor P14 tone (`claude/mentor-app-p14-tone-2026-09-30`, gate #332): short answers, style guard, attach tuning, `earnings_pack`.
+- **Merged 2026-09-30 (P14 tone):** the coach answers first and short, guard never drops data; live eval style pass 96 %, first token p50 1.3 s (gate #332). Trader owes gate #332 re-check after the next restart.
 - **Desk:** next launch uses main; live checks are in GATES.
 - **Night throughput (2026-09-30):** slot retries x3, budget 360, every care name briefed nightly and last on the slate (#331), nightly permutation report + per-setup sentences (#330, shadow only). Parked: Mentor recall index (worktree only). Next: morning pre-brief queue; rule audit once plan lines exist.
 - **gpt-oss:20b vs gemma4:12b:** effort `high`, 8k think tokens live. Probe 2 10-01 02:05 runs both, then flip `ai_local_model_medium`.
