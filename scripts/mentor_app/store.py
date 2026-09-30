@@ -254,9 +254,10 @@ class MentorChatStore:
         )[::-1]
 
     # ----------------------------------------------------------------- memory
-    def add_profile_note(self, text: str, source: str = "remember") -> int | None:
+    def add_profile_note(self, text: str, source: str = "remember", *, ts_utc: str = "") -> int | None:
         return self._write(
-            "profile note", "INSERT INTO profile_notes (ts_utc, text, source) VALUES (?, ?, ?)", (utc_now(), text, source)
+            "profile note", "INSERT INTO profile_notes (ts_utc, text, source) VALUES (?, ?, ?)",
+            (ts_utc or utc_now(), text, source),
         )
 
     def profile_notes(self, *, limit: int = 50, include_retired: bool = False) -> list[dict[str, Any]]:
@@ -272,13 +273,13 @@ class MentorChatStore:
         written = self._write(what, f"UPDATE profile_notes SET {column} = ? WHERE id = ?", (when or utc_now(), int(note_id)))
         return written is not None
 
-    def retire_note(self, note_id: int) -> bool:
+    def retire_note(self, note_id: int, when: str = "") -> bool:
         """``/forget``: the note stays in the table, marked retired; it is never deleted."""
-        return self._note_stamp("note retire", "retired_utc", note_id)
+        return self._note_stamp("note retire", "retired_utc", note_id, when)
 
-    def check_note(self, note_id: int) -> bool:
+    def check_note(self, note_id: int, when: str = "") -> bool:
         """``/keep``: the trader says the note is still true; its age restarts."""
-        return self._note_stamp("note keep", "checked_utc", note_id)
+        return self._note_stamp("note keep", "checked_utc", note_id, when)
 
     def mark_note_asked(self, note_id: int, when: str = "") -> bool:
         return self._note_stamp("note asked", "asked_utc", note_id, when)

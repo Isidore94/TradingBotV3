@@ -1012,19 +1012,20 @@ class MentorWindow(QMainWindow):
         worker.start()
 
     def _run_command(self, result: commands.CommandResult) -> None:
+        stamp = self._utc_stamp()
         if result.action == "quiet":
             until = self.inbox.mute(result.arg)
             self._add_note(f"Inbox muted until {until.astimezone().strftime('%H:%M')}.")
         elif result.action == "remember":
             note = str(result.arg)
             self._memory_text = (self._memory_text + f"\n- {note}").strip()
-            self._submit_io(lambda: self.store.add_profile_note(note, "remember"))
+            self._submit_io(lambda: self.store.add_profile_note(note, "remember", ts_utc=stamp))
             self._add_note(f"Kept: {note}")
         elif result.action == "forget":
             note_id = int(result.arg)
 
             def forget() -> None:
-                if self.store.retire_note(note_id):
+                if self.store.retire_note(note_id, stamp):
                     self._bridge.note.emit(f"Retired [mem:note:{note_id}]. It is kept, never deleted.")
                     self._load_memory()
                 else:
@@ -1035,7 +1036,7 @@ class MentorWindow(QMainWindow):
             note_id = int(result.arg)
             self._submit_io(lambda: self._bridge.note.emit(
                 f"Still true: [mem:note:{note_id}]. I will ask again in {memory.STILL_TRUE_DAYS} days."
-                if self.store.check_note(note_id) else f"There is no note {note_id}. `/memory` shows the ids."))
+                if self.store.check_note(note_id, stamp) else f"There is no note {note_id}. `/memory` shows the ids."))
         elif result.action == "memory":
             self._add_note(memory.as_listing(self._memory))
         elif result.action == "recall":
@@ -1154,6 +1155,10 @@ class MentorWindow(QMainWindow):
         self._finish_turn()
 
     # ------------------------------------------------------------------ memory (P4)
+    def _utc_stamp(self) -> str:
+        """The window's clock as the store's UTC stamp (tests inject the clock; the wall clock never leaks in)."""
+        return self._now().astimezone(timezone.utc).isoformat(timespec="milliseconds")
+
     def _maybe_still_true(self) -> None:
         """First turn of a session day: look for ONE old ``rule:`` note to re-check (IO thread)."""
         now = self._now()
@@ -1175,7 +1180,8 @@ class MentorWindow(QMainWindow):
             logging.info("Trade Mentor: the still-true question waits (%s)", self.inbox.last_refusal)
             return
         note_id = int(row["id"])
-        self._submit_io(lambda: self.store.mark_note_asked(note_id))
+        stamp = self._utc_stamp()
+        self._submit_io(lambda: self.store.mark_note_asked(note_id, stamp))
         self.refresh_inbox()
 
     def _queue_memory_embeddings(self) -> None:

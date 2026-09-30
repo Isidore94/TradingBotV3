@@ -3,6 +3,7 @@ Wilson LB on every rate, "too few" under the floor, spreads paired, no live path
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from datetime import datetime
@@ -151,3 +152,38 @@ def test_builds_fast(world):
     started = time.perf_counter()
     mirror_pack.build(now=NOW, paths=world)
     assert time.perf_counter() - started < 2.0
+
+
+# ---------------------------------------------------------------- review fixes
+def test_a_later_drop_ends_the_claim_it_names(world):
+    base = mirror_pack.build(now=NOW, paths=world)
+    n = _rows(base)["mirror:liked:LONG:5"]["n"]
+    with world.claimed_picks.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"action": "claim", "symbol": "B000", "side": "LONG", "session_date": "2026-08-17",
+                                 "claimed_setup_id": "general"}) + "\n")
+    assert _rows(mirror_pack.build(now=NOW, paths=world))["mirror:liked:LONG:5"]["n"] == n + 1
+    with world.claimed_picks.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"action": "drop", "symbol": "B000", "side": "LONG", "session_date": "2026-08-18",
+                                 "claimed_setup_id": "other_setup"}) + "\n")
+    assert _rows(mirror_pack.build(now=NOW, paths=world))["mirror:liked:LONG:5"]["n"] == n + 1,         "a drop ends only the claim it names"
+    with world.claimed_picks.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"action": "drop", "symbol": "B000", "side": "LONG", "session_date": "2026-08-18",
+                                 "claimed_setup_id": "general"}) + "\n")
+    assert _rows(mirror_pack.build(now=NOW, paths=world))["mirror:liked:LONG:5"]["n"] == n
+
+
+def test_no_scan_row_is_told_apart_from_not_matured_yet(world):
+    with world.claimed_picks.open("a", encoding="utf-8") as handle:
+        for symbol, day in (("NEW1", "2026-09-24"), ("NEW2", "2026-09-25")):
+            handle.write(json.dumps({"action": "claim", "symbol": symbol, "side": "SHORT", "session_date": day,
+                                     "claimed_setup_id": "x"}) + "\n")
+    text = _rows(mirror_pack.build(now=NOW, paths=world))["mirror:liked:SHORT:10"]["text"]
+    assert "(3 with no scan row, 2 not matured yet)" in text
+
+
+def test_spreads_pair_by_the_first_leg_not_a_chain():
+    base = {"account_number": "M1", "security_type": "OPT", "status": "CLOSED", "net_pnl": 10.0,
+            "closed_at": "2026-09-16T10:00:00-04:00"}
+    trades = [{**base, "trade_id": t, "symbol": f"AMD261016C0015{i}000", "opened_at": f"2026-09-15T10:0{m}-04:00"}
+              for i, (t, m) in enumerate((("a", "0:00"), ("b", "2:30"), ("c", "5:00")))]
+    assert sorted(u.ids for u in journal_read.units(trades)) == [["a", "b"], ["c"]]

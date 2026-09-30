@@ -153,8 +153,13 @@ def grade_open(store: Any, now: datetime, *, journal: Path | str | None = None) 
         closes = cache[key]
         before = round(tilt_pack.realized(closes, before=at), 2)
         rest = round(tilt_pack.realized(closes, after=at), 2)
-        new = {**outcome, "status": "graded", "before_pnl": before, "rest_pnl": rest, "hit": rest < 0,
-               "closes_after": sum(1 for c in closes if c.at > at)}
+        after = sum(1 for c in closes if c.at > at)
+        new = {**outcome, "status": "graded", "before_pnl": before, "rest_pnl": rest, "closes_after": after}
+        if after:
+            new["hit"] = rest < 0
+        else:  # nothing closed after it: no rest of day to judge, so never a hit or a miss (out of n)
+            new["result"] = "no trades after"
+            new.pop("hit", None)
         graded = moment.astimezone(timezone.utc).isoformat(timespec="seconds")
         if store.update_challenge(row["id"], outcome=new, graded_utc=graded):
             updated += 1

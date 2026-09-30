@@ -35,7 +35,7 @@ def test_golden_today_every_pattern_with_its_legs(journal):
         "3 opens in 9 min after a losing close on AMD (legs 2, 3, 4, 5, 7). Observation, not a rule.")
     assert rows["tilt:burst:094000"]["legs"] == [2, 3, 4, 5, 7], "partial fills of one order are one open"
     assert rows["tilt:reentry:AMD:094500"]["text"].startswith("Re-opened AMD LONG 5 min after a losing close on it")
-    assert rows["tilt:size:AMD:094500"]["text"].startswith("An open of AMD at 1.6x today's median size after a loss")
+    assert rows["tilt:size:AMD:094500"]["text"].startswith("An open of AMD at 4.0x the median size of today's earlier opens after a loss")
     assert rows["tilt:streak:094000"]["legs"] == [2, 6, 8]
     assert rows["tilt:streak:094000"]["before_pnl"] == -170.0
     assert datetime.fromisoformat(rows["tilt:burst:094000"]["at"]).tzinfo is not None
@@ -96,3 +96,25 @@ def test_thresholds_are_module_constants():
     assert (tilt_pack.BURST_OPENS, tilt_pack.BURST_WINDOW, tilt_pack.REENTRY_WINDOW) == (
         3, timedelta(minutes=10), timedelta(minutes=15))
     assert (tilt_pack.SIZE_MULTIPLE, tilt_pack.STREAK_LOSSES, tilt_pack.BASE_SESSIONS) == (1.5, 3, 60)
+
+
+# ---------------------------------------------------------------- review fixes (size median, boundaries)
+def _event(minute, notional, *, pnl=None, leg=0, symbol="AAA"):
+    at = datetime(2026, 9, 29, 10, minute, tzinfo=tilt_pack.ET)
+    return tilt_pack.Event(at, f"T{leg}", symbol, "LONG", [leg], notional=notional, pnl=pnl)
+
+
+@pytest.mark.parametrize("earlier", [[100.0], [100.0, 100.0]])
+@pytest.mark.parametrize(("size", "fires"), [(150.0, True), (149.0, False)])
+def test_size_is_measured_against_the_earlier_opens_only(earlier, size, fires):
+    opens = [_event(i, n, leg=i + 1, symbol=f"E{i}") for i, n in enumerate(earlier)]
+    opens.append(_event(30, size, leg=99, symbol="BIG"))
+    losses = [_event(20, None, pnl=-10.0, leg=50, symbol="E0")]
+    kinds = [row["kind"] for row in tilt_pack.detect(opens, losses)]
+    assert ("size" in kinds) is fires
+
+
+def test_no_earlier_open_means_no_size_observation():
+    opens = [_event(30, 1_000_000.0, leg=99, symbol="BIG")]
+    losses = [_event(20, None, pnl=-10.0, leg=50, symbol="ZZZ")]
+    assert "size" not in [row["kind"] for row in tilt_pack.detect(opens, losses)]

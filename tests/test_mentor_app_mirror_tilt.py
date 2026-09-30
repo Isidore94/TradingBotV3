@@ -380,3 +380,20 @@ def test_tilt_command_shows_today_and_the_base_rates(win):
     text = win.transcript.toPlainText()
     assert "Tilt watch: today" in text and "[tilt:burst:094000]" in text
     assert "too few (n=2, floor 30)" in text and "Observations, not rules" in text
+
+
+def test_no_trades_after_the_observation_is_not_a_miss(store, journal):
+    import sqlite3
+
+    now = tilt_pack.FIXTURE_NOW
+    tilt_watch.run_watch(store, now, build=lambda: tilt_pack.build(now=now, journal=journal))
+    conn = sqlite3.connect(journal)
+    conn.execute("DELETE FROM trades WHERE trade_id = 'T5'")
+    conn.commit()
+    conn.close()
+    tilt_watch.grade_open(store, datetime(2026, 9, 29, 16, 20, tzinfo=ET), journal=journal)
+    rows = {row["id"]: json.loads(row["outcome_json"]) for row in store.challenges(kind="tilt")}
+    streak = rows["tilt:2026-09-29:streak:094000"]  # the last close was the streak's own third loss
+    assert streak["result"] == "no trades after" and "hit" not in streak and streak["status"] == "graded"
+    assert "hit" in rows["tilt:2026-09-29:burst:094000"], "the burst had closes after it"
+    assert "(n=3, floor 30)" in challenge.scorecard(store, floor=30).split("tilt challenges")[1]

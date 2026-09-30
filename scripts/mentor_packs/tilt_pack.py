@@ -5,7 +5,7 @@ evidence:
 
 - ``tilt:burst:<HHMMSS>``: BURST_OPENS or more opens within BURST_WINDOW after a losing close;
 - ``tilt:reentry:<SYM>:<HHMMSS>``: the same symbol and side re-opened within REENTRY_WINDOW of a loss on it;
-- ``tilt:size:<SYM>:<HHMMSS>``: an open at SIZE_MULTIPLE x the day's median open size (so far) after a loss;
+- ``tilt:size:<SYM>:<HHMMSS>``: an open at SIZE_MULTIPLE x the median of the day's earlier opens, after a loss;
 - ``tilt:streak:<HHMMSS>``: STREAK_LOSSES losing closes in a row today;
 - ``tilt:base:<kind>``: over the last BASE_SESSIONS sessions with trades, how often the pattern
   was followed by a red rest of day (n, Wilson LB, "too few" under the floor).
@@ -49,7 +49,7 @@ BURST_OPENS = 3
 BURST_WINDOW = timedelta(minutes=10)
 #: Fifteen minutes = three M5 bars: a re-entry faster than that did not wait for a new setup.
 REENTRY_WINDOW = timedelta(minutes=15)
-#: 1.5x the day's median open size is a clear step up, not fill noise.
+#: 1.5x the median of the day's earlier opens is a clear step up, not fill noise.
 SIZE_MULTIPLE = 1.5
 #: Three losing closes in a row is the first streak the Trader Mirror could see at all.
 STREAK_LOSSES = 3
@@ -164,8 +164,9 @@ def detect(opens: list[Event], closes: list[Event]) -> list[dict[str, Any]]:
                                    f"a losing close on it ({_legs_text(legs)}). {FOOTER}")})
     first_loss = losses[0].at if losses else None
     for index, event in enumerate(opens):
-        sizes = [o.notional for o in opens[: index + 1] if o.notional is not None]
-        if first_loss is None or event.at <= first_loss or event.notional is None or len(sizes) < 2:
+        # Measured against the day's EARLIER opens only; the first open has nothing to compare with.
+        sizes = [o.notional for o in opens[:index] if o.notional is not None]
+        if first_loss is None or event.at <= first_loss or event.notional is None or not sizes:
             continue
         middle = median(sizes)
         if middle > 0 and event.notional >= SIZE_MULTIPLE * middle:
@@ -173,7 +174,7 @@ def detect(opens: list[Event], closes: list[Event]) -> list[dict[str, Any]]:
             legs = loss.legs + event.legs
             found.append({"kind": "size", "id": f"tilt:size:{event.symbol}:{_stamp(event.at)}", "at": event.at,
                           "symbol": event.symbol, "legs": legs,
-                          "text": (f"An open of {event.symbol} at {event.notional / middle:.1f}x today's median size "
+                          "text": (f"An open of {event.symbol} at {event.notional / middle:.1f}x the median size of today's earlier opens "
                                    f"after a loss ({_legs_text(legs)}). {FOOTER}")})
     run: list[Event] = []
     for close in closes:

@@ -209,13 +209,34 @@ def _stat_text(stat: Mapping[str, Any], floor: int, *, what: str = "win") -> str
             f"avg side return {_pct(stat['avg'])}")
 
 
+def _sessions_after(day: date, asof: date) -> int:
+    """Weekdays after ``day`` up to ``asof`` (holidays ignored: a close enough count to say "not matured yet")."""
+    count, cursor = 0, day
+    while cursor < asof:
+        cursor += timedelta(days=1)
+        count += 1 if cursor.weekday() < 5 else 0
+    return count
+
+
 def liked_rows(claims: list[dict[str, Any]], tier: Mapping, start: date, asof: date, weeks: int,
                floor: int) -> list[dict[str, Any]]:
+    import claimed_picks
+
     through = asof.isoformat()
+    # A later drop ends the claim it names (exact symbol, side, setup); an expiry is a faded like, still a like.
+    open_claims: dict[tuple[str, str, str], list[int]] = {}
+    dropped: set[int] = set()
+    for index, row in enumerate(claims):
+        action = str(row.get("action") or "").strip().lower()
+        key = claimed_picks.claim_key(row)
+        if action == "claim":
+            open_claims.setdefault(key, []).append(index)
+        elif action == "drop" and open_claims.get(key):
+            dropped.update(open_claims.pop(key))
     seen: set[tuple[str, str, str]] = set()
     picks: list[tuple[str, str, date]] = []
-    for row in claims:
-        if str(row.get("action") or "") != "claim":
+    for index, row in enumerate(claims):
+        if str(row.get("action") or "") != "claim" or index in dropped:
             continue
         symbol, side, day = _sym(row.get("symbol")), _side(row.get("side")), _day(row.get("session_date"))
         if not symbol or not side or day is None or not start <= day <= asof:
@@ -237,7 +258,9 @@ def liked_rows(claims: list[dict[str, Any]], tier: Mapping, start: date, asof: d
                     hit = tier.get((symbol, side, (day - timedelta(days=back)).isoformat(), horizon))
                     if hit is not None:
                         break
-                if hit is None:
+                if hit is None and _sessions_after(day, asof) < horizon:
+                    maturing += 1  # the outcome cannot exist yet
+                elif hit is None:
                     unmatched += 1
                 elif hit[2] > through:
                     maturing += 1
@@ -252,7 +275,7 @@ def liked_rows(claims: list[dict[str, Any]], tier: Mapping, start: date, asof: d
             if unmatched:
                 extra.append(f"{unmatched} with no scan row")
             if maturing:
-                extra.append(f"{maturing} not matured")
+                extra.append(f"{maturing} not matured yet")
             rows.append({
                 "id": f"mirror:liked:{side}:{horizon}", "kind": "liked", "side": side, "horizon": horizon,
                 "n": mine["n"], "wins": mine["wins"], "lb": mine["lb"], "avg": mine["avg"], "weeks": weeks,

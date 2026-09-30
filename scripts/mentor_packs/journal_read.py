@@ -2,7 +2,7 @@
 
 The journal is opened ``mode=ro``. Times are parsed as ISO 8601 (fractional seconds and
 offsets included); a naive stamp reads as New York. Option legs of one account and
-underlying opened within :data:`SPREAD_WINDOW` of each other are one spread unit. R is
+underlying opened within :data:`SPREAD_WINDOW` of the first leg are one spread unit. R is
 net PnL over the planned risk (``planned_risk``, else |entry - stop| x qty x multiplier);
 no stop and no risk = R unknown, never a guess.
 """
@@ -228,8 +228,9 @@ def units(trades: Iterable[Mapping[str, Any]]) -> list[Unit]:
         clusters: list[list[dict[str, Any]]] = []
         for trade in group:
             opened = parse_time(trade.get("opened_at"))
-            last = parse_time(clusters[-1][-1].get("opened_at")) if clusters else None
-            if clusters and opened is not None and last is not None and opened - last <= SPREAD_WINDOW:
+            # Within SPREAD_WINDOW of the cluster's FIRST leg; legs are never chained one to the next.
+            first = parse_time(clusters[-1][0].get("opened_at")) if clusters else None
+            if clusters and opened is not None and first is not None and opened - first <= SPREAD_WINDOW:
                 clusters[-1].append(trade)
             else:
                 clusters.append([trade])
