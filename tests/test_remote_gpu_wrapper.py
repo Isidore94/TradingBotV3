@@ -7,9 +7,14 @@ a host problem into a refused run: the deterministic jobs do not need a model.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
 
 def _wrapper_code() -> str:
@@ -145,8 +150,7 @@ def test_the_local_server_is_readied_even_when_the_5080_is_used():
 # ---------------------------------------------------------------- Pause AI (2026-09-30)
 def test_pause_ai_is_read_first_and_leaves_the_host_alone():
     code = _wrapper_code()
-    assert "$settings.ai_paused_until" in code
-    assert "[DateTimeOffset]::Parse([string]$settings.ai_paused_until) -gt [DateTimeOffset]::Now" in code
+    assert "$aiPausedUntil = Get-AiPausedUntil -Path $settingsPath" in code
     paused = code.index("if ($aiPausedUntil) {")
     # The pause branch comes before every remote-GPU branch, so the preflight never runs.
     assert paused < code.index("Invoke-RemoteGpuPreflight -Alias")
@@ -158,34 +162,86 @@ def test_pause_ai_is_read_first_and_leaves_the_host_alone():
     assert "$hostFinished = $script:remoteAlias -and -not $noModelRun -and" in code
 
 
-def _run_wrapper(tmp_path: Path, settings: dict) -> str:
+def _powershell() -> str:
+    import shutil
+
+    powershell = shutil.which("powershell.exe")
+    if not powershell:
+        import pytest
+
+        pytest.skip("needs Windows PowerShell")
+    return powershell
+
+
+#: A stand-in for python.exe and ssh.exe: records every call; as python it may rewrite the
+#: settings file (a pause set mid-run) and prints a clean night summary.
+_FAKE_SOURCE = r"""
+using System; using System.Diagnostics; using System.IO;
+public static class FakeTool { public static int Main(string[] args) {
+    string name = Path.GetFileName(Process.GetCurrentProcess().MainModule.FileName).ToLowerInvariant();
+    string calls = Environment.GetEnvironmentVariable("FAKE_CALLS");
+    if (!String.IsNullOrEmpty(calls)) File.AppendAllText(calls, name + " " + String.Join(" ", args) + Environment.NewLine);
+    if (name.StartsWith("python")) {
+        string settings = Environment.GetEnvironmentVariable("FAKE_CHILD_SETTINGS");
+        if (!String.IsNullOrEmpty(settings)) File.WriteAllText(Environment.GetEnvironmentVariable("FAKE_SETTINGS_FILE"), settings);
+        Console.WriteLine("AI jobs for session 2026-09-30: 3 ok, 0 degraded, 0 failed, 0 skipped");
+    }
+    return 0;
+} }
+"""
+
+
+def _fake_tool(tmp_path: Path) -> Path:
+    import subprocess
+
+    source = tmp_path / "fake_tool.cs"
+    source.write_text(_FAKE_SOURCE, encoding="utf-8")
+    exe = tmp_path / "fake_tool.exe"
+    subprocess.run(
+        [_powershell(), "-NoProfile", "-Command",
+         f"Add-Type -TypeDefinition (Get-Content '{source}' -Raw) -OutputAssembly '{exe}' -OutputType ConsoleApplication"],
+        capture_output=True, text=True, timeout=120, check=True,
+    )
+    return exe
+
+
+def _run_wrapper(tmp_path: Path, settings: dict, *, child_settings: dict | None = None,
+                 fake_ssh: bool = False, woken: bool = False) -> str:
     """Run the real wrapper in a scratch tree; returns its log. A fake interpreter stands in
     for the venv Python, and a scratch HOME/LOCALAPPDATA keeps it off the live machine."""
     import json
     import os
     import shutil
     import subprocess
+    from datetime import datetime, timedelta
 
-    powershell = shutil.which("powershell.exe")
-    where = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "where.exe"
-    if not powershell or not where.exists():
-        import pytest
-
-        pytest.skip("needs Windows PowerShell")
+    powershell = _powershell()
     root = tmp_path / "repo"
     (root / "scripts" / "remote_gpu").mkdir(parents=True)
     shutil.copy(SCRIPTS_DIR / "run_ai_jobs.ps1", root / "scripts" / "run_ai_jobs.ps1")
     shutil.copy(SCRIPTS_DIR / "remote_gpu" / "ollama_up.sh", root / "scripts" / "remote_gpu" / "ollama_up.sh")
     (root / "scripts" / "run_ai_jobs.py").write_text("", encoding="utf-8")
     (root / ".venv" / "Scripts").mkdir(parents=True)
-    shutil.copy(where, root / ".venv" / "Scripts" / "python.exe")
+    fake = _fake_tool(tmp_path)
+    shutil.copy(fake, root / ".venv" / "Scripts" / "python.exe")
     appdata = tmp_path / "appdata"
     (appdata / "TradingBotV3").mkdir(parents=True)
-    (appdata / "TradingBotV3" / "local_settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    settings_file = appdata / "TradingBotV3" / "local_settings.json"
+    settings_file.write_text(json.dumps(settings), encoding="utf-8")
+    if woken:
+        night = (datetime.now() - timedelta(hours=12)).strftime("%Y%m%d")
+        (appdata / "TradingBotV3" / f"gpu_host_woken-{night}.flag").write_text("x", encoding="ascii")
     home = tmp_path / "home"
     home.mkdir()
     env = {**os.environ, "LOCALAPPDATA": str(appdata), "USERPROFILE": str(home),
-           "HOMEDRIVE": str(home)[:2], "HOMEPATH": str(home)[2:]}
+           "HOMEDRIVE": str(home)[:2], "HOMEPATH": str(home)[2:],
+           "FAKE_CALLS": str(tmp_path / "calls.txt"), "FAKE_SETTINGS_FILE": str(settings_file),
+           "FAKE_CHILD_SETTINGS": json.dumps(child_settings) if child_settings is not None else ""}
+    if fake_ssh:
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        shutil.copy(fake, bin_dir / "ssh.exe")
+        env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
     subprocess.run(
         [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(root / "scripts" / "run_ai_jobs.ps1")],
         env=env, capture_output=True, text=True, timeout=180,
@@ -213,3 +269,69 @@ def test_an_expired_pause_runs_the_preflight_as_before(tmp_path):
     log = _run_wrapper(tmp_path, {**_SETTINGS, "ai_paused_until": "2020-01-01T00:00:00-08:00"})
     assert "AI paused" not in log
     assert "remote GPU:" in log
+
+
+def test_a_pause_set_while_the_jobs_run_never_powers_the_host_off(tmp_path):
+    """Reviewer's repro: the host was woken by this job, the night comes out clean, and the
+    trader pauses AI (to game) while the child runs. The host must stay on."""
+    log = _run_wrapper(
+        tmp_path, _SETTINGS, fake_ssh=True, woken=True,
+        child_settings={**_SETTINGS, "ai_paused_until": "2999-01-01T00:00:00-08:00"},
+    )
+    calls = (tmp_path / "calls.txt").read_text(encoding="utf-8")
+    assert "night done after pass 1" in log, "the setup reached the power-off decision"
+    assert "AI paused mid-run; host left on" in log
+    assert "shutdown" not in log
+    assert "shutdown.exe" not in calls and "tmux ls" not in calls
+
+
+def test_the_mid_run_pause_unloads_the_nights_model_before_leaving_the_host_on():
+    code = _wrapper_code()
+    start = code.index("$midRunPause = (-not $aiPausedUntil) -and [bool](Get-AiPausedUntil -Path $settingsPath)")
+    block = code[start:code.index("$hostFinished =", start)]
+    assert "if ($remoteReady) {" in block and "keep_alive = 0" in block
+    assert block.index("keep_alive = 0") < block.index('Write-Log "AI paused mid-run; host left on"')
+    assert "-and -not $midRunPause -and" in code[code.index("$hostFinished ="):]
+    # Re-read after the child exits, before the unload and power-off decision.
+    assert code.index("Start-Process -FilePath $python") < start < code.index("if ($hostFinished -and $remoteReady) {")
+
+
+# ---------------------------------------------------------------- one parse rule, both sides
+@pytest.mark.parametrize(
+    "raw, paused",
+    [
+        ("2999-01-01T00:00:00-08:00", True),
+        ("2999-01-01T08:00:00Z", True),
+        ("2020-01-01T00:00:00-08:00", False),
+        ("2999-01-01T00:00:00", False),  # naive: rejected on both sides
+        ("junk", False),
+        (None, False),  # missing
+    ],
+)
+def test_the_wrapper_and_python_read_the_pause_the_same_way(tmp_path, monkeypatch, raw, paused):
+    import json
+    import subprocess
+
+    import ai_pause
+    import project_paths
+
+    settings_file = tmp_path / "local_settings.json"
+    settings_file.write_text(json.dumps({} if raw is None else {"ai_paused_until": raw}), encoding="utf-8")
+    monkeypatch.setattr(project_paths, "LOCAL_SETTINGS_FILE", settings_file)
+    project_paths.invalidate_local_settings_cache()
+    try:
+        python_says = ai_pause.is_paused()
+    finally:
+        project_paths.invalidate_local_settings_cache()
+
+    code = (SCRIPTS_DIR / "run_ai_jobs.ps1").read_text(encoding="utf-8")
+    start = code.index("function Get-AiPausedUntil")
+    function = code[start:code.index("function Stop-RemoteGpuTunnel", start)]
+    done = subprocess.run(
+        [_powershell(), "-NoProfile", "-Command", f"{function}\n'<' + (Get-AiPausedUntil -Path '{settings_file}') + '>'"],
+        capture_output=True, text=True, timeout=60,
+    )
+    wrapper_says = done.stdout.strip() not in ("<>", "")
+    assert "<" in done.stdout, done.stderr
+    assert python_says is paused
+    assert wrapper_says is paused

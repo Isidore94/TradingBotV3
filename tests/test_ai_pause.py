@@ -89,6 +89,15 @@ def test_an_unreadable_or_naive_value_is_not_a_pause(raw):
     assert not ai_pause.is_paused(NOW)
 
 
+def test_a_malformed_value_is_logged_once_and_an_offset_without_a_colon_is_refused(caplog):
+    project_paths.save_local_setting(ai_pause.PAUSE_KEY, "2999-01-01T00:00:00+0700")
+    with caplog.at_level("WARNING"):
+        assert not ai_pause.is_paused(NOW)
+        assert not ai_pause.is_paused(NOW)
+    warnings = [r for r in caplog.records if "ai_paused_until" in r.getMessage()]
+    assert len(warnings) == 1
+
+
 def test_an_unknown_length_is_refused_and_writes_nothing(scratch_settings):
     with pytest.raises(ValueError):
         ai_pause.pause_for("forever-ish", NOW)

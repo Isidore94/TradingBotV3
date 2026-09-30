@@ -8,6 +8,8 @@ a missing, unreadable, naive or past value means "not paused". Qt-free and cheap
 
 from __future__ import annotations
 
+import logging
+import re
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -15,6 +17,10 @@ from zoneinfo import ZoneInfo
 import project_paths
 
 PAUSE_KEY = "ai_paused_until"
+#: A value must end in an explicit offset; a naive time is rejected on both sides.
+OFFSET_SUFFIX = re.compile(r"(Z|[+-]\d{2}:\d{2})$")
+#: Malformed values already logged (once each).
+_warned: set[str] = set()
 PT = ZoneInfo("America/Los_Angeles")
 #: "tonight" pauses until the next 06:00 PT, when the night AI's window closes.
 RESUME_AT_PT = time(6, 0)
@@ -36,14 +42,23 @@ def _moment(now: datetime | None) -> datetime:
 
 
 def _parse(raw: Any) -> datetime | None:
+    """The saved end, or None. Only ISO-8601 ending in ``Z`` or ``+HH:MM`` counts
+    (the same rule ``run_ai_jobs.ps1`` applies); anything else is logged once."""
     text = str(raw or "").strip()
     if not text:
         return None
-    try:
-        value = datetime.fromisoformat(text)
-    except ValueError:
+    value = None
+    if OFFSET_SUFFIX.search(text):
+        try:
+            value = datetime.fromisoformat(text)
+        except ValueError:
+            value = None
+    if value is None or value.tzinfo is None:
+        if text not in _warned:
+            _warned.add(text)
+            logging.warning("Pause AI: %s=%r is not an ISO time with an offset; AI is not paused", PAUSE_KEY, text)
         return None
-    return value if value.tzinfo is not None else None
+    return value
 
 
 def paused_until(now: datetime | None = None) -> datetime | None:
