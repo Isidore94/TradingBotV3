@@ -9,6 +9,8 @@ here.
 - Trade Mentor app: P0 shell -> P1 mentor move (flag `mentor_app_enabled`) -> P2 picks ->
   P3 vetoes -> P4 night memory -> P5 tape -> P6 gate -> P7 news. Owed by the trader:
   `trading_plan.md` lines before P2, Risk per trade before P6.
+  In flight: P1 mentor move (`claude/mentor-app-p1-mentor-move-2026-09-30`, flag off by
+  default); after one live week with the flag on, delete `_MentorPopup` and the flag.
 
 ## Plan to 8/10, round 2 (trader's brief, 2026-09-25 evening)
 

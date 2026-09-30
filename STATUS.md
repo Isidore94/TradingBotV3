@@ -2,7 +2,7 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-09-30 PT (Trade Mentor app P0 in flight)
+**Updated:** 2026-09-30 PT (Trade Mentor app P0 + P1 in flight)
 
 - **Live on `main`:** round 1, round 2 Phase A (`81272d42`), Phase B + S (`2d59aace`),
   S10a + S7 (`3802c0d7`), p9 phase 1 regime frame (`849390a2`), p9 phase 2 long
@@ -16,7 +16,8 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 - **GUI:** 4K design (gui.md) live; selftests 105/105; long combined Qt test runs
   still hit worker-lifetime crashes.
 - **In flight:** Trade Mentor app P0 shell (`claude/mentor-app-p0-shell-2026-09-30`,
-  not merged; gate #311). Plan: TODO "Trade Mentor app".
+  gate #311) and P1 mentor move stacked on it (`claude/mentor-app-p1-mentor-move-2026-09-30`,
+  flag `mentor_app_enabled` off, gate #312); neither merged.
 - **Desk:** next launch uses main; live 4K/resource and first-usable checks are in GATES.
 - **Night window:** the night AI starts 22:00 PT. Its model runs on the RTX 5080 host
   (`ai_remote_gpu_ssh_alias` = `claude-host`, ssh tunnel on 11435); falls back to local Ollama
@@ -27,9 +28,8 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   summary into the night AI; phone-brief rule line; pre-Aug entry_at (outcome code, ask
   first); review of the per-trade Mentor Save (`182f3e08`); weekly-options facet needs a
   theta store (43 of 6,462 picks quoted).
-- **Night read 2026-09-28:** econ brief rejected 4 nights ("1 p.m." auction time, P4b);
-  Sat day_review_show (names XLK) and regime_read ("W bearish") rejected twice, reply text
-  not kept; setup_research narration absent. #264 Health rows need a desk session.
+- **Night read 2026-09-28:** econ brief rejected 4 nights (P4b); Sat day_review_show and
+  regime_read rejected twice; setup_research narration absent. #264 needs a desk session.
 - **Next action:** Tue 07:30 gate #305; gates #300-#301 (rolling RRS, Movers); gates #297-#298 (runner dips armed, a fire in the Alert Center); `desk_perf_report.py --day 2026-09-28 --compare 2026-09-24`,
   gates #258-#287. Left: B10, B2, C4a, Phase C.
 - **Trader actions owed:** set Risk per trade ($) in Settings > General; fill
