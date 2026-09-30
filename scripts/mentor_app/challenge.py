@@ -6,7 +6,8 @@ baseline); the model only words them, in one structured call over the candidate 
 foreign id rejects the whole reply; an item for a veto that is not a candidate, one that
 does not cite its slice, or one whose n / lb differ from the pack's is dropped. Each
 surviving challenge is one ``challenges`` row (kind ``veto``). A challenge is a note,
-never a rule proposal: rules go through the plan (``plan_challenges``).
+never a rule: plan lines come only from the trader's own words (``plan_infer``) or the
+trader's hand.
 
 Grading is deterministic (no model): :func:`grade_open` fills each open challenge's
 side returns at 1/3/5/10 sessions from the veto cohort's graded outcomes as they mature.

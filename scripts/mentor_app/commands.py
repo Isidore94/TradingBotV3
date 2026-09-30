@@ -12,6 +12,8 @@ HELP_TEXT = (
     "- `/help` this list\n"
     "- `/quiet 2h` mute the Inbox for a while (`30m`, `1h30m`)\n"
     "- `/remember <text>` keep a note about you that I will recall later (start it with `rule:` for a rule)\n"
+    "- `/plan` your trading plan by section, with ids; lines ending in [ai date] I added from your words\n"
+    "- `/drop <id>` take back a line I added (e.g. `/drop plan:rules:3`); your own lines are never touched\n"
     "- `/memory` what I loaded at start (night digests and your notes), with ids\n"
     "- `/recall <text>` search what we said before (plain text search when the brain is off)\n"
     "- `/forget <id>` retire a note (it is kept, never deleted); `/keep <id>` says it is still true\n"
@@ -29,6 +31,8 @@ AI_USAGE = "Try `/ai off 2h`, `/ai off tonight`, `/ai on` or `/ai`."
 #: `/ai off` words for "until I resume".
 FOREVER_WORDS = ("until_resumed", "forever", "indefinitely", "resume")
 MAX_QUIET = timedelta(hours=12)
+#: A plan line id as `/plan` shows it: ``plan:<section slug>:<n>``.
+PLAN_ID = re.compile(r"plan:[a-z0-9_]+:\d+")
 
 
 @dataclass(frozen=True)
@@ -81,6 +85,13 @@ def handle(text: str) -> CommandResult | None:
         return CommandResult(name, "", note_id)
     if name == "memory":
         return CommandResult("memory")
+    if name == "plan":
+        return CommandResult("plan")
+    if name == "drop":
+        plan_id = rest.strip("[]").lower()
+        if not PLAN_ID.fullmatch(plan_id):
+            return CommandResult("error", "Try `/drop plan:rules:3` (the id `/plan` shows).")
+        return CommandResult("drop", "", plan_id)
     if name == "recall":
         if not rest:
             return CommandResult("error", "Try `/recall NVDA`.")

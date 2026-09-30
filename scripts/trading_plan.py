@@ -473,10 +473,15 @@ def set_testing_rule(
 # AI lines (the Trade Mentor app's inferred rules; never a line without the marker)
 # ---------------------------------------------------------------------------
 class PlanLineRefused(ValueError):
-    """The app may not make this change: the line is the trader's, gone, moved, or the text is bad."""
+    """The app may not make this change. ``kind``: ``trader`` (their own line), ``gone``, ``moved`` or ``text``."""
+
+    def __init__(self, message: str, kind: str = "text") -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
-def _ai_words(text: Any) -> str:
+def clean_ai_text(text: Any) -> str:
+    """The rule words an AI line may carry, or PlanLineRefused (empty, too long, marker, heading, recap)."""
     words, _ = split_ai(" ".join(str(text or "").split()))
     words = _BULLET.sub("", words).strip()
     if not words:
@@ -498,7 +503,7 @@ def _row(lines: list[str], plan_id: str) -> tuple[int, str, int, str]:
     for row in _walk(lines)[0]:
         if f"plan:{slug(row[1])}:{row[2]}" == plan_id:
             return row
-    raise PlanLineRefused(f"there is no plan line {plan_id}")
+    raise PlanLineRefused(f"there is no plan line {plan_id}", "gone")
 
 
 def _duplicate(lines: list[str], words: str, *, skip: int = -1) -> str:
@@ -514,9 +519,9 @@ def _owned(lines: list[str], plan_id: str, expect_text: Any) -> tuple[int, str, 
     row = _row(lines, plan_id)
     rule, ai_day = split_ai(row[3])
     if not ai_day or row[1] == DECISIONS:
-        raise PlanLineRefused(f"{plan_id} is the trader's own line; the app never edits it")
+        raise PlanLineRefused(f"{plan_id} is the trader's own line; the app never edits it", "trader")
     if expect_text is not None and normalize_rule(rule) != normalize_rule(expect_text):
-        raise PlanLineRefused(f"{plan_id} changed since it was read; nothing was written")
+        raise PlanLineRefused(f"{plan_id} changed since it was read; nothing was written", "moved")
     return row
 
 
@@ -532,7 +537,7 @@ def add_ai_line(
     heading = _canonical(section)
     if not heading or heading == DECISIONS:
         raise PlanLineRefused(f"{section!r} is not a plan section the app may add to")
-    words = _ai_words(text)
+    words = clean_ai_text(text)
     line = _ai_line(words, _day(now, day))
     out: dict[str, Any] = {"plan_id": "", "text": words, "duplicate": ""}
 
@@ -557,7 +562,7 @@ def update_ai_line(
 
     With `expect_text`, the line must still say that rule (checked under the lock).
     """
-    words = _ai_words(text)
+    words = clean_ai_text(text)
     line = _ai_line(words, _day(now, day))
     out: dict[str, Any] = {"plan_id": plan_id, "text": words, "duplicate": "", "old_text": ""}
 
@@ -611,6 +616,7 @@ __all__ = [
     "TESTING",
     "add_ai_line",
     "append_decision",
+    "clean_ai_text",
     "content_hash",
     "history_dir",
     "normalize_rule",
