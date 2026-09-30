@@ -334,7 +334,7 @@ def build(date: str = "", *, now: datetime | None = None, paths: VetoPaths | Non
         symbol, side = _sym(row.get("symbol")), _side(row.get("side"))
         if day == through:
             today_rows.append(row)
-        if row.get("event_type") != KIND_VETO or not symbol or not side or not day or day >= through:
+        if row.get("event_type") != KIND_VETO or not symbol or not side or _day(day) is None or day >= through:
             continue
         key = (day, symbol, side)
         if key in seen:
