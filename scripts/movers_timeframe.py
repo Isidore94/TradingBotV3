@@ -247,9 +247,11 @@ def measure_d1(
 def tf_anchors(tf: str, spy: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any] | None]:
     """Where each Dip box measures from, off SPY's completed bars on this timeframe.
 
-    Longs: SPY's lowest low since its last major dip (a run of SWING_HA_RUN red
-    Heikin-Ashi candles) began, inside the lookback; shorts: the highest high
-    since the last major rip. No such run, or an extreme under
+    A major dip / rip is a run of SWING_HA_RUN red / green Heikin-Ashi candles
+    inside the lookback. M30 longs: the highest high from the start of the last
+    rip before the last dip (else the lookback start) through that dip's end;
+    M30 shorts: the mirror low. D1 longs: the lowest low since the last dip
+    began; D1 shorts: the highest high since the last rip. No such run, or an extreme under
     ANCHOR_MIN_AGE_BARS bars old: the extreme of the fallback window among bars
     old enough (`kind` "window"). None when SPY has too few bars."""
     empty: dict[str, dict[str, Any] | None] = {"long": None, "short": None}
@@ -270,34 +272,49 @@ def tf_anchors(tf: str, spy: Sequence[Mapping[str, Any]]) -> dict[str, dict[str,
     else:
         look = max(0, len(bars) - D1_LOOKBACK_BARS)
         fall = max(0, len(bars) - D1_FALLBACK_BARS)
-    runs: list[tuple[str, int]] = []  # (colour, start) of major runs in the lookback
+    runs: list[tuple[str, int, int]] = []  # (colour, start, end) of major runs in the lookback
     start = look
     for index in range(look + 1, len(bars) + 1):
         if index == len(bars) or colors[index] != colors[start]:
             if colors[start] in (GREEN, RED) and index - start >= movers_scan.SWING_HA_RUN:
-                runs.append((colors[start], start))
+                runs.append((colors[start], start, index - 1))
             start = index
+    # M30 longs read the top SPY's last big dip fell from, shorts the bottom its last
+    # big rip rose from (trader 2026-09-30); D1 keeps the low/high since the last run.
+    top_for_long = tf == TF_M30
 
     def old_enough(at: int) -> bool:
         return last - at >= ANCHOR_MIN_AGE_BARS
 
+    def high_side(side: str) -> bool:
+        return (side == "long") == top_for_long
+
     def extreme(side: str, window: Sequence[int]) -> int:
-        if side == "long":
-            return min(window, key=lambda i: (bars[i]["low"], -i))
-        return max(window, key=lambda i: (bars[i]["high"], i))
+        if high_side(side):
+            return max(window, key=lambda i: (bars[i]["high"], i))
+        return min(window, key=lambda i: (bars[i]["low"], -i))
 
     def pack(at: int, side: str, kind: str) -> dict[str, Any]:
         stamp = bars[at]["dt"]
         return {"dt": stamp.isoformat(timespec="seconds"), "date": stamp.date().isoformat(),
                 "time": stamp.strftime("%H:%M") if tf == TF_M30 else "",
-                "price": bars[at]["low"] if side == "long" else bars[at]["high"],
+                "price": bars[at]["high"] if high_side(side) else bars[at]["low"],
                 "kind": kind, "_dt": stamp}
 
+    def span(side: str) -> range | None:
+        move, before = (RED, GREEN) if side == "long" else (GREEN, RED)
+        at = next((i for i in range(len(runs) - 1, -1, -1) if runs[i][0] == move), None)
+        if at is None:
+            return None
+        if not top_for_long:
+            return range(runs[at][1], len(bars))
+        prior = next((r for r in reversed(runs[:at]) if r[0] == before), None)
+        return range(prior[1] if prior else look, runs[at][2] + 1)
+
     def anchor(side: str) -> dict[str, Any] | None:
-        move = RED if side == "long" else GREEN
-        run = next((r for r in reversed(runs) if r[0] == move), None)
-        if run is not None:
-            at = extreme(side, range(run[1], len(bars)))
+        window = span(side)
+        if window is not None:
+            at = extreme(side, window)
             if old_enough(at):
                 return pack(at, side, "swing")
         window = [i for i in range(fall, len(bars)) if old_enough(i)]

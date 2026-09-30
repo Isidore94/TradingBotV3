@@ -202,7 +202,9 @@ def tf_swing_title(tf: str, side: str, anchor: dict[str, Any] | None) -> str:
     if not anchor:
         return f"{label} {name} · no SPY anchor yet"
     verb = "beating" if side == "long" else "lagging"
-    point = "low" if side == "long" else "high"
+    # M30: longs from SPY's high before its last big dip, shorts from the low (trader 2026-09-30).
+    point = ("high" if side == "long" else "low") if tf == "m30" else (
+        "low" if side == "long" else "high")
     when = _short_date(anchor.get("date") or anchor.get("dt"))
     if tf == "m30":
         when = f"{when} {_local_clock(anchor.get('dt')) or anchor.get('time') or ''}".strip()
@@ -1333,10 +1335,11 @@ class MoversBoard(QWidget):
             board = self._view_board()
             if not board:
                 return "" if name != "pop" else tf_banner_text(self._mode, board)
+            m30 = self._mode == "m30"
             if name == "strong":
-                return "No name is beating SPY since the low."
+                return f"No name is beating SPY since the {'high' if m30 else 'low'}."
             if name == "weak":
-                return "No name is lagging SPY since the high."
+                return f"No name is lagging SPY since the {'low' if m30 else 'high'}."
             if self._hidden_in_view():
                 return "Every name is hidden. Tap Unhide to see them."
             return "Nothing moved enough."

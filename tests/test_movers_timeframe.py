@@ -149,34 +149,49 @@ def test_trend_gate_and_quality_floor_apply_to_the_pop_lists():
 
 
 # ------------------------------------------------------------------ anchors
-def _spy_m30_with_prior_drop(today_closes):
-    """Prior session: flat 400, then 8 red bars down to 392; today: `today_closes`."""
-    prior_day = _weekdays(2)[0]
-    prior = _m30(prior_day, [400.0] * 5 + [399.0, 398.0, 397.0, 396.0, 395.0, 394.0, 393.0,
-                                          392.0], first_open=400.0)
-    return mt.normalize_tf_bars(
-        "m30", prior + _m30(TODAY, today_closes, first_open=392.0),
-        now=datetime(2026, 9, 22, 16, 0, tzinfo=NY))
+def _spy_m30_rise_drop_rise():
+    """9/18 rises to 401 (green run), 9/21 falls to 394 (red run), 9/22 rises to 403."""
+    d2, d1 = _weekdays(3)[:2]
+    raw = (_m30(d2, [395.0, 396.0, 397.0, 398.0, 399.0, 400.0] + [401.0] * 7, first_open=394.0)
+           + _m30(d1, [400.0, 399.0, 398.0, 397.0, 396.0, 395.0] + [394.0] * 7, first_open=401.0)
+           + _m30(TODAY, [395.0, 396.0, 397.0, 398.0, 399.0, 400.0, 401.0, 402.0, 403.0],
+                  first_open=394.0))
+    return mt.normalize_tf_bars("m30", raw, now=datetime(2026, 9, 22, 16, 0, tzinfo=NY))
 
 
-def test_m30_long_anchor_is_the_low_since_the_last_red_ha_run():
-    spy = _spy_m30_with_prior_drop([393.0, 394.0, 395.0, 396.0, 397.0])
-    anchors = mt.tf_anchors("m30", spy)
+def test_m30_long_anchor_is_the_top_the_last_big_dip_fell_from():
+    # Trader 2026-09-30: M30 longs measure from the last major dip in SPY.
+    anchors = mt.tf_anchors("m30", _spy_m30_rise_drop_rise())
     long = anchors["long"]
     assert long["kind"] == "swing"
-    assert long["dt"] == "2026-09-22T09:30:00-04:00"  # the tie goes to the later bar
-    assert long["price"] == 391.5
-    # No 6-bar green run: shorts take the fallback window's (prior + today) high.
-    assert anchors["short"]["kind"] == "window"
-    assert anchors["short"]["price"] == 400.5
+    # Highest high from the 9/18 green run's start through the 9/21 red run's end;
+    # 401.5 ties from 9/18 12:30 to 9/21 09:30 and the tie goes to the later bar.
+    assert long["dt"] == "2026-09-21T09:30:00-04:00"
+    assert long["price"] == 401.5
 
 
-def test_m30_young_anchor_falls_back_to_an_old_enough_bar():
-    # Today keeps falling: the lowest low is the last bar (0 bars old).
-    spy = _spy_m30_with_prior_drop([391.0, 390.0, 389.0])
-    long = mt.tf_anchors("m30", spy)["long"]
-    assert long["kind"] == "window"
-    assert long["dt"] == "2026-09-22T09:30:00-04:00"  # 2 bars old: the newest allowed
+def test_m30_short_anchor_is_the_bottom_the_last_big_rip_rose_from():
+    short = mt.tf_anchors("m30", _spy_m30_rise_drop_rise())["short"]
+    assert short["kind"] == "swing"
+    # Lowest low from the 9/21 red run's start through today's green run; later tie wins.
+    assert short["dt"] == "2026-09-22T09:30:00-04:00"
+    assert short["price"] == 393.5
+
+
+def test_m30_no_run_falls_back_to_the_window_high_and_no_prior_run_uses_the_lookback():
+    prior_day = _weekdays(2)[0]
+    raw = (_m30(prior_day, [400.0] * 13, first_open=400.0)
+           + _m30(TODAY, [401.0, 402.0, 403.0, 404.0, 405.0, 406.0, 407.0], first_open=400.0))
+    spy = mt.normalize_tf_bars("m30", raw, now=datetime(2026, 9, 22, 16, 0, tzinfo=NY))
+    anchors = mt.tf_anchors("m30", spy)
+    # No red run: longs take the fallback window's high among bars 2+ bars old.
+    assert anchors["long"]["kind"] == "window"
+    assert anchors["long"]["dt"] == "2026-09-22T11:30:00-04:00"
+    assert anchors["long"]["price"] == 405.5
+    # Today's green run has no red run before it: its low runs from the lookback start.
+    assert anchors["short"]["kind"] == "swing"
+    assert anchors["short"]["dt"] == "2026-09-22T09:30:00-04:00"
+    assert anchors["short"]["price"] == 399.5
     assert mt.tf_anchors("m30", []) == {"long": None, "short": None}
 
 

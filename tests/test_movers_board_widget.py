@@ -607,6 +607,15 @@ def test_m30_and_daily_tabs_show_the_three_boxes_from_their_boards(app):
     assert not widget.strong.isHidden() and not widget.weak.isHidden()
     assert widget.main.title_label.text().startswith("M30 Movers · 3-bar moves at ")
     assert widget.strong.title_label.text().startswith("M30 Dip-strong · beating SPY since 9/21")
+    # Trader 2026-09-30: M30 longs measure from SPY's high, shorts from its low.
+    assert widget.strong.title_label.text().endswith(" high")
+    assert widget.weak.title_label.text().endswith(" low")
+    widget.update_timeframe_board("m30", dict(_tf_board("m30"), swing={"long": [], "short": []}))
+    widget.flush_pending_refresh()
+    assert widget.strong.empty_label.text() == "No name is beating SPY since the high."
+    assert widget.weak.empty_label.text() == "No name is lagging SPY since the low."
+    widget.update_timeframe_board("m30", _tf_board("m30"))
+    widget.flush_pending_refresh()
     assert [h for _k, h in widget.model._columns][:3] == ["Sym", "90m", "RVOL"]
     # The outcome line rides on each box title's hover.
     assert "Last 20 sessions: +0.8% vs SPY at 3d, 57% beat, n=10" in \
