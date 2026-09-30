@@ -24,6 +24,8 @@ here.
   (`claude/mentor-app-p11-research-frontier-2026-09-30`, gate #324): the plan's ladder is
   complete. P12 IBKR `/book` built (trader 2026-09-30, `claude/mentor-app-p12-ibkr-book-2026-09-30`,
   gate #326): read-only IBKR positions + cash beside Questrade, own client id 9155.
+  Plan inference built (trader 2026-09-30, `claude/mentor-plan-infer-2026-09-30`, gate #327):
+  the app adds `[ai date]` plan lines from the trader's chat words.
   Next only by the trader's word: an alerts pack, a movers pack, more recall sources.
 
 ## Plan to 8/10, round 2 (trader's brief, 2026-09-25 evening)

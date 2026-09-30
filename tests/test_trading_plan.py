@@ -214,3 +214,100 @@ def test_snapshot_at_picks_the_newest_before_the_moment(plan_dir):
     chosen = trading_plan.snapshot_at(NOW + timedelta(days=1))
     assert chosen is not None and chosen.read_text(encoding="utf-8") == "## Goals\n- a\n"
     assert trading_plan.snapshot_at(NOW - timedelta(days=1)) is None
+
+
+# ---------------------------------------------------------------- AI lines (the Mentor app's inferred rules)
+AI_PLAN = (
+    "## Rules\n\n- Respect the stop.\n- No trades before 06:45. [ai 2026-09-29]\n\n"
+    "## What I am testing\n\n- Recap rule for 2026-09-23: hold winners to 1R.\n\n## Decisions\n"
+)
+
+
+def _plan_text() -> str:
+    return Path(project_paths.TRADING_PLAN_FILE).read_text(encoding="utf-8")
+
+
+def test_an_ai_line_keeps_its_marker_in_text_and_is_flagged():
+    lines = {row["id"]: row for row in trading_plan.parse_plan(AI_PLAN)["lines"]}
+    mine, inferred = lines["plan:rules:1"], lines["plan:rules:2"]
+    assert (mine["ai"], mine["ai_day"], mine["rule"]) == (False, "", "Respect the stop.")
+    assert inferred["text"] == "No trades before 06:45. [ai 2026-09-29]", "packs show the marker"
+    assert (inferred["ai"], inferred["ai_day"], inferred["rule"]) == (True, "2026-09-29", "No trades before 06:45.")
+    assert lines["plan:what_i_am_testing:1"]["ai"] is False
+
+
+def test_add_ai_line_round_trips_the_marker_and_snapshots(plan_dir):
+    Path(project_paths.TRADING_PLAN_FILE).write_text(AI_PLAN, encoding="utf-8")
+    result = trading_plan.add_ai_line("Stop after two losses", section="rules", now=NOW, day="2026-09-30")
+    assert result["changed"] and result["plan_id"] == "plan:rules:3" and result["snapshot"]
+    row = {r["id"]: r for r in trading_plan.parse_plan(_plan_text())["lines"]}["plan:rules:3"]
+    assert row["text"] == "Stop after two losses [ai 2026-09-30]" and row["ai"]
+    assert "- Respect the stop.\n" in _plan_text()
+
+
+def test_add_ai_line_drops_a_rule_already_in_the_plan(plan_dir):
+    Path(project_paths.TRADING_PLAN_FILE).write_text(AI_PLAN, encoding="utf-8")
+    before = _plan_text()
+    result = trading_plan.add_ai_line("respect   the STOP", section="Risk", now=NOW)
+    assert result["changed"] is False and result["duplicate"] == "plan:rules:1"
+    assert _plan_text() == before
+
+
+def test_the_traders_own_line_is_never_updated_or_retired(plan_dir):
+    Path(project_paths.TRADING_PLAN_FILE).write_text(AI_PLAN, encoding="utf-8")
+    before = _plan_text()
+    with pytest.raises(trading_plan.PlanLineRefused):
+        trading_plan.update_ai_line("plan:rules:1", "Respect the stop, always", now=NOW)
+    with pytest.raises(trading_plan.PlanLineRefused):
+        trading_plan.retire_ai_line("plan:rules:1", now=NOW)
+    with pytest.raises(trading_plan.PlanLineRefused):
+        trading_plan.retire_ai_line("plan:what_i_am_testing:1", now=NOW)
+    assert _plan_text() == before
+
+
+def test_a_marker_the_trader_deleted_makes_the_line_theirs(plan_dir):
+    Path(project_paths.TRADING_PLAN_FILE).write_text(AI_PLAN.replace(" [ai 2026-09-29]", ""), encoding="utf-8")
+    with pytest.raises(trading_plan.PlanLineRefused):
+        trading_plan.retire_ai_line("plan:rules:2", now=NOW)
+
+
+def test_update_ai_line_rewrites_in_place_with_the_new_date(plan_dir):
+    Path(project_paths.TRADING_PLAN_FILE).write_text(AI_PLAN, encoding="utf-8")
+    with pytest.raises(trading_plan.PlanLineRefused):
+        trading_plan.update_ai_line("plan:rules:2", "x", expect_text="something else", now=NOW)
+    result = trading_plan.update_ai_line("plan:rules:2", "No trades before 07:00", expect_text="No trades before 06:45.",
+                                         now=NOW, day="2026-09-30")
+    assert result["changed"] and result["old_text"] == "No trades before 06:45."
+    assert trading_plan.parse_plan(_plan_text())["sections"]["Rules"] == [
+        "Respect the stop.", "No trades before 07:00 [ai 2026-09-30]"]
+
+
+def test_retire_ai_line_removes_it_and_writes_a_decisions_line(plan_dir):
+    Path(project_paths.TRADING_PLAN_FILE).write_text(AI_PLAN, encoding="utf-8")
+    result = trading_plan.retire_ai_line("plan:rules:2", now=NOW, day="2026-09-30")
+    assert result["changed"] and result["text"] == "No trades before 06:45."
+    parsed = trading_plan.parse_plan(_plan_text())
+    assert parsed["sections"]["Rules"] == ["Respect the stop."]
+    assert parsed["decisions"] == [
+        {"day": "2026-09-30", "text": "dropped AI rule: No trades before 06:45.", "dated": True}]
+    # the recap loop's line and append_decision still work beside AI lines
+    trading_plan.set_testing_rule("respect the stop", for_day="2026-09-30", now=NOW)
+    trading_plan.append_decision("Size down in chop.", now=NOW, day="2026-09-30")
+    parsed = trading_plan.parse_plan(_plan_text())
+    assert parsed["sections"]["What I am testing"] == ["Recap rule for 2026-09-30: respect the stop"]
+    assert [row["text"] for row in parsed["decisions"]][-1] == "Size down in chop."
+
+
+def test_ai_text_is_checked_before_any_write(plan_dir):
+    Path(project_paths.TRADING_PLAN_FILE).write_text(AI_PLAN, encoding="utf-8")
+    before = _plan_text()
+    for bad, section in (("", "Rules"), ("x" * 141, "Rules"), ("ok", "Decisions"), ("ok", "Notes"),
+                         ("Recap rule for 2026-09-30: x", "What I am testing")):
+        with pytest.raises(trading_plan.PlanLineRefused):
+            trading_plan.add_ai_line(bad, section=section, now=NOW)
+    assert _plan_text() == before
+
+
+def test_line_ids_skip_a_comment_spanning_lines():
+    text = "## Rules\n<!-- a\ncomment -->\n- one\n- two [ai 2026-09-30]\n"
+    assert [row["id"] for row in trading_plan.parse_plan(text)["lines"]] == ["plan:rules:1", "plan:rules:2"]

@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 
 import ai_pause
 from mentor_app import assess as pick_assess
-from mentor_app import brain, challenge, commands, grounding, memory, pick_jobs, settings, tape
+from mentor_app import brain, challenge, commands, grounding, memory, pick_jobs, plan_infer, settings, tape
 from mentor_app.chat_model import ChatModel
 from mentor_app.inbox import Inbox
 from mentor_app.prefetch import (
@@ -178,6 +178,7 @@ class MentorWindow(QMainWindow):
         frontier_request: Callable[..., Any] | None = None,
         frontier_post: Callable[..., Any] | None = None,
         frontier_key: Callable[[], str] | None = None,
+        plan_path: Any = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -212,6 +213,9 @@ class MentorWindow(QMainWindow):
         self._memory_block = ""
         self._memory_text = ""
         self._still_true_day: Any = None
+        #: Plan inference: the plan file (None = the live one) and the newest trader turn already read.
+        self._plan_path = plan_path
+        self._plan_after = 0
         self._session_id: int | None = None
         self._worker: Any = None
         self._blocks: list[str] = []
@@ -1068,8 +1072,21 @@ class MentorWindow(QMainWindow):
         elif result.action == "remember":
             note = str(result.arg)
             self._memory_text = (self._memory_text + f"\n- {note}").strip()
-            self._submit_io(lambda: self.store.add_profile_note(note, "remember", ts_utc=stamp))
+            day, now, path = self._pt_day(), self._now(), self._plan_path
+
+            def remember() -> None:
+                self.store.add_profile_note(note, "remember", ts_utc=stamp)
+                for line in plan_infer.remember_rule(note, store=self.store, day=day, now=now, path=path):
+                    self._bridge.note.emit(line)
+
+            self._submit_io(remember)
             self._add_note(f"Kept: {note}")
+        elif result.action == "plan":
+            path = self._plan_path
+            self._submit_io(lambda: self._bridge.note.emit(plan_infer.listing(store=self.store, path=path)))
+        elif result.action == "drop":
+            plan_id, day, now, path = str(result.arg), self._pt_day(), self._now(), self._plan_path
+            self._submit_io(lambda: self._bridge.note.emit(plan_infer.drop(plan_id, store=self.store, day=day, now=now, path=path)))
         elif result.action == "forget":
             note_id = int(result.arg)
 
@@ -1214,6 +1231,7 @@ class MentorWindow(QMainWindow):
         )
         self._finish_turn()
         self._queue_embeddings()
+        self._queue_plan_inference()
 
     def _on_failed(self, message: str) -> None:
         self._blocks[self._stream_slot()] = f"**Mentor:** *(failed: {message})*"
@@ -1270,6 +1288,40 @@ class MentorWindow(QMainWindow):
             return done
 
         self.queue.submit("embed_memory", job, priority=PRIORITY_IDLE, needs_model=True, key="embed_memory")
+
+    # ------------------------------------------------------------------ plan inference
+    def _pt_day(self) -> str:
+        return self._now().astimezone(challenge.PT).date().isoformat()
+
+    def _queue_plan_inference(self) -> None:
+        """After a reply: one side call infers plan lines from the trader's new turns (queue thread, never Qt)."""
+        endpoint, model, path, post = self._endpoint, self._model, self._plan_path, self._post
+
+        def job() -> list[dict]:
+            if not self._brain_ok or self._session_id is None:
+                logging.info("Trade Mentor: plan inference skipped (brain off)")
+                return []
+            turns = [row for row in self.store.turns(self._session_id, limit=4 * plan_infer.TURN_LIMIT)
+                     if row.get("role") == "user"]
+            if not turns or int(turns[-1]["id"]) <= self._plan_after:
+                return []
+            after, self._plan_after = self._plan_after, int(turns[-1]["id"])
+            return plan_infer.infer(turns, after=after, endpoint=endpoint, model=model, post=post,
+                                    keep_alive=settings.keep_alive(), num_ctx=settings.context_tokens(), path=path)
+
+        def written(ops: Any) -> None:
+            if ops:
+                self._submit_io(lambda: self._apply_plan_ops(ops))
+
+        # Waits for the IO thread's pending turn writes first, then asks on the queue's thread.
+        self._submit_io(lambda: self.queue.submit(
+            "plan_infer", job, priority=PRIORITY_REFRESH, needs_model=True,
+            max_tokens=plan_infer.MAX_OUTPUT_TOKENS, key="plan_infer", on_done=written))
+
+    def _apply_plan_ops(self, ops: list[dict]) -> None:
+        """IO thread (the one owner of the day's count): write the ops, show one line per change."""
+        for line in plan_infer.apply(ops, store=self.store, day=self._pt_day(), now=self._now(), path=self._plan_path):
+            self._bridge.note.emit(line)
 
     def _store_turn(self, role: str, text: str, **kwargs: Any) -> None:
         self._submit_io(lambda: self.store.add_turn(self._session_id, role, text, **kwargs))

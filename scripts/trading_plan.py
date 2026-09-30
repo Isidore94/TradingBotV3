@@ -6,6 +6,12 @@ as `TRADING_PLAN_HISTORY_DIR/<stamp>_<seq>_<hash8>.md` (append-only), found by c
 hash whenever the plan is read. A failed snapshot is logged and retried on the
 next read, because the newest snapshot still differs from the plan.
 
+A line ending in ``[ai YYYY-MM-DD]`` was inferred by the Trade Mentor app from the
+trader's own chat words (the date is its last change); only such lines are added,
+updated or retired by :func:`add_ai_line`, :func:`update_ai_line` and
+:func:`retire_ai_line`. A line without the marker is the trader's and is never
+edited or removed here; deleting the marker makes a line the trader's.
+
 File reads and writes here: call them on a worker or at night, never on the Qt
 thread. `parse_plan` is pure. Evidence only: nothing here detects, scores,
 ranks, gates or alerts.
@@ -65,6 +71,12 @@ _DATED = re.compile(r"^(?P<day>\d{4}-\d{2}-\d{2})\s*[:\-]\s*(?P<text>.+)$")
 _BULLET = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
 #: The exact line the recap rule loop writes; nothing else under the heading is touched.
 _RECAP_LINE = re.compile(r"^- Recap rule for \d{4}-\d{2}-\d{2}: \S")
+#: The trailing marker of a line the Trade Mentor app inferred; the date is its last change.
+_AI_MARKER = re.compile(r"\s*\[ai (?P<day>\d{4}-\d{2}-\d{2})\]\s*$")
+#: The longest rule text the app may write as one AI line.
+AI_TEXT_MAX = 140
+#: What a retired AI line leaves under Decisions: ``- YYYY-MM-DD: dropped AI rule: <text>``.
+AI_DROPPED_PREFIX = "dropped AI rule:"
 #: How long a desk plan write waits for another desk plan write.
 LOCK_TIMEOUT_SECONDS = 5.0
 
@@ -92,24 +104,34 @@ def _canonical(name: str) -> str:
 
 
 def _strip_comments(text: str) -> str:
-    return re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+    """Comments removed, their line breaks kept, so line n of the result is raw line n."""
+    return re.sub(r"<!--.*?-->", lambda match: "\n" * match.group(0).count("\n"), text, flags=re.DOTALL)
 
 
-def parse_plan(text: Any) -> dict[str, Any]:
-    """The plan as data. Pure.
+def split_ai(text: Any) -> tuple[str, str]:
+    """``("rule words", "YYYY-MM-DD")`` for an AI line, ``(text, "")`` for the trader's own."""
+    words = str(text or "").strip()
+    match = _AI_MARKER.search(words)
+    if not match:
+        return words, ""
+    return words[: match.start()].strip(), match.group("day")
 
-    Returns ``{"sections": {heading: [line text]}, "lines": [{id, section, n,
-    text}], "decisions": [{day, text, dated}], "missing": [heading],
-    "unknown_sections": [name]}``. A line id is ``plan:<section slug>:<n>``,
-    n counting the section's non-empty lines from 1. Comments, blank lines
-    and text before the first fixed heading carry no id.
-    """
-    body = _strip_comments(str(text or "")).replace("\r\n", "\n")
-    sections: dict[str, list[str]] = {heading: [] for heading in HEADINGS}
+
+def normalize_rule(text: Any) -> str:
+    """The comparable form of a rule: no marker, no bullet, lower case, single spaces, no end punctuation."""
+    words, _ = split_ai(_BULLET.sub("", str(text or "").strip()))
+    return " ".join(words.lower().split()).strip(" .!;,")
+
+
+def _walk(raw_lines: list[str]) -> tuple[list[tuple[int, str, int, str]], set[str], list[str]]:
+    """``[(raw index, section, n, words)]`` for every citable line, plus headings seen and unknown."""
+    body = _strip_comments("\n".join(raw_lines)).split("\n")
+    rows: list[tuple[int, str, int, str]] = []
+    counts: dict[str, int] = {}
     seen: set[str] = set()
     unknown: list[str] = []
     current = ""
-    for raw in body.split("\n"):
+    for index, raw in enumerate(body):
         match = _HEADING.match(raw)
         if match:
             name = _canonical(match.group("name"))
@@ -122,13 +144,36 @@ def parse_plan(text: Any) -> dict[str, Any]:
         line = raw.strip()
         if not current or not line:
             continue
-        sections[current].append(_BULLET.sub("", line).strip())
+        counts[current] = counts.get(current, 0) + 1
+        rows.append((index, current, counts[current], _BULLET.sub("", line).strip()))
+    return rows, seen, unknown
+
+
+def parse_plan(text: Any) -> dict[str, Any]:
+    """The plan as data. Pure.
+
+    Returns ``{"sections": {heading: [line text]}, "lines": [{id, section, n,
+    text, ai, ai_day, rule}], "decisions": [{day, text, dated}], "missing":
+    [heading], "unknown_sections": [name]}``. A line id is
+    ``plan:<section slug>:<n>``, n counting the section's non-empty lines from 1.
+    ``text`` is the line as written (an AI line keeps its ``[ai YYYY-MM-DD]``
+    marker, so every pack shows which lines were inferred); ``rule`` is the text
+    without the marker. Comments, blank lines and text before the first fixed
+    heading carry no id.
+    """
+    rows, seen, unknown = _walk(str(text or "").replace("\r\n", "\n").split("\n"))
+    sections: dict[str, list[str]] = {heading: [] for heading in HEADINGS}
+    for _index, heading, _n, words in rows:
+        sections[heading].append(words)
     lines: list[dict[str, Any]] = []
     for heading in HEADINGS:
         for index, words in enumerate(sections[heading], start=1):
-            lines.append(
-                {"id": f"plan:{slug(heading)}:{index}", "section": heading, "n": index, "text": words}
-            )
+            rule, ai_day = split_ai(words)
+            ai = bool(ai_day) and heading != DECISIONS
+            lines.append({
+                "id": f"plan:{slug(heading)}:{index}", "section": heading, "n": index, "text": words,
+                "ai": ai, "ai_day": ai_day if ai else "", "rule": rule if ai else words,
+            })
     decisions = []
     for words in sections[DECISIONS]:
         match = _DATED.match(words)
@@ -424,28 +469,167 @@ def set_testing_rule(
     return _edit(mutate, now=now, path=path)
 
 
+# ---------------------------------------------------------------------------
+# AI lines (the Trade Mentor app's inferred rules; never a line without the marker)
+# ---------------------------------------------------------------------------
+class PlanLineRefused(ValueError):
+    """The app may not make this change. ``kind``: ``trader`` (their own line), ``gone``, ``moved`` or ``text``."""
+
+    def __init__(self, message: str, kind: str = "text") -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
+def clean_ai_text(text: Any) -> str:
+    """The rule words an AI line may carry, or PlanLineRefused (empty, too long, marker, heading, recap)."""
+    words, _ = split_ai(" ".join(str(text or "").split()))
+    words = _BULLET.sub("", words).strip()
+    if not words:
+        raise PlanLineRefused("an AI plan line needs text")
+    if len(words) > AI_TEXT_MAX:
+        raise PlanLineRefused(f"an AI plan line is at most {AI_TEXT_MAX} characters")
+    if "[ai " in words.lower() or "<!--" in words or words.startswith("#"):
+        raise PlanLineRefused("an AI plan line may not carry a marker, comment or heading")
+    if words.lower().startswith(RECAP_RULE_PREFIX.lower()):
+        raise PlanLineRefused("the recap rule line belongs to the recap loop")
+    return words
+
+
+def _ai_line(words: str, day: str) -> str:
+    return f"- {words} [ai {day}]"
+
+
+def _row(lines: list[str], plan_id: str) -> tuple[int, str, int, str]:
+    for row in _walk(lines)[0]:
+        if f"plan:{slug(row[1])}:{row[2]}" == plan_id:
+            return row
+    raise PlanLineRefused(f"there is no plan line {plan_id}", "gone")
+
+
+def _duplicate(lines: list[str], words: str, *, skip: int = -1) -> str:
+    """The id of a non-Decisions line saying the same rule, or ""."""
+    wanted = normalize_rule(words)
+    for index, heading, n, text in _walk(lines)[0]:
+        if heading != DECISIONS and index != skip and normalize_rule(text) == wanted:
+            return f"plan:{slug(heading)}:{n}"
+    return ""
+
+
+def _owned(lines: list[str], plan_id: str, expect_text: Any) -> tuple[int, str, int, str]:
+    row = _row(lines, plan_id)
+    rule, ai_day = split_ai(row[3])
+    if not ai_day or row[1] == DECISIONS:
+        raise PlanLineRefused(f"{plan_id} is the trader's own line; the app never edits it", "trader")
+    if expect_text is not None and normalize_rule(rule) != normalize_rule(expect_text):
+        raise PlanLineRefused(f"{plan_id} changed since it was read; nothing was written", "moved")
+    return row
+
+
+def add_ai_line(
+    text: Any, *, section: str, now: datetime | None = None, day: Any = None, path: Path | None = None
+) -> dict[str, Any]:
+    """Add ``- text [ai YYYY-MM-DD]`` as the last line of `section`.
+
+    A rule already in the plan (any non-Decisions line, same normalized text) is
+    not added: ``duplicate`` names it. Returns the write result plus ``plan_id``,
+    ``text`` and ``duplicate``. Raises PlanLineRefused or PlanWriteError.
+    """
+    heading = _canonical(section)
+    if not heading or heading == DECISIONS:
+        raise PlanLineRefused(f"{section!r} is not a plan section the app may add to")
+    words = clean_ai_text(text)
+    line = _ai_line(words, _day(now, day))
+    out: dict[str, Any] = {"plan_id": "", "text": words, "duplicate": ""}
+
+    def mutate(lines: list[str]) -> list[str] | None:
+        out["duplicate"] = _duplicate(lines, words)
+        if out["duplicate"]:
+            return None
+        new_lines = _insert_at_end(lines, heading, line)
+        for index, name, n, _words in _walk(new_lines)[0]:
+            if name == heading and new_lines[index] == line:
+                out["plan_id"] = f"plan:{slug(name)}:{n}"
+        return new_lines
+
+    return {**_edit(mutate, now=now, path=path), **out}
+
+
+def update_ai_line(
+    plan_id: str, text: Any, *, expect_text: Any = None, now: datetime | None = None, day: Any = None,
+    path: Path | None = None,
+) -> dict[str, Any]:
+    """Rewrite one AI line in place with today's marker. The trader's lines raise PlanLineRefused.
+
+    With `expect_text`, the line must still say that rule (checked under the lock).
+    """
+    words = clean_ai_text(text)
+    line = _ai_line(words, _day(now, day))
+    out: dict[str, Any] = {"plan_id": plan_id, "text": words, "duplicate": "", "old_text": ""}
+
+    def mutate(lines: list[str]) -> list[str] | None:
+        row = _owned(lines, plan_id, expect_text)
+        out["old_text"] = split_ai(row[3])[0]
+        out["duplicate"] = _duplicate(lines, words, skip=row[0])
+        if out["duplicate"] or normalize_rule(out["old_text"]) == normalize_rule(words):
+            return None
+        new_lines = list(lines)
+        new_lines[row[0]] = line
+        return new_lines
+
+    return {**_edit(mutate, now=now, path=path), **out}
+
+
+def retire_ai_line(
+    plan_id: str, *, expect_text: Any = None, now: datetime | None = None, day: Any = None,
+    path: Path | None = None,
+) -> dict[str, Any]:
+    """Remove one AI line and add ``- YYYY-MM-DD: dropped AI rule: <text>`` under Decisions.
+
+    The trader's lines raise PlanLineRefused; the history keeps the old plan.
+    """
+    stamp = _day(now, day)
+    out: dict[str, Any] = {"plan_id": plan_id, "text": ""}
+
+    def mutate(lines: list[str]) -> list[str] | None:
+        row = _owned(lines, plan_id, expect_text)
+        out["text"] = split_ai(row[3])[0]
+        kept = lines[: row[0]] + lines[row[0] + 1:]
+        return _insert_at_end(kept, DECISIONS, f"- {stamp}: {AI_DROPPED_PREFIX} {out['text']}")
+
+    return {**_edit(mutate, now=now, path=path), **out}
+
+
 def plan_lines(parsed: Mapping[str, Any]) -> list[dict[str, Any]]:
     """The citable lines of a parsed plan."""
     return [dict(row) for row in (parsed or {}).get("lines") or () if isinstance(row, Mapping)]
 
 
 __all__ = [
+    "AI_DROPPED_PREFIX",
+    "AI_TEXT_MAX",
     "DECISIONS",
     "HEADINGS",
+    "PlanLineRefused",
     "PlanWriteError",
     "RECAP_RULE_PREFIX",
     "TEMPLATE",
     "TESTING",
+    "add_ai_line",
     "append_decision",
+    "clean_ai_text",
     "content_hash",
     "history_dir",
+    "normalize_rule",
     "parse_plan",
     "plan_lines",
     "plan_path",
     "read_plan",
+    "retire_ai_line",
     "set_testing_rule",
     "slug",
     "snapshot_at",
     "snapshot_if_changed",
     "snapshots",
+    "split_ai",
+    "update_ai_line",
 ]

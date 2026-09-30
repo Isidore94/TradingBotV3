@@ -12,8 +12,10 @@ the evidence.
 Its deterministic half (``ask=False``: forced by day, model down, or budget
 cut) only reads the plan, which snapshots a changed plan.
 
-It writes `PLAN_CHALLENGES_FILE` (append-only) and nothing else: the plan
-itself is written only by the trader's Accept click on the Mentor card.
+It writes `PLAN_CHALLENGES_FILE` (append-only) and nothing else: no night job
+writes the plan. Only the trader, their Accept click on the Mentor card, the
+recap loop's one line and the Trade Mentor app's ``[ai date]`` lines (inferred
+live from the trader's own chat words) change it.
 """
 
 from __future__ import annotations

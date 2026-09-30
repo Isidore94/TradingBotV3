@@ -4,7 +4,8 @@
 newest NOTE_LIMIT live ``profile_notes`` (call it off the Qt thread). ``render`` sorts the items
 oldest first and drops the oldest until the block fits MEMORY_BUDGET_TOKENS, so the same inputs
 always give the same bytes and Ollama's KV prefix stays warm. Every item carries a citable id
-``mem:<kind>:<id>``. Nothing here infers a note: notes come only from ``/remember``.
+``mem:<kind>:<id>``. Nothing here infers a note: notes come only from ``/remember``. (Plan
+lines are a separate store: ``plan_infer`` writes AI-marked lines to the trading plan.)
 """
 
 from __future__ import annotations
