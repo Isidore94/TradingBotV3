@@ -92,21 +92,45 @@ def _args_key(args: dict[str, Any] | None) -> str:
     return json.dumps(dict(args or {}), sort_keys=True, default=str)
 
 
+def _copy_old_challenges(conn: sqlite3.Connection) -> None:
+    """Copy every row of ``challenges_old`` into the nullable table ('' becomes NULL), then drop it."""
+    conn.execute(
+        "INSERT OR IGNORE INTO challenges (id, kind, symbol, claim, evidence_ids_json, issued_utc, graded_utc, "
+        "outcome_json) SELECT id, kind, symbol, claim, evidence_ids_json, issued_utc, NULLIF(graded_utc, ''), "
+        "outcome_json FROM challenges_old"
+    )
+    conn.execute("DROP TABLE challenges_old")
+
+
+def _has_table(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone() is not None
+
+
 def _open_graded_column(conn: sqlite3.Connection) -> None:
-    """Phase 0-2 created ``graded_utc`` NOT NULL: rebuild the table nullable, keeping every row ('' becomes NULL)."""
-    columns = {row[1]: row for row in conn.execute("PRAGMA table_info(challenges)").fetchall()}
-    graded = columns.get("graded_utc")
-    if graded is None or not graded[3]:
-        return
-    with conn:
-        conn.execute("ALTER TABLE challenges RENAME TO challenges_old")
-        conn.execute(_CHALLENGES_TABLE)
-        conn.execute(
-            "INSERT INTO challenges (id, kind, symbol, claim, evidence_ids_json, issued_utc, graded_utc, outcome_json) "
-            "SELECT id, kind, symbol, claim, evidence_ids_json, issued_utc, NULLIF(graded_utc, ''), outcome_json "
-            "FROM challenges_old"
-        )
-        conn.execute("DROP TABLE challenges_old")
+    """Phase 0-2 created ``graded_utc`` NOT NULL: rebuild the table nullable, keeping every row.
+
+    One explicit transaction (sqlite DDL is transactional), rolled back whole on any failure, so a
+    failed open leaves the old table as it was and the next open tries again. A ``challenges_old``
+    left by an interrupted run is finished first.
+    """
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if _has_table(conn, "challenges_old"):
+            conn.execute(_CHALLENGES_TABLE)
+            _copy_old_challenges(conn)
+        else:
+            columns = {row[1]: row for row in conn.execute("PRAGMA table_info(challenges)").fetchall()}
+            graded = columns.get("graded_utc")
+            if graded is not None and graded[3]:
+                conn.execute("ALTER TABLE challenges RENAME TO challenges_old")
+                conn.execute(_CHALLENGES_TABLE)
+                _copy_old_challenges(conn)
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
 
 
 class MentorChatStore:
@@ -125,9 +149,13 @@ class MentorChatStore:
         conn.row_factory = sqlite3.Row
         conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
         if not self._ready:
-            conn.execute("PRAGMA journal_mode = WAL")
-            conn.executescript(SCHEMA)
-            _open_graded_column(conn)
+            try:
+                conn.execute("PRAGMA journal_mode = WAL")
+                conn.executescript(SCHEMA)
+                _open_graded_column(conn)
+            except BaseException:
+                conn.close()
+                raise
             self._ready = True
         return conn
 

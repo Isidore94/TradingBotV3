@@ -1171,6 +1171,9 @@ class MentorWindow(QMainWindow):
                 logging.info("Trade Mentor: the vetoes card for %s was dropped (held past its day)", session)
                 self._veto_inbox_waiting.pop(0)
                 continue
+            if not self.inbox.refusal():
+                # The marker is queued before the item shows: a quit between the two never reposts the card.
+                self._submit_io(lambda session=session: self.store.set_state(challenge.MORNING_POSTED_KEY, session))
             item = self.inbox.add("vetoes", line)
             if item is None:
                 if "cap" in self.inbox.last_refusal:
@@ -1181,4 +1184,3 @@ class MentorWindow(QMainWindow):
             self._veto_inbox_waiting.pop(0)
             self._inbox_cards[item.id] = markdown
             self.refresh_inbox()
-            self._submit_io(lambda session=session: self.store.set_state(challenge.MORNING_POSTED_KEY, session))

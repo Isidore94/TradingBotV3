@@ -444,6 +444,52 @@ def test_an_old_not_null_graded_column_with_rows_is_migrated_and_keeps_them(tmp_
     assert set(rows) == {"old:1", "old:2", "veto:x:C:1"}
     assert rows["old:1"]["graded_utc"] is None and rows["old:2"]["graded_utc"] == "2026-10-01T00:00:00+00:00"
     assert {row["id"] for row in store.challenges(open_only=True)} == {"old:1", "veto:x:C:1"}
+    assert not _has_table(path, "challenges_old")
+
+
+def _old_table(path):
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE challenges (id TEXT PRIMARY KEY, kind TEXT NOT NULL, symbol TEXT NOT NULL DEFAULT '', "
+                     "claim TEXT NOT NULL, evidence_ids_json TEXT NOT NULL DEFAULT '[]', issued_utc TEXT NOT NULL, "
+                     "graded_utc TEXT NOT NULL DEFAULT '', outcome_json TEXT NOT NULL DEFAULT '{}')")
+        conn.execute("INSERT INTO challenges (id, kind, symbol, claim, issued_utc) VALUES ('old:1', 'veto', 'A', 'c', 't')")
+    conn.close()
+
+
+def _has_table(path, name):
+    conn = sqlite3.connect(path)
+    try:
+        return bool(conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone())
+    finally:
+        conn.close()
+
+
+def test_a_migration_that_fails_midway_rolls_back_whole_and_runs_again(tmp_path, monkeypatch):
+    from mentor_app import store as store_module
+
+    path = tmp_path / "chat.sqlite3"
+    _old_table(path)
+    real = store_module._copy_old_challenges
+    monkeypatch.setattr(store_module, "_copy_old_challenges", lambda conn: (_ for _ in ()).throw(sqlite3.OperationalError("locked")))
+    assert MentorChatStore(path).challenges() == [], "the failed open reads nothing, loudly in the log"
+    assert not _has_table(path, "challenges_old"), "the rename rolled back with the failed copy"
+    monkeypatch.setattr(store_module, "_copy_old_challenges", real)
+    reopened = MentorChatStore(path)
+    assert [row["id"] for row in reopened.challenges()] == ["old:1"]
+    assert reopened.challenges()[0]["graded_utc"] is None and not _has_table(path, "challenges_old")
+
+
+def test_a_leftover_challenges_old_is_finished_on_open(tmp_path):
+    path = tmp_path / "chat.sqlite3"
+    _old_table(path)
+    conn = sqlite3.connect(path)
+    conn.execute("ALTER TABLE challenges RENAME TO challenges_old")  # the state an interrupted older migration left
+    conn.commit()
+    conn.close()
+    store = MentorChatStore(path)
+    assert [row["id"] for row in store.challenges()] == ["old:1"]
+    assert not _has_table(path, "challenges_old")
+    assert store.add_challenge("veto:x:C:1", kind="veto", symbol="C", claim="c")
 
 
 def test_a_restart_after_the_morning_card_posted_never_posts_it_again(window, app, tmp_path):
