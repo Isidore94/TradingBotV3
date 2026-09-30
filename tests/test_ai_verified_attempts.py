@@ -333,6 +333,60 @@ def test_market_story_a_first_time_pass_makes_exactly_one_call(tmp_path):
     assert len(calls) == 1
 
 
+# ---------------------------------------------------------------------------
+# setup_research narration wiring
+# ---------------------------------------------------------------------------
+def _setup_research(monkeypatch, *summaries):
+    import ai_summary
+    from ai_jobs import setup_research
+
+    view = {"eligible_policies": [{"recipe_id": "r1", "stats": {"n": 41, "mean_r": 0.734}}], "narrated": {}}
+    monkeypatch.setattr(ai_summary, "local_provider_enabled", lambda: True)
+    monkeypatch.setattr(ai_summary, "local_model", lambda tier="medium": "stub")
+    monkeypatch.setattr(setup_research, "_evidence_package", lambda pack: {
+        "package_id": "p", "scope_caveats": ["Every result is post-hoc discovery."],
+        "sources": [{"sha256": "x", "content": view}],
+    })
+    calls: list[dict] = []
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        return {"model": "stub", "summary": summaries[min(len(calls), len(summaries)) - 1]}
+
+    monkeypatch.setattr(ai_summary, "request_ai_summary", request)
+    return setup_research, calls
+
+
+def _sr_line(text):
+    return {"what_is_working": [{"statement": text, "confidence": "medium", "evidence_refs": ["setup_research.facts"]}]}
+
+
+def test_setup_research_a_numberless_reply_is_asked_again(monkeypatch):
+    module, calls = _setup_research(monkeypatch, _sr_line("Several recipes work."), _sr_line("r1 has n=41."))
+    told: list[str] = []
+    narration = module._narrate({}, attempt_label=told)
+    assert len(calls) == 2
+    assert narration["narration"]["what_is_working"][0]["statement"] == "r1 has n=41."
+    assert told == ["attempt 2/3"]
+    assert "attempt" not in narration  # the published file's shape is unchanged
+    caveats = calls[1]["evidence"]["scope_caveats"]
+    assert any("quoted no number from the facts" in line for line in caveats)
+    assert not any("quoted no number" in line for line in calls[0]["evidence"]["scope_caveats"])
+
+
+def test_setup_research_three_numberless_replies_raise_with_every_reason(monkeypatch):
+    module, calls = _setup_research(monkeypatch, _sr_line("Nothing measured."))
+    with pytest.raises(ValueError, match="attempt 3/3: the narration quoted no number"):
+        module._narrate({})
+    assert len(calls) == 3
+
+
+def test_setup_research_a_first_time_pass_makes_exactly_one_call(monkeypatch):
+    module, calls = _setup_research(monkeypatch, _sr_line("r1 has n=41."))
+    module._narrate({})
+    assert len(calls) == 1
+
+
 from test_tj4_d1_view import rolling_root  # noqa: E402,F401 - fixture reuse
 
 
