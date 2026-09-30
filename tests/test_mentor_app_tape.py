@@ -262,6 +262,16 @@ def test_the_prefetch_rebuilds_every_30_min_and_never_moves_the_transcript(win):
     assert win.transcript.toPlainText() == before, "the prefetch never moves the transcript"
 
 
+def test_a_failed_re_read_keeps_the_good_read_for_the_same_tape(win):
+    _up(win)
+    win.send("/tape")
+    _drain(win)
+    good = win._tape_last["card"]
+    win._on_tape_ready({**win._tape_last, "card": tape.TapeCard(pack_hash=win._tape_last["hash"], error="down"),
+                        "narrated": True})
+    assert win._tape_last["card"] is good
+
+
 def test_the_window_pushes_once_a_day_only_with_the_setting_on(win, monkeypatch):
     win.clock["now"] = TUE_0631
     monkeypatch.setattr(settings, "push_brief_enabled", lambda: False)

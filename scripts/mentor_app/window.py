@@ -1188,8 +1188,9 @@ class MentorWindow(QMainWindow):
     def _remember_tape(self, result: dict) -> None:
         old = self._tape_last or {}
         card = result.get("card")
-        if card is None and old.get("hash") == result["hash"]:
-            card = old.get("card")  # a pack-only rebuild keeps the read it already has
+        kept = old.get("card") if old.get("hash") == result["hash"] else None
+        if kept is not None and kept.narrated and (card is None or not card.narrated):
+            card = kept  # a pack-only rebuild or a failed re-read keeps the read it already has
         self._tape_last = {"pack": result["pack"], "hash": result["hash"], "card": card, "at_utc": result["at_utc"]}
 
     def _on_tape_ready(self, result: dict) -> None:
