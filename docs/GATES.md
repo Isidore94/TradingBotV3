@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #326 Trade Mentor app P12 IBKR book (2026-09-30): first live `/book` with TWS up: the IBKR positions match TWS for one account; cash shows per currency (CAD and USD, no FX conversion); client id 9155 shows in TWS's API connections list only while the read runs (a few seconds); the bounce bot's own TWS connection is untouched.
 - #325 Trade Mentor app P7 news (2026-09-30): first live day with the app open: `/news` on a chip name shows headlines, each with a link, a source and a PT time; no headline shows without a link; the app log's "news cycle" lines show at most 40 symbols fetched per 30-min cycle; the desk shows no stutter at the 30-min mark (`desk_perf_report.py --day`) [trader]
 - #324 Trade Mentor app P11 hypotheses + frontier (2026-09-30): the first night after it merges, `/hypotheses` shows at most 3 of the night's cells and their n, win rate, LB and hold-out match `permutation_report_history/` newest file by hand; with the frontier switch off, a day of use calls nothing external (proxy log empty); with it on, one `/think pick SYM` costs what `/frontier` says, within 20% of the Anthropic console [trader]
 - #323 Trade Mentor app P10 debate (2026-09-30): first live `/debate`: both columns cite only ids from the pick pack; a rejected side shows as rejected, not replaced; the two calls finish in under 60 s on the 5080 [trader]

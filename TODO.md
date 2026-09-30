@@ -22,7 +22,9 @@ here.
   (`claude/mentor-app-p9-mirror-tilt-2026-09-30`, gate #322). P10 debate built
   (`claude/mentor-app-p10-debate-2026-09-30`, gate #323). P11 hypotheses + frontier built
   (`claude/mentor-app-p11-research-frontier-2026-09-30`, gate #324): the plan's ladder is
-  complete. Next only by the trader's word: an alerts pack, a movers pack, more recall sources.
+  complete. P12 IBKR `/book` built (trader 2026-09-30, `claude/mentor-app-p12-ibkr-book-2026-09-30`,
+  gate #326): read-only IBKR positions + cash beside Questrade, own client id 9155.
+  Next only by the trader's word: an alerts pack, a movers pack, more recall sources.
 
 ## Plan to 8/10, round 2 (trader's brief, 2026-09-25 evening)
 
