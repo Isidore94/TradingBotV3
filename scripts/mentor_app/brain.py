@@ -26,6 +26,8 @@ THINKING_MODEL_PREFIXES = ("gpt-oss",)
 CAPS_TTL = timedelta(hours=24)
 CAPS_STATE_PREFIX = "model_caps:"
 SHOW_TIMEOUT = 20
+#: The app's auto-attached packs share this many tokens; lower-priority packs are dropped first.
+ATTACH_BUDGET_TOKENS = 6000
 CHAT_REASONING_EFFORT = "low"
 STREAM_TIMEOUT = (10, 300)
 SELECT_TIMEOUT = 120
@@ -263,10 +265,17 @@ def run_turn(
     on_tool_call: Callable[[dict], None] = lambda call: None,
     cancelled: Callable[[], bool] = lambda: False,
     clock: Callable[[], float] = time.monotonic,
+    attachments: Sequence[Any] = (),
+    seen_ids: Iterable[str] = (),
+    question: str | None = None,
+    attach_budget_tokens: int = ATTACH_BUDGET_TOKENS,
 ) -> dict[str, Any]:
     """One chat turn, tools included. Returns the result dict ``done`` carries.
 
     ``native_tools`` is the probed capability (:func:`native_tools_for`); None (unknown) = the fallback.
+    ``attachments`` (``attach.AttachRequest``) are built here and injected as tool results after the
+    newest user turn (native) or as a packs block before it (fallback): never into the system prefix.
+    Rows cited in ``seen_ids`` are left out unless ``question`` names their subject.
     """
     url = f"{endpoint.rstrip('/')}/api/chat"
     started = clock()
@@ -282,24 +291,54 @@ def run_turn(
         "pack_ids": [],
         #: Every pack text sent this turn (guardrail 2 greys numbers found in none of them).
         "pack_texts": [],
+        #: Packs the app attached from the question (``source: auto``), kept or dropped by the budget.
+        "attached": [],
+        "attach_ms": 0,
+        #: "Not covered: ..." for a pre-trade question whose reply skipped checklist sections.
+        "appendix": "",
         "cancelled": False,
     }
     emitted: list[str] = []
+    gate_packs: list[Any] = []
+
+    def note_pack(name: str, pack: Any, shown_ids: Iterable[str] | None = None) -> None:
+        if hasattr(pack, "as_text"):
+            result["pack_texts"].append(pack.as_text())
+        for pack_id in (getattr(pack, "ids", ()) if shown_ids is None else shown_ids):
+            if pack_id not in result["pack_ids"]:
+                result["pack_ids"].append(pack_id)
+        if name == "gate_pack" and getattr(pack, "rows", ()):
+            gate_packs.append(pack)
 
     def use_pack(name: str, args: dict[str, Any]) -> Any:
         call = {"name": name, "arguments": args}
         result["tool_calls"].append(call)
         on_tool_call(call)
         pack = build_pack(name, args)
-        if hasattr(pack, "as_text"):
-            result["pack_texts"].append(pack.as_text())
-        for pack_id in getattr(pack, "ids", ()):
-            if pack_id not in result["pack_ids"]:
-                result["pack_ids"].append(pack_id)
+        note_pack(name, pack)
         return pack
 
     native = bool(tools) and native_tools is True
-    if tools and not native:
+    kept: list[tuple[Any, str]] = []
+    if attachments:
+        asked = question if question is not None else next(
+            (str(m.get("content") or "") for m in reversed(convo) if m.get("role") == "user"), "")
+        kept = _attach(list(attachments), build_pack, note_pack, result, set(seen_ids or ()), asked,
+                       int(attach_budget_tokens), on_tool_call, cancelled)
+        result["attach_ms"] = int((clock() - started) * 1000)
+        if cancelled():
+            result["cancelled"] = True
+            result["total_ms"] = int((clock() - started) * 1000)
+            return result
+    if kept and native:
+        convo.append({"role": "assistant", "content": "", "tool_calls": [
+            {"function": {"name": request.name, "arguments": dict(request.args)}} for request, _ in kept]})
+        convo.extend({"role": "tool", "content": text, "tool_name": request.name} for request, text in kept)
+    elif kept:
+        # No native tools: the app's packs go just before the newest user turn, the prefix untouched.
+        convo.insert(len(convo) - 1, {"role": "system", "content": "# Packs (attached by the app)\n"
+                                      + "\n\n".join(text for _, text in kept)})
+    if tools and not native and not kept:
         catalog = "\n".join(
             f"- {tool['function']['name']}: {tool['function'].get('description', '')}" for tool in tools
         )
@@ -357,8 +396,89 @@ def run_turn(
             name, args = _arguments(call)
             convo.append({"role": "tool", "content": use_pack(name, args).as_text(), "tool_name": name})
     result["text"] = "".join(emitted)
+    if gate_packs and not result["cancelled"]:
+        from mentor_app import checklist
+
+        result["appendix"] = "\n\n".join(filter(None, (checklist.appendix(result["text"], pack)
+                                                       for pack in gate_packs[:1])))
     result["total_ms"] = int((clock() - started) * 1000)
+    result["timings"] = {
+        "attach_ms": result["attach_ms"],
+        "prompt_tokens": result["prompt_tokens"],
+        "completion_tokens": result["completion_tokens"],
+        "first_token_ms": result["first_token_ms"],
+        "total_ms": result["total_ms"],
+        "tool_calls": len(result["tool_calls"]),
+        "auto_packs": sum(1 for item in result["attached"] if not item.get("dropped")),
+    }
+    logging.info("Trade Mentor turn: %s", json.dumps(result["timings"], sort_keys=True))
     return result
+
+
+def _render(name: str, rows: Sequence[Mapping[str, Any]], empty_text: str, hidden: int) -> str:
+    """A pack as the model sees it: one ``[id] text`` line per shown row."""
+    if not rows:
+        body = f"## {name}\n{empty_text or 'nothing'}"
+    else:
+        body = "\n".join([f"## {name}", *(f"[{row['id']}] {row.get('text', '')}" for row in rows)])
+    if hidden:
+        body += f"\n({hidden} row(s) you cited in the last turns left out; ask again by name to see them)"
+    return body
+
+
+def _attach(
+    requests_: list[Any],
+    build_pack: Callable[[str, Mapping[str, Any]], Any],
+    note_pack: Callable[..., None],
+    result: dict[str, Any],
+    seen_ids: set[str],
+    question: str,
+    budget: int,
+    on_tool_call: Callable[[dict], None],
+    cancelled: Callable[[], bool],
+) -> list[tuple[Any, str]]:
+    """Build the app's packs, drop recently-cited rows, keep the most important under ``budget`` tokens."""
+    from mentor_app.attach import names_subject
+    from mentor_app.chat_model import estimate_tokens
+
+    built: list[tuple[Any, Any, list[dict[str, Any]], int]] = []
+    for request in sorted(requests_, key=lambda item: getattr(item, "priority", 50)):
+        if cancelled():
+            return []
+        on_tool_call({"name": request.name, "arguments": dict(request.args), "source": "auto"})
+        try:
+            pack = build_pack(request.name, dict(request.args))
+        except Exception as exc:  # noqa: BLE001 - a broken pack is left out, never a guess
+            logging.warning("Trade Mentor: auto pack %s failed: %s", request.name, exc)
+            continue
+        rows = [dict(row) for row in getattr(pack, "rows", ()) or ()]
+        shown = [row for row in rows if str(row.get("id")) not in seen_ids or names_subject(question, str(row.get("id")))]
+        built.append((request, pack, shown, len(rows) - len(shown)))
+    kept: list[tuple[Any, str]] = []
+    used = 0
+    for request, pack, shown, hidden in built:
+        text = _render(getattr(pack, "name", request.name), shown, getattr(pack, "empty_text", ""), hidden)
+        cost = estimate_tokens(text)
+        dropped = False
+        if used + cost > budget:
+            if kept:
+                dropped = True
+            else:  # the most important pack alone is too big: keep its first rows
+                lines = text.split("\n")
+                while lines and estimate_tokens("\n".join(lines)) > budget:
+                    lines.pop()
+                shown = [row for row in shown if f"[{row['id']}]" in "\n".join(lines)]
+                text = "\n".join(lines)
+                cost = estimate_tokens(text)
+        entry = {"name": request.name, "arguments": dict(request.args), "reason": getattr(request, "reason", ""),
+                 "source": "auto", "rows": len(shown), "hidden": hidden, "tokens": cost, "dropped": dropped}
+        result["attached"].append(entry)
+        if dropped:
+            continue
+        used += cost
+        note_pack(request.name, pack, [str(row["id"]) for row in shown])
+        kept.append((request, text))
+    return kept
 
 
 def warm(endpoint: str, model: str, keep_alive: Any = -1, *, post: Post = default_post) -> Mapping[str, Any]:

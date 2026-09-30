@@ -244,3 +244,37 @@ def test_any_plan_edit_changes_the_hash_even_one_that_adds_no_line(world):
     b = pick_pack.build("NVDA", now=NOW, paths=world)
     assert a.ids == b.ids and a.as_text() == b.as_text(), "the edit adds no citable line"
     assert pick_pack.pack_hash(a) != pick_pack.pack_hash(b), "a changed plan re-narrates the card"
+
+
+# ---------------------------------------------------------------- P13: the M5 branch
+def test_an_m5_focus_pick_takes_its_setup_cell_from_the_m5_outcome_store(world):
+    rows = {row["id"]: row for row in pick_pack.build("AMD", now=NOW, paths=world).rows}
+    assert rows["pick:AMD:branch"]["branch"] == "m5" and "M5 bounce cell" in rows["pick:AMD:branch"]["text"]
+    m5 = rows["pick:AMD:m5cell"]
+    assert m5["setup"] == "vwap" and m5["n"] == 35 and m5["wins"] == 20
+    assert "latest M5 alert, 2026-09-25" in m5["text"] and "Wilson LB" in m5["text"]
+    assert "D1 context only" in rows["pick:AMD:cell"]["text"]
+    assert rows["pick:AMD:cohort:1"]["text"].startswith("Cohort human_focus_m5 SHORT")
+
+
+def test_an_m5_pick_with_no_outcome_file_says_not_stored_and_never_guesses(world):
+    rows = {row["id"]: row for row in pick_pack.build("AMD", now=NOW, paths=replace(world, m5_outcomes=None)).rows}
+    assert rows["pick:AMD:m5cell"]["text"].startswith("M5 setup cell: not stored")
+    missing = replace(world, m5_outcomes=world.focus_longs.with_name("nope.csv"))
+    rows = {row["id"]: row for row in pick_pack.build("AMD", now=NOW, paths=missing).rows}
+    assert "not stored" in rows["pick:AMD:m5cell"]["text"]
+
+
+def test_an_m5_pick_with_no_alert_of_its_own_says_so(world):
+    world.focus_shorts.write_text("AMD\nQQQX\n", encoding="utf-8")
+    rows = {row["id"]: row for row in pick_pack.build("QQQX", now=NOW, paths=world).rows}
+    assert "no usable M5 alert for QQQX SHORT" in rows["pick:QQQX:m5cell"]["text"]
+
+
+def test_a_swing_or_claimed_pick_stays_on_the_d1_branch(world):
+    for symbol in ("NVDA", "TSLA"):
+        ids = pick_pack.build(symbol, now=NOW, paths=world).ids
+        assert f"pick:{symbol}:branch" not in ids and f"pick:{symbol}:m5cell" not in ids
+    assert pick_pack.is_m5_branch([("m5", "SHORT")], "SHORT", []) is True
+    assert pick_pack.is_m5_branch([("m5", "SHORT")], "SHORT", [{"side": "SHORT"}]) is False, "a D1 claim wins"
+    assert pick_pack.is_m5_branch([("m5", "SHORT"), ("swing", "SHORT")], "SHORT", []) is False

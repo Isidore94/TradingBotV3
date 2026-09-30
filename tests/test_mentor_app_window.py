@@ -266,6 +266,84 @@ def test_connect_without_gemma4_keeps_the_medium_model_on_the_fallback(window, m
     recall.set_searcher(None)
 
 
+def _run_turn(window, app, text):
+    window.send(text)
+    worker = window._worker
+    assert worker is not None and worker.wait(5000)
+    deadline = time.monotonic() + 5
+    while window._worker is not None and time.monotonic() < deadline:
+        app.processEvents()
+    _flush(window)
+
+
+def test_a_plain_pre_trade_question_auto_attaches_the_gate_and_the_log_says_so(app, tmp_path, monkeypatch):
+    from mentor_app.window import MentorWindow
+    from mentor_packs import context_pack
+    from mentor_packs.registry import make_pack
+
+    monkeypatch.setattr(settings, "gpu_block_reason", lambda now=None: "")
+    monkeypatch.setattr(settings, "context_tokens", lambda: 8192)
+    sent: list = []
+    built: list = []
+
+    def build(name, args):
+        built.append((name, dict(args)))
+        if name == "gate_pack":
+            return make_pack(name, [{"id": "gate:TSLA:pick:TSLA:earn", "text": "earnings far"},
+                                    {"id": "gate:TSLA:tape:d1env", "text": "D1 bearish"},
+                                    {"id": "gate:TSLA:book:industry", "text": "no Autos open"}])
+        return make_pack(name, [{"id": f"news:{args.get('symbol')}:1", "text": "a headline"}])
+
+    win = MentorWindow(
+        store=MentorChatStore(tmp_path / "mentor_chat.sqlite3"), queue=PrefetchQueue(),
+        stream_post=lambda url, payload, cancelled: sent.append(payload) or _answer(
+            "Earnings are far [gate:TSLA:pick:TSLA:earn]."),
+        post=lambda url, payload, timeout: {}, pack_builder=build,
+    )
+    try:
+        win._brain_ok, win._endpoint, win._model, win._native_tools = True, "http://x", "gemma4:12b", True
+        win._on_context(context_pack.fixture())  # TSLA is a swing short on Focus
+        _run_turn(win, app, "im thinking of shorting TSLA thoughts?")
+        assert built[0] == ("gate_pack", {"side": "SHORT", "symbol": "TSLA"})
+        assert [m["role"] for m in sent[0]["messages"]][-3:] == ["assistant", "tool", "tool"]
+        shown = _text(win)
+        assert "Not covered:" in shown and "[gate:TSLA:book:industry]" in shown
+        row = win.store.turns()[-1]
+        calls = json.loads(row["tool_calls_json"])
+        assert [(c["name"], c["source"]) for c in calls] == [("gate_pack", "auto"), ("news_pack", "auto")]
+        timings = json.loads(row["timings_json"])
+        assert timings["auto_packs"] == 2 and timings["prompt_tokens"] == 50 and "attach_ms" in timings
+        assert "Not covered:" in row["text"], "the stored turn is what the trader saw"
+        win._io.submit(lambda: None).result(5)
+        win.send("/latency")
+        _flush(win)
+        app.processEvents()
+        assert "Last answers" in _text(win) and "gemma4:12b" in _text(win)
+    finally:
+        win.shutdown()
+        win.deleteLater()
+
+
+def test_today_answers_from_the_journal(app, tmp_path, monkeypatch):
+    from mentor_app.window import MentorWindow
+    from mentor_packs import journal_pack
+
+    monkeypatch.setattr(settings, "gpu_block_reason", lambda now=None: "")
+    journal = journal_pack.write_fixture_journal(tmp_path / "trade_journal.sqlite3")
+    win = MentorWindow(store=MentorChatStore(tmp_path / "mentor_chat.sqlite3"), queue=PrefetchQueue(),
+                       post=lambda url, payload, timeout: {}, journal_path=journal,
+                       now=lambda: journal_pack.FIXTURE_NOW)
+    try:
+        win.send("/today")
+        assert win.queue.run_one()
+        app.processEvents()
+        assert "[jrn:2026-09-30:totals]" in _text(win) and "LONG NVDA" in _text(win)
+        assert win._read_journal_symbols() == ["TSLA", "NVDA", "AMD", "ALL", "MSFT"]
+    finally:
+        win.shutdown()
+        win.deleteLater()
+
+
 def test_tape_and_chips_show_the_context_pack(window):
     from mentor_packs import context_pack
 

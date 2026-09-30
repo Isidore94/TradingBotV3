@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS turns (
     latency_ms INTEGER,
     prompt_tokens INTEGER,
     completion_tokens INTEGER,
-    tool_calls_json TEXT NOT NULL DEFAULT '[]'
+    tool_calls_json TEXT NOT NULL DEFAULT '[]',
+    timings_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS turns_by_session ON turns(session_id, id);
 CREATE TABLE IF NOT EXISTS challenges (
@@ -171,6 +172,14 @@ def _open_graded_column(conn: sqlite3.Connection) -> None:
         raise
 
 
+def _add_turn_columns(conn: sqlite3.Connection) -> None:
+    """Add P13's per-turn timings to an older ``turns`` table (rows kept)."""
+    have = {row[1] for row in conn.execute("PRAGMA table_info(turns)").fetchall()}
+    if "timings_json" not in have:
+        conn.execute("ALTER TABLE turns ADD COLUMN timings_json TEXT NOT NULL DEFAULT '{}'")
+        conn.commit()
+
+
 def _add_note_columns(conn: sqlite3.Connection) -> None:
     """Add the Phase 4 note columns to an older ``profile_notes`` (nullable, rows kept)."""
     have = {row[1] for row in conn.execute("PRAGMA table_info(profile_notes)").fetchall()}
@@ -205,6 +214,7 @@ class MentorChatStore:
                         conn.executescript(SCHEMA)
                         _open_graded_column(conn)
                         _add_note_columns(conn)
+                        _add_turn_columns(conn)
                     except BaseException:
                         conn.close()
                         raise
@@ -244,11 +254,12 @@ class MentorChatStore:
         prompt_tokens: int | None = None,
         completion_tokens: int | None = None,
         tool_calls: Iterable[Any] = (),
+        timings: dict[str, Any] | None = None,
     ) -> int | None:
         return self._write(
             "turn",
             "INSERT INTO turns (session_id, ts_utc, role, text, pack_ids_json, model, latency_ms, "
-            "prompt_tokens, completion_tokens, tool_calls_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "prompt_tokens, completion_tokens, tool_calls_json, timings_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 session_id,
                 utc_now(),
@@ -260,8 +271,15 @@ class MentorChatStore:
                 prompt_tokens,
                 completion_tokens,
                 _json(tool_calls),
+                json.dumps(dict(timings or {}), sort_keys=True, default=str),
             ),
         )
+
+    def latency_rows(self, limit: int = 10) -> list[dict[str, Any]]:
+        """The last ``limit`` assistant turns with their timings (newest last)."""
+        return self._read(
+            "SELECT id, ts_utc, model, latency_ms, prompt_tokens, timings_json, tool_calls_json FROM turns "
+            "WHERE role = 'assistant' ORDER BY id DESC LIMIT ?", (int(limit),))[::-1]
 
     def turns(self, session_id: int | None = None, *, limit: int = 200) -> list[dict[str, Any]]:
         if session_id is None:

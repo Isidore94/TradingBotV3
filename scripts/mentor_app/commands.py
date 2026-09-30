@@ -25,6 +25,9 @@ HELP_TEXT = (
     "- `/news SYM [days]` the stored headlines for a stock (title, source, time, link; 3 days unless you say)\n"
     "- `/vetoes [YYYY-MM-DD]` the last session's vetoes (or that one's), each with its slice and any challenge\n"
     "- `/check short NVDA 400 stop 3.20 entry 3.05` check a trade before you take it (advice only; it never orders)\n"
+    "- `/today` today's trades from your journal: R or $, hold time, account, totals, open (`/today week`,"
+    " `/today yesterday`, `/today 2026-09-29`)\n"
+    "- `/latency` how fast my last 10 answers were (attach, first token, total, tool calls)\n"
     "- `/book` your open positions by account (Questrade when it can be read, else the journal; read-only)\n"
     "- `/mirror [weeks]` your own record in cuts with n: likes vs the scan, vetoes, journal, regime (6 weeks"
     " unless you say)\n"
@@ -168,6 +171,16 @@ def handle(text: str) -> CommandResult | None:
         if rest:
             return CommandResult("error", "Try `/tilt` (no arguments).")
         return CommandResult("tilt")
+    if name == "today":
+        day = rest.lower().replace(" ", "_") or "today"
+        if day not in ("today", "yesterday", "week", "this_week", "last_week") and not re.fullmatch(
+                r"\d{4}-\d{2}-\d{2}", day):
+            return CommandResult("error", "Try `/today`, `/today yesterday`, `/today week` or `/today 2026-09-29`.")
+        return CommandResult("today", "", day)
+    if name == "latency":
+        if rest:
+            return CommandResult("error", "Try `/latency` (no arguments).")
+        return CommandResult("latency")
     if name == "book":
         if rest:
             return CommandResult("error", "Try `/book` (no arguments).")

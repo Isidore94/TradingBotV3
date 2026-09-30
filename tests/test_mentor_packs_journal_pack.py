@@ -1,0 +1,94 @@
+"""P13 journal pack: today's (or a day's/week's) trades from the journal, read-only, ids per trade."""
+
+from __future__ import annotations
+
+import sqlite3
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = ROOT_DIR / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from mentor_packs import journal_pack  # noqa: E402
+from mentor_packs.journal_read import ET  # noqa: E402
+
+NOW = journal_pack.FIXTURE_NOW
+
+
+@pytest.fixture
+def journal(tmp_path):
+    return journal_pack.write_fixture_journal(tmp_path / "trade_journal.sqlite3")
+
+
+def _rows(pack):
+    return {row["id"]: row for row in pack.rows}
+
+
+def test_today_lists_each_trade_with_r_or_dollars_hold_and_tax_class(journal):
+    rows = _rows(journal_pack.build("today", now=NOW, journal=journal))
+    nvda = rows["jrn:2026-09-30:W1"]["text"]
+    assert "LONG NVDA (day) size 100" in nvda and "+1.00R (+100.00 $)" in nvda and "held 45 min" in nvda
+    assert "opened Wed 09:35 ET" in nvda and "account M1 (margin)" in nvda
+    amd = rows["jrn:2026-09-30:W2"]["text"]
+    assert "-120.00 $ (R unknown: no planned stop)" in amd, "no stop: dollars, R unknown, never a guess"
+
+
+def test_option_legs_opened_together_are_one_spread_in_a_tax_free_account(journal):
+    rows = _rows(journal_pack.build("today", now=NOW, journal=journal))
+    spread = rows["jrn:2026-09-30:W3+W4"]["text"]
+    assert spread.startswith("SPREAD ALL (spread)") and "+50.00 $" in spread and "registered, tax-free" in spread
+
+
+def test_totals_and_open_positions(journal):
+    rows = _rows(journal_pack.build("today", now=NOW, journal=journal))
+    totals = rows["jrn:2026-09-30:totals"]
+    assert (totals["count"], totals["wins"], totals["net"], totals["open"]) == (3, 2, 30.0, 1)
+    assert "largest loss AMD -120.00 $" in totals["text"] and "+1.00R over 1 of 3" in totals["text"]
+    assert "Open LONG MSFT 10 @ 400.00, stop 395.00" in rows["jrn:2026-09-30:open:W5"]["text"]
+
+
+def test_yesterday_weekday_week_and_last_week(journal):
+    assert "jrn:2026-09-29:Y1" in _rows(journal_pack.build("yesterday", now=NOW, journal=journal))
+    assert "jrn:2026-09-29:Y1" in _rows(journal_pack.build("tuesday", now=NOW, journal=journal))
+    assert "jrn:2026-09-29:Y1" in _rows(journal_pack.build("2026-09-29", now=NOW, journal=journal))
+    week = _rows(journal_pack.build("week", now=NOW, journal=journal))
+    assert {"jrn:wk2026-09-28:Y1", "jrn:wk2026-09-28:W1", "jrn:wk2026-09-28:totals"} <= set(week)
+    assert week["jrn:wk2026-09-28:totals"]["count"] == 4
+    last = _rows(journal_pack.build("last_week", now=NOW, journal=journal))
+    assert last["jrn:wk2026-09-21:totals"]["count"] == 0 and "no trades" in last["jrn:wk2026-09-21:totals"]["text"]
+
+
+def test_a_quiet_day_is_a_citable_none_and_a_bad_day_word_is_empty(journal):
+    quiet = journal_pack.build("2026-09-28", now=NOW, journal=journal)
+    assert quiet.ids[0] == "jrn:2026-09-28:totals" and "no trades" in quiet.rows[0]["text"]
+    assert journal_pack.build("someday", now=NOW, journal=journal).ids == ()
+
+
+def test_a_missing_journal_is_no_trades_not_a_raise(tmp_path):
+    pack = journal_pack.build("today", now=NOW, journal=tmp_path / "none.sqlite3")
+    assert "jrn:2026-09-30:totals" in pack.ids
+
+
+def test_the_journal_is_opened_read_only(journal):
+    before = journal.read_bytes()
+    journal_pack.build("week", now=NOW, journal=journal)
+    assert journal.read_bytes() == before
+    with sqlite3.connect(journal) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 6
+
+
+def test_today_summary_and_recent_symbols(journal):
+    assert journal_pack.today_summary(journal, now=NOW) == "Today so far: 3 closed trade(s), 2 win(s), net +30.00 $, 1 open"
+    assert journal_pack.recent_symbols(journal, now=NOW) == ["TSLA", "NVDA", "AMD", "ALL", "MSFT"]
+    later = datetime(2026, 12, 30, 11, 0, tzinfo=ET)
+    assert journal_pack.recent_symbols(journal, now=later) == [], "only the last 60 days"
+
+
+def test_fixture_ids_are_unique():
+    pack = journal_pack.fixture()
+    assert pack.ids and len(pack.ids) == len(set(pack.ids))

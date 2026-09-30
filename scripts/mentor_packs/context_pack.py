@@ -46,6 +46,8 @@ class Sources:
     open_positions: Callable[[], list[Mapping[str, Any]]]
     focus: Callable[[], Mapping[str, Mapping[str, list[str]]]]
     econ: Callable[[str], Mapping[str, Any]]
+    #: P13: "Today so far: ..." from the journal (``journal_pack.today_summary``); None = not read.
+    today: Callable[[datetime], str] | None = None
 
 
 def _journal_rows(sql: str) -> list[dict[str, Any]]:
@@ -105,6 +107,12 @@ def _live_econ(session: str) -> Mapping[str, Any]:
     return econ_brief.today_view(session)
 
 
+def _live_today(moment: datetime) -> str:
+    from mentor_packs import journal_pack
+
+    return journal_pack.today_summary(now=moment)
+
+
 def live_sources() -> Sources:
     return Sources(
         auto_mode=_live_auto_mode,
@@ -113,6 +121,7 @@ def live_sources() -> Sources:
         open_positions=_live_open_positions,
         focus=_live_focus,
         econ=_live_econ,
+        today=_live_today,
     )
 
 
@@ -195,6 +204,11 @@ def build(*, now: datetime | None = None, sources: Sources | None = None) -> Pac
             )
     except Exception as exc:  # noqa: BLE001
         rows.append(_unknown("ctx:positions", "Open journal positions", exc))
+    if src.today is not None:
+        try:
+            rows.append({"id": "ctx:today", "kind": "today", "text": str(src.today(moment))})
+        except Exception as exc:  # noqa: BLE001
+            rows.append(_unknown("ctx:today", "Today so far", exc))
     try:
         focus = src.focus()
         for category in ("swing", "m5"):
@@ -254,6 +268,7 @@ def fixture_sources() -> Sources:
             "today": [{"id": "t1", "date": session, "time_et": "10:00", "label": "ISM Manufacturing"}],
             "week": [{"id": "w1", "date": "2026-10-02", "time_et": "08:30", "label": "Nonfarm payrolls"}],
         },
+        today=lambda moment: "Today so far: 2 closed trade(s), 1 win(s), net +40.00 $, 1 open",
     )
 
 
