@@ -2,7 +2,7 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-09-30 PT (Mentor P12)
+**Updated:** 2026-09-30 PT (Mentor plan inference)
 
 - **Live on `main`:** round 1, round 2 Phase A (`81272d42`), Phase B + S (`2d59aace`),
   S10a + S7 (`3802c0d7`), p9 phase 1 regime frame (`849390a2`), p9 phase 2 long
@@ -15,7 +15,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   Saturday summary reads every slice (`1751c338`); gates #257-#306.
 - **GUI:** 4K design live; selftests 105/105; long combined Qt runs still hit
   worker-lifetime crashes.
-- **Merged 2026-09-30, live at the next desk restart:** Trade Mentor app P0-P12 (`370c6efb`, `8f7664fc` Pause AI, `e9c77690` P7-P12): chat, `/pick`, `/vetoes`, `/tape`, `/check`, `/news`, `/book` (Questrade + IBKR read-only), `/mirror`, `/tilt`, `/debate`, `/hypotheses`; gates #311-#318, #321-#326. `mentor_app_enabled` off until gate #312; frontier OFF (trader's word).
+- **Merged 2026-09-30, live at the next desk restart:** Trade Mentor app P0-P12 (`370c6efb`, `8f7664fc` Pause AI, `e9c77690` P7-P12, `152e765f` plan inference): chat, `/plan` `/drop` (plan lines inferred from chat), `/pick`, `/vetoes`, `/tape`, `/check`, `/news`, `/book` (Questrade + IBKR read-only), `/mirror`, `/tilt`, `/debate`, `/hypotheses`; gates #311-#318, #321-#327. `mentor_app_enabled` off until gate #312; frontier OFF (trader's word).
 - **Desk:** next launch uses main; live checks are in GATES.
 - **gpt-oss:20b:** code merged, inert for gemma3; probe 2 on 10-01 02:05, then the trader's word.
 - **Night window:** the night AI starts 22:00 PT. Its model runs on the RTX 5080 host
@@ -31,8 +31,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   regime_read rejected twice; setup_research narration absent. #264 needs a desk session.
 - **Next action:** Tue 07:30 gate #305; gates #300-#301 (rolling RRS, Movers); gates #297-#298 (runner dips armed, a fire in the Alert Center); `desk_perf_report.py --day 2026-09-28 --compare 2026-09-24`,
   gates #258-#287. Left: B10, B2, C4a, Phase C.
-- **Trader actions owed:** set Risk per trade ($) in Settings > General; fill
-  `trading_plan.md`; run the permutation backfill before Saturday; confirm setup tags
+- **Trader actions owed:** set Risk per trade ($) in Settings > General; run the permutation backfill before Saturday; confirm setup tags
   (P2 screen); Task Scheduler "run whether logged on or not" on the night task;
   `map_freshness.py --apply`; desk down + market closed: `journal_pnl_repair.py` (#205),
   the options-journal repair (#162), `journal_questrade_gaps.py --statement`; the
