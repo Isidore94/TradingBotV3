@@ -153,15 +153,30 @@ def _answer_first_and_leave(host, card, trades):
     host._show_trade_mentor_prompt(slot_at(SESSION, 10))
 
 
+def _answer_the_questions(host, card, trades):
+    assert card._question_inputs, "an unplanned trade is asked where it came from (TJ-12)"
+    for _subject, combo in card._question_inputs.values():
+        combo.setCurrentIndex(next(i for i in range(combo.count()) if combo.itemData(i)))
+    assert card.save_questions()["ok"] is True
+
+
 SCENARIOS = {
+    # test_tj12_mentor_wake: the woken question kinds are asked and their answers stored.
+    "questions_answered": {"setup": _one_trade, "act": _answer_the_questions, "expect": {"NOTE"}},
     # test_mentor_asks_once: answering the read files the untouched trade and retires it.
-    "submit_files_and_retires": {"setup": _one_trade, "act": lambda host, card, trades: card.submit()},
+    "submit_files_and_retires": {
+        "setup": _one_trade, "act": lambda host, card, trades: card.submit(), "expect": {"MENTOR_ASKED"},
+    },
     # test_mentor_asks_once: skipping the card also retires the trade.
-    "skip_retires": {"setup": _one_trade, "act": lambda host, card, trades: card.skip()},
+    "skip_retires": {"setup": _one_trade, "act": lambda host, card, trades: card.skip(), "expect": {"MENTOR_ASKED"}},
     # test_mentor_stores_an_answered_trade: one trade saved, the other filed on leave.
-    "answer_one_file_the_other": {"setup": _two_trades, "act": _answer_first_and_leave},
+    "answer_one_file_the_other": {
+        "setup": _two_trades, "act": _answer_first_and_leave, "expect": {"MENTOR_ASKED", "RECALLED"},
+    },
     # test_mentor_stop_first / TJ-9 ride: an ordinary 11:00 slot still carries the trade.
-    "ordinary_slot_rides": {"setup": _one_trade, "hour": 11, "act": lambda host, card, trades: card.skip()},
+    "ordinary_slot_rides": {
+        "setup": _one_trade, "hour": 11, "act": lambda host, card, trades: card.skip(), "expect": {"MENTOR_ASKED"},
+    },
 }
 
 
@@ -171,11 +186,9 @@ def test_the_app_writes_the_same_journal_events_as_the_desk(name, tmp_path, monk
     desk = _run("desk", scenario, tmp_path, monkeypatch)
     app = _run("app", scenario, tmp_path, monkeypatch)
     assert desk, "the scenario must write something"
-    assert "MENTOR_ASKED" in desk
+    assert scenario["expect"] <= set(desk), sorted(desk)
     assert {kind: len(rows) for kind, rows in app.items()} == {kind: len(rows) for kind, rows in desk.items()}
     assert app == desk
-    if name == "answer_one_file_the_other":
-        assert "RECALLED" in desk, "the saved answers are journal rows too"
 
 
 def test_the_app_host_runs_the_desks_code_not_a_fork():
