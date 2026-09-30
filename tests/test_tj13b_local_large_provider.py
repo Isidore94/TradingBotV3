@@ -441,10 +441,10 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         # weeknight does not carry - so here it sits between the word tagger
         # and the briefs.
         "exit_note_fields",
-        # LEAD AMENDMENT 2026-09-24 (WISHLIST P1-3 3b, trader decision):
-        # `ticker_briefs` is Saturday-only, so it left this slate.
-        # Mentor app P4 (2026-09-30): `mentor_review`, registered directly after
-        # the briefs, so on a weeknight it follows the exit-note reader.
+        # Trader 2026-09-30: `ticker_briefs` is back on the weeknight slate
+        # (Saturday-only 2026-09-24 to 2026-09-30).
+        "ticker_briefs",
+        # Mentor app P4 (2026-09-30): `mentor_review`, directly after the briefs.
         "mentor_review",
         # Econ morning brief (2026-09-24): a stage 2 model slot directly after
         # the briefs.

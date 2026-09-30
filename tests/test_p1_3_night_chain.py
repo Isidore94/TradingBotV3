@@ -403,7 +403,8 @@ def test_the_budget_is_a_weeknight_rule_and_a_setting(monkeypatch):
             return cls.settings.get(key, default)
 
     monkeypatch.setattr(store, "_paths", lambda: _Paths)
-    assert runner.night_budget_for("weeknight") == 150.0
+    assert runner.DEFAULT_NIGHT_BUDGET_MINUTES == 360.0
+    assert runner.night_budget_for("weeknight") == 360.0
     assert runner.night_budget_for("saturday") == 0.0
     assert runner.night_budget_for("sunday") == 0.0
     _Paths.settings = {"ai_night_budget_minutes": 90}
@@ -448,17 +449,22 @@ def test_health_names_the_slots_the_budget_skipped(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 3b: ticker briefs, Saturday only, the week's names, 7-day week cache
+# 3b: ticker briefs, the week's names, 7-day week cache
 # ---------------------------------------------------------------------------
 
 
-def test_ticker_briefs_are_saturday_only_and_run_the_weekly_wrapper():
+def test_ticker_briefs_run_every_weeknight_and_run_the_weekly_wrapper():
+    # Trader 2026-09-30: back on the weeknight slate (the 5080 finishes in minutes).
     from ai_jobs import briefs, runner
 
-    assert "ticker_briefs" in runner.WEEKEND_ONLY_SLOTS
-    assert "ticker_briefs" not in [slot.name for slot in runner.slots_for("weeknight")]
+    assert "ticker_briefs" not in runner.WEEKEND_ONLY_SLOTS
+    weeknight = {slot.name: slot for slot in runner.slots_for("weeknight")}
+    assert weeknight["ticker_briefs"].run is briefs.run_weekly_ticker_briefs
     saturday = {slot.name: slot for slot in runner.slots_for("saturday")}
     assert saturday["ticker_briefs"].run is briefs.run_weekly_ticker_briefs
+    for name in ("ai_summary", "week_review_narration", "setup_keys_narration"):
+        assert name in runner.WEEKEND_ONLY_SLOTS
+        assert name not in weeknight
 
 
 def _week_sources(tmp_path: Path) -> dict:

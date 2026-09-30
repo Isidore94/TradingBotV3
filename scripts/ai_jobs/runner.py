@@ -210,8 +210,9 @@ MODEL_DOWN_FLAG = "model_down"
 AI_PAUSED_FLAG = "ai_paused"
 
 #: P1-3 3a. Minutes a weeknight may spend, counted from its first ledger row.
+#: 360 since 2026-09-30 (trader): 150 was sized for the old box.
 NIGHT_BUDGET_SETTING = "ai_night_budget_minutes"
-DEFAULT_NIGHT_BUDGET_MINUTES = 150.0
+DEFAULT_NIGHT_BUDGET_MINUTES = 360.0
 #: Ledger flag on a model slot skipped because the night budget could not hold it.
 NIGHT_BUDGET_FLAG = "night_budget"
 #: Model slots in the order the budget protects them (the trader's P1-3 list).
@@ -1731,7 +1732,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         JobSlot(
             name="ticker_briefs",
             goal="coaching",
-            # Saturday only, for the week's picks, alerts and traded names (P1-3 3b).
+            # Every night, for the week's picks, alerts and traded names (P1-3 3b).
             run=briefs.run_weekly_ticker_briefs,
             reserve_minutes=120.0,
             description="Medium-tier advisory briefs for the week's picked, alerted and traded names",
@@ -1959,12 +1960,12 @@ NIGHT_KINDS = (NIGHT_WEEKNIGHT, NIGHT_SATURDAY, NIGHT_SUNDAY)
 #: story's cadence. It is weekly work on the largest local model the desk owns,
 #: and a Tuesday night has a session behind it and another in front.
 #:
-#: `ticker_briefs` joins it (trader, 2026-09-24, WISHLIST P1-3 3b): 66-139
-#: minutes a weeknight for briefs only the Saturday summary reads.
+#: `ticker_briefs` was weekend-only 2026-09-24 (66-139 min a weeknight on the old
+#: box); the trader put it back on weeknights 2026-09-30 (the 5080 takes minutes).
 #:
 #: `setup_keys_narration` joins it (P1-4 4d, 2026-09-25): the permutation report
 #: is weekly research, narrated once on Saturday.
-WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration", "ticker_briefs", "setup_keys_narration")
+WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration", "setup_keys_narration")
 
 #: The deterministic stage (decision 0018 stage 1), which every night runs. It
 #: ENDS at `swing_path_facts` (S15, directly after S12's `family_side_evidence`); a
