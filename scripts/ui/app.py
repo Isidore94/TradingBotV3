@@ -581,6 +581,14 @@ class MainWindow(QMainWindow):
         self.autopilot_panel.service.enabledChanged.connect(lambda *_: self._sync_auto_mode_button())
         self._sync_auto_mode_button()
         status.addWidget(self.auto_mode_button)
+        # Opens the Trade Mentor app (its own process) or brings it to the front.
+        self.trade_mentor_app_button = QPushButton("Trade Mentor")
+        self.trade_mentor_app_button.setObjectName("TradeMentorAppButton")
+        self.trade_mentor_app_button.setToolTip(
+            "Open the Trade Mentor app in its own window. Click again to bring it to the front."
+        )
+        self.trade_mentor_app_button.clicked.connect(self._open_trade_mentor_app)
+        status.addWidget(self.trade_mentor_app_button)
         self.ib_status = QLabel("IB/TWS: unknown")
         self.scan_status = QLabel("Scan: idle")
         self.setup_status = QLabel("Setups: 0")
@@ -795,6 +803,12 @@ class MainWindow(QMainWindow):
             getattr(self, "_technical_integrity_snapshot", {}),
             self,
         ).exec()
+
+    def _open_trade_mentor_app(self) -> None:
+        """Start or focus the Trade Mentor app; the launcher works off the Qt thread."""
+        from ui.services.mentor_launcher import launch_or_focus
+
+        launch_or_focus()
 
     def _cycle_auto_mode(self) -> None:
         service = self.autopilot_panel.service
