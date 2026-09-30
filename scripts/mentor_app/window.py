@@ -48,6 +48,8 @@ from mentor_app.store import MentorChatStore
 CONTEXT_REFRESH_MS = 5 * 60 * 1000
 #: The /check narration's output cap (gate.MAX_OUTPUT_TOKENS).
 MAX_GATE_TOKENS = 600
+#: How long a /check waits for the Questrade read it queued (then it uses the journal).
+BOOK_WAIT_SECONDS = 10.0
 GPU_CHECK_MS = 60 * 1000
 #: How often the app looks at the Pause AI switch (the desk may flip it).
 PAUSE_CHECK_MS = 5 * 1000
@@ -101,6 +103,15 @@ class _Bridge(QObject):
     tape_refreshed = Signal(object)
     check_card = Signal(object)
     desk_state = Signal(object)
+    news_card = Signal(object)
+    book_card = Signal(object)
+    mirror_card = Signal(object)
+    mirror_week = Signal(object)
+    tilt_ready = Signal(object)
+    tilt_card = Signal(object)
+    debate_card = Signal(object)
+    frontier_card = Signal(object)
+    frontier_state = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -115,6 +126,13 @@ class InputBox(QPlainTextEdit):
             self.submitted.emit()
             return
         super().keyPressEvent(event)
+
+
+def _ibkr_fetch_book(now: Any) -> Any:
+    """The real IBKR read (``ibkr_positions.fetch_book``), imported on the news thread."""
+    import ibkr_positions
+
+    return ibkr_positions.fetch_book(now)
 
 
 class MentorWindow(QMainWindow):
@@ -146,6 +164,20 @@ class MentorWindow(QMainWindow):
         follow_desk: bool = False,
         desk_probe: Callable[[], bool | None] | None = None,
         quit_app: Callable[[], Any] | None = None,
+        news_fetcher: Any = None,
+        news_open_symbols: Callable[[], Any] | None = None,
+        news_queue: PrefetchQueue | None = None,
+        book_fetch: Callable[..., Any] | None = None,
+        book_sources: Callable[[], Any] | None = None,
+        ibkr_fetch: Callable[..., Any] | None = None,
+        mirror_builder: Callable[[int], Any] | None = None,
+        mirror_request: Callable[..., Any] | None = None,
+        tilt_builder: Callable[[], Any] | None = None,
+        tilt_journal: Any = None,
+        debate_request: Callable[..., Any] | None = None,
+        frontier_request: Callable[..., Any] | None = None,
+        frontier_post: Callable[..., Any] | None = None,
+        frontier_key: Callable[[], str] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -173,6 +205,9 @@ class MentorWindow(QMainWindow):
         self._context_text = ""
         #: P4 memory: the start-of-day block (system prefix, byte-stable) and this session's new notes (tail).
         self._memory_root = memory_root
+        #: P11 /hypotheses: the permutation report paths (None = project_paths' live constants, read-only).
+        self.permutation_history: Any = None
+        self.permutation_report: Any = None
         self._memory = memory.Memory()
         self._memory_block = ""
         self._memory_text = ""
@@ -276,6 +311,84 @@ class MentorWindow(QMainWindow):
         self._pick_timer.timeout.connect(self.maybe_veto_card)
         self._pick_timer.timeout.connect(self.maybe_prefetch_tape)
         self._pick_timer.timeout.connect(self.maybe_push_brief)
+        # P7 news: the fetcher and the open-book reader are injectable; no model, never the Inbox.
+        from mentor_app import news_jobs
+        from news_feed import NewsFetcher
+
+        self._news_fetcher = news_fetcher or NewsFetcher()
+        self._news_open_symbols = news_open_symbols
+        self._news_named = news_jobs.NamedSymbols()
+        #: News fetches are network-bound: their own one-thread queue, so /pick, /check and /news never wait.
+        self.news_queue = news_queue or PrefetchQueue(thread_name="mentor-news")
+        self._news_seeded = False
+        self._news_schedule = news_jobs.NewsSchedule()
+        self._news_blocks: dict[int, int] = {}
+        self._news_seq = 0
+        self._bridge.news_card.connect(self._on_news_card)
+        self._pick_timer.timeout.connect(self.maybe_refresh_news)
+        # P8 book: Questrade read on demand (/book, /check, 06:20 PT) on the news thread; injectable.
+        # P12: then IBKR, over its own short-lived read-only TWS client (id 9155).
+        from mentor_app import book_jobs
+
+        self._book_fetch = book_fetch
+        self._ibkr_fetch = ibkr_fetch if ibkr_fetch is not None else _ibkr_fetch_book
+        self._book_sources = book_sources
+        self._book_schedule = book_jobs.BookSchedule()
+        self._book_blocks: dict[int, int] = {}
+        self._book_seq = 0
+        self._book_event: threading.Event | None = None
+        self._book_lock = threading.Lock()
+        self._bridge.book_card.connect(self._on_book_card)
+        self._pick_timer.timeout.connect(self.maybe_fetch_book)
+        # P9 mirror: /mirror and the weekly Inbox card; the pack builder and the narration call are injectable.
+        from mentor_app import mirror as mirror_mod
+
+        self._mirror_builder = mirror_builder
+        self._mirror_request = mirror_request
+        self._mirror_blocks: dict[int, int] = {}
+        self._mirror_seq = 0
+        self._mirror_schedule = mirror_mod.WeeklySchedule()
+        #: (ISO week, PT day queued, card markdown); held through quiet hours or a mute, never past the day.
+        self._mirror_waiting: list[tuple[str, Any, str]] = []
+        self._bridge.mirror_card.connect(self._on_mirror_card)
+        self._bridge.mirror_week.connect(self._on_mirror_week)
+        self._pick_timer.timeout.connect(self.maybe_mirror_week)
+        # P9 tilt watch: every 2 min in the session on the news thread (no model); one Inbox item per 30 min.
+        from mentor_app import tilt_watch
+
+        self._tilt_builder = tilt_builder
+        self._tilt_journal = tilt_journal
+        self._tilt_schedule = tilt_watch.TiltSchedule()
+        self._tilt_blocks: dict[int, int] = {}
+        self._tilt_seq = 0
+        #: Observations waiting for the Inbox (quiet hours, a mute or the 30-min spacing), with their PT day.
+        self._tilt_waiting: list[tuple[Any, dict]] = []
+        self._tilt_last_post = ""
+        self._bridge.tilt_ready.connect(self._on_tilt_ready)
+        self._bridge.tilt_card.connect(self._on_tilt_card)
+        self._tilt_timer = QTimer(self)
+        self._tilt_timer.setInterval(tilt_watch.CHECK_MS)
+        self._tilt_timer.timeout.connect(self.maybe_watch_tilt)
+        # P10 debate: two persona calls on one pick pack, on demand; Stop cancels between the calls.
+        self._debate_request = debate_request
+        self._debate_blocks: dict[int, int] = {}
+        self._debate_stops: dict[int, threading.Event] = {}
+        self._debate_seq = 0
+        self._bridge.debate_card.connect(self._on_debate_card)
+        # P11 frontier: metered, off by default, never automatic; one call at a time on its own thread.
+        self._frontier_request = frontier_request
+        self._frontier_post = frontier_post
+        self._frontier_key = frontier_key
+        self._frontier_busy = False
+        self._frontier_seq = 0
+        self._frontier_blocks: dict[int, int] = {}
+        self._frontier_state: Any = None
+        #: What the last local chat turn read, verbatim, for /think.
+        self._last_turn: dict[str, Any] | None = None
+        self._bridge.frontier_card.connect(self._on_frontier_card)
+        self._bridge.frontier_state.connect(self._on_frontier_state)
+        if settings.frontier_enabled():
+            self._spawn("mentor-frontier-status", self._frontier_status)
         self._add_note("Hi. Ask me anything, or type `/help`.")
 
     # ------------------------------------------------------------------ UI
@@ -345,6 +458,12 @@ class MentorWindow(QMainWindow):
         self.ai_pause_button.changed.connect(self.check_ai_pause)
         header = QHBoxLayout()
         header.addStretch(1)
+        # P11: shown only while the frontier switch is on; disabled with the reason when it cannot run.
+        self.think_button = QPushButton("Think harder")
+        self.think_button.setToolTip("Ask the frontier model the last question again (metered, capped per day)")
+        self.think_button.clicked.connect(lambda: self.send("/think"))
+        self.think_button.setVisible(settings.frontier_enabled())
+        header.addWidget(self.think_button)
         header.addWidget(self.ai_pause_button)
 
         left = QWidget()
@@ -397,6 +516,7 @@ class MentorWindow(QMainWindow):
         self._add_block(f"*Mentor (desk):* {markdown}")
 
     def _sync_status(self) -> None:
+        self.think_button.setVisible(settings.frontier_enabled())
         if self._paused_until is not None:
             # Paused is its own state, not "down": the pill and banner say so.
             until = ai_pause.until_text(self._paused_until, self._now())
@@ -423,6 +543,7 @@ class MentorWindow(QMainWindow):
 
         self._focus_server = make_focus_server(self, self.bring_to_front)
         self.queue.start()
+        self.news_queue.start()
         if self.card_host is not None:
             self.card_host.start()
         self._context_timer.start()
@@ -431,6 +552,7 @@ class MentorWindow(QMainWindow):
         if self._follow_desk:
             self._desk_timer.start()
         self._pick_timer.start()
+        self._tilt_timer.start()
         self.install_recall_fallback()
         self._submit_io(self._open_session)
         self.refresh_context()
@@ -451,6 +573,7 @@ class MentorWindow(QMainWindow):
         self._pause_timer.stop()
         self._desk_timer.stop()
         self._pick_timer.stop()
+        self._tilt_timer.stop()
         from mentor_packs import recall
 
         recall.set_fallback(None)
@@ -458,7 +581,10 @@ class MentorWindow(QMainWindow):
         if self._worker is not None:
             self._worker.cancel()
             self._worker.wait(3000)
+        for stop in self._debate_stops.values():
+            stop.set()
         self.queue.stop()
+        self.news_queue.stop(timeout=0.5)  # a fetch stuck on the network is a daemon; never wait 10 s for it
         if self.card_host is not None:
             self.card_host.shutdown()
         if self._endpoint and self._paused_until is None:
@@ -935,19 +1061,20 @@ class MentorWindow(QMainWindow):
         worker.start()
 
     def _run_command(self, result: commands.CommandResult) -> None:
+        stamp = self._utc_stamp()
         if result.action == "quiet":
             until = self.inbox.mute(result.arg)
             self._add_note(f"Inbox muted until {until.astimezone().strftime('%H:%M')}.")
         elif result.action == "remember":
             note = str(result.arg)
             self._memory_text = (self._memory_text + f"\n- {note}").strip()
-            self._submit_io(lambda: self.store.add_profile_note(note, "remember"))
+            self._submit_io(lambda: self.store.add_profile_note(note, "remember", ts_utc=stamp))
             self._add_note(f"Kept: {note}")
         elif result.action == "forget":
             note_id = int(result.arg)
 
             def forget() -> None:
-                if self.store.retire_note(note_id):
+                if self.store.retire_note(note_id, stamp):
                     self._bridge.note.emit(f"Retired [mem:note:{note_id}]. It is kept, never deleted.")
                     self._load_memory()
                 else:
@@ -958,7 +1085,7 @@ class MentorWindow(QMainWindow):
             note_id = int(result.arg)
             self._submit_io(lambda: self._bridge.note.emit(
                 f"Still true: [mem:note:{note_id}]. I will ask again in {memory.STILL_TRUE_DAYS} days."
-                if self.store.check_note(note_id) else f"There is no note {note_id}. `/memory` shows the ids."))
+                if self.store.check_note(note_id, stamp) else f"There is no note {note_id}. `/memory` shows the ids."))
         elif result.action == "memory":
             self._add_note(memory.as_listing(self._memory))
         elif result.action == "recall":
@@ -976,16 +1103,39 @@ class MentorWindow(QMainWindow):
             self._add_note("No more Trade Mentor questions today.")
         elif result.action == "pick":
             symbol, side = result.arg
+            self._name_for_news(symbol)
             self.show_pick(symbol, side)
+        elif result.action == "debate":
+            symbol, side = result.arg
+            self._name_for_news(symbol)
+            self.show_debate(symbol, side)
+        elif result.action == "news":
+            symbol, days = result.arg
+            self.show_news(symbol, days)
         elif result.action == "vetoes":
             self.show_vetoes(str(result.arg or ""))
         elif result.action == "scorecard":
             self.queue.submit("scorecard", lambda: challenge.scorecard(self.store, facts=memory.load_facts(self._memory_root)),
                               priority=PRIORITY_INTERACTIVE, key="scorecard", on_done=self._bridge.note.emit)
+        elif result.action == "think":
+            self.think(result.arg)
+        elif result.action == "frontier":
+            self._spawn("mentor-frontier-status", lambda: self._bridge.note.emit(
+                self._frontier_status_text()))
+        elif result.action == "hypotheses":
+            self.queue.submit("hypotheses", self._hypotheses_card, priority=PRIORITY_INTERACTIVE, key="hypotheses",
+                              on_done=self._bridge.note.emit)
         elif result.action == "tape":
             self.show_tape()
         elif result.action == "check":
+            self._name_for_news(result.arg.symbol)
             self.show_check(result.arg)
+        elif result.action == "book":
+            self.show_book()
+        elif result.action == "mirror":
+            self.show_mirror(int(result.arg or 6))
+        elif result.action == "tilt":
+            self.show_tilt()
         elif result.action == "ai_off":
             self.set_ai_pause(result.arg)
         elif result.action == "ai_on":
@@ -1000,6 +1150,7 @@ class MentorWindow(QMainWindow):
     def stop_turn(self) -> None:
         if self._worker is not None:
             self._worker.cancel()
+        self._stop_debates()
 
     def _stream_slot(self) -> int:
         index = self._stream_index
@@ -1029,7 +1180,7 @@ class MentorWindow(QMainWindow):
         self._stream_index = None
         self.activity_label.setText("")
         self.queue.end_interactive()
-        self.stop_button.setEnabled(False)
+        self.stop_button.setEnabled(bool(self._debate_stops))
         self.send_button.setEnabled(True)
 
     def _on_done(self, result: dict) -> None:
@@ -1046,6 +1197,11 @@ class MentorWindow(QMainWindow):
         self.chat.add("assistant", text)
         self._latency_ms = result.get("first_token_ms")
         self._sync_status()
+        if not result.get("cancelled"):
+            question = next((turn.text for turn in reversed(self.chat.turns[:-1]) if turn.role == "user"), "")
+            self._last_turn = {"question": question, "context_text": self._context_text,
+                               "memory_block": self._memory_block,
+                               "pack_texts": list(result.get("pack_texts") or ())}
         self._store_turn(
             "assistant",
             text,
@@ -1066,6 +1222,10 @@ class MentorWindow(QMainWindow):
         self._finish_turn()
 
     # ------------------------------------------------------------------ memory (P4)
+    def _utc_stamp(self) -> str:
+        """The window's clock as the store's UTC stamp (tests inject the clock; the wall clock never leaks in)."""
+        return self._now().astimezone(timezone.utc).isoformat(timespec="milliseconds")
+
     def _maybe_still_true(self) -> None:
         """First turn of a session day: look for ONE old ``rule:`` note to re-check (IO thread)."""
         now = self._now()
@@ -1087,7 +1247,8 @@ class MentorWindow(QMainWindow):
             logging.info("Trade Mentor: the still-true question waits (%s)", self.inbox.last_refusal)
             return
         note_id = int(row["id"])
-        self._submit_io(lambda: self.store.mark_note_asked(note_id))
+        stamp = self._utc_stamp()
+        self._submit_io(lambda: self.store.mark_note_asked(note_id, stamp))
         self.refresh_inbox()
 
     def _queue_memory_embeddings(self) -> None:
@@ -1430,9 +1591,15 @@ class MentorWindow(QMainWindow):
     def _build_gate(self, request: Any) -> Any:
         if self._gate_builder is not None:
             return self._gate_builder(request)
+        import dataclasses
+
         from mentor_packs import gate_pack
 
-        return gate_pack.build(request.side, request.symbol, request.size, request.stop, request.entry)
+        book = self._book_pack_sources()
+        sources = dataclasses.replace(gate_pack.live_sources(), book_snapshot=book.snapshot, book_status=book.status,
+                                      ibkr_book_snapshot=book.ibkr_snapshot, ibkr_book_status=book.ibkr_status)
+        return gate_pack.build(request.side, request.symbol, request.size, request.stop, request.entry,
+                               sources=sources)
 
     def show_check(self, request: Any) -> None:
         """/check: build the gate pack off-thread, narrate once (never cached across requests), store the claim."""
@@ -1440,6 +1607,9 @@ class MentorWindow(QMainWindow):
         seq = self._check_seq
         self._check_blocks[seq] = len(self._blocks)
         self._add_block(f"**Check {request.side} {request.symbol}**: building...")
+        # The book is read on the news thread; the gate waits a little for it only while that thread runs.
+        book_done = self._queue_book_fetch("check")
+        book_wait = BOOK_WAIT_SECONDS if self.news_queue.running() else 0.0
         live = self._brain_ok and bool(self._endpoint) and not self._gpu_reason()
         paused = self._pause_reason()
         why = "" if live else (paused or f"the brain is off: {self._gpu_reason() or self._brain_reason or 'not connected'}")
@@ -1450,6 +1620,8 @@ class MentorWindow(QMainWindow):
             from mentor_app import gate
             from mentor_packs import gate_pack
 
+            if book_done is not None and book_wait:
+                book_done.wait(book_wait)
             pack = self._build_gate(request)
             digest = gate.request_hash(request, gate_pack.pack_hash(pack))
             if live:
@@ -1573,6 +1745,215 @@ class MentorWindow(QMainWindow):
             return line
 
         self.queue.submit("tape_push", job, priority=PRIORITY_REFRESH, key="tape-push")
+
+    # ------------------------------------------------------------------ news (P7)
+    def _name_for_news(self, symbol: str) -> None:
+        """A symbol the trader typed joins today's news scope (newest first, at most 10, dropped at day end)."""
+        self._news_named.add(symbol, self._now())
+
+    def _seed_news(self) -> None:
+        """News thread, once: the store's last request stamps keep the 30-min spacing across a restart."""
+        if not self._news_seeded:
+            from mentor_app import news_jobs
+
+            news_jobs.seed_fetcher(self._news_fetcher, self.store)
+            self._news_seeded = True
+
+    def _open_book_symbols(self) -> list[str]:
+        if self._news_open_symbols is not None:
+            return list(self._news_open_symbols() or ())
+        from pathlib import Path
+
+        from mentor_packs import gate_pack
+        from project_paths import JOURNAL_DB_FILE
+
+        return [str(row.get("symbol") or "") for row in gate_pack.read_open_trades(Path(JOURNAL_DB_FILE))]
+
+    def show_news(self, symbol: str, days: int = 3) -> None:
+        """/news: the stored headlines at once (main queue, no network); a symbol with no good fetch yet is
+        then fetched once on the news thread and the card is redrawn. No model."""
+        from mentor_app import news_jobs
+
+        self._name_for_news(symbol)
+        self._news_seq += 1
+        seq = self._news_seq
+        self._news_blocks[seq] = len(self._blocks)
+        self._add_block(f"**News {symbol}**: reading...")
+        store, now = self.store, self._now
+
+        def job() -> dict:
+            card = news_jobs.news_card(symbol, days, store=store, now=now())
+            return {**card, "seq": seq, "days": days, "need_fetch": news_jobs.needs_first_fetch(store, symbol, now())}
+
+        self.queue.submit(f"news {symbol}", job, priority=PRIORITY_INTERACTIVE, key=f"news-live:{seq}",
+                          on_done=self._bridge.news_card.emit, on_error=self._news_failed(seq, symbol))
+
+    def _news_failed(self, seq: int, symbol: str) -> Callable[[BaseException], None]:
+        def failed(exc: BaseException) -> None:
+            self._bridge.news_card.emit({"seq": seq, "markdown": (
+                f"**News {symbol}**: could not be read ({type(exc).__name__}: {exc}).")})
+
+        return failed
+
+    def _first_fetch(self, seq: int, symbol: str, days: int) -> None:
+        """News thread, ahead of the refresh cycle's waiting symbols: fetch once, then redraw the card."""
+        from mentor_app import news_jobs
+
+        def job() -> dict:
+            self._seed_news()
+            out = news_jobs.refresh_symbol(symbol, store=self.store, fetcher=self._news_fetcher, now=self._now())
+            card = news_jobs.news_card(symbol, days, store=self.store, now=self._now(), note=news_jobs.fetch_note(out))
+            return {**card, "seq": seq, "need_fetch": False}
+
+        self.news_queue.submit(f"news_first {symbol}", job, priority=PRIORITY_INTERACTIVE, key=f"news-first:{seq}",
+                               on_done=self._bridge.news_card.emit, on_error=self._news_failed(seq, symbol))
+
+    def _on_news_card(self, done: dict) -> None:
+        seq = done.get("seq")
+        index = self._news_blocks.get(seq)
+        markdown = str(done.get("markdown") or "")
+        if index is not None and index < len(self._blocks):
+            self._blocks[index] = markdown
+            self._render()
+        else:
+            self._news_blocks[seq] = len(self._blocks)
+            self._add_block(markdown)
+        if done.get("need_fetch") and not self._shut:
+            self._first_fetch(seq, str(done.get("symbol") or ""), int(done.get("days") or 3))
+            return  # the fetched card replaces this one
+        self._news_blocks.pop(seq, None)
+        # The card joins the conversation, so a follow-up sees it (news_pack stays a tool).
+        self.chat.add("assistant", markdown)
+        pack = done.get("pack")
+        self._store_turn("assistant", markdown, pack_ids=getattr(pack, "ids", ()),
+                         tool_calls=[{"name": "news_pack", "arguments": {"symbol": done.get("symbol")}}])
+
+    def maybe_refresh_news(self) -> None:
+        """Every 30 min, 06:00-13:30 PT weekdays: fetch the scope's headlines on the news thread (never the
+        main queue, so no /pick waits). Runs while AI is paused (news is not the GPU); skipped while the desk
+        is closed. Never the Inbox, never the transcript."""
+        from mentor_app import news_jobs
+
+        now = self._now()
+        if self._shut or not self._news_schedule.due(now):
+            return
+        self._news_schedule.mark(now)
+        probe, named = self._desk_probe, self._news_named.today(now)
+
+        def plan() -> int:
+            try:
+                closed = probe() is True
+            except Exception:  # noqa: BLE001 - a broken probe is "unknown", never "closed"
+                closed = False
+            if closed:
+                logging.info("Trade Mentor news: the desk is closed; no fetch this cycle")
+                return 0
+            self._seed_news()
+            try:
+                book = self._open_book_symbols()
+            except Exception as exc:  # noqa: BLE001 - an unreadable journal leaves the other names
+                logging.warning("Trade Mentor news: open book unreadable (%s)", exc)
+                book = []
+            liked = [sym for sym, _ in self._liked()]
+            scope = news_jobs.news_scope(named=named, open_book=book, liked=liked)
+            queued = 0
+            for symbol in scope:
+                if not self._news_fetcher.due(symbol, self._now()):
+                    continue
+                self.news_queue.submit(
+                    f"news_fetch {symbol}",
+                    lambda symbol=symbol: news_jobs.refresh_symbol(symbol, store=self.store,
+                                                                   fetcher=self._news_fetcher, now=self._now()),
+                    priority=PRIORITY_REFRESH, key=f"news-fetch:{symbol}",
+                )
+                queued += 1
+            logging.info("Trade Mentor news cycle: %d in scope, %d due and queued (cap %d per 30 min)",
+                         len(scope), queued, self._news_fetcher.max_per_cycle)
+            return queued
+
+        self.news_queue.submit("news_plan", plan, priority=PRIORITY_REFRESH, key="news-plan")
+
+    # ------------------------------------------------------------------ book (P8)
+    def _book_pack_sources(self) -> Any:
+        """``book_pack`` sources: the snapshot from this app's store, the journal ``mode=ro``."""
+        from mentor_app import book_jobs
+
+        base = self._book_sources() if self._book_sources is not None else None
+        return book_jobs.store_sources(self.store, base)
+
+    def _queue_book_fetch(self, why: str, priority: int = PRIORITY_INTERACTIVE) -> threading.Event | None:
+        """Queue one Questrade read on the news thread (fresh / backoff / no token / desk closed skip it inside).
+
+        Returns the event set when that read finishes (shared with a read already waiting)."""
+        from mentor_app import book_jobs
+
+        if self._shut:
+            return None
+        with self._book_lock:
+            if self._book_event is not None and "book-fetch" in self.news_queue.pending_keys():
+                return self._book_event
+            event = self._book_event = threading.Event()
+        store, now, fetch, probe, ibkr = self.store, self._now, self._book_fetch, self._desk_probe, self._ibkr_fetch
+
+        def job() -> dict:
+            try:
+                out = book_jobs.ensure_book(store, now(), fetch=fetch, desk_closed=probe, ibkr_fetch=ibkr)
+                logging.info("Trade Mentor book (%s): %s", why, out)
+                return out
+            finally:
+                event.set()
+
+        if not self.news_queue.submit(f"book_fetch {why}", job, priority=priority, key="book-fetch",
+                                      on_error=lambda exc: event.set()):
+            event.set()
+        return event
+
+    def maybe_fetch_book(self) -> None:
+        """Once a weekday from 06:20 PT: one Questrade read at refresh priority (never a poll)."""
+        now = self._now()
+        if self._shut or not self._book_schedule.due(now):
+            return
+        self._book_schedule.mark(now)
+        self._queue_book_fetch("06:20", priority=PRIORITY_REFRESH)
+
+    def show_book(self) -> None:
+        """/book: read Questrade when due (news thread), then the card from book_pack. No model."""
+        from mentor_app import book_jobs
+
+        self._book_seq += 1
+        seq = self._book_seq
+        self._book_blocks[seq] = len(self._blocks)
+        self._add_block("**Book**: reading...")
+        store, now, fetch, probe, ibkr = self.store, self._now, self._book_fetch, self._desk_probe, self._ibkr_fetch
+
+        def job() -> dict:
+            from mentor_packs import book_pack
+
+            out = book_jobs.ensure_book(store, now(), fetch=fetch, desk_closed=probe, ibkr_fetch=ibkr)
+            note = book_jobs.fetch_note(out)
+            pack = book_pack.build(now=now(), sources=self._book_pack_sources())
+            return {"seq": seq, "pack": pack, "markdown": book_jobs.card_markdown(pack, note=note)}
+
+        def failed(exc: BaseException) -> None:
+            self._bridge.book_card.emit({"seq": seq, "markdown": (
+                f"**Book**: could not be read ({type(exc).__name__}: {exc}).\n\n{book_jobs.FOOTER}")})
+
+        self.news_queue.submit("book", job, priority=PRIORITY_INTERACTIVE, key=f"book:{seq}",
+                               on_done=self._bridge.book_card.emit, on_error=failed)
+
+    def _on_book_card(self, done: dict) -> None:
+        index = self._book_blocks.pop(done.get("seq"), None)
+        markdown = str(done.get("markdown") or "")
+        if index is not None and index < len(self._blocks):
+            self._blocks[index] = markdown
+            self._render()
+        else:
+            self._add_block(markdown)
+        # The card joins the conversation, so a follow-up sees it (book_pack stays a tool).
+        self.chat.add("assistant", markdown)
+        pack = done.get("pack")
+        self._store_turn("assistant", markdown, pack_ids=getattr(pack, "ids", ()),
+                         tool_calls=[{"name": "book_pack", "arguments": {}}])
 
     # ------------------------------------------------------------------ vetoes (P3)
     def _build_veto(self, day: str) -> Any:
@@ -1764,3 +2145,450 @@ class MentorWindow(QMainWindow):
             self._veto_inbox_waiting.pop(0)
             self._inbox_cards[item.id] = markdown
             self.refresh_inbox()
+
+    # ------------------------------------------------------------------ mirror (P9)
+    def _build_mirror(self, weeks: int) -> Any:
+        if self._mirror_builder is not None:
+            return self._mirror_builder(weeks)
+        from mentor_packs import mirror_pack
+
+        return mirror_pack.build(weeks)
+
+    def _mirror_narrator(self) -> Callable[[Any, str], Any] | None:
+        """The narration call while the brain is up; None = the pack alone."""
+        if not self._brain_ok or not self._endpoint or self._gpu_reason():
+            return None
+        from mentor_app import mirror as mirror_mod
+
+        endpoint, model, request = self._endpoint, self._model, self._mirror_request
+
+        def narrate(pack: Any, digest: str) -> Any:
+            return mirror_mod.narrate(pack, pack_hash=digest, model=model, endpoint=endpoint, request=request,
+                                      now=self._now)
+
+        return narrate
+
+    def _mirror_job(self, weeks: int, *, narrate: Callable[[Any, str], Any] | None, extra: dict) -> Callable[[], dict]:
+        from mentor_app import mirror as mirror_mod
+
+        def job() -> dict:
+            result = mirror_mod.run_mirror_job(store=self.store, build_pack=lambda: self._build_mirror(weeks),
+                                               narrate=narrate)
+            return {**result, **extra, "weeks": weeks}
+
+        return job
+
+    def show_mirror(self, weeks: int = 6) -> None:
+        """/mirror: the pack off-thread, narrated once per pack hash (cached); brain down = the pack alone."""
+        from mentor_app import mirror as mirror_mod
+
+        self._mirror_seq += 1
+        seq = self._mirror_seq
+        self._mirror_blocks[seq] = len(self._blocks)
+        self._add_block("**Mirror**: reading your record...")
+        narrate = self._mirror_narrator()
+
+        def failed(exc: BaseException) -> None:
+            self._bridge.mirror_card.emit({"seq": seq, "error": f"{type(exc).__name__}: {exc}"})
+
+        self.queue.submit("mirror", self._mirror_job(weeks, narrate=narrate, extra={"seq": seq}),
+                          priority=PRIORITY_INTERACTIVE, needs_model=narrate is not None,
+                          max_tokens=mirror_mod.MAX_OUTPUT_TOKENS, key=f"mirror:{seq}",
+                          on_done=self._bridge.mirror_card.emit, on_error=failed)
+
+    def _on_mirror_card(self, done: dict) -> None:
+        from mentor_app import mirror as mirror_mod
+
+        index = self._mirror_blocks.pop(done.get("seq"), None)
+        if done.get("error"):
+            markdown = f"**Mirror**: could not be built ({done['error']}).\n\n{mirror_mod.FOOTER}"
+        else:
+            markdown = mirror_mod.card_markdown(done["pack"], done.get("card"), brain_reason=self._tape_why())
+        if index is not None and index < len(self._blocks):
+            self._blocks[index] = markdown
+            self._render()
+        else:
+            self._add_block(markdown)
+        if done.get("error"):
+            return
+        # The card joins the conversation, so a follow-up sees it (mirror_pack stays a tool).
+        self.chat.add("assistant", markdown)
+        card = done.get("card")
+        self._store_turn("assistant", markdown, pack_ids=getattr(done.get("pack"), "ids", ()),
+                         model=getattr(card, "model", "") or "",
+                         tool_calls=[{"name": "mirror_pack", "arguments": {"weeks": done.get("weeks")},
+                                      "hash": done.get("hash"), "error": getattr(card, "error", "")}])
+
+    # ------------------------------------------------------------------ frontier (P11)
+    def _key(self) -> str:
+        from mentor_app import frontier
+
+        return (self._frontier_key or frontier.load_key)()
+
+    def _frontier_status(self) -> Any:
+        """The switch, key and cap now (reads the key: never on the Qt thread)."""
+        from mentor_app import frontier
+
+        state = frontier.status(self.store, self._now(), key_loader=self._key)
+        self._bridge.frontier_state.emit(state)
+        return state
+
+    def _frontier_status_text(self) -> str:
+        from mentor_app import frontier
+
+        return frontier.status_text(self._frontier_status())
+
+    def _on_frontier_state(self, state: Any) -> None:
+        self._frontier_state = state
+        self.think_button.setVisible(bool(state.enabled))
+        self.think_button.setEnabled(state.usable and not self._frontier_busy)
+        self.think_button.setToolTip("Ask the frontier model the last question again (metered, capped per day)"
+                                     if state.usable else f"Not available: {state.reason}")
+
+    def think(self, what: Any = None) -> None:
+        """/think [pick SYM [side] | week]: one metered frontier call over what the local model read."""
+        kind = (what or ("chat",))[0]
+        if self._frontier_busy:
+            self._add_note("A frontier call is already running.")
+            return
+        last = dict(self._last_turn) if self._last_turn else None
+        if kind == "chat" and not last:
+            self._add_note("Ask a question first: `/think` re-asks the last one with the frontier model.")
+            return
+        self._frontier_busy = True
+        self.think_button.setEnabled(False)
+        self._frontier_seq += 1
+        seq = self._frontier_seq
+        self._frontier_blocks[seq] = len(self._blocks)
+        self._add_block("**frontier**: checking the switch, the key and today's cap...")
+
+        def job() -> None:
+            try:
+                self._bridge.frontier_card.emit({"seq": seq, **self._frontier_job(what or ("chat",), last)})
+            except Exception as exc:  # noqa: BLE001 - a failed frontier job is a note, never a crash
+                self._bridge.frontier_card.emit({"seq": seq, "markdown": f"**frontier**: failed ({exc})."})
+
+        self._spawn("mentor-frontier", job)
+
+    def _frontier_job(self, what: Any, last: dict[str, Any] | None) -> dict[str, Any]:
+        """Worker thread: the guard, then the one call, then the card and the turn log."""
+        from mentor_app import assess, frontier
+
+        kind = what[0]
+        state = self._frontier_status()
+        if not state.usable:
+            return {"markdown": f"**frontier**: not called ({state.reason})."}
+        usage: list[dict[str, Any]] = []
+        request = frontier.metered_request(
+            store=self.store, purpose=kind, model=state.model, api_key=self._key(), cap_usd=state.cap_usd,
+            now=self._now, request=self._frontier_request, spent_sink=usage)
+        post = frontier.frontier_post(self._frontier_post, model=state.model)
+        pack_ids: tuple[str, ...] = ()
+        if kind == "pick":
+            from mentor_packs import pick_pack
+
+            symbol, side = what[1], what[2] if len(what) > 2 else ""
+            pack = self._build_pick(symbol, side)
+            digest = pick_pack.pack_hash(pack)
+            self._pick_packs[(symbol, digest)] = pack
+            result = assess.assess(pack, symbol=symbol, pack_hash=digest, model=state.model, endpoint="",
+                                   live=True, request=request, post=post, now=self._now)
+            body = assess.card_markdown(result, side=side)
+            markdown = f"**{frontier.label(state.model)}** · Think harder: pick {symbol}\n\n{body}"
+            pack_ids, error = pack.ids, result.error
+            reply: Any = {"verdict": result.verdict, "bullets": result.bullets, "rule_flags": result.rule_flags}
+            dropped = result.dropped
+        else:
+            if kind == "week":
+                from mentor_packs import hypothesis_pack
+
+                rows = frontier.week_rows(
+                    digests=frontier.load_digests(self._memory_root), mirror=self._build_mirror(6),
+                    hypotheses=hypothesis_pack.build(now=self._now(), chat_db=self.store.path,
+                                                     history_dir=self.permutation_history,
+                                                     report_file=self.permutation_report),
+                    now=self._now())
+                answer = frontier.think_week(rows, model=state.model, request=request, post=post)
+                pack_ids = tuple(row["source_id"] for row in rows)
+            else:
+                last = last or {}
+                answer = frontier.think_chat(
+                    str(last.get("question") or ""), context_text=str(last.get("context_text") or ""),
+                    memory_block=str(last.get("memory_block") or ""), pack_texts=last.get("pack_texts") or (),
+                    model=state.model, request=request, post=post)
+            markdown = frontier.card_markdown(answer)
+            error, reply, dropped = answer.error, answer.reply, answer.dropped
+        spent = self.store.frontier_spent(frontier.day_pt(self._now()))
+        markdown += "\n\n*" + frontier.spend_line(usage, spent, state.cap_usd) + "*"
+        self._frontier_status()
+        return {"markdown": markdown, "model": state.model, "pack_ids": pack_ids,
+                "tool_calls": [{"name": "frontier", "purpose": kind, "model": state.model, "usage": usage,
+                                "reply": reply, "dropped": dropped, "error": error}]}
+
+    def _on_frontier_card(self, done: dict) -> None:
+        self._frontier_busy = False
+        state = self._frontier_state
+        self.think_button.setEnabled(bool(state is not None and state.usable))
+        markdown = str(done.get("markdown") or "")
+        index = self._frontier_blocks.pop(done.get("seq"), None)
+        if index is not None and index < len(self._blocks):
+            self._blocks[index] = markdown
+            self._render()
+        else:
+            self._add_block(markdown)
+        if done.get("model"):
+            self.chat.add("assistant", markdown)
+            self._store_turn("assistant", markdown, pack_ids=done.get("pack_ids") or (), model=str(done["model"]),
+                             tool_calls=done.get("tool_calls") or ())
+
+    # ------------------------------------------------------------------ /hypotheses (P11)
+    def _hypotheses_card(self) -> str:
+        """The night's hypotheses and their cells (queue thread; reads only)."""
+        from mentor_packs import hypothesis_pack
+
+        pack = hypothesis_pack.build(now=self._now(), chat_db=self.store.path, history_dir=self.permutation_history,
+                                     report_file=self.permutation_report)
+        return hypothesis_pack.card_markdown(pack)
+
+    # ------------------------------------------------------------------ /debate (P10)
+    def _debate_runner(self, stop: threading.Event) -> Callable[[Any, str], Any] | None:
+        """Both persona calls while the brain is up; None = no debate, the pack alone."""
+        if not self._brain_ok or not self._endpoint or self._gpu_reason():
+            return None
+        from mentor_app import debate
+
+        endpoint, model, request = self._endpoint, self._model, self._debate_request
+
+        def run(pack: Any, digest: str, symbol: str, side: str) -> Any:
+            return debate.debate(pack, symbol=symbol, side=side, pack_hash=digest, model=model, endpoint=endpoint,
+                                 request=request, cancelled=stop.is_set, now=self._now)
+
+        return run
+
+    def show_debate(self, symbol: str, side: str = "") -> None:
+        """/debate: the pick pack once, then bull and bear on the model queue (interactive); brain off = the pack."""
+        from mentor_app import debate
+        from mentor_packs import pick_pack
+
+        symbol = str(symbol or "").upper()
+        self._debate_seq += 1
+        seq = self._debate_seq
+        self._debate_blocks[seq] = len(self._blocks)
+        self._add_block(f"**Debate {symbol}**: building the pack, then bull and bear...")
+        stop = threading.Event()
+        runner = self._debate_runner(stop)
+        why = self._tape_why() or self._gpu_reason()
+        if runner is not None:
+            self._debate_stops[seq] = stop
+            self.stop_button.setEnabled(True)
+            self.activity_label.setText(f"debating {symbol}...")
+
+        def job() -> dict:
+            result = debate.run_debate_job(
+                symbol, side, store=self.store, build_pack=self._build_pick, pack_hash=pick_pack.pack_hash,
+                run=None if runner is None else (
+                    lambda pack, digest: runner(pack, digest, symbol, debate.pack_side(pack) or side)),
+            )
+            return {**result, "seq": seq, "why": why}
+
+        def failed(exc: BaseException) -> None:
+            self._bridge.debate_card.emit({"seq": seq, "symbol": symbol, "error": f"{type(exc).__name__}: {exc}"})
+
+        self.queue.submit(f"debate {symbol}", job, priority=PRIORITY_INTERACTIVE, needs_model=runner is not None,
+                          max_tokens=debate.job_budget(self._model), calls=debate.CALLS, key=f"debate:{seq}",
+                          on_done=self._bridge.debate_card.emit, on_error=failed)
+
+    def _stop_debates(self) -> None:
+        """Stop: a debate not started yet is dropped; a running one stops before its next call."""
+        for seq, stop in list(self._debate_stops.items()):
+            stop.set()
+            if self.queue.cancel(f"debate:{seq}"):
+                self._debate_stops.pop(seq, None)
+                self._replace_debate_block(seq, "**Debate**: stopped before it started.")
+        if not self._debate_stops and self._worker is None:
+            self.stop_button.setEnabled(False)
+
+    def _replace_debate_block(self, seq: int, markdown: str) -> None:
+        index = self._debate_blocks.pop(seq, None)
+        if index is not None and index < len(self._blocks):
+            self._blocks[index] = markdown
+            self._render()
+        else:
+            self._add_block(markdown)
+
+    def _on_debate_card(self, done: dict) -> None:
+        from mentor_app import debate
+
+        seq = done.get("seq")
+        self._debate_stops.pop(seq, None)
+        if not self._debate_stops:
+            self.activity_label.setText("")
+            if self._worker is None:
+                self.stop_button.setEnabled(False)
+        symbol = str(done.get("symbol") or "")
+        if done.get("error"):
+            self._replace_debate_block(seq, f"**Debate {symbol}**: could not be built ({done['error']}).")
+            return
+        pack, digest, result = done["pack"], done["hash"], done.get("debate")
+        self._pick_packs[(symbol, digest)] = pack  # the card's evidence link opens this pack
+        markdown = debate.card_markdown(result, pack, symbol=symbol, side=str(done.get("side") or ""),
+                                        pack_hash=digest, brain_reason=str(done.get("why") or ""))
+        self._replace_debate_block(seq, markdown)
+        # The card joins the conversation; a follow-up goes through the normal turn (pick_pack stays a tool).
+        self.chat.add("assistant", markdown)
+        self._store_turn("assistant", markdown, pack_ids=getattr(pack, "ids", ()),
+                         model=getattr(result, "model", "") or "", tool_calls=debate.turn_tool_calls(done))
+
+    def maybe_mirror_week(self) -> None:
+        """Every minute: deliver a waiting weekly card; from 06:50 PT on the week's first session day, build it."""
+        from mentor_app import mirror as mirror_mod
+
+        now = self._now()
+        self._deliver_mirror_inbox()
+        if self._shut or not self._mirror_schedule.due(now):
+            return
+        self._mirror_schedule.mark(now)
+        week = mirror_mod.week_key(now)
+        narrate = self._mirror_narrator()
+        store = self.store
+
+        def job() -> dict:
+            posted = store.get_state(mirror_mod.POSTED_KEY)
+            if posted == week:
+                return {"week": week, "posted": posted}
+            result = self._mirror_job(6, narrate=narrate, extra={})()
+            return {**result, "week": week, "posted": posted}
+
+        self.queue.submit("mirror_week", job, priority=PRIORITY_REFRESH, needs_model=narrate is not None,
+                          max_tokens=mirror_mod.MAX_OUTPUT_TOKENS, key="mirror-week",
+                          on_done=self._bridge.mirror_week.emit)
+
+    def _on_mirror_week(self, built: dict) -> None:
+        from mentor_app import mirror as mirror_mod
+
+        if built.get("posted") == built.get("week") or "pack" not in built:
+            return  # this week's card was posted before a restart
+        markdown = mirror_mod.card_markdown(built["pack"], built.get("card"), brain_reason=self._tape_why(),
+                                            title=mirror_mod.INBOX_LINE)
+        self._mirror_waiting.append((str(built["week"]), self._now().astimezone(challenge.PT).date(), markdown))
+        self._deliver_mirror_inbox()
+
+    def _deliver_mirror_inbox(self) -> None:
+        """Post the waiting weekly card once quiet hours or a mute end; a used cap or a new day drops it."""
+        from mentor_app import mirror as mirror_mod
+
+        today = self._now().astimezone(challenge.PT).date()
+        while self._mirror_waiting:
+            week, day, markdown = self._mirror_waiting[0]
+            if day != today:
+                logging.info("Trade Mentor: the mirror card for %s was dropped (held past its day)", week)
+                self._mirror_waiting.pop(0)
+                continue
+            if not self.inbox.refusal():
+                # The marker is queued before the item shows: a quit between the two never reposts the card.
+                self._submit_io(lambda week=week: self.store.set_state(mirror_mod.POSTED_KEY, week))
+            item = self.inbox.add("mirror", mirror_mod.INBOX_LINE)
+            if item is None:
+                if "cap" in self.inbox.last_refusal:
+                    logging.info("Trade Mentor: the mirror card was dropped (%s)", self.inbox.last_refusal)
+                    self._mirror_waiting.pop(0)
+                    continue
+                return  # quiet hours or muted: try again next minute
+            self._mirror_waiting.pop(0)
+            self._inbox_cards[item.id] = markdown
+            self.refresh_inbox()
+
+    # ------------------------------------------------------------------ tilt watch (P9)
+    def _build_tilt(self) -> Any:
+        if self._tilt_builder is not None:
+            return self._tilt_builder()
+        from mentor_packs import tilt_pack
+
+        return tilt_pack.build(now=self._now(), journal=self._tilt_journal)
+
+    def _tilt_signature(self) -> Callable[[], Any] | None:
+        if self._tilt_builder is not None and self._tilt_journal is None:
+            return None
+        from mentor_packs import journal_read, tilt_pack
+
+        journal = self._tilt_journal if self._tilt_journal is not None else tilt_pack.live_journal()
+        day = self._now().astimezone(journal_read.ET).date().isoformat()
+        return lambda: journal_read.leg_signature(journal, day)
+
+    def maybe_watch_tilt(self) -> None:
+        """Every 2 min in 06:30-13:00 PT weekdays: run the tilt pack on the news thread (no model, no GPU)."""
+        from mentor_app import tilt_watch
+
+        now = self._now()
+        self._deliver_tilt()
+        if self._shut or not self._tilt_schedule.due(now):
+            return
+        store, signature = self.store, self._tilt_signature()
+        self.news_queue.submit("tilt_watch", lambda: tilt_watch.run_watch(store, now, build=self._build_tilt,
+                                                                          signature=signature),
+                               priority=PRIORITY_REFRESH, key="tilt-watch", on_done=self._bridge.tilt_ready.emit)
+
+    def _on_tilt_ready(self, result: dict) -> None:
+        """New observations wait for the Inbox; they are posted as ONE item at most every 30 min."""
+        stored = str(result.get("last_post") or "")
+        if stored > self._tilt_last_post:
+            self._tilt_last_post = stored
+        day = self._now().astimezone(challenge.PT).date()
+        self._tilt_waiting.extend((day, row) for row in result.get("new") or [])
+        self._deliver_tilt()
+
+    def _deliver_tilt(self) -> None:
+        """Post the waiting observations as one item once the 30 min, quiet hours or a mute allow it.
+
+        A used daily cap or a new day drops them (``/tilt`` still shows them). Never pops, never moves
+        the transcript."""
+        from mentor_app import tilt_watch
+
+        today = self._now().astimezone(challenge.PT).date()
+        self._tilt_waiting = [(day, row) for day, row in self._tilt_waiting if day == today]
+        if not self._tilt_waiting or not tilt_watch.may_post(self._tilt_last_post or None, self._now()):
+            return
+        item = self.inbox.add("tilt", tilt_watch.inbox_text([row for _, row in self._tilt_waiting]))
+        if item is None:
+            if "cap" in self.inbox.last_refusal:
+                logging.info("Trade Mentor: tilt observations stayed out of the Inbox (%s)", self.inbox.last_refusal)
+                self._tilt_waiting = []
+            return  # quiet hours or muted: try again at the next watch
+        self._tilt_waiting = []
+        stamp = self._now().astimezone(timezone.utc).isoformat(timespec="seconds")
+        self._tilt_last_post = stamp
+        self._submit_io(lambda: self.store.set_state(tilt_watch.LAST_POST_KEY, stamp))
+        self.refresh_inbox()
+
+    def show_tilt(self) -> None:
+        """/tilt: today's observations and the base rates, built on the news thread. No model."""
+        from mentor_app import tilt_watch
+
+        self._tilt_seq += 1
+        seq = self._tilt_seq
+        self._tilt_blocks[seq] = len(self._blocks)
+        self._add_block("**Tilt**: reading today's journal...")
+
+        def job() -> dict:
+            pack = self._build_tilt()
+            return {"seq": seq, "pack": pack, "markdown": tilt_watch.card_markdown(pack)}
+
+        def failed(exc: BaseException) -> None:
+            self._bridge.tilt_card.emit({"seq": seq, "markdown": f"**Tilt**: could not be read ({type(exc).__name__})."})
+
+        self.news_queue.submit("tilt", job, priority=PRIORITY_INTERACTIVE, key=f"tilt:{seq}",
+                               on_done=self._bridge.tilt_card.emit, on_error=failed)
+
+    def _on_tilt_card(self, done: dict) -> None:
+        index = self._tilt_blocks.pop(done.get("seq"), None)
+        markdown = str(done.get("markdown") or "")
+        if index is not None and index < len(self._blocks):
+            self._blocks[index] = markdown
+            self._render()
+        else:
+            self._add_block(markdown)
+        pack = done.get("pack")
+        if pack is not None:
+            self.chat.add("assistant", markdown)
+            self._store_turn("assistant", markdown, pack_ids=getattr(pack, "ids", ()),
+                             tool_calls=[{"name": "tilt_pack", "arguments": {}}])

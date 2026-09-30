@@ -84,6 +84,24 @@ def write_keyring_secret(name: str, value: str) -> bool:
     return False
 
 
+#: The Trade Mentor's frontier key (P11): credential store only, never JSON or an env var.
+ANTHROPIC_API_KEY_NAME = "anthropic_api_key"
+
+
+def load_secret(name: str) -> str:
+    """A credential-store-only secret ("" when missing); no JSON or environment fallback."""
+    return read_keyring_secret(name).strip()
+
+
+def save_secret(name: str, value: str) -> bool:
+    """Store a credential-store-only secret (read back to verify); an empty value deletes it."""
+    value = str(value or "").strip()
+    if not value:
+        delete_keyring_secret(name)
+        return True
+    return write_keyring_secret(name, value)
+
+
 def read_secret_setting(name: str, default: str = "") -> str:
     """The credential store first, then the JSON setting, then ``default``."""
     stored = read_keyring_secret(name).strip()

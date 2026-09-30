@@ -52,6 +52,9 @@ class Sources:
     index_rrs: Callable[[], Mapping[str, float]]
     sector_board: Callable[[], Mapping[str, Any]]
     spy_pause: Callable[[str], Mapping[str, Any] | None]
+    #: The plan file's hash (``plan_lines.plan_digest``), carried on the as-of row so a plan edit
+    #: re-narrates the tape; None = not carried.
+    plan_sha: Callable[[], str] | None = None
 
 
 def _read_json(path: Path) -> Any:
@@ -107,7 +110,14 @@ def live_sources() -> Sources:
         index_rrs=_live_index_rrs,
         sector_board=_live_sector_board,
         spy_pause=_live_spy_pause,
+        plan_sha=_live_plan_sha,
     )
+
+
+def _live_plan_sha() -> str:
+    from mentor_packs.plan_lines import plan_digest
+
+    return plan_digest()
 
 
 def _unknown(row_id: str, what: str, exc: BaseException) -> dict[str, Any]:
@@ -152,6 +162,11 @@ def build(*, now: datetime | None = None, sources: Sources | None = None) -> Pac
             "at_utc": moment.astimezone(timezone.utc).isoformat(timespec="seconds"),
         }
     ]
+    if src.plan_sha is not None:
+        try:
+            rows[0]["plan_sha"] = str(src.plan_sha())
+        except Exception:  # noqa: BLE001 - an unreadable plan hashes as "unknown"
+            rows[0]["plan_sha"] = "unknown"
     try:
         state = src.auto_state() or {}
         mode = str(state.get("mode") or "unknown")

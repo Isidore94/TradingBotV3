@@ -2,7 +2,7 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-09-30 PT (Mentor P6)
+**Updated:** 2026-09-30 PT (Mentor P12)
 
 - **Live on `main`:** round 1, round 2 Phase A (`81272d42`), Phase B + S (`2d59aace`),
   S10a + S7 (`3802c0d7`), p9 phase 1 regime frame (`849390a2`), p9 phase 2 long
@@ -16,7 +16,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 - **GUI:** 4K design live; selftests 105/105; long combined Qt runs still hit
   worker-lifetime crashes.
 - **Merged 2026-09-30 (`370c6efb`), live at the next desk restart:** Trade Mentor app P0-P6 (shell to `/check` gate), gates #311-#317; `mentor_app_enabled` stays off until gate #312.
-- **In flight:** Pause AI (`claude/pause-ai-mode-2026-09-30`, gate #318), live at the next restart once merged.
+- **In flight:** Mentor P7 news (gate #325), P8 `/book` (gate #321), P9 mirror + tilt (gate #322), P10 `/debate` (gate #323), P11 hypotheses + frontier (gate #324), P12 IBKR book on top (`claude/mentor-app-p12-ibkr-book-2026-09-30`, gate #326). Pause AI merged (gate #318).
 - **Desk:** next launch uses main; live checks are in GATES.
 - **gpt-oss:20b:** code merged, inert for gemma3; probe 2 on 10-01 02:05, then the trader's word.
 - **Night window:** the night AI starts 22:00 PT. Its model runs on the RTX 5080 host

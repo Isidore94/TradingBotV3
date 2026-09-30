@@ -4,9 +4,12 @@ Sections: Focus membership + claim + the trader's verdicts (30 d); the setup's
 scoreboard cell (n, win rate, Wilson lower bound, avg return, avg closed R; the
 n floor printed out loud); the name's own next earnings; industry peers reporting
 within +-7 calendar days; the trading plan's lines; and the human-pick cohort's
-1/3/5/10-session returns. Files are read directly (the Focus and Journal store
+1/3/5/10-session returns; and up to 5 stored news headlines from the last 3 days
+(``news:<SYM>:<n>``, each with its URL). Files are read directly (the Focus and Journal store
 classes write on construction, so they are never built here). A source that cannot be read
-gives an "unknown" row, never a guess. Call :func:`build` on a worker.
+gives an "unknown" row, never a guess. Call :func:`build` on a worker. The pack hash
+covers every row's id and text plus the plan file's hash, so any plan edit or a new
+headline re-narrates the card at its next refresh.
 """
 
 from __future__ import annotations
@@ -55,6 +58,8 @@ FEEDBACK_MAX_ROWS = 10
 PEER_WINDOW_DAYS = 7
 PEER_MAX_ROWS = 12
 COHORT_HORIZONS = (1, 3, 5, 10)
+NEWS_DAYS = 3
+NEWS_MAX_ROWS = 5
 _VOLATILE_KINDS = frozenset({"asof"})
 
 
@@ -76,10 +81,16 @@ class PickPaths:
     plan: Path | None = None
     #: symbol -> industry context (``industry_context.load_industry_context_map`` shape).
     industry_map: Callable[[], Mapping[str, Mapping[str, Any]]] | None = field(default=None, compare=False)
+    #: (symbol, since UTC ISO, limit) -> stored headlines (``news_pack.Reader``); None = no news source.
+    news: Callable[[str, str, int], Any] | None = field(default=None, compare=False)
+    #: symbol -> last good fetch UTC ISO / last feed failure (``news_pack`` readers); None = not known.
+    news_stamps: Callable[[str], Any] | None = field(default=None, compare=False)
+    news_errors: Callable[[str], Any] | None = field(default=None, compare=False)
 
 
 def live_paths() -> PickPaths:
     import project_paths as pp
+    from mentor_packs import news_pack
 
     longs, shorts = Path(pp.FOCUS_LONGS_FILE), Path(pp.FOCUS_SHORTS_FILE)
 
@@ -102,6 +113,9 @@ def live_paths() -> PickPaths:
         cohort_performance=Path(pp.HUMAN_FOCUS_PERFORMANCE_FILE),
         plan=None,
         industry_map=industry_map,
+        news=news_pack.live_reader(),
+        news_stamps=news_pack.live_stamp_reader(),
+        news_errors=news_pack.live_error_reader(),
     )
 
 
@@ -476,6 +490,28 @@ def _cohort_rows(symbol: str, found: list[tuple[str, str]], side: str, origin: s
     return rows
 
 
+def _news_rows(symbol: str, moment: datetime, paths: PickPaths) -> list[dict[str, Any]]:
+    """Up to 5 stored headlines from the last 3 days as ``pick:<SYM>:news:<n>``, each carrying its URL."""
+    from mentor_packs import news_pack
+
+    if paths.news is None:
+        return [{"id": f"pick:{symbol}:news", "kind": "news_empty", "text": "News: not read (no news source)"}]
+    found = news_pack.headline_rows(symbol, now=moment, days=NEWS_DAYS, limit=NEWS_MAX_ROWS, reader=paths.news)
+    rows = [{**row, "id": f"pick:{symbol}:news:{row['id'].rsplit(':', 1)[-1]}", "news_id": row["id"]} for row in found]
+    fetched, error = news_pack.read_status(symbol, paths.news_stamps, paths.news_errors)
+    state = news_pack.news_state(fetched, error)
+    if state == news_pack.STATE_UNKNOWN:
+        # The last request failed on every feed: whatever is stored may be stale, and "none" is unknown.
+        rows.append({"id": f"pick:{symbol}:news", "kind": "unknown", "text": news_pack.empty_text(state, error, NEWS_DAYS)})
+    elif not rows and state == news_pack.STATE_NOT_FETCHED:
+        rows = [{"id": f"pick:{symbol}:news", "kind": "news_not_fetched",
+                 "text": news_pack.empty_text(state, error, NEWS_DAYS)}]
+    elif not rows:
+        rows = [{"id": f"pick:{symbol}:news", "kind": "news_empty",
+                 "text": f"News: no stored headlines in the last {NEWS_DAYS} days"}]
+    return rows
+
+
 # ---------------------------------------------------------------- build
 def _now(now: datetime | None) -> datetime:
     moment = now or datetime.now(timezone.utc)
@@ -492,12 +528,19 @@ def build(symbol: str = "", side: str = "", *, now: datetime | None = None, path
     moment = _now(now)
     today = moment.astimezone(ET).date()
     src = paths or live_paths()
+    from mentor_packs.plan_lines import plan_digest
+
+    try:
+        plan_sha = plan_digest(src.plan)
+    except Exception:  # noqa: BLE001 - an unreadable plan hashes as "unknown"
+        plan_sha = "unknown"
     rows: list[dict[str, Any]] = [
         {
             "id": f"pick:{sym}:asof",
             "kind": "asof",
             "text": f"{sym} as of market date {today.isoformat()}",
             "at_utc": moment.astimezone(timezone.utc).isoformat(timespec="seconds"),
+            "plan_sha": plan_sha,
         }
     ]
     found: list[tuple[str, str]] = []
@@ -546,13 +589,23 @@ def build(symbol: str = "", side: str = "", *, now: datetime | None = None, path
         rows.extend(_cohort_rows(sym, found, chosen, origin, src))
     except Exception as exc:  # noqa: BLE001
         rows.append(_unknown(f"pick:{sym}:cohort", "Pick cohort", exc))
+    try:
+        rows.extend(_news_rows(sym, moment, src))
+    except Exception as exc:  # noqa: BLE001
+        rows.append(_unknown(f"pick:{sym}:news", "News", exc))
     return make_pack(NAME, rows)
 
 
+def plan_sha_of(pack: Pack) -> str:
+    """The plan file hash a pack was built with ("" for a pack built before it was carried)."""
+    return next((str(row.get("plan_sha") or "") for row in pack.rows if "plan_sha" in row), "")
+
+
 def pack_hash(pack: Pack) -> str:
-    """A stable hash of what the pack SAYS (the as-of stamp aside): same hash, same card."""
+    """A stable hash of what the pack SAYS (the as-of stamp aside) and of the plan file: same hash, same card."""
     stable = [(row.get("id"), row.get("text")) for row in pack.rows if row.get("kind") not in _VOLATILE_KINDS]
-    body = json.dumps({"name": pack.name, "rows": stable, "empty": pack.empty_text}, sort_keys=True, default=str)
+    body = json.dumps({"name": pack.name, "rows": stable, "empty": pack.empty_text, "plan": plan_sha_of(pack)},
+                      sort_keys=True, default=str)
     return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
 
 
@@ -576,8 +629,9 @@ FIXTURE_COHORT_HEADER = "cohort,side,horizon_sessions,sample_count,win_rate,avg_
 def write_fixture_world(root: Path | str, *, plan_text: str | None = None) -> PickPaths:
     """A small, deterministic desk under ``root``: NVDA long, TSLA short, AMD thin, ZZZ no earnings.
 
-    NVDA's peer AVGO reports tomorrow (2026-09-30).
+    NVDA's peer AVGO reports tomorrow (2026-09-30). NVDA has two headlines in the last 3 days.
     """
+    from mentor_packs import news_pack
     from mentor_packs.plan_lines import FIXTURE_PLAN
 
     base = Path(root)
@@ -670,6 +724,8 @@ def write_fixture_world(root: Path | str, *, plan_text: str | None = None) -> Pi
         cohort_performance=base / "human_focus_performance.csv",
         plan=plan,
         industry_map=lambda: industries,
+        news=news_pack.fixture_reader(),
+        news_stamps=news_pack.fixture_stamps,
     )
 
 

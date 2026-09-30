@@ -7,7 +7,8 @@ here.
 ## Trade Mentor app (approved 2026-09-29)
 
 - Trade Mentor app: P0 shell -> P1 mentor move (flag `mentor_app_enabled`) -> P2 picks ->
-  P3 vetoes -> P4 night memory -> P5 tape -> P6 gate -> P7 news. Owed by the trader:
+  P3 vetoes -> P4 night memory -> P5 tape -> P6 gate -> P7 news -> P8 book -> P9 mirror + tilt -> P10 debate
+  -> P11 research hook + frontier switch. Owed by the trader:
   `trading_plan.md` lines before P2, Risk per trade before P6.
   In flight: P1 mentor move (`claude/mentor-app-p1-mentor-move-2026-09-30`, flag off by
   default); after one live week with the flag on, delete `_MentorPopup` and the flag.
@@ -15,7 +16,15 @@ here.
   (`claude/mentor-app-p3-vetoes-2026-09-30`, gate #314). P4 night memory built
   (`claude/mentor-app-p4-night-memory-2026-09-30`, gate #315). P5 tape built
   (`claude/mentor-app-p5-tape-2026-09-30`, gate #316). P6 gate built
-  (`claude/mentor-app-p6-gate-2026-09-30`, gate #317). Next: P7 news, by the trader's word only.
+  (`claude/mentor-app-p6-gate-2026-09-30`, gate #317). P7 news built
+  (`claude/mentor-app-p7-news-2026-09-30`, gate #325). P8 book built
+  (`claude/mentor-app-p8-book-2026-09-30`, gate #321). P9 mirror + tilt built
+  (`claude/mentor-app-p9-mirror-tilt-2026-09-30`, gate #322). P10 debate built
+  (`claude/mentor-app-p10-debate-2026-09-30`, gate #323). P11 hypotheses + frontier built
+  (`claude/mentor-app-p11-research-frontier-2026-09-30`, gate #324): the plan's ladder is
+  complete. P12 IBKR `/book` built (trader 2026-09-30, `claude/mentor-app-p12-ibkr-book-2026-09-30`,
+  gate #326): read-only IBKR positions + cash beside Questrade, own client id 9155.
+  Next only by the trader's word: an alerts pack, a movers pack, more recall sources.
 
 ## Plan to 8/10, round 2 (trader's brief, 2026-09-25 evening)
 

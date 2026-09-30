@@ -224,3 +224,97 @@ def test_the_ledger_reason_counts_graded_and_updated_apart(chat, tmp_path, monke
     assert out["extra"]["graded"] == 1 and out["extra"]["updated"] == 2
     graded = [row for row in MentorChatStore(chat).challenges(kind="veto") if row.get("graded_utc")]
     assert len(graded) == out["extra"]["graded"]
+
+
+# ---------------------------------------------------------------- P11 hypotheses
+def _perm_history(tmp_path):
+    from mentor_packs import hypothesis_pack
+
+    folder = tmp_path / "permutation_report_history"
+    folder.mkdir(exist_ok=True)
+    (folder / "2026-09-26.json").write_text(json.dumps(hypothesis_pack.fixture_report()), encoding="utf-8")
+    return folder
+
+
+def _hyp_reply(*hypotheses):
+    return {"digest": [{"text": "Asked about NVDA once.", "evidence_refs": ["fact:turns"]}], "open_questions": [],
+            "hypotheses": list(hypotheses)}
+
+
+HYP = {"query": {"population": "swing", "horizon": "5", "family": "avwap_breakout", "side": "LONG",
+                 "facets": ["sma100_support=held", "spy_trend=up"]},
+       "why": "He keeps liking SMA100 holds in an up tape.", "evidence_refs": ["turn:1", "hyp:report:asof"]}
+
+
+def test_hypotheses_are_looked_up_recorded_and_published_as_hyp_lines(chat, tmp_path):
+    seen = {}
+    miss = {**HYP, "query": {**HYP["query"], "facets": ["made_up=yes"]}}
+
+    def request(**kwargs):
+        seen.update(kwargs)
+        return {"summary": _hyp_reply(HYP, miss), "model": "m"}
+
+    before = _dump(chat)
+    out = _run(chat, tmp_path, request=request, permutation_history=_perm_history(tmp_path),
+               permutation_report=tmp_path / "none.json")
+    assert out["status"] == "ok" and out["extra"]["hypotheses"] == 2 and out["extra"]["hypotheses_recorded"] == 2
+    evidence = seen["evidence"]
+    assert "hyp:report:asof" in evidence["allowed_evidence_ids"]
+    assert evidence["hypothesis_vocabulary"]["swing"]["facets"]["spy_trend"] == ["up"]
+    assert set(mentor_review.DIGEST_JSON_SCHEMA["properties"]["hypotheses"]["items"]["properties"]) == {
+        "query", "why", "evidence_refs"}
+    digest = json.loads((tmp_path / "ai" / f"mentor_day_digest_{SESSION}.json").read_text(encoding="utf-8"))
+    assert digest["permutation_report_asof"] == "2026-09-26"
+    lines = digest["hyp_lines"]
+    assert lines[0].startswith(f"[hyp:{SESSION}:1] swing avwap_breakout LONG 5") and "n=64" in lines[0]
+    assert "not in vocabulary: facet made_up" in lines[1]
+    rows = {row["id"]: row for row in MentorChatStore(chat).challenges(kind="hypothesis")}
+    assert set(rows) == {f"hyp:{SESSION}:1", f"hyp:{SESSION}:2"}
+    first = json.loads(rows[f"hyp:{SESSION}:1"]["outcome_json"])
+    assert first["status"] == "open" and first["lookup"]["cell"]["n"] == 64
+    assert first["lookup"]["report_asof"] == "2026-09-26" and rows[f"hyp:{SESSION}:1"]["graded_utc"] is None
+    assert datetime.fromisoformat(rows[f"hyp:{SESSION}:1"]["issued_utc"]).tzinfo is not None
+    after = _dump(chat)
+    assert {k: v for k, v in after.items() if k != "challenges"} == {k: v for k, v in before.items()
+                                                                       if k != "challenges"}
+    assert set(before["challenges"]) < set(after["challenges"]), "only hypothesis rows were added"
+
+
+def test_a_hypothesis_citing_a_foreign_id_rejects_the_reply(chat, tmp_path):
+    bad = {**HYP, "evidence_refs": ["pick:TSLA:cell"]}
+    out = _run(chat, tmp_path, request=lambda **_: {"summary": _hyp_reply(bad), "model": "m"},
+               permutation_history=_perm_history(tmp_path), permutation_report=tmp_path / "none.json")
+    assert out["status"] == "failed" and "hypotheses 0 cited" in out["reason"]
+    assert MentorChatStore(chat).challenges(kind="hypothesis") == []
+
+
+def test_uncited_or_extra_hypotheses_are_dropped(chat, tmp_path):
+    uncited = {**HYP, "evidence_refs": []}
+    out = _run(chat, tmp_path, request=lambda **_: {"summary": _hyp_reply(uncited, HYP, HYP, HYP, HYP),
+                                                     "model": "m"},
+               permutation_history=_perm_history(tmp_path), permutation_report=tmp_path / "none.json")
+    assert out["extra"]["hypotheses"] == 3 and out["extra"]["dropped"] == 2
+
+
+def test_a_daytime_run_publishes_the_lookup_but_records_nothing(chat, tmp_path):
+    out = mentor_review.run_mentor_review(
+        session_date=SESSION, now=datetime(2026, 9, 29, 12, 0, tzinfo=PT), chat_db=chat, ai_root=tmp_path / "ai",
+        request=lambda **_: {"summary": _hyp_reply(HYP), "model": "m"},
+        permutation_history=_perm_history(tmp_path), permutation_report=tmp_path / "none.json")
+    assert out["extra"]["hypotheses"] == 1 and out["extra"]["hypotheses_recorded"] == 0
+    assert MentorChatStore(chat).challenges(kind="hypothesis") == []
+    digest = json.loads((tmp_path / "ai" / f"mentor_day_digest_{SESSION}.json").read_text(encoding="utf-8"))
+    assert digest["hypotheses"][0]["recorded"] is False and "n=64" in digest["hyp_lines"][0]
+
+
+def test_no_permutation_report_leaves_the_vocabulary_empty(chat, tmp_path):
+    seen = {}
+
+    def request(**kwargs):
+        seen.update(kwargs)
+        return {"summary": _hyp_reply(), "model": "m"}
+
+    out = _run(chat, tmp_path, request=request, permutation_history=tmp_path / "none",
+               permutation_report=tmp_path / "none.json")
+    assert out["status"] == "ok" and seen["evidence"]["hypothesis_vocabulary"] == {}
+    assert "hyp:report:asof" not in seen["evidence"]["allowed_evidence_ids"]

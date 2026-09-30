@@ -78,3 +78,29 @@ def test_profile_notes_pack_cache_and_embeddings(tmp_path):
     got = store.embeddings("nomic-embed-text")
     assert got[0]["vector"] == [0.5, 0.25] and got[0]["text"] == "NVDA"
     assert store.unembedded_turns("nomic-embed-text") == []
+
+
+def test_threads_that_open_a_fresh_store_together_all_get_in(tmp_path):
+    """The window's IO thread and the frontier thread may both be first; one sets up, the others wait."""
+    import threading
+
+    for round_no in range(20):
+        store = MentorChatStore(tmp_path / f"chat{round_no}.sqlite3")
+        gate = threading.Barrier(6)
+        spent: list = []
+
+        def read(store=store, gate=gate, spent=spent):
+            gate.wait()
+            spent.append(store.frontier_spent("2026-09-30"))
+
+        def write(store=store, gate=gate):
+            gate.wait()
+            store.start_session("m")
+
+        threads = [threading.Thread(target=read) for _ in range(4)] + [threading.Thread(target=write)
+                                                                         for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(10)
+        assert spent == [0.0] * 4, f"round {round_no}: a first open lost the race ({spent})"

@@ -19,9 +19,20 @@ HELP_TEXT = (
     "- `/read` give a market read now (Trade Mentor card)\n"
     "- `/pause` no Trade Mentor questions for the rest of today\n"
     "- `/pick SYM` what the desk knows about a pick, narrated (or tap a Focus chip)\n"
+    "- `/debate SYM [long|short]` a bull case and a bear case from the same evidence, side by side (you decide)\n"
+    "- `/news SYM [days]` the stored headlines for a stock (title, source, time, link; 3 days unless you say)\n"
     "- `/vetoes [YYYY-MM-DD]` the last session's vetoes (or that one's), each with its slice and any challenge\n"
     "- `/check short NVDA 400 stop 3.20 entry 3.05` check a trade before you take it (advice only; it never orders)\n"
+    "- `/book` your open positions by account (Questrade when it can be read, else the journal; read-only)\n"
+    "- `/mirror [weeks]` your own record in cuts with n: likes vs the scan, vetoes, journal, regime (6 weeks"
+    " unless you say)\n"
+    "- `/tilt` today's patterns after a loss (observations with leg ids) and how often they led to a red rest"
+    " of day\n"
     "- `/scorecard` how the challenges have done by kind, with n, and how the app itself is doing\n"
+    "- `/hypotheses` the night's queries into the shadow permutation grid, each with its cell and grade\n"
+    "- `/think` ask the frontier model your last question again (`/think pick SYM`, `/think week`);"
+    " metered, off unless you switch it on\n"
+    "- `/frontier` the frontier switch, today's spend and the daily cap\n"
     "- `/ai off [2h|4h|tonight]` pause every local-AI use of the GPU host (default: until 06:00);"
     " `/ai on` resumes; `/ai` says which\n"
 )
@@ -98,6 +109,23 @@ def handle(text: str) -> CommandResult | None:
             return CommandResult("error", "Try `/pick NVDA` (or `/pick NVDA short`).")
         side = parts[1] if len(parts) > 1 and parts[1] in ("LONG", "SHORT") else ""
         return CommandResult("pick", "", (symbol, side))
+    if name == "debate":
+        parts = rest.upper().split()
+        symbol = parts[0] if parts else ""
+        side = parts[1] if len(parts) > 1 else ""
+        if (not symbol or not symbol.replace(".", "").replace("-", "").isalnum() or len(parts) > 2
+                or side not in ("", "LONG", "SHORT")):
+            return CommandResult("error", "Try `/debate NVDA` (or `/debate NVDA short`).")
+        return CommandResult("debate", "", (symbol, side))
+    if name == "news":
+        from news_feed import clean_symbol
+
+        parts = rest.split()
+        symbol = clean_symbol(parts[0]) if parts else ""
+        days_text = parts[1].lower().removesuffix("d") if len(parts) > 1 else "3"
+        if not symbol or len(parts) > 2 or not days_text.isdigit() or not 1 <= int(days_text) <= 14:
+            return CommandResult("error", "Try `/news NVDA` or `/news NVDA 7` (1 to 14 days).")
+        return CommandResult("news", "", (symbol, int(days_text)))
     if name == "vetoes":
         if rest and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", rest):
             return CommandResult("error", "Try `/vetoes` or `/vetoes 2026-09-29`.")
@@ -111,9 +139,50 @@ def handle(text: str) -> CommandResult | None:
         return CommandResult("check", "", request)
     if name == "scorecard":
         return CommandResult("scorecard")
+    if name == "think":
+        return _think_command(rest)
+    if name == "frontier":
+        if rest:
+            return CommandResult("error", "Try `/frontier` (no arguments).")
+        return CommandResult("frontier")
+    if name in ("hypotheses", "hyp"):
+        if rest:
+            return CommandResult("error", "Try `/hypotheses` (no arguments).")
+        return CommandResult("hypotheses")
+    if name == "mirror":
+        if rest and not (rest.isdigit() and 1 <= int(rest) <= 52):
+            return CommandResult("error", "Try `/mirror` or `/mirror 8` (1 to 52 weeks).")
+        return CommandResult("mirror", "", int(rest) if rest else 6)
+    if name == "tilt":
+        if rest:
+            return CommandResult("error", "Try `/tilt` (no arguments).")
+        return CommandResult("tilt")
+    if name == "book":
+        if rest:
+            return CommandResult("error", "Try `/book` (no arguments).")
+        return CommandResult("book")
     if name == "ai":
         return _ai_command(rest)
     return CommandResult("error", f"I don't know `/{name}`. Type `/help`.")
+
+
+THINK_USAGE = "Try `/think`, `/think pick NVDA` (or `/think pick NVDA short`) or `/think week`."
+
+
+def _think_command(rest: str) -> CommandResult:
+    """``/think`` (the last question), ``/think pick SYM [long|short]``, ``/think week``."""
+    words = rest.split()
+    if not words:
+        return CommandResult("think", "", ("chat",))
+    head = words[0].lower()
+    if head == "week" and len(words) == 1:
+        return CommandResult("think", "", ("week",))
+    if head == "pick" and 2 <= len(words) <= 3:
+        symbol = words[1].upper()
+        side = words[2].upper() if len(words) == 3 else ""
+        if symbol.replace(".", "").replace("-", "").isalnum() and side in ("", "LONG", "SHORT"):
+            return CommandResult("think", "", ("pick", symbol, side))
+    return CommandResult("error", THINK_USAGE)
 
 
 def _ai_command(rest: str) -> CommandResult:

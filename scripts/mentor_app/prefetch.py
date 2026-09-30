@@ -3,7 +3,7 @@
 One consumer thread, one job at a time, highest priority first (interactive > refresh >
 embed). A job that needs the model waits while an interactive turn is in flight, while
 the brain is down, and through the night window; a deterministic job (a pack rebuild)
-still runs then. A generating job may ask for at most MAX_JOB_OUTPUT_TOKENS. Qt-free:
+still runs then. A generating job may ask for at most MAX_JOB_OUTPUT_TOKENS per model call. Qt-free:
 results come back through ``on_done`` on the consumer thread; the window re-emits them.
 """
 
@@ -43,7 +43,9 @@ class PrefetchQueue:
         *,
         blocked: Callable[[], str] = lambda: "",
         model_ready: Callable[[], bool] = lambda: True,
+        thread_name: str = "mentor-prefetch",
     ) -> None:
+        self.thread_name = str(thread_name)
         self._blocked = blocked
         self._model_ready = model_ready
         self._jobs: list[Job] = []
@@ -65,13 +67,18 @@ class PrefetchQueue:
         priority: int = PRIORITY_REFRESH,
         needs_model: bool = False,
         max_tokens: int = 0,
+        calls: int = 1,
         key: str = "",
         on_done: Callable[[Any], None] | None = None,
         on_error: Callable[[BaseException], None] | None = None,
     ) -> bool:
-        """Queue a job; False when a job with the same key is already waiting."""
-        if int(max_tokens) > MAX_JOB_OUTPUT_TOKENS:
-            raise ValueError(f"a background job may ask for at most {MAX_JOB_OUTPUT_TOKENS} output tokens")
+        """Queue a job; False when a job with the same key is already waiting.
+
+        ``max_tokens`` is the job's whole output budget over its ``calls`` model calls.
+        """
+        calls = max(1, int(calls))
+        if int(max_tokens) > MAX_JOB_OUTPUT_TOKENS * calls:
+            raise ValueError(f"a background job may ask for at most {MAX_JOB_OUTPUT_TOKENS} output tokens per call")
         with self._lock:
             if key and any(job.key == key for job in self._jobs):
                 return False
@@ -108,6 +115,10 @@ class PrefetchQueue:
                     del self._jobs[index]
                     return True
         return False
+
+    def running(self) -> bool:
+        """True while the consumer thread is alive."""
+        return self._thread is not None and self._thread.is_alive() and not self._stop.is_set()
 
     def pending_keys(self) -> list[str]:
         with self._lock:
@@ -160,7 +171,7 @@ class PrefetchQueue:
     def start(self) -> None:
         if self._thread is None or not self._thread.is_alive():
             self._stop.clear()
-            self._thread = threading.Thread(target=self._loop, name="mentor-prefetch", daemon=True)
+            self._thread = threading.Thread(target=self._loop, name=self.thread_name, daemon=True)
             self._thread.start()
 
     def stop(self, timeout: float = 2.0) -> None:

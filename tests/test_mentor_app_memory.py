@@ -226,3 +226,18 @@ def test_keep_refreshes_the_note(window, app):
     _drain(window, app)
     assert window.store.profile_notes()[0]["checked_utc"]
     assert "Still true: [mem:note:1]" in _text(window)
+
+
+@pytest.mark.parametrize("wall", ["2026-01-05T12:00:00.000+00:00", "2027-06-01T12:00:00.000+00:00"])
+def test_still_true_uses_the_windows_clock_on_any_date(window, app, monkeypatch, wall):
+    from mentor_app import store as store_module
+
+    monkeypatch.setattr(store_module, "utc_now", lambda: wall)
+    _note(window.store, "rule: I stop after two losses")
+    window.send("/help")
+    _drain(window, app)
+    assert window.store.profile_notes()[0]["asked_utc"].startswith("2026-09-29")
+    window.clock["now"] = NOW + timedelta(days=8)
+    window.send("/help")
+    _drain(window, app)
+    assert len([item for item in window.inbox.items() if item.kind == "memory"]) == 2
