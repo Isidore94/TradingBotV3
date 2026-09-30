@@ -12,8 +12,15 @@ check is ``plan_review``'s rule: an id the pack does not carry rejects the reply
 an uncited item is dropped. Publishes ``mentor_day_digest`` (<= 5 items, <= 3 open
 questions) by temp-and-rename, so a failed publish keeps the last good one.
 
-The only write to the chat DB is the grading columns (``outcome_json``, ``graded_utc``)
-through :class:`NightChallengeStore`; digests are never written back into the app's tables.
+Hypotheses (P11): the reply may carry <= 3 ``hypotheses``, each a query into the shadow
+permutation grid (the pack shows the newest report's vocabulary). The deterministic half
+looks each one up (``mentor_packs.hypothesis_pack.find``: no new compute), records it as a
+``hypothesis`` challenge (22:00-06:00 PT only, the night's write window) and publishes the
+cell numbers or the miss reason in the digest as ``hyp:*`` lines. Nothing is applied.
+
+The chat DB writes are the grading columns (``outcome_json``, ``graded_utc``) and the new
+``hypothesis`` challenge rows, through :class:`NightChallengeStore`; digests are never
+written back into the app's tables.
 """
 
 from __future__ import annotations
@@ -33,7 +40,7 @@ from ai_jobs import ledger
 _log = logging.getLogger(__name__)
 
 PT = ZoneInfo("America/Los_Angeles")
-PROMPT_VERSION = "mentor_review_v1"
+PROMPT_VERSION = "mentor_review_v2"
 SCHEMA_NAME = "tradingbot_mentor_review"
 FACTS_STEM = "mentor_day_facts"
 DIGEST_STEM = "mentor_day_digest"
@@ -42,6 +49,7 @@ DIGEST_SCHEMA = "mentor_day_digest_v1"
 MAX_OUTPUT_TOKENS = 600
 MAX_DIGEST_ITEMS = 5
 MAX_OPEN_QUESTIONS = 3
+MAX_HYPOTHESES = 3
 MAX_ITEM_CHARS = 280
 MAX_TURNS = 20
 MAX_TURN_CHARS = 300
@@ -57,7 +65,11 @@ INSTRUCTIONS = (
     "open questions to ask him. Every item cites one or more ids copied exactly from "
     "allowed_evidence_ids. Copy numbers from the evidence; never compute one. Never "
     "suggest an order, a size, or a change to a detector, score or alert. Say nothing "
-    "rather than something the evidence does not carry."
+    "rather than something the evidence does not carry. You may also propose at most three "
+    "hypotheses: each is a query into the shadow permutation grid (population, horizon, family, "
+    "side and one to three facets as 'name=value', using only names and values listed in "
+    "hypothesis_vocabulary), with why and the ids it rests on. The desk looks each one up; "
+    "you never state its numbers. Leave hypotheses empty when the vocabulary is empty."
 )
 
 _ITEM = {
@@ -69,13 +81,36 @@ _ITEM = {
         "evidence_refs": {"type": "array", "items": {"type": "string"}},
     },
 }
+_QUERY = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["population", "horizon", "family", "side", "facets"],
+    "properties": {
+        "population": {"type": "string", "enum": ["swing", "m5"]},
+        "horizon": {"type": "string"},
+        "family": {"type": "string"},
+        "side": {"type": "string", "enum": ["LONG", "SHORT"]},
+        "facets": {"type": "array", "maxItems": 3, "items": {"type": "string"}},
+    },
+}
+_HYPOTHESIS = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["query", "why", "evidence_refs"],
+    "properties": {
+        "query": _QUERY,
+        "why": {"type": "string", "maxLength": MAX_ITEM_CHARS},
+        "evidence_refs": {"type": "array", "items": {"type": "string"}},
+    },
+}
 DIGEST_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["digest", "open_questions"],
+    "required": ["digest", "open_questions", "hypotheses"],
     "properties": {
         "digest": {"type": "array", "maxItems": MAX_DIGEST_ITEMS, "items": _ITEM},
         "open_questions": {"type": "array", "maxItems": MAX_OPEN_QUESTIONS, "items": _ITEM},
+        "hypotheses": {"type": "array", "maxItems": MAX_HYPOTHESES, "items": _HYPOTHESIS},
     },
 }
 
@@ -149,6 +184,7 @@ class NightChallengeStore:
         self.path = Path(path)
         self.graded: list[str] = []  # rows whose graded_utc this run set
         self.updated: list[str] = []  # every row whose outcome this run changed
+        self.added: list[str] = []  # hypothesis rows this run inserted
 
     def challenges(self, *, kind: str | None = None, open_only: bool = False) -> list[dict[str, Any]]:
         sql = "SELECT * FROM challenges WHERE 1 = 1"
@@ -159,6 +195,27 @@ class NightChallengeStore:
         if open_only:
             sql += " AND (graded_utc IS NULL OR graded_utc = '')"
         return _rows(self.path, sql + " ORDER BY issued_utc, id", params)
+
+    def add_challenge(self, challenge_id: str, *, kind: str, symbol: str = "", claim: str = "",
+                      evidence_ids: Sequence[str] = (), issued_utc: str = "",
+                      outcome: Mapping[str, Any] | None = None) -> bool:
+        """Insert one open challenge (the night's hypotheses); an id already issued is left alone."""
+        try:
+            with closing(sqlite3.connect(self.path, timeout=BUSY_TIMEOUT_MS / 1000)) as conn, conn:
+                conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+                cursor = conn.execute(
+                    "INSERT OR IGNORE INTO challenges (id, kind, symbol, claim, evidence_ids_json, issued_utc, "
+                    "graded_utc, outcome_json) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)",
+                    (str(challenge_id), str(kind), str(symbol or ""), str(claim),
+                     json.dumps(list(evidence_ids)), str(issued_utc),
+                     json.dumps(dict(outcome or {}), sort_keys=True, default=str)),
+                )
+        except sqlite3.Error:
+            _log.exception("mentor_review: challenge %s could not be written", challenge_id)
+            return False
+        if cursor.rowcount:
+            self.added.append(str(challenge_id))
+        return bool(cursor.rowcount)
 
     def update_challenge(self, challenge_id: str, *, outcome: dict[str, Any], graded_utc: str | None = None) -> bool:
         try:
@@ -286,7 +343,18 @@ def fact_rows(facts: Mapping[str, Any]) -> list[dict[str, str]]:
 # ---------------------------------------------------------------------------
 # inputs, citation check, publish
 # ---------------------------------------------------------------------------
-def build_inputs(path: Path, session: str, facts: Mapping[str, Any]) -> dict[str, Any]:
+def hypothesis_context(report: Any) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    """(the ``hyp:report:asof`` row, the report's vocabulary) for the model; empty without a report."""
+    from mentor_packs import hypothesis_pack
+
+    if report is None:
+        return [], {}
+    row = {"id": "hyp:report:asof",
+           "text": f"newest permutation report: data date {report.asof or 'unknown'} ({Path(report.path).name})"}
+    return [row], hypothesis_pack.vocabulary(report)
+
+
+def build_inputs(path: Path, session: str, facts: Mapping[str, Any], *, report: Any = None) -> dict[str, Any]:
     """Everything the model may see, with ids; ``inputs_hash`` ignores the clock."""
     notes = [
         {"id": f"note:{row['id']}", "text": _text(row.get("text"))[:MAX_TURN_CHARS]}
@@ -303,13 +371,16 @@ def build_inputs(path: Path, session: str, facts: Mapping[str, Any]) -> dict[str
         if row.get("role") in ("user", "assistant")
     ][-MAX_TURNS:]
     rows = fact_rows(facts)
-    ids = [row["id"] for row in (*rows, *notes, *challenges, *turns)]
+    report_rows, vocab = hypothesis_context(report)
+    ids = [row["id"] for row in (*rows, *notes, *challenges, *turns, *report_rows)]
     body: dict[str, Any] = {
         "session_date": session,
         "facts": rows,
         "profile_notes": notes,
         "challenges": challenges,
         "turns": turns,
+        "permutation_report": report_rows,
+        "hypothesis_vocabulary": vocab,
         "allowed_evidence_ids": ids,
     }
     body["inputs_hash"] = hashlib.sha256(
@@ -336,7 +407,7 @@ def check_reply(reply: Any, inputs: Mapping[str, Any]) -> tuple[dict[str, list[d
     if not isinstance(reply, Mapping):
         raise MentorReviewRejected("the reply was not an object")
     allowed = {_text(item) for item in inputs.get("allowed_evidence_ids") or ()}
-    kept: dict[str, list[dict[str, Any]]] = {"digest": [], "open_questions": []}
+    kept: dict[str, list[dict[str, Any]]] = {"digest": [], "open_questions": [], "hypotheses": []}
     dropped = 0
     for key, cap in (("digest", MAX_DIGEST_ITEMS), ("open_questions", MAX_OPEN_QUESTIONS)):
         rows = reply.get(key)
@@ -354,7 +425,57 @@ def check_reply(reply: Any, inputs: Mapping[str, Any]) -> tuple[dict[str, list[d
                 dropped += 1
                 continue
             kept[key].append({"text": text, "evidence_refs": refs})
+    hypotheses = reply.get("hypotheses")
+    if hypotheses is not None and not isinstance(hypotheses, (list, tuple)):
+        raise MentorReviewRejected("hypotheses was not an array")
+    for index, row in enumerate(hypotheses or ()):
+        if not isinstance(row, Mapping):
+            raise MentorReviewRejected(f"hypotheses {index} was not an object")
+        refs = _refs(row)
+        for ref in refs:
+            if ref not in allowed:
+                raise MentorReviewRejected(f"hypotheses {index} cited {ref!r}, which tonight does not carry")
+        why = _text(row.get("why"))
+        query = row.get("query")
+        if (not refs or not why or len(why) > MAX_ITEM_CHARS or not isinstance(query, Mapping)
+                or len(kept["hypotheses"]) >= MAX_HYPOTHESES):
+            dropped += 1
+            continue
+        kept["hypotheses"].append({"query": dict(query), "why": why, "evidence_refs": refs})
     return kept, dropped
+
+
+def look_up_hypotheses(
+    hypotheses: Sequence[Mapping[str, Any]],
+    report: Any,
+    *,
+    session: str,
+    issued_utc: str,
+    night_store: "NightChallengeStore | None",
+) -> list[dict[str, Any]]:
+    """Look each hypothesis up in the report (no compute) and record it when the night may write."""
+    from mentor_packs import hypothesis_pack
+
+    out: list[dict[str, Any]] = []
+    for index, item in enumerate(hypotheses, start=1):
+        hyp_id = f"hyp:{session}:{index}"
+        clean, _why = hypothesis_pack.normalise(item.get("query"))
+        query = clean or dict(item.get("query") or {})
+        record = hypothesis_pack.lookup_record(query, report)
+        recorded = False
+        if night_store is not None:
+            recorded = night_store.add_challenge(
+                hyp_id, kind=hypothesis_pack.KIND, claim=_text(item.get("why")),
+                evidence_ids=list(item.get("evidence_refs") or ()), issued_utc=issued_utc,
+                outcome={"status": "open", "query": query, "lookup": record},
+            )
+        text = hypothesis_pack.record_text(record)
+        out.append({
+            "id": hyp_id, "query": query, "why": _text(item.get("why")),
+            "evidence_refs": list(item.get("evidence_refs") or ()), "lookup": record, "recorded": recorded,
+            "line": f"[{hyp_id}] {hypothesis_pack.query_label(query)} -> {text}",
+        })
+    return out
 
 
 def published_path(root: Path, stem: str, session: str) -> Path:
@@ -415,14 +536,17 @@ def model_wanted(*, session_date: str = "", chat_db: Path | str | None = None, *
         return True
 
 
-def _grade(path: Path, moment: datetime, veto_outcomes: Any) -> dict[str, Any]:
+def _grade(path: Path, moment: datetime, veto_outcomes: Any, *, permutation_history: Any = None,
+           permutation_report: Any = None) -> dict[str, Any]:
     from mentor_app import challenge
 
     if not challenge.night_owns_grading(moment):
         return {"owner": "app", "graded": 0, "updated": 0, "reason": "outside 22:00-06:00 PT the app grades"}
     night_store = NightChallengeStore(path)
     try:
-        updated = challenge.grade_open(night_store, moment, veto_outcomes=veto_outcomes)
+        updated = challenge.grade_open(night_store, moment, veto_outcomes=veto_outcomes,
+                                       permutation_history=permutation_history,
+                                       permutation_report=permutation_report)
     except Exception as exc:  # noqa: BLE001 - a grading failure never costs the facts
         _log.debug("mentor_review grading failed.", exc_info=True)
         return {"owner": "night", "graded": len(night_store.graded), "updated": len(night_store.updated),
@@ -437,6 +561,8 @@ def run_mentor_review(
     chat_db: Path | str | None = None,
     ai_root: Path | str | None = None,
     veto_outcomes: Any = None,
+    permutation_history: Path | str | None = None,
+    permutation_report: Path | str | None = None,
     request: Callable[..., Mapping[str, Any]] | None = None,
     post: Callable[..., Any] | None = None,
     ask: bool = True,
@@ -456,7 +582,8 @@ def run_mentor_review(
         return {"status": ledger.STATUS_FAILED, "model": "", "reason": f"the ai_store is unavailable: {exc}",
                 "outputs": []}
 
-    grading = _grade(path, moment, veto_outcomes)
+    grading = _grade(path, moment, veto_outcomes, permutation_history=permutation_history,
+                     permutation_report=permutation_report)
     try:
         facts = day_facts(path, session, grading=grading)
     except Exception as exc:  # noqa: BLE001
@@ -481,7 +608,14 @@ def run_mentor_review(
         return {"status": ledger.STATUS_OK, "model": "", "outputs": outputs, "extra": summary,
                 "reason": f"facts published for {session}; {graded_note}; no model asked"}
 
-    inputs = build_inputs(path, session, facts)
+    try:
+        from mentor_packs import hypothesis_pack
+
+        report = hypothesis_pack.latest_report(permutation_history, permutation_report)
+    except Exception:  # noqa: BLE001 - no report = no vocabulary, the digest still runs
+        _log.debug("mentor_review could not read the permutation report.", exc_info=True)
+        report = None
+    inputs = build_inputs(path, session, facts, report=report)
     if not (inputs["turns"] or inputs["profile_notes"] or inputs["challenges"]):
         return {"status": ledger.STATUS_OK, "model": "", "outputs": outputs, "extra": summary,
                 "reason": f"no mentor conversation on {session}, so no model was loaded"}
@@ -532,17 +666,29 @@ def run_mentor_review(
         "open_questions": kept["open_questions"],
         "dropped": dropped,
     }
+    from mentor_app import challenge
+
+    # The night inserts rows only inside its window; a manual daytime run publishes the lookups unrecorded.
+    night_store = NightChallengeStore(path) if challenge.night_owns_grading(moment) else None
+    looked = look_up_hypotheses(kept["hypotheses"], report, session=session, issued_utc=facts["built_utc"],
+                                night_store=night_store)
+    payload |= {
+        "permutation_report_asof": report.asof if report is not None else "",
+        "hypotheses": looked,
+        "hyp_lines": [item["line"] for item in looked],
+    }
     try:
         _publish(digest_path, payload)
     except OSError as exc:
         return {"status": ledger.STATUS_FAILED, "model": answered, "outputs": outputs, "extra": summary,
                 "reason": f"mentor_day_digest could not be published (the last good one is kept): {exc}"}
     summary.update({"digest_items": len(kept["digest"]), "open_questions": len(kept["open_questions"]),
+                    "hypotheses": len(looked), "hypotheses_recorded": sum(1 for item in looked if item["recorded"]),
                     "dropped": dropped})
     return {
         "status": ledger.STATUS_OK, "model": answered, "outputs": [*outputs, str(digest_path)], "extra": summary,
         "reason": (f"{len(kept['digest'])} digest item(s), {len(kept['open_questions'])} open question(s), "
-                   f"{dropped} dropped for {session}; {graded_note}"),
+                   f"{len(looked)} hypothesis lookup(s), {dropped} dropped for {session}; {graded_note}"),
     }
 
 

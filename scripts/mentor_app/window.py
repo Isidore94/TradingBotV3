@@ -192,6 +192,9 @@ class MentorWindow(QMainWindow):
         self._context_text = ""
         #: P4 memory: the start-of-day block (system prefix, byte-stable) and this session's new notes (tail).
         self._memory_root = memory_root
+        #: P11 /hypotheses: the permutation report paths (None = project_paths' live constants, read-only).
+        self.permutation_history: Any = None
+        self.permutation_report: Any = None
         self._memory = memory.Memory()
         self._memory_block = ""
         self._memory_text = ""
@@ -1078,6 +1081,9 @@ class MentorWindow(QMainWindow):
         elif result.action == "scorecard":
             self.queue.submit("scorecard", lambda: challenge.scorecard(self.store, facts=memory.load_facts(self._memory_root)),
                               priority=PRIORITY_INTERACTIVE, key="scorecard", on_done=self._bridge.note.emit)
+        elif result.action == "hypotheses":
+            self.queue.submit("hypotheses", self._hypotheses_card, priority=PRIORITY_INTERACTIVE, key="hypotheses",
+                              on_done=self._bridge.note.emit)
         elif result.action == "tape":
             self.show_tape()
         elif result.action == "check":
@@ -2166,6 +2172,15 @@ class MentorWindow(QMainWindow):
                          model=getattr(card, "model", "") or "",
                          tool_calls=[{"name": "mirror_pack", "arguments": {"weeks": done.get("weeks")},
                                       "hash": done.get("hash"), "error": getattr(card, "error", "")}])
+
+    # ------------------------------------------------------------------ /hypotheses (P11)
+    def _hypotheses_card(self) -> str:
+        """The night's hypotheses and their cells (queue thread; reads only)."""
+        from mentor_packs import hypothesis_pack
+
+        pack = hypothesis_pack.build(now=self._now(), chat_db=self.store.path, history_dir=self.permutation_history,
+                                     report_file=self.permutation_report)
+        return hypothesis_pack.card_markdown(pack)
 
     # ------------------------------------------------------------------ /debate (P10)
     def _debate_runner(self, stop: threading.Event) -> Callable[[Any, str], Any] | None:
