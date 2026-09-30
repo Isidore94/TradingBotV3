@@ -7,7 +7,9 @@ with the reason folded into the evidence. The first passing reply wins.
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -36,6 +38,10 @@ def _validate(result):
 
 
 BASE = {"instructions": "Say it.", "pack": {"a": 1}}
+
+#: Inside the night window, so a retry may launch; DAYTIME is in market hours.
+NIGHT = datetime(2026, 9, 25, 2, 0, tzinfo=ZoneInfo("America/New_York"))
+DAYTIME = datetime(2026, 9, 24, 11, 0, tzinfo=ZoneInfo("America/New_York"))
 
 
 def test_the_default_is_three_attempts():
@@ -136,17 +142,27 @@ def _econ_bad_time(pack):
     return reply
 
 
-def _run_econ(tmp_path, request, brief_extra=""):
+def _run_econ(tmp_path, request, brief_extra="", now=NIGHT):
     from ai_jobs import econ_brief_narration as job
 
     econ = _econ()
     return job.run_econ_brief(
         session_date="2026-09-24",
+        now=now,
         out_dir=tmp_path,
         forecasts=econ._forecasts(("2026-09-24", econ.BRIEF_0924 + brief_extra)),
         request=request,
         ledger_path=tmp_path / "ledger.jsonl",
     )
+
+
+def test_econ_a_closed_window_stops_the_retries(tmp_path):
+    pack = _econ()._pack()
+    request = _sequence(_econ_bad_time(pack), _econ()._good_reply(pack))
+    outcome = _run_econ(tmp_path, request, now=DAYTIME)
+    assert len(request.calls) == 1
+    assert outcome["status"] == "degraded_no_narrative"
+    assert "no attempt 2/3 (" in outcome["reason"]
 
 
 def test_econ_a_rejection_then_a_pass_is_ok_on_attempt_two(tmp_path):
@@ -296,6 +312,7 @@ def _run_story(tmp_path, *changes_per_call):
         rollups_dir=tmp_path / "rollups",
         out_dir=tmp_path / "out",
         request=request,
+        now=NIGHT,
         frame_reader=lambda _day: None,
     )
     return result, calls
@@ -364,7 +381,7 @@ def _sr_line(text):
 def test_setup_research_a_numberless_reply_is_asked_again(monkeypatch):
     module, calls = _setup_research(monkeypatch, _sr_line("Several recipes work."), _sr_line("r1 has n=41."))
     told: list[str] = []
-    narration = module._narrate({}, attempt_label=told)
+    narration = module._narrate({}, now=NIGHT, attempt_label=told)
     assert len(calls) == 2
     assert narration["narration"]["what_is_working"][0]["statement"] == "r1 has n=41."
     assert told == ["attempt 2/3"]
@@ -377,7 +394,7 @@ def test_setup_research_a_numberless_reply_is_asked_again(monkeypatch):
 def test_setup_research_three_numberless_replies_raise_with_every_reason(monkeypatch):
     module, calls = _setup_research(monkeypatch, _sr_line("Nothing measured."))
     with pytest.raises(ValueError, match="attempt 3/3: the narration quoted no number"):
-        module._narrate({})
+        module._narrate({}, now=NIGHT)
     assert len(calls) == 3
 
 

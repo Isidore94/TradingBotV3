@@ -296,7 +296,11 @@ def run_econ_brief(
     try:
         # Each rejected reply is asked again with its reason quoted, up to VERIFIED_ATTEMPTS.
         verified = attempts.verified_attempts(
-            _ask, _check, evidence=evidence, with_feedback=_retry_evidence(pack, prior)
+            _ask,
+            _check,
+            evidence=evidence,
+            with_feedback=_retry_evidence(pack, prior),
+            may_retry=attempts.night_window_gate(now, reserve_minutes=10),
         )
         result, lines = verified.result, verified.value
         moment = now or datetime.now(timezone.utc)

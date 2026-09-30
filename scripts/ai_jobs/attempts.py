@@ -2,12 +2,15 @@
 
 Ask the model, run the slot's own deterministic verifier, and on a rejection ask
 again with the rejection folded into the evidence. The first reply the verifier
-passes wins; there is no model judge. Pure: no I/O, no clock, no settings.
+passes wins; there is no model judge. The retry loop is pure; the one clock seam
+is `night_window_gate`, which a slot passes as `may_retry`.
 """
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Generic, Mapping, Sequence, TypeVar
 
 #: Model calls one slot may spend on one answer before it keeps the last good file.
@@ -69,6 +72,30 @@ def instructions_feedback(evidence: Mapping[str, Any], reasons: Sequence[str]) -
     return out
 
 
+def night_window_gate(
+    now: datetime | None, *, reserve_minutes: float
+) -> Callable[[], tuple[bool, str]]:
+    """`may_retry` that asks the night window, on a clock starting at `now` and moving.
+
+    A retry is another model call, and the slot's reserve bought only the first.
+    """
+    from ai_jobs import window
+
+    start = now or datetime.now(timezone.utc)
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    began = time.monotonic()
+
+    def _gate() -> tuple[bool, str]:
+        moment = start + timedelta(seconds=time.monotonic() - began)
+        try:
+            return window.launch_allowed(moment, reserve_minutes=reserve_minutes)
+        except Exception as exc:  # noqa: BLE001 - an unanswerable window stops the retries
+            return False, f"the night window could not be read: {exc}"
+
+    return _gate
+
+
 def verified_attempts(
     request: Callable[[Mapping[str, Any]], Mapping[str, Any]],
     validate: Callable[[Mapping[str, Any]], T],
@@ -121,5 +148,6 @@ __all__ = [
     "describe_rejections",
     "feedback_line",
     "instructions_feedback",
+    "night_window_gate",
     "verified_attempts",
 ]

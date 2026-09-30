@@ -1305,7 +1305,11 @@ def _narrate(
         return _keep_quoted_statements(answer.get("summary") or {}, facts)
 
     verified = attempts.verified_attempts(
-        _ask, _check, evidence=package, with_feedback=_caveat_feedback
+        _ask,
+        _check,
+        evidence=package,
+        with_feedback=_caveat_feedback,
+        may_retry=attempts.night_window_gate(now, reserve_minutes=15),
     )
     result = verified.result
     if attempt_label is not None:

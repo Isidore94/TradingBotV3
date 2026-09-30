@@ -444,7 +444,12 @@ def run_market_story_narration(
 
     try:
         # A rejected narration is asked again with its reason, up to VERIFIED_ATTEMPTS.
-        verified = attempts.verified_attempts(_ask, _check, evidence=evidence)
+        verified = attempts.verified_attempts(
+            _ask,
+            _check,
+            evidence=evidence,
+            may_retry=attempts.night_window_gate(now, reserve_minutes=15),
+        )
         result, narration = verified.result, verified.value
         moment = now or datetime.now(timezone.utc)
         if moment.tzinfo is None:
