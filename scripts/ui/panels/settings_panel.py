@@ -62,6 +62,8 @@ TRADE_MENTOR_SENTENCE = (
     "trades at 10:00. Skipped when away, paused or locked."
 )
 
+TRADE_MENTOR_APP_LINE = "Trade Mentor runs in its own app (`/pause` there)"
+
 
 class SettingsPanel(QFrame):
     stateChanged = Signal()
@@ -139,6 +141,10 @@ class SettingsPanel(QFrame):
             "Silences the rest of today only. Tomorrow's prompts are unaffected."
         )
         self.trade_mentor_pause.clicked.connect(self.mentorPauseRequested)
+        # With `mentor_app_enabled` on, this one line replaces "Next prompt" + "Pause today".
+        self.trade_mentor_app_line = QLabel(TRADE_MENTOR_APP_LINE)
+        self.trade_mentor_app_line.setObjectName("MutedLabel")
+        self.trade_mentor_app_line.setVisible(False)
 
         # P1-6 6c (trader, 2026-09-24): fixed dollars risked per trade. One
         # local setting; no account size is stored. Sizes plans, never orders.
@@ -194,6 +200,7 @@ class SettingsPanel(QFrame):
         mentor_row.setSpacing(8)
         mentor_row.addWidget(self.trade_mentor_next)
         mentor_row.addWidget(self.trade_mentor_pause)
+        mentor_row.addWidget(self.trade_mentor_app_line)
         mentor_row.addStretch(1)
         risk_form.addRow("", mentor_row)
         risk_form.addRow("Risk per trade ($)", self.risk_input)
@@ -381,6 +388,13 @@ class SettingsPanel(QFrame):
         )
         self.riskPerTradeChanged.emit(value)
         return True
+
+    def set_mentor_app_mode(self, enabled: bool) -> None:
+        """On: the Trade Mentor app owns the schedule, so show its one line instead of Pause/Next."""
+        on = bool(enabled)
+        self.trade_mentor_next.setVisible(not on)
+        self.trade_mentor_pause.setVisible(not on)
+        self.trade_mentor_app_line.setVisible(on)
 
     def set_next_prompt_at(self, moment) -> None:
         """Say when the next Trade Mentor prompt is, or that there is none left.

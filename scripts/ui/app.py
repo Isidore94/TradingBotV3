@@ -337,6 +337,7 @@ class MainWindow(MentorHostMixin, QMainWindow):
         self.mentor_app_enabled = bool(
             getattr(self.trading_panel.alert_center.chart_review, "mentor_app_enabled", False)
         )
+        self.settings_panel.set_mentor_app_mode(self.mentor_app_enabled)
         self.trade_mentor_service = None
         self.trade_mentor_context_service = None
         self._journal_importer = None
