@@ -351,6 +351,9 @@ EXPECTED_SLOT_ORDER = (
     # P10 (2026-09-27): point-in-time daily regime rows in the research lake.
     # Deterministic, no model; directly after `market_regime_table`.
     "market_regime_daily",
+    # Nightly permutation report (trader 2026-09-30): backfill + search, deterministic,
+    # directly after `market_regime_daily` (pinned right after `lake_history_topup`).
+    "permutation_report",
     # WS-10D (2026-09-12): the Market Journal's weekly/monthly/quarterly rollups.
     # Deterministic, no model; it reads the daily stories and the exchange calendar
     # and feeds nothing above it, so it CLOSES the deterministic stage.
@@ -422,7 +425,7 @@ EXPECTED_SLOT_ORDER = (
     # P1-7 7b (2026-09-25): challenges to the trader's plan. Stage 3, before
     # `setup_research` because `improvement_ideas` is pinned last.
     "plan_review",
-    # P1-4 4d (2026-09-25): Saturday-only setup-keys narration, inside stage 3,
+    # P1-4 4d (2026-09-25): setup-keys narration (nightly since 2026-09-30), inside stage 3,
     # directly before `setup_research` (only `improvement_ideas` may follow it).
     "setup_keys_narration",
     "setup_research",

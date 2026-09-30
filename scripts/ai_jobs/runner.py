@@ -1113,6 +1113,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         miss_contrast,
         observation_tags,
         outcome_sweep,
+        permutation_report,
         plan_review,
         policy_draft,
         prediction_contrast,
@@ -1473,6 +1474,21 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
                 "auto structural) for SPY/QQQ/IWM appended to the research lake (deterministic, no model)"
             ),
             max_attempts=3,
+        ),
+        # Nightly permutation report (trader, 2026-09-30: every night, no by-hand
+        # step). Stage 1 directly after `market_regime_daily` (pinned right after
+        # `lake_history_topup`): the backfill then the search as library calls,
+        # grids registered in the live lake's trial ledger. Shadow only.
+        JobSlot(
+            name="permutation_report",
+            goal="permutations",
+            run=permutation_report.run_permutation_report,
+            reserve_minutes=permutation_report.RESERVE_MINUTES,
+            description=(
+                "Setup permutation backfill + hold-out search from the live stores; "
+                "report, history and verdicts (deterministic, no model; shadow only)"
+            ),
+            max_attempts=2,
         ),
         # Packet WS-10D (2026-09-12), APPENDED at the END of the deterministic
         # stage, after `theta_pick_grading`, and it CLOSES the block. It reads
@@ -1884,9 +1900,10 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         ),
         # P1-4 4d (2026-09-25): three cited sentences per setup family over the
         # permutation report. Stage 3, directly BEFORE `setup_research`: two pins
-        # say only `improvement_ideas` may follow `setup_research`. SATURDAY ONLY via WEEKEND_ONLY_SLOTS:
-        # the report is weekly research. No deterministic half, so no
-        # `model_free_kwargs`; a missing report skips before any model load.
+        # say only `improvement_ideas` may follow `setup_research`. Every night since
+        # 2026-09-30 (the report is nightly); an unchanged report asks no model.
+        # No deterministic half, so no `model_free_kwargs`; a missing report skips
+        # before any model load.
         JobSlot(
             name="setup_keys_narration",
             goal="permutations",
@@ -1963,9 +1980,9 @@ NIGHT_KINDS = (NIGHT_WEEKNIGHT, NIGHT_SATURDAY, NIGHT_SUNDAY)
 #: `ticker_briefs` was weekend-only 2026-09-24 (66-139 min a weeknight on the old
 #: box); the trader put it back on weeknights 2026-09-30 (the 5080 takes minutes).
 #:
-#: `setup_keys_narration` joins it (P1-4 4d, 2026-09-25): the permutation report
-#: is weekly research, narrated once on Saturday.
-WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration", "setup_keys_narration")
+#: `setup_keys_narration` was weekend-only 2026-09-25; the trader made the
+#: permutation report nightly 2026-09-30, so its narration runs every night too.
+WEEKEND_ONLY_SLOTS = ("ai_summary", "week_review_narration")
 
 #: The deterministic stage (decision 0018 stage 1), which every night runs. It
 #: ENDS at `swing_path_facts` (S15, directly after S12's `family_side_evidence`); a

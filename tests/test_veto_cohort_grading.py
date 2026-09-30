@@ -644,6 +644,8 @@ def test_the_scope_can_be_selected_on_demand():
         # regime rows that read it.
         "lake_history_topup",
         "market_regime_daily",
+        # Nightly permutation report (2026-09-30), stage 1 after the lake regime rows.
+        "permutation_report",
         "market_story_rollups",
         "measured_report",
         # AI-R3 keeps the factual day pack current before stage-2 stories.
@@ -696,7 +698,7 @@ def test_the_scope_can_be_selected_on_demand():
         "review_policy_draft",
         # P1-7 7b (2026-09-25): plan challenges, a stage 3 model slot.
         "plan_review",
-        # P1-4 4d (2026-09-25): the Saturday setup-keys narration, before setup_research.
+        # P1-4 4d (2026-09-25): the setup-keys narration (nightly since 2026-09-30), before setup_research.
         "setup_keys_narration",
         "setup_research",
         # TJ-6 (2026-09-20), appended LAST inside stage 3.

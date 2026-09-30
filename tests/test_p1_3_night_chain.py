@@ -462,9 +462,12 @@ def test_ticker_briefs_run_every_weeknight_and_run_the_weekly_wrapper():
     assert weeknight["ticker_briefs"].run is briefs.run_weekly_ticker_briefs
     saturday = {slot.name: slot for slot in runner.slots_for("saturday")}
     assert saturday["ticker_briefs"].run is briefs.run_weekly_ticker_briefs
-    for name in ("ai_summary", "week_review_narration", "setup_keys_narration"):
+    for name in ("ai_summary", "week_review_narration"):
         assert name in runner.WEEKEND_ONLY_SLOTS
         assert name not in weeknight
+    # Trader 2026-09-30: the permutation report is nightly, so its narration is too.
+    assert "setup_keys_narration" not in runner.WEEKEND_ONLY_SLOTS
+    assert "setup_keys_narration" in weeknight
 
 
 def _week_sources(tmp_path: Path) -> dict:
