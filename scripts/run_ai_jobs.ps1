@@ -339,6 +339,21 @@ foreach ($stream in @(@{ Path = $stdout; Tag = 'out' }, @{ Path = $stderr; Tag =
 }
 $code = $process.ExitCode
 
+# Pause AI set while the jobs ran (the trader started gaming): free the night's model, then
+# leave the host alone (no log mirror, no power-off).
+$midRunPause = (-not $aiPausedUntil) -and [bool](Get-AiPausedUntil -Path $settingsPath)
+if ($midRunPause) {
+    if ($remoteReady) {
+        try {
+            $unload = @{ model = $model; keep_alive = 0 } | ConvertTo-Json
+            Invoke-RestMethod "http://127.0.0.1:$tunnelPort/api/generate" -Method Post -Body $unload -ContentType 'application/json' -TimeoutSec 30 | Out-Null
+            Write-Log "remote GPU: '$model' unloaded from the host"
+        } catch { Write-Log "remote GPU: model unload failed (ignored): $($_.Exception.Message)" }
+    }
+    $noModelRun = $true
+    Write-Log "AI paused mid-run; host left on"
+}
+
 # Bring the host's model/GPU log back beside this run's log and into the AI
 # store on the mini PC. Best effort: a mirror problem is never a job outcome.
 if ($script:remoteAlias -and -not $noModelRun) {
@@ -383,18 +398,6 @@ if ($scheduled -and $code -in @(0, 1)) {
 $offAfter = if ($settings.ai_remote_gpu_off_after) { [string]$settings.ai_remote_gpu_off_after } else { '05:30' }
 $now = Get-Date
 $morning = $now.TimeOfDay -ge ([datetime]::ParseExact($offAfter, 'HH:mm', $null)).TimeOfDay -and $now.Hour -lt 12
-# Pause AI set while the jobs ran (the trader started gaming): free the night's model, never power off.
-$midRunPause = (-not $aiPausedUntil) -and [bool](Get-AiPausedUntil -Path $settingsPath)
-if ($midRunPause) {
-    if ($remoteReady) {
-        try {
-            $unload = @{ model = $model; keep_alive = 0 } | ConvertTo-Json
-            Invoke-RestMethod "http://127.0.0.1:$tunnelPort/api/generate" -Method Post -Body $unload -ContentType 'application/json' -TimeoutSec 30 | Out-Null
-            Write-Log "remote GPU: '$model' unloaded from the host"
-        } catch { Write-Log "remote GPU: model unload failed (ignored): $($_.Exception.Message)" }
-    }
-    Write-Log "AI paused mid-run; host left on"
-}
 $hostFinished = $script:remoteAlias -and -not $noModelRun -and -not $midRunPause -and ($nightDone -or ($scheduled -and $morning))
 
 # Free the 5080's memory as soon as the night is over, even on a host left on.

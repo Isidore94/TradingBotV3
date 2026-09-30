@@ -51,6 +51,9 @@ MAX_GATE_TOKENS = 600
 GPU_CHECK_MS = 60 * 1000
 #: How often the app looks at the Pause AI switch (the desk may flip it).
 PAUSE_CHECK_MS = 5 * 1000
+#: A desk-launched app looks at the desk's slot this often; this many free checks in a row = the desk closed.
+DESK_CHECK_MS = 30 * 1000
+DESK_FREE_CHECKS = 2
 PICK_CHECK_MS = 60 * 1000
 #: How long a live narration may wait for the model before the card shows the evidence alone.
 ASSESS_WAIT_MS = 90 * 1000
@@ -61,6 +64,21 @@ SHUTDOWN_UNLOAD_SECONDS = 4
 CHIP_KINDS = ("auto_mode", "d1_env", "regime")
 #: A background tape narration that fails is tried once more for the same pack hash, then not again.
 TAPE_MAX_FAILURES_PER_HASH = 2
+
+
+def _desk_slot_is_free() -> bool | None:
+    """True when no desk holds its single-instance slot; None when unknown."""
+    from single_instance import DESK_LOCK_KEY, slot_is_free
+
+    return slot_is_free(DESK_LOCK_KEY)
+
+
+def _quit_qt() -> None:
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is not None:
+        app.quit()
 
 
 class _Bridge(QObject):
@@ -82,6 +100,7 @@ class _Bridge(QObject):
     tape_ready = Signal(object)
     tape_refreshed = Signal(object)
     check_card = Signal(object)
+    desk_state = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -124,6 +143,9 @@ class MentorWindow(QMainWindow):
         push_send: Callable[..., Any] | None = None,
         gate_builder: Callable[..., Any] | None = None,
         gate_request: Callable[..., Any] | None = None,
+        follow_desk: bool = False,
+        desk_probe: Callable[[], bool | None] | None = None,
+        quit_app: Callable[[], Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -239,6 +261,15 @@ class MentorWindow(QMainWindow):
         self._pause_timer = QTimer(self)
         self._pause_timer.setInterval(PAUSE_CHECK_MS)
         self._pause_timer.timeout.connect(self.check_ai_pause)
+        # Follow the desk: only a desk-launched app (--follow-desk) exits when the desk closes.
+        self._follow_desk = bool(follow_desk)
+        self._desk_probe = desk_probe or _desk_slot_is_free
+        self._quit_app = quit_app or _quit_qt
+        self._desk_free_checks = 0
+        self._bridge.desk_state.connect(self._on_desk_state)
+        self._desk_timer = QTimer(self)
+        self._desk_timer.setInterval(DESK_CHECK_MS)
+        self._desk_timer.timeout.connect(self.check_desk)
         self._pick_timer = QTimer(self)
         self._pick_timer.setInterval(PICK_CHECK_MS)
         self._pick_timer.timeout.connect(self.maybe_prefetch_picks)
@@ -397,6 +428,8 @@ class MentorWindow(QMainWindow):
         self._context_timer.start()
         self._gpu_timer.start()
         self._pause_timer.start()
+        if self._follow_desk:
+            self._desk_timer.start()
         self._pick_timer.start()
         self.install_recall_fallback()
         self._submit_io(self._open_session)
@@ -416,6 +449,7 @@ class MentorWindow(QMainWindow):
         self._context_timer.stop()
         self._gpu_timer.stop()
         self._pause_timer.stop()
+        self._desk_timer.stop()
         self._pick_timer.stop()
         from mentor_packs import recall
 
@@ -443,6 +477,31 @@ class MentorWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
         self.shutdown()
         super().closeEvent(event)
+
+    # ------------------------------------------------------------------ follow the desk
+    def check_desk(self) -> None:
+        """Every 30 s (desk-launched only): probe the desk's slot off the Qt thread."""
+        if not self._follow_desk or self._shut:
+            return
+        probe, emit = self._desk_probe, self._bridge.desk_state.emit
+
+        def run() -> None:
+            try:
+                free = probe()
+            except Exception:  # noqa: BLE001 - a broken probe is "unknown", never "closed"
+                free = None
+            emit(free)
+
+        threading.Thread(target=run, name="mentor-desk-probe", daemon=True).start()
+
+    def _on_desk_state(self, free: Any) -> None:
+        """Two free checks in a row: the desk closed, so hand the GPU back and exit."""
+        self._desk_free_checks = self._desk_free_checks + 1 if free is True else 0
+        if not self._follow_desk or self._shut or self._desk_free_checks < DESK_FREE_CHECKS:
+            return
+        logging.info("desk closed; Trade Mentor following")
+        self.shutdown()
+        self._quit_app()
 
     def bring_to_front(self) -> None:
         if self.isMinimized():

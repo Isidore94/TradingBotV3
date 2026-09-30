@@ -283,14 +283,17 @@ def test_a_pause_set_while_the_jobs_run_never_powers_the_host_off(tmp_path):
     assert "AI paused mid-run; host left on" in log
     assert "shutdown" not in log
     assert "shutdown.exe" not in calls and "tmux ls" not in calls
+    assert "tail -n 500" not in calls and "host log" not in log, "no log mirror after a mid-run pause"
 
 
 def test_the_mid_run_pause_unloads_the_nights_model_before_leaving_the_host_on():
     code = _wrapper_code()
     start = code.index("$midRunPause = (-not $aiPausedUntil) -and [bool](Get-AiPausedUntil -Path $settingsPath)")
-    block = code[start:code.index("$hostFinished =", start)]
+    block = code[start:code.index('Write-Log "AI paused mid-run; host left on"', start)]
     assert "if ($remoteReady) {" in block and "keep_alive = 0" in block
-    assert block.index("keep_alive = 0") < block.index('Write-Log "AI paused mid-run; host left on"')
+    assert "$noModelRun = $true" in block
+    # Decided before the host-log mirror, so a mid-run pause skips it too.
+    assert start < code.index("if ($script:remoteAlias -and -not $noModelRun) {", start)
     assert "-and -not $midRunPause -and" in code[code.index("$hostFinished ="):]
     # Re-read after the child exits, before the unload and power-off decision.
     assert code.index("Start-Process -FilePath $python") < start < code.index("if ($hostFinished -and $remoteReady) {")
