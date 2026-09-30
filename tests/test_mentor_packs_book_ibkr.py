@@ -278,3 +278,22 @@ def test_the_window_default_ibkr_reader_is_the_real_one():
     from mentor_app import window
 
     assert "ibkr_positions.fetch_book(now)" in inspect.getsource(window._ibkr_fetch_book)
+
+
+# ---------------------------------------------------------------- contract kinds (review advisory)
+@pytest.mark.parametrize("extra,expected", [
+    ({"security_type": "OPT", "multiplier": 100}, "not computed (option)"),
+    ({"security_type": "WAR", "multiplier": 1}, "not computed (option)"),
+    ({"security_type": "STK", "symbol": "AAPL 261016C00250000"}, "not computed (option)"),
+    ({"security_type": "FUT", "multiplier": 50}, "not computed (future)"),
+    ({"security_type": "STK", "multiplier": 1}, "$ at risk $300.00 (stop 257)"),
+])
+def test_only_options_and_futures_skip_the_risk_number(extra, expected):
+    pos = {"account_number": "222", "symbol": "TSLA", "side": "LONG", "open_qty": 100.0, "avg_price": 260.0,
+           "market_value": 26000.0, **extra}
+    trade = {"trade_id": "T9", "account_number": "222", "symbol": pos["symbol"], "direction": "LONG",
+             "quantity_opened": 100, "quantity_closed": 0, "average_entry_price": 260.0, "planned_stop": 257.0,
+             "opened_at": "2026-09-28T09:00:00-07:00"}
+    rows = _build(q=qp.fixture_snapshot(FRESH, [pos]).as_dict(), trades=[trade]).rows
+    row = next(r for r in rows if r["kind"] == "position")
+    assert row["text"].endswith(expected), row["text"]

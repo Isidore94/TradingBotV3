@@ -317,15 +317,28 @@ _OPTION_SYMBOL = re.compile(
 )
 
 
-def is_option_position(pos: Mapping[str, Any]) -> bool:
-    """A contract, not shares: a multiplier other than 1, an option security type, or an option symbol."""
-    mult = _num(pos.get("multiplier"))
-    if mult is not None and mult != 1:
-        return True
+_OPTION_TYPES = frozenset({"OPT", "OPTION", "OPTIONS", "EQUITYOPTION", "FOP", "WAR"})
+_FUTURE_TYPES = frozenset({"FUT", "FUTURE", "FUTURES"})
+
+
+def contract_kind(pos: Mapping[str, Any]) -> str | None:
+    """``"option"`` / ``"future"`` for a contract whose $ at risk is not computed; None for shares.
+
+    Futures by security type; options by security type or an option-shaped symbol. Any other
+    multiplier than 1 is an unknown contract and stays "option" (the P8 rule); a multiplier of 1 is shares.
+    """
     kind = re.sub(r"[\s_\-]", "", str(pos.get("security_type") or "")).upper()
-    if kind in ("OPT", "OPTION", "OPTIONS", "EQUITYOPTION", "FOP"):
-        return True
-    return _OPTION_SYMBOL.fullmatch(re.sub(r"\s+", "", _sym(pos.get("symbol")))) is not None
+    if kind in _FUTURE_TYPES:
+        return "future"
+    if kind in _OPTION_TYPES or _OPTION_SYMBOL.fullmatch(re.sub(r"\s+", "", _sym(pos.get("symbol")))):
+        return "option"
+    mult = _num(pos.get("multiplier"))
+    return "option" if mult is not None and mult != 1 else None
+
+
+def is_option_position(pos: Mapping[str, Any]) -> bool:
+    """An option (or an unknown multiplied contract), per :func:`contract_kind`."""
+    return contract_kind(pos) == "option"
 
 
 def _setting_int(value: Any) -> int | None:
@@ -425,8 +438,9 @@ def load_book(src: Sources, now: datetime | None = None) -> Book:
         stop = _stop_for(stops, pos)
         avg, qty = _num(pos.get("avg_price")), _num(pos.get("open_qty"))
         pos["stop"] = stop
-        pos["option"] = is_option_position(pos)
-        computable = not pos["option"] and None not in (stop, avg, qty)
+        pos["contract"] = contract_kind(pos)
+        pos["option"] = pos["contract"] == "option"
+        computable = pos["contract"] is None and None not in (stop, avg, qty)
         pos["at_risk"] = round(abs(avg - stop) * qty, 2) if computable else None
     try:
         imap = src.industry_map() or {}
@@ -501,8 +515,8 @@ def position_rows(book: Book) -> list[dict[str, Any]]:
             row_id += f":{side}"
         seen.add(row_id)
         qty, avg, value = _num(pos.get("open_qty")) or 0.0, _num(pos.get("avg_price")), _num(pos.get("market_value"))
-        if pos.get("option"):
-            risk = "$ at risk: not computed (option)"
+        if pos.get("contract"):
+            risk = f"$ at risk: not computed ({pos['contract']})"
         elif pos.get("at_risk") is not None:
             risk = f"$ at risk {_money(pos['at_risk'])} (stop {pos['stop']:g})"
         else:

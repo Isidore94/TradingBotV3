@@ -30,7 +30,8 @@ except Exception:  # pragma: no cover - exercised when ibapi is not installed
     _BASES = (object,)
 
 BROKER = "IBKR"
-#: The book reader's own fixed TWS client id (9125 journal, 9135 scanner, 9145 options chase).
+#: The book reader's own fixed TWS client id, clear of 9125-9127 journal, 9135-9137 scanner,
+#: 9140-9142 momentum universe and 9145-9147 options chase (their ids plus retries).
 IBKR_BOOK_CLIENT_ID = 9155
 CLIENT_ID_SETTING = "mentor_ibkr_client_id"
 DEFAULT_HOST = "127.0.0.1"
@@ -121,10 +122,24 @@ class IBKRPositionsReader(*_BASES):  # type: ignore[misc]
         asked: set[str] = set()
         summary_ok = False
         try:
-            try:
-                self.connect(host, int(port), int(client_id))
-            except Exception as exc:  # noqa: BLE001 - a refused socket is "TWS not running"
-                return None, f"TWS not running ({type(exc).__name__})"
+            # ibapi's connect can loop forever when TWS accepts the socket and never answers (mid-login,
+            # frozen), so it runs on its own daemon thread inside the same deadline.
+            dialled = threading.Event()
+            failure: list[BaseException] = []
+
+            def dial() -> None:
+                try:
+                    self.connect(host, int(port), int(client_id))
+                except Exception as exc:  # noqa: BLE001 - reported below
+                    failure.append(exc)
+                finally:
+                    dialled.set()
+
+            threading.Thread(target=dial, daemon=True, name="ibkr-book-connect").start()
+            if not dialled.wait(left()):
+                return None, f"TWS not answering (connect did not finish in {wait_for:g}s)"
+            if failure:  # a refused socket is "TWS not running"
+                return None, f"TWS not running ({type(failure[0]).__name__})"
             if not self.isConnected():
                 return None, "TWS not running" + (f" ({self.errors[-1]})" if self.errors else "")
             thread = threading.Thread(target=self.run, daemon=True, name="ibkr-book-reader")

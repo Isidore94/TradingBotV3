@@ -5,6 +5,8 @@ EClient answers here; the suite never dials TWS."""
 from __future__ import annotations
 
 import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -225,3 +227,57 @@ def test_the_snapshot_round_trips_with_its_broker():
     snap, _ = _fetch(FakeReader())
     again = ip.BookSnapshot.from_json(snap.as_json())
     assert again == snap and again.broker == "IBKR"
+
+
+# ---------------------------------------------------------------- review advisories (P12 round 1)
+class _HangingConnect(FakeReader):
+    """TWS accepts the socket and never answers: ibapi's connect would loop forever."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.release = threading.Event()
+
+    def connect(self, host, port, client_id):
+        self.calls.append("connect")
+        self.connected = True
+        self.release.wait(10)
+
+
+def test_a_connect_that_never_returns_is_cut_at_the_deadline_and_disconnected():
+    reader = _HangingConnect()
+    started = time.monotonic()
+    try:
+        snap, reason = _fetch(reader, timeout=0.3)
+        elapsed = time.monotonic() - started
+    finally:
+        reader.release.set()
+    assert snap is None and reason.startswith("TWS not answering") and elapsed < 2.5
+    assert reader.calls[-1] == "disconnect"
+    assert not {"reqManagedAccts", "reqPositions", "reqAccountSummary"} & set(reader.calls)
+
+
+class _RaisingPositions(FakeReader):
+    def reqPositions(self):  # noqa: N802
+        self.calls.append("reqPositions")
+        raise RuntimeError("socket gone")
+
+
+class _ClosingPositions(FakeReader):
+    def reqPositions(self):  # noqa: N802
+        self.calls.append("reqPositions")
+        self.connected = False
+        self.connectionClosed()
+
+
+def test_disconnect_is_the_last_call_when_a_request_raises():
+    reader = _RaisingPositions()
+    snap, reason = _fetch(reader)
+    assert snap is None and reason == "RuntimeError: socket gone"
+    assert reader.calls[-2:] == ["cancelPositions", "disconnect"]
+
+
+def test_disconnect_is_the_last_call_when_tws_closes_the_connection():
+    reader = _ClosingPositions()
+    snap, reason = _fetch(reader)
+    assert snap is None and reason.startswith("TWS closed the connection")
+    assert reader.calls[-1] == "disconnect" and "reqAccountSummary" not in reader.calls
