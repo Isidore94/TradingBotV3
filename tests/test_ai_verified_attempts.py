@@ -276,6 +276,63 @@ def test_day_story_a_first_time_pass_makes_exactly_one_call(day_root):
     assert "attempt 1/3" in outcome["reason"]
 
 
+# ---------------------------------------------------------------------------
+# market story wiring
+# ---------------------------------------------------------------------------
+def _run_story(tmp_path, *changes_per_call):
+    import test_market_story_narration as story_tests
+    from ai_jobs.market_story_narration import run_market_story_narration
+
+    story_tests._direction_packs(tmp_path / "rollups")
+    calls: list[dict] = []
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        changes = changes_per_call[min(len(calls), len(changes_per_call)) - 1]
+        return story_tests._story(changes)(**kwargs)
+
+    result = run_market_story_narration(
+        session_date="2026-09-24",
+        rollups_dir=tmp_path / "rollups",
+        out_dir=tmp_path / "out",
+        request=request,
+        frame_reader=lambda _day: None,
+    )
+    return result, calls
+
+
+def test_market_story_a_rejection_then_a_pass_is_ok_on_attempt_two(tmp_path):
+    result, calls = _run_story(
+        tmp_path, ["USO decreased (journal:mj-1)."], ["VXX increased and USO rose (journal:mj-1)."]
+    )
+    assert result["status"] == "ok", result
+    assert "attempt 2/3" in result["reason"]
+    assert len(calls) == 2
+    assert "USO fell" in calls[1]["evidence"]["instructions"]
+    assert "USO fell" not in calls[0]["evidence"]["instructions"]
+
+
+def test_market_story_three_rejections_keep_nothing_and_name_every_reason(tmp_path):
+    result, calls = _run_story(
+        tmp_path,
+        ["USO decreased (journal:mj-1)."],
+        ["SPY fell (journal:mj-made-up)."],
+        ["USO decreased again (journal:mj-1)."],
+    )
+    assert result["status"] == "degraded_no_narrative"
+    assert len(calls) == 3
+    assert "attempt 1/3: narration says USO fell" in result["reason"]
+    assert "attempt 2/3: narration cited 'journal:mj-made-up'" in result["reason"]
+    assert "attempt 3/3: narration says USO fell" in result["reason"]
+    assert not (tmp_path / "out" / "2026-09-24.json").exists()
+
+
+def test_market_story_a_first_time_pass_makes_exactly_one_call(tmp_path):
+    result, calls = _run_story(tmp_path, ["VXX increased and USO rose (journal:mj-1)."])
+    assert result["status"] == "ok", result
+    assert len(calls) == 1
+
+
 from test_tj4_d1_view import rolling_root  # noqa: E402,F401 - fixture reuse
 
 
