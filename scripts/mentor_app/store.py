@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 from array import array
 from contextlib import closing
 from datetime import datetime, timezone
@@ -89,6 +90,18 @@ CREATE TABLE IF NOT EXISTS news (
     UNIQUE (symbol, url)
 );
 CREATE INDEX IF NOT EXISTS news_by_symbol ON news(symbol, published_utc);
+CREATE TABLE IF NOT EXISTS frontier_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_utc TEXT NOT NULL,
+    day_pt TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    est_usd REAL NOT NULL,
+    measured INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS frontier_usage_by_day ON frontier_usage(day_pt);
 """
 
 BUSY_TIMEOUT_MS = 5000
@@ -175,6 +188,8 @@ class MentorChatStore:
             path = MENTOR_CHAT_DB_FILE
         self.path = Path(path)
         self._ready = False
+        #: One thread sets the store up; the others wait (a second WAL switch mid-write says "locked").
+        self._init_lock = threading.Lock()
 
     # ----------------------------------------------------------------- plumbing
     def _connect(self) -> sqlite3.Connection:
@@ -183,15 +198,17 @@ class MentorChatStore:
         conn.row_factory = sqlite3.Row
         conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
         if not self._ready:
-            try:
-                conn.execute("PRAGMA journal_mode = WAL")
-                conn.executescript(SCHEMA)
-                _open_graded_column(conn)
-                _add_note_columns(conn)
-            except BaseException:
-                conn.close()
-                raise
-            self._ready = True
+            with self._init_lock:
+                if not self._ready:
+                    try:
+                        conn.execute("PRAGMA journal_mode = WAL")
+                        conn.executescript(SCHEMA)
+                        _open_graded_column(conn)
+                        _add_note_columns(conn)
+                    except BaseException:
+                        conn.close()
+                        raise
+                    self._ready = True
         return conn
 
     def _write(self, what: str, sql: str, params: Sequence[Any]) -> int | None:
@@ -353,6 +370,33 @@ class MentorChatStore:
             (json.dumps(dict(outcome), sort_keys=True, default=str), graded_utc, str(challenge_id)),
         )
         return written is not None
+
+    # ----------------------------------------------------------------- frontier spend (P11)
+    def add_frontier_usage(self, *, day_pt: str, purpose: str, model: str, input_tokens: int | None,
+                           output_tokens: int | None, est_usd: float, measured: bool = True,
+                           ts_utc: str = "") -> int | None:
+        """One metered frontier call; ``measured`` False = the estimate stood in for missing usage."""
+        return self._write(
+            "frontier usage",
+            "INSERT INTO frontier_usage (ts_utc, day_pt, purpose, model, input_tokens, output_tokens, est_usd, "
+            "measured) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts_utc or utc_now(), str(day_pt), str(purpose), str(model), input_tokens, output_tokens,
+             float(est_usd), 1 if measured else 0),
+        )
+
+    def frontier_spent(self, day_pt: str) -> float | None:
+        """USD spent on ``day_pt`` (PT date); None when the store cannot be read (the caller refuses)."""
+        try:
+            with closing(self._connect()) as conn:
+                row = conn.execute("SELECT COALESCE(SUM(est_usd), 0) FROM frontier_usage WHERE day_pt = ?",
+                                   (str(day_pt),)).fetchone()
+        except Exception:  # noqa: BLE001 - unknown spend is never read as zero
+            logging.exception("Trade Mentor store: frontier spend unreadable (%s)", self.path)
+            return None
+        return float(row[0] or 0.0)
+
+    def frontier_usage(self, day_pt: str) -> list[dict[str, Any]]:
+        return self._read("SELECT * FROM frontier_usage WHERE day_pt = ? ORDER BY id", (str(day_pt),))
 
     # ----------------------------------------------------------------- app state
     def set_state(self, key: str, value: str) -> bool:

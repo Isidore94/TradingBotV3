@@ -110,6 +110,8 @@ class _Bridge(QObject):
     tilt_ready = Signal(object)
     tilt_card = Signal(object)
     debate_card = Signal(object)
+    frontier_card = Signal(object)
+    frontier_state = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -165,6 +167,9 @@ class MentorWindow(QMainWindow):
         tilt_builder: Callable[[], Any] | None = None,
         tilt_journal: Any = None,
         debate_request: Callable[..., Any] | None = None,
+        frontier_request: Callable[..., Any] | None = None,
+        frontier_post: Callable[..., Any] | None = None,
+        frontier_key: Callable[[], str] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -360,6 +365,20 @@ class MentorWindow(QMainWindow):
         self._debate_stops: dict[int, threading.Event] = {}
         self._debate_seq = 0
         self._bridge.debate_card.connect(self._on_debate_card)
+        # P11 frontier: metered, off by default, never automatic; one call at a time on its own thread.
+        self._frontier_request = frontier_request
+        self._frontier_post = frontier_post
+        self._frontier_key = frontier_key
+        self._frontier_busy = False
+        self._frontier_seq = 0
+        self._frontier_blocks: dict[int, int] = {}
+        self._frontier_state: Any = None
+        #: What the last local chat turn read, verbatim, for /think.
+        self._last_turn: dict[str, Any] | None = None
+        self._bridge.frontier_card.connect(self._on_frontier_card)
+        self._bridge.frontier_state.connect(self._on_frontier_state)
+        if settings.frontier_enabled():
+            self._spawn("mentor-frontier-status", self._frontier_status)
         self._add_note("Hi. Ask me anything, or type `/help`.")
 
     # ------------------------------------------------------------------ UI
@@ -429,6 +448,12 @@ class MentorWindow(QMainWindow):
         self.ai_pause_button.changed.connect(self.check_ai_pause)
         header = QHBoxLayout()
         header.addStretch(1)
+        # P11: shown only while the frontier switch is on; disabled with the reason when it cannot run.
+        self.think_button = QPushButton("Think harder")
+        self.think_button.setToolTip("Ask the frontier model the last question again (metered, capped per day)")
+        self.think_button.clicked.connect(lambda: self.send("/think"))
+        self.think_button.setVisible(settings.frontier_enabled())
+        header.addWidget(self.think_button)
         header.addWidget(self.ai_pause_button)
 
         left = QWidget()
@@ -481,6 +506,7 @@ class MentorWindow(QMainWindow):
         self._add_block(f"*Mentor (desk):* {markdown}")
 
     def _sync_status(self) -> None:
+        self.think_button.setVisible(settings.frontier_enabled())
         if self._paused_until is not None:
             # Paused is its own state, not "down": the pill and banner say so.
             until = ai_pause.until_text(self._paused_until, self._now())
@@ -1081,6 +1107,11 @@ class MentorWindow(QMainWindow):
         elif result.action == "scorecard":
             self.queue.submit("scorecard", lambda: challenge.scorecard(self.store, facts=memory.load_facts(self._memory_root)),
                               priority=PRIORITY_INTERACTIVE, key="scorecard", on_done=self._bridge.note.emit)
+        elif result.action == "think":
+            self.think(result.arg)
+        elif result.action == "frontier":
+            self._spawn("mentor-frontier-status", lambda: self._bridge.note.emit(
+                self._frontier_status_text()))
         elif result.action == "hypotheses":
             self.queue.submit("hypotheses", self._hypotheses_card, priority=PRIORITY_INTERACTIVE, key="hypotheses",
                               on_done=self._bridge.note.emit)
@@ -1156,6 +1187,11 @@ class MentorWindow(QMainWindow):
         self.chat.add("assistant", text)
         self._latency_ms = result.get("first_token_ms")
         self._sync_status()
+        if not result.get("cancelled"):
+            question = next((turn.text for turn in reversed(self.chat.turns[:-1]) if turn.role == "user"), "")
+            self._last_turn = {"question": question, "context_text": self._context_text,
+                               "memory_block": self._memory_block,
+                               "pack_texts": list(result.get("pack_texts") or ())}
         self._store_turn(
             "assistant",
             text,
@@ -2172,6 +2208,128 @@ class MentorWindow(QMainWindow):
                          model=getattr(card, "model", "") or "",
                          tool_calls=[{"name": "mirror_pack", "arguments": {"weeks": done.get("weeks")},
                                       "hash": done.get("hash"), "error": getattr(card, "error", "")}])
+
+    # ------------------------------------------------------------------ frontier (P11)
+    def _key(self) -> str:
+        from mentor_app import frontier
+
+        return (self._frontier_key or frontier.load_key)()
+
+    def _frontier_status(self) -> Any:
+        """The switch, key and cap now (reads the key: never on the Qt thread)."""
+        from mentor_app import frontier
+
+        state = frontier.status(self.store, self._now(), key_loader=self._key)
+        self._bridge.frontier_state.emit(state)
+        return state
+
+    def _frontier_status_text(self) -> str:
+        from mentor_app import frontier
+
+        return frontier.status_text(self._frontier_status())
+
+    def _on_frontier_state(self, state: Any) -> None:
+        self._frontier_state = state
+        self.think_button.setVisible(bool(state.enabled))
+        self.think_button.setEnabled(state.usable and not self._frontier_busy)
+        self.think_button.setToolTip("Ask the frontier model the last question again (metered, capped per day)"
+                                     if state.usable else f"Not available: {state.reason}")
+
+    def think(self, what: Any = None) -> None:
+        """/think [pick SYM [side] | week]: one metered frontier call over what the local model read."""
+        kind = (what or ("chat",))[0]
+        if self._frontier_busy:
+            self._add_note("A frontier call is already running.")
+            return
+        last = dict(self._last_turn) if self._last_turn else None
+        if kind == "chat" and not last:
+            self._add_note("Ask a question first: `/think` re-asks the last one with the frontier model.")
+            return
+        self._frontier_busy = True
+        self.think_button.setEnabled(False)
+        self._frontier_seq += 1
+        seq = self._frontier_seq
+        self._frontier_blocks[seq] = len(self._blocks)
+        self._add_block("**frontier**: checking the switch, the key and today's cap...")
+
+        def job() -> None:
+            try:
+                self._bridge.frontier_card.emit({"seq": seq, **self._frontier_job(what or ("chat",), last)})
+            except Exception as exc:  # noqa: BLE001 - a failed frontier job is a note, never a crash
+                self._bridge.frontier_card.emit({"seq": seq, "markdown": f"**frontier**: failed ({exc})."})
+
+        self._spawn("mentor-frontier", job)
+
+    def _frontier_job(self, what: Any, last: dict[str, Any] | None) -> dict[str, Any]:
+        """Worker thread: the guard, then the one call, then the card and the turn log."""
+        from mentor_app import assess, frontier
+
+        kind = what[0]
+        state = self._frontier_status()
+        if not state.usable:
+            return {"markdown": f"**frontier**: not called ({state.reason})."}
+        usage: list[dict[str, Any]] = []
+        request = frontier.metered_request(
+            store=self.store, purpose=kind, model=state.model, api_key=self._key(), cap_usd=state.cap_usd,
+            now=self._now, request=self._frontier_request, spent_sink=usage)
+        post = frontier.frontier_post(self._frontier_post, model=state.model)
+        pack_ids: tuple[str, ...] = ()
+        if kind == "pick":
+            from mentor_packs import pick_pack
+
+            symbol, side = what[1], what[2] if len(what) > 2 else ""
+            pack = self._build_pick(symbol, side)
+            digest = pick_pack.pack_hash(pack)
+            self._pick_packs[(symbol, digest)] = pack
+            result = assess.assess(pack, symbol=symbol, pack_hash=digest, model=state.model, endpoint="",
+                                   live=True, request=request, post=post, now=self._now)
+            body = assess.card_markdown(result, side=side)
+            markdown = f"**{frontier.label(state.model)}** · Think harder: pick {symbol}\n\n{body}"
+            pack_ids, error = pack.ids, result.error
+            reply: Any = {"verdict": result.verdict, "bullets": result.bullets, "rule_flags": result.rule_flags}
+            dropped = result.dropped
+        else:
+            if kind == "week":
+                from mentor_packs import hypothesis_pack
+
+                rows = frontier.week_rows(
+                    digests=frontier.load_digests(self._memory_root), mirror=self._build_mirror(6),
+                    hypotheses=hypothesis_pack.build(now=self._now(), chat_db=self.store.path,
+                                                     history_dir=self.permutation_history,
+                                                     report_file=self.permutation_report),
+                    now=self._now())
+                answer = frontier.think_week(rows, model=state.model, request=request, post=post)
+                pack_ids = tuple(row["source_id"] for row in rows)
+            else:
+                last = last or {}
+                answer = frontier.think_chat(
+                    str(last.get("question") or ""), context_text=str(last.get("context_text") or ""),
+                    memory_block=str(last.get("memory_block") or ""), pack_texts=last.get("pack_texts") or (),
+                    model=state.model, request=request, post=post)
+            markdown = frontier.card_markdown(answer)
+            error, reply, dropped = answer.error, answer.reply, answer.dropped
+        spent = self.store.frontier_spent(frontier.day_pt(self._now()))
+        markdown += "\n\n*" + frontier.spend_line(usage, spent, state.cap_usd) + "*"
+        self._frontier_status()
+        return {"markdown": markdown, "model": state.model, "pack_ids": pack_ids,
+                "tool_calls": [{"name": "frontier", "purpose": kind, "model": state.model, "usage": usage,
+                                "reply": reply, "dropped": dropped, "error": error}]}
+
+    def _on_frontier_card(self, done: dict) -> None:
+        self._frontier_busy = False
+        state = self._frontier_state
+        self.think_button.setEnabled(bool(state is not None and state.usable))
+        markdown = str(done.get("markdown") or "")
+        index = self._frontier_blocks.pop(done.get("seq"), None)
+        if index is not None and index < len(self._blocks):
+            self._blocks[index] = markdown
+            self._render()
+        else:
+            self._add_block(markdown)
+        if done.get("model"):
+            self.chat.add("assistant", markdown)
+            self._store_turn("assistant", markdown, pack_ids=done.get("pack_ids") or (), model=str(done["model"]),
+                             tool_calls=done.get("tool_calls") or ())
 
     # ------------------------------------------------------------------ /hypotheses (P11)
     def _hypotheses_card(self) -> str:

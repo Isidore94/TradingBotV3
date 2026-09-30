@@ -30,6 +30,9 @@ HELP_TEXT = (
     " of day\n"
     "- `/scorecard` how the challenges have done by kind, with n, and how the app itself is doing\n"
     "- `/hypotheses` the night's queries into the shadow permutation grid, each with its cell and grade\n"
+    "- `/think` ask the frontier model your last question again (`/think pick SYM`, `/think week`);"
+    " metered, off unless you switch it on\n"
+    "- `/frontier` the frontier switch, today's spend and the daily cap\n"
     "- `/ai off [2h|4h|tonight]` pause every local-AI use of the GPU host (default: until 06:00);"
     " `/ai on` resumes; `/ai` says which\n"
 )
@@ -136,6 +139,12 @@ def handle(text: str) -> CommandResult | None:
         return CommandResult("check", "", request)
     if name == "scorecard":
         return CommandResult("scorecard")
+    if name == "think":
+        return _think_command(rest)
+    if name == "frontier":
+        if rest:
+            return CommandResult("error", "Try `/frontier` (no arguments).")
+        return CommandResult("frontier")
     if name in ("hypotheses", "hyp"):
         if rest:
             return CommandResult("error", "Try `/hypotheses` (no arguments).")
@@ -155,6 +164,25 @@ def handle(text: str) -> CommandResult | None:
     if name == "ai":
         return _ai_command(rest)
     return CommandResult("error", f"I don't know `/{name}`. Type `/help`.")
+
+
+THINK_USAGE = "Try `/think`, `/think pick NVDA` (or `/think pick NVDA short`) or `/think week`."
+
+
+def _think_command(rest: str) -> CommandResult:
+    """``/think`` (the last question), ``/think pick SYM [long|short]``, ``/think week``."""
+    words = rest.split()
+    if not words:
+        return CommandResult("think", "", ("chat",))
+    head = words[0].lower()
+    if head == "week" and len(words) == 1:
+        return CommandResult("think", "", ("week",))
+    if head == "pick" and 2 <= len(words) <= 3:
+        symbol = words[1].upper()
+        side = words[2].upper() if len(words) == 3 else ""
+        if symbol.replace(".", "").replace("-", "").isalnum() and side in ("", "LONG", "SHORT"):
+            return CommandResult("think", "", ("pick", symbol, side))
+    return CommandResult("error", THINK_USAGE)
 
 
 def _ai_command(rest: str) -> CommandResult:

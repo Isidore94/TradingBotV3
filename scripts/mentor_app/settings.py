@@ -131,6 +131,35 @@ def liked_sources() -> frozenset[str]:
     return parse_liked_sources(_setting(LIKED_SOURCES_KEY, DEFAULT_LIKED_SOURCES))
 
 
+FRONTIER_ENABLED_KEY = "mentor_frontier_enabled"
+FRONTIER_MODEL_KEY = "mentor_frontier_model"
+FRONTIER_CAP_KEY = "mentor_frontier_daily_usd_cap"
+#: The current Sonnet id per the claude-api skill (model table cached 2026-06-24).
+DEFAULT_FRONTIER_MODEL = "claude-sonnet-5"
+DEFAULT_FRONTIER_CAP_USD = 2.00
+
+
+def frontier_enabled() -> bool:
+    """The metered frontier switch; off unless the setting is exactly true."""
+    return _setting(FRONTIER_ENABLED_KEY, False) is True
+
+
+def frontier_model() -> str:
+    return str(_setting(FRONTIER_MODEL_KEY, "") or "").strip() or DEFAULT_FRONTIER_MODEL
+
+
+def frontier_daily_cap_usd() -> float:
+    """The daily USD cap; an unreadable or negative value is the default."""
+    raw = _setting(FRONTIER_CAP_KEY, DEFAULT_FRONTIER_CAP_USD)
+    if isinstance(raw, bool):
+        return DEFAULT_FRONTIER_CAP_USD
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_FRONTIER_CAP_USD
+    return value if value >= 0 else DEFAULT_FRONTIER_CAP_USD
+
+
 def gpu_block_reason(now: datetime | None = None) -> str:
     """"" while the app may use the model; otherwise why it may not.
 
