@@ -639,26 +639,25 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
     # reader, registered after `week_review_narration` - which a weeknight does
     # not carry - so on this slate it sits directly before the briefs and the
     # two-step chain becomes a three-step one.
-    # LEAD AMENDMENT 2026-09-24 (WISHLIST P1-3 3b, trader decision): the
-    # briefs are Saturday-only, so the chain is anchored on the exit-note reader
-    # and `econ_brief` now follows it directly.
-    assert "ticker_briefs" not in slate
+    # Trader 2026-09-30: the briefs are back on the weeknight slate, directly
+    # after the exit-note reader (Saturday-only 2026-09-24 to 2026-09-30).
+    assert slate[slate.index("exit_note_fields") + 1] == "ticker_briefs"
     # R1 (2026-09-26): the Day Review Show reads the story, so it follows it
     # directly and the chain gains one step.
     assert slate[slate.index("exit_note_fields") - 3] == "day_review_narration"
     assert slate[slate.index("exit_note_fields") - 2] == "day_review_show"
     assert slate[slate.index("exit_note_fields") - 1] == "observation_tags"
-    # Mentor app P4 (2026-09-30): `mentor_review` sits directly after the briefs'
-    # place, so on a weeknight it follows the exit-note reader and `econ_brief` is next.
-    assert slate[slate.index("exit_note_fields") + 1] == "mentor_review"
-    assert slate[slate.index("exit_note_fields") + 2] == "econ_brief"
+    # Mentor app P4 (2026-09-30): `mentor_review` sits directly after the briefs,
+    # and `econ_brief` is next.
+    assert slate[slate.index("ticker_briefs") + 1] == "mentor_review"
+    assert slate[slate.index("ticker_briefs") + 2] == "econ_brief"
     # AMENDMENT 2026-09-25 (Plan to 8/10 P4): `note_vocabulary_audit` was
     # deleted (its report had no reader), so it leaves the pinned set and every
     # position after it moves up one: the moved triple is now 11-13.
     pinned_at_e8c04f88 = tuple(
         name
         for name in pinned_at_e8c04f88
-        if name not in ("ticker_briefs", "note_vocabulary_audit")
+        if name != "note_vocabulary_audit"
     )
     set_aside = (
         "outcome_sweep",

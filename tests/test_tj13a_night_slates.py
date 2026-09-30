@@ -65,10 +65,10 @@ def test_a_weeknight_slate_runs_the_deterministic_stage_and_the_short_narration(
     # the deterministic stage, whole
     for slot in ("journal_import", "journal_auto_tag", "daily_digest", "measured_report"):
         assert slot in names, f"a weeknight must still do {slot}"
-    # the short trader-facing narration; the briefs moved to Saturday
-    # (trader decision 2026-09-24, WISHLIST P1-3 3b)
+    # the short trader-facing narration; the briefs run every night again
+    # (Saturday-only 2026-09-24, back on weeknights: trader 2026-09-30)
     assert "market_story_narration" in names
-    assert "ticker_briefs" not in names
+    assert "ticker_briefs" in names
     assert "ticker_briefs" in _slate("saturday")
     # the model-gated stage is unchanged
     assert "journal_enrichment" in names
