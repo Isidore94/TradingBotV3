@@ -13,6 +13,17 @@ import logging
 from datetime import date as _date
 
 
+def _review(host):
+    """The host's card surface; a duck-typed desk host (tests, old callers) has the Alert review."""
+    finder = getattr(host, "_mentor_review", None)
+    return finder() if finder is not None else host.trading_panel.alert_center.chart_review
+
+
+def _morning_started(host) -> bool:
+    finder = getattr(host, "_econ_morning_has_started", None)
+    return finder() if finder is not None else host.econ_reminder_service.morning_has_started()
+
+
 class MentorHostMixin:
     """Builds and shows the Trade Mentor card: slot -> state -> questions -> writers."""
 
@@ -66,7 +77,7 @@ class MentorHostMixin:
     def _on_econ_view(self, view: dict) -> None:
         """Show today's news & econ once per session; later views redraw in place."""
         try:
-            review = self._mentor_review()
+            review = _review(self)
             session = str(view.get("session") or "")
             mentor = self.trade_mentor_service
             if mentor.econ_brief_shown(session):
@@ -78,7 +89,7 @@ class MentorHostMixin:
             # next refresh (or mode flip) tries again.
             if self._auto_mode_now() in ("AWAY", "EVENING"):
                 return
-            if not self._econ_morning_has_started():
+            if not _morning_started(self):
                 return
             review.show_econ_brief(view)
             mentor.mark_econ_brief_shown(session)
@@ -118,7 +129,7 @@ class MentorHostMixin:
 
     def _show_trade_mentor_prompt(self, slot) -> None:
         """Show a due prompt in its reusable popup, with its question."""
-        review = self._mentor_review()
+        review = _review(self)
         try:
             review.show_mentor_slot(slot, previous=self._previous_mentor_read(str(slot.session)))
         except Exception:  # noqa: BLE001 - a prompt never costs the desk
@@ -237,7 +248,7 @@ class MentorHostMixin:
         try:
             import mentor_questions
 
-            card = self._mentor_review().mentor_card
+            card = _review(self).mentor_card
             if store is None:
                 from journal_store import JournalStore
 
@@ -324,7 +335,7 @@ class MentorHostMixin:
     def _mentor_regime_lane(self):
         """The regime lane the card's worker last read (S16), or ``None``. No read here."""
         try:
-            return self._mentor_review().mentor_card.regime_lane()
+            return _review(self).mentor_card.regime_lane()
         except Exception:  # noqa: BLE001 - a lane never costs the card
             logging.debug("Mentor regime lane unavailable.", exc_info=True)
             return None
@@ -333,7 +344,7 @@ class MentorHostMixin:
         """The first regime read after a card was shown: put its question on that card."""
         if not first_load:
             return
-        card = self._mentor_review().mentor_card
+        card = _review(self).mentor_card
         slot, store = card.shown_slot(), card.regime_store()
         # Only a scheduled card handed a store; a hand-opened card gets no questions.
         if slot is not None and store is not None:
