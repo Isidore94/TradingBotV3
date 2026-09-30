@@ -2,7 +2,7 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-09-28 20:45 PT (night AI model on the RTX 5080 host, trader's word)
+**Updated:** 2026-09-30 PT (Trade Mentor app P0 in flight)
 
 - **Live on `main`:** round 1, round 2 Phase A (`81272d42`), Phase B + S (`2d59aace`),
   S10a + S7 (`3802c0d7`), p9 phase 1 regime frame (`849390a2`), p9 phase 2 long
@@ -13,10 +13,10 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   (`13b2e2cb`), Yahoo download guard (`56ce3965`),
   Movers boxes + Dip anchors, daytime focus preview, night AI idle-probe skip +
   Saturday summary reads every slice (`1751c338`); gates #257-#306.
-- **GUI/startup delivery:** approved 4K GUI design in gui.md; Journal, Research,
-  Day Review, supporting pages and Desk polish; Windows font-startup fix.
-  Source and frozen selftests 105/105. Long combined Qt test runs still hit
-  worker-lifetime crashes.
+- **GUI:** 4K design (gui.md) live; selftests 105/105; long combined Qt test runs
+  still hit worker-lifetime crashes.
+- **In flight:** Trade Mentor app P0 shell (`claude/mentor-app-p0-shell-2026-09-30`,
+  not merged; gate #311). Plan: TODO "Trade Mentor app".
 - **Desk:** next launch uses main; live 4K/resource and first-usable checks are in GATES.
 - **Night window:** the night AI starts 22:00 PT. Its model runs on the RTX 5080 host
   (`ai_remote_gpu_ssh_alias` = `claude-host`, ssh tunnel on 11435); falls back to local Ollama

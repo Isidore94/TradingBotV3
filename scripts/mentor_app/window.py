@@ -420,7 +420,7 @@ class MentorWindow(QMainWindow):
         self._add_block(f"**You:** {text}")
         self._store_turn("user", text)
         if not self._brain_ok:
-            self._add_note(f"The brain is off ({self._brain_reason or 'not connected'}). Packs still work: try `/tape`.")
+            self._add_note(f"The brain is off: {self._brain_reason or 'not connected'}. Packs still work: try `/tape`.")
             return
         self.chat.add("user", text)
         from mentor_packs import registry
