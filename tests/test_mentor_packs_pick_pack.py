@@ -247,28 +247,35 @@ def test_any_plan_edit_changes_the_hash_even_one_that_adds_no_line(world):
 
 
 # ---------------------------------------------------------------- P13: the M5 branch
-def test_an_m5_focus_pick_takes_its_setup_cell_from_the_m5_outcome_store(world):
+def test_an_m5_focus_pick_takes_its_setup_cell_from_the_desk_s_day_trade_grades(world):
     rows = {row["id"]: row for row in pick_pack.build("AMD", now=NOW, paths=world).rows}
     assert rows["pick:AMD:branch"]["branch"] == "m5" and "M5 bounce cell" in rows["pick:AMD:branch"]["text"]
-    m5 = rows["pick:AMD:m5cell"]
-    assert m5["setup"] == "vwap" and m5["n"] == 35 and m5["wins"] == 20
-    assert "latest M5 alert, 2026-09-25" in m5["text"] and "Wilson LB" in m5["text"]
+    band = rows["pick:AMD:m5cell:vwap_lower_band"]
+    assert band["setup"] == "vwap_lower_band" and band["n"] == 40
+    assert "latest M5 alert, 2026-09-25 07:05 PT" in band["text"] and "grade B" in band["text"]
+    assert "low bound 0.40" in band["text"] and "as of 2026-09-28" in band["text"]
+    thin = rows["pick:AMD:m5cell:10_candle"]
+    assert "too few, n=12 (floor 30)" in thin["text"] and "grade New" not in thin["text"], "a thin cell carries n only"
+    assert "pick:AMD:m5cell:ema_8" not in rows, "only the latest alert's types"
     assert "D1 context only" in rows["pick:AMD:cell"]["text"]
     assert rows["pick:AMD:cohort:1"]["text"].startswith("Cohort human_focus_m5 SHORT")
 
 
-def test_an_m5_pick_with_no_outcome_file_says_not_stored_and_never_guesses(world):
-    rows = {row["id"]: row for row in pick_pack.build("AMD", now=NOW, paths=replace(world, m5_outcomes=None)).rows}
+def test_an_m5_pick_with_no_m5_files_says_not_stored_and_never_guesses(world):
+    rows = {row["id"]: row for row in pick_pack.build("AMD", now=NOW, paths=replace(world, m5_grades=None)).rows}
     assert rows["pick:AMD:m5cell"]["text"].startswith("M5 setup cell: not stored")
-    missing = replace(world, m5_outcomes=world.focus_longs.with_name("nope.csv"))
+    missing = replace(world, m5_alerts=world.focus_longs.with_name("nope.csv"))
     rows = {row["id"]: row for row in pick_pack.build("AMD", now=NOW, paths=missing).rows}
     assert "not stored" in rows["pick:AMD:m5cell"]["text"]
 
 
-def test_an_m5_pick_with_no_alert_of_its_own_says_so(world):
+def test_an_m5_pick_with_no_recent_alert_of_its_own_says_so(world):
     world.focus_shorts.write_text("AMD\nQQQX\n", encoding="utf-8")
     rows = {row["id"]: row for row in pick_pack.build("QQQX", now=NOW, paths=world).rows}
-    assert "no usable M5 alert for QQQX SHORT" in rows["pick:QQQX:m5cell"]["text"]
+    assert "no M5 alert for QQQX SHORT in the last 60 days" in rows["pick:QQQX:m5cell"]["text"]
+    later = NOW.replace(month=12)
+    rows = {row["id"]: row for row in pick_pack.build("AMD", now=later, paths=world).rows}
+    assert "no M5 alert for AMD SHORT in the last 60 days" in rows["pick:AMD:m5cell"]["text"]
 
 
 def test_a_swing_or_claimed_pick_stays_on_the_d1_branch(world):
