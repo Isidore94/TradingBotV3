@@ -239,6 +239,67 @@ def test_d1_scan_resolves_earlier_picks_and_one_worker_at_a_time(app, tmp_path):
     assert service.refresh_now() is False
 
 
+def _d1_downloader():
+    closes = [100.0] * 200 + [101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0, 108.0, 109.0,
+                              110.0]
+    return FakeDownloader(daily={"SPY": _daily_frame([400.0] * 210),
+                                 "AAA": _daily_frame(closes)})
+
+
+def test_d1_since_rebuilds_the_daily_board_from_cache_without_logging_picks(app, tmp_path):
+    # Trader 2026-09-30: "Daily can just be raw strength and weakness maybe let me pick a date?"
+    from datetime import date
+
+    downloader = _d1_downloader()
+    service = _service(tmp_path, downloader, Clock(ny(22, 16, 20)))
+    service._worker(["d1"], service._snapshot())
+    board = service.boards()["d1"]
+    assert board["swing_anchor"]["long"]["date"] == "2026-08-25"  # 20 sessions back
+    assert [r["symbol"] for r in board["swing"]["long"]] == ["AAA"]
+    picks_before = (tmp_path / "picks.jsonl").read_text()
+    calls_before = len(downloader.calls)
+    emitted = []
+    service.timeframeBoardChanged.connect(lambda tf, b: emitted.append((tf, b)))
+    started = []
+    service._spawn = lambda target: (started.append(target), target())
+    service.set_d1_since(date(2026, 9, 19))  # a Saturday: Monday 9/21's close
+    assert len(started) == 1 and not service.running
+    tf, rebuilt = emitted[-1]
+    assert tf == "d1" and rebuilt["swing_anchor"]["long"]["date"] == "2026-09-21"
+    assert rebuilt["swing_anchor"]["short"] == rebuilt["swing_anchor"]["long"]
+    assert rebuilt["swing"]["long"][0]["since_start_pct"] == pytest.approx((110 / 109 - 1) * 100)
+    assert len(downloader.calls) == calls_before  # from the cached bars, no download
+    assert (tmp_path / "picks.jsonl").read_text() == picks_before  # no pick rows
+    saved = json.loads((tmp_path / "d1.json").read_text(encoding="utf-8"))
+    assert saved["swing_anchor"]["long"]["date"] == "2026-09-21"
+    # The next normal Daily scan uses the stored date too.
+    service._worker(["d1"], service._snapshot())
+    assert service.boards()["d1"]["swing_anchor"]["long"]["date"] == "2026-09-21"
+
+
+def test_d1_since_waits_for_a_running_worker_and_scans_without_a_cache(app, tmp_path):
+    from datetime import date
+
+    service = _service(tmp_path, _d1_downloader(), Clock(ny(22, 16, 20)))
+    started = []
+    service._spawn = lambda target: started.append(target)
+    service._running = True
+    service.set_d1_since(date(2026, 9, 21))
+    assert started == []  # one worker at a time: the date waits
+    service._running = False
+    service._after_worker()
+    # No cached daily bars for 9/22: a normal Daily scan runs.
+    assert len(started) == 1 and service.running
+    service._running = False
+    service._after_worker()
+    assert len(started) == 1  # the pending date was applied once
+    # Restoring the saved date on start stores it without a scan.
+    other = _service(tmp_path, _d1_downloader(), Clock(ny(22, 16, 20)))
+    other._spawn = lambda target: started.append(target)
+    other.set_d1_since(date(2026, 9, 2), rebuild=False)
+    assert other.d1_since == date(2026, 9, 2) and len(started) == 1
+
+
 def test_a_missing_daily_bar_retries_at_most_3_times_per_session(app, tmp_path):
     # Yahoo still lacks 9/22's daily bar at 16:15: the board stays on 9/21.
     downloader = FakeDownloader(daily={"SPY": _daily_frame([400.0] * 210, end_day=21),

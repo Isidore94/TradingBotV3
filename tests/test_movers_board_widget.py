@@ -628,13 +628,60 @@ def test_m30_and_daily_tabs_show_the_three_boxes_from_their_boards(app):
     widget.mode_buttons["d1"].click()
     widget.flush_pending_refresh()
     assert widget.main.title_label.text() == "Daily Movers · 3-day moves to the 9/22 close"
-    assert widget.weak.title_label.text() == "Daily Dip-weak · lagging SPY since 9/22 high"
+    assert widget.weak.title_label.text() == "Daily Dip-weak · lagging SPY since 9/22"
     assert [h for _k, h in widget.model._columns][:2] == ["Sym", "3d"]
     # Copy still copies the shown box.
     widget.main.copy_button.click()
     assert QApplication.clipboard().text() == "TFA,TFZ"
     widget.mode_buttons["pop"].click()
     assert _symbols(widget) == ["AAA", "BBB", "ZZZ"]
+
+
+def test_daily_tab_date_control_persists_and_titles_read_since_the_date(app, monkeypatch):
+    # Trader 2026-09-30: "Daily can just be raw strength and weakness maybe let me pick a date?"
+    from datetime import date
+
+    from PySide6.QtCore import QDate
+
+    import project_paths
+    from ui.widgets import movers_board as mb
+
+    saved = {}
+    monkeypatch.setattr(project_paths, "save_local_setting", lambda k, v: saved.__setitem__(k, v))
+    monkeypatch.setattr(project_paths, "get_local_setting", lambda k, d=None: saved.get(k, d))
+    widget = mb.MoversBoard(persist=True)
+    widget.resize(420, 400)
+    widget.show()
+    assert widget.d1_since() is None
+    board = _tf_board("d1")
+    anchor = {"dt": "2026-09-02T00:00:00-04:00", "date": "2026-09-02", "time": "",
+              "kind": "date", "price": 400.0}
+    board["swing_anchor"] = {"long": anchor, "short": dict(anchor)}
+    widget.update_timeframe_board("d1", board)
+    widget.set_mode("m30")
+    widget.flush_pending_refresh()
+    assert widget.d1_since_edit.isHidden() and widget.d1_reset_button.isHidden()
+    widget.set_mode("d1")
+    widget.flush_pending_refresh()
+    assert not widget.d1_since_edit.isHidden() and not widget.d1_reset_button.isHidden()
+    assert widget.strong.title_label.text() == "Daily Dip-strong · beating SPY since 9/2"
+    assert widget.weak.title_label.text() == "Daily Dip-weak · lagging SPY since 9/2"
+    widget.update_timeframe_board("d1", dict(board, swing={"long": [], "short": []}))
+    widget.flush_pending_refresh()
+    assert widget.strong.empty_label.text() == "No name is beating SPY since 9/2."
+    sent = []
+    widget.d1SinceChanged.connect(sent.append)
+    widget.d1_since_edit.setDate(QDate(2026, 1, 5))
+    assert sent == [date(2026, 1, 5)] and widget.d1_since() == date(2026, 1, 5)
+    assert saved[mb.MOVERS_D1_SINCE_SETTING] == "2026-01-05"
+    # A restart restores the saved date.
+    again = mb.MoversBoard(persist=True)
+    assert again.d1_since() == date(2026, 1, 5)
+    assert again.d1_since_edit.date() == QDate(2026, 1, 5)
+    # "20d" goes back to the default (no date).
+    widget.d1_reset_button.click()
+    assert sent[-1] is None and widget.d1_since() is None
+    assert saved[mb.MOVERS_D1_SINCE_SETTING] == ""
 
 
 def test_timeframe_banner_says_not_scanned_yet_stale_and_failed(app):

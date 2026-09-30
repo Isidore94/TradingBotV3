@@ -54,13 +54,13 @@ POP_MIN_ATR_MOVE = movers_scan.POP_MIN_ATR_MOVE
 #: (lead decision 2026-09-29, trader can overrule).
 RVOL_SESSIONS = movers_scan.RVOL_BASELINE_SESSIONS
 RVOL_MIN_SESSIONS = movers_scan.RVOL_BASELINE_MIN_SESSIONS
-#: Dip-box anchor search: the last SWING_HA_RUN same-colour Heikin-Ashi run on
-#: SPY within this lookback; none -> the extreme of the fallback window. M30 looks
-#: back 5 sessions (fallback: prior + current session); D1 60 sessions (fallback:
-#: last 20) (lead decision 2026-09-29, trader can overrule).
+#: M30 Dip-box anchor search: the last SWING_HA_RUN same-colour Heikin-Ashi runs on
+#: SPY within 5 sessions; none -> the extreme of the fallback window (prior +
+#: current session) (lead decision 2026-09-29, trader can overrule).
 M30_LOOKBACK_SESSIONS = 5
 M30_FALLBACK_SESSIONS = 2
-D1_LOOKBACK_BARS = 60
+#: Daily Dip boxes measure from a date the trader picks; with none, this many
+#: sessions back (lead decision 2026-09-30, trader can overrule).
 D1_FALLBACK_BARS = 20
 #: An anchor bar needs at least this many completed bars after it, else the
 #: fallback window's extreme among old-enough bars (lead decision 2026-09-29, trader can overrule).
@@ -244,14 +244,38 @@ def measure_d1(
 
 
 # ---------------------------------------------------------------- anchors
+def _pack_anchor(bar: Mapping[str, Any], price: float, kind: str, tf: str) -> dict[str, Any]:
+    stamp = bar["dt"]
+    return {"dt": stamp.isoformat(timespec="seconds"), "date": stamp.date().isoformat(),
+            "time": stamp.strftime("%H:%M") if tf == TF_M30 else "",
+            "price": price, "kind": kind, "_dt": stamp}
+
+
+def d1_anchors(spy: Sequence[Mapping[str, Any]], since: date | None) -> dict[str, dict[str, Any] | None]:
+    """Daily Dip boxes: both measure from the close of SPY's first session on or after
+    `since` (trader 2026-09-30: "Daily can just be raw strength and weakness maybe let
+    me pick a date?"). No date: D1_FALLBACK_BARS sessions back; a date before SPY's
+    first bar: the first bar; a date after its last bar: no anchor."""
+    bars = list(spy or ())
+    if not bars:
+        return {"long": None, "short": None}
+    if since is None:
+        at: int | None = max(0, len(bars) - 1 - D1_FALLBACK_BARS)
+    else:
+        at = next((i for i, b in enumerate(bars) if b["dt"].date() >= since), None)
+    if at is None:
+        return {"long": None, "short": None}
+    anchor = _pack_anchor(bars[at], bars[at]["close"], "date", TF_D1)
+    return {"long": anchor, "short": dict(anchor)}
+
+
 def tf_anchors(tf: str, spy: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any] | None]:
-    """Where each Dip box measures from, off SPY's completed bars on this timeframe.
+    """Where each M30 Dip box measures from, off SPY's completed M30 bars.
 
     A major dip / rip is a run of SWING_HA_RUN red / green Heikin-Ashi candles
-    inside the lookback. M30 longs: the highest high from the start of the last
-    rip before the last dip (else the lookback start) through that dip's end;
-    M30 shorts: the mirror low. D1 longs: the lowest low since the last dip
-    began; D1 shorts: the highest high since the last rip. No such run, or an extreme under
+    inside the lookback. Longs: the highest high from the start of the last rip
+    before the last dip (else the lookback start) through that dip's end
+    (trader 2026-09-30); shorts: the mirror low. No such run, or an extreme under
     ANCHOR_MIN_AGE_BARS bars old: the extreme of the fallback window among bars
     old enough (`kind` "window"). None when SPY has too few bars."""
     empty: dict[str, dict[str, Any] | None] = {"long": None, "short": None}
@@ -263,15 +287,11 @@ def tf_anchors(tf: str, spy: Sequence[Mapping[str, Any]]) -> dict[str, dict[str,
         [b["open"] for b in bars], [b["high"] for b in bars],
         [b["low"] for b in bars], [b["close"] for b in bars],
     ).colors
-    if tf == TF_M30:
-        sessions = sorted({b["dt"].date() for b in bars})
-        look_day = sessions[-M30_LOOKBACK_SESSIONS:][0]
-        fall_day = sessions[-M30_FALLBACK_SESSIONS:][0]
-        look = next(i for i, b in enumerate(bars) if b["dt"].date() >= look_day)
-        fall = next(i for i, b in enumerate(bars) if b["dt"].date() >= fall_day)
-    else:
-        look = max(0, len(bars) - D1_LOOKBACK_BARS)
-        fall = max(0, len(bars) - D1_FALLBACK_BARS)
+    sessions = sorted({b["dt"].date() for b in bars})
+    look_day = sessions[-M30_LOOKBACK_SESSIONS:][0]
+    fall_day = sessions[-M30_FALLBACK_SESSIONS:][0]
+    look = next(i for i, b in enumerate(bars) if b["dt"].date() >= look_day)
+    fall = next(i for i, b in enumerate(bars) if b["dt"].date() >= fall_day)
     runs: list[tuple[str, int, int]] = []  # (colour, start, end) of major runs in the lookback
     start = look
     for index in range(look + 1, len(bars) + 1):
@@ -279,35 +299,24 @@ def tf_anchors(tf: str, spy: Sequence[Mapping[str, Any]]) -> dict[str, dict[str,
             if colors[start] in (GREEN, RED) and index - start >= movers_scan.SWING_HA_RUN:
                 runs.append((colors[start], start, index - 1))
             start = index
-    # M30 longs read the top SPY's last big dip fell from, shorts the bottom its last
-    # big rip rose from (trader 2026-09-30); D1 keeps the low/high since the last run.
-    top_for_long = tf == TF_M30
 
     def old_enough(at: int) -> bool:
         return last - at >= ANCHOR_MIN_AGE_BARS
 
-    def high_side(side: str) -> bool:
-        return (side == "long") == top_for_long
-
     def extreme(side: str, window: Sequence[int]) -> int:
-        if high_side(side):
+        if side == "long":
             return max(window, key=lambda i: (bars[i]["high"], i))
         return min(window, key=lambda i: (bars[i]["low"], -i))
 
     def pack(at: int, side: str, kind: str) -> dict[str, Any]:
-        stamp = bars[at]["dt"]
-        return {"dt": stamp.isoformat(timespec="seconds"), "date": stamp.date().isoformat(),
-                "time": stamp.strftime("%H:%M") if tf == TF_M30 else "",
-                "price": bars[at]["high"] if high_side(side) else bars[at]["low"],
-                "kind": kind, "_dt": stamp}
+        price = bars[at]["high"] if side == "long" else bars[at]["low"]
+        return _pack_anchor(bars[at], price, kind, tf)
 
     def span(side: str) -> range | None:
         move, before = (RED, GREEN) if side == "long" else (GREEN, RED)
         at = next((i for i in range(len(runs) - 1, -1, -1) if runs[i][0] == move), None)
         if at is None:
             return None
-        if not top_for_long:
-            return range(runs[at][1], len(bars))
         prior = next((r for r in reversed(runs[:at]) if r[0] == before), None)
         return range(prior[1] if prior else look, runs[at][2] + 1)
 
@@ -323,32 +332,6 @@ def tf_anchors(tf: str, spy: Sequence[Mapping[str, Any]]) -> dict[str, dict[str,
     return {"long": anchor("long"), "short": anchor("short")}
 
 
-def anchored_vwap(bars: Sequence[Mapping[str, Any]], anchor_dt: datetime) -> float | None:
-    """The name's VWAP anchored at `anchor_dt` through its last bar (None if no bar there)."""
-    at = next((i for i, b in enumerate(bars) if b["dt"] == anchor_dt), None)
-    if at is None:
-        return None
-    try:
-        from chart_snapshot import anchored_vwap_band_series
-
-        return anchored_vwap_band_series(list(bars), at)["avwap"][-1]
-    except Exception:
-        return None
-
-
-def d1_dip_ok(last: float | None, avwap: float | None, side: str, trend_long: bool | None,
-              below_weak_sma: bool | None) -> bool:
-    """Daily Dip-box entry: long above the SPY-anchored VWAP and the 100/200 SMA;
-    short below that VWAP and the 50 SMA. Unknown never qualifies
-    (lead decision 2026-09-29, trader can overrule)."""
-    price, level = movers_scan._finite(last), movers_scan._finite(avwap)
-    if price is None or level is None:
-        return False
-    if side == "long":
-        return price > level and trend_long is True
-    return price < level and below_weak_sma is True
-
-
 # ---------------------------------------------------------------- board
 def build_timeframe_board(
     tf: str,
@@ -362,12 +345,14 @@ def build_timeframe_board(
     earnings: Iterable[str] | None = None,
     top_n: int = TOP_N,
     local_tz: tzinfo | None = None,
+    since: date | None = None,
 ) -> dict[str, Any]:
     """The M30 or Daily board as plain dicts (safe to emit across threads).
 
     `bars_by_symbol`/`spy_bars` are that timeframe's bars; `daily_bars` the daily
     bars for the SMA trend gate and 20-day volume (D1 reads its own bars when
-    omitted); `fundamentals` symbol -> {"market_cap_m", "avg_volume_20d"}.
+    omitted); `fundamentals` symbol -> {"market_cap_m", "avg_volume_20d"}; `since`
+    the Daily Dip boxes' start date (None: D1_FALLBACK_BARS sessions back).
     Lists: `pop` and `swing` (the Dip boxes), each {"long": rows, "short": rows}."""
     if tf not in TIMEFRAMES:
         raise ValueError(f"unknown timeframe {tf!r}")
@@ -429,7 +414,7 @@ def build_timeframe_board(
         key=lambda r: (r.pop_score, r.symbol),
     )
 
-    anchors = tf_anchors(tf, spy)
+    anchors = tf_anchors(tf, spy) if tf == TF_M30 else d1_anchors(spy, since)
     swing: dict[str, list[dict[str, Any]]] = {"long": [], "short": []}
     for side, anchor in anchors.items():
         if anchor is None:
@@ -438,30 +423,27 @@ def build_timeframe_board(
         for symbol, row in rows.items():
             if not rankable(row):
                 continue
-            closes = [b["close"] for b in daily.get(symbol) or ()]
-            weak_sma = None if side == "long" else movers_scan.below_sma(
-                row.last, closes, movers_scan.DIP_WEAK_SMA)
-            bars = normalised[symbol]
-            avwap = None
             if tf == TF_M30:
+                closes = [b["close"] for b in daily.get(symbol) or ()]
+                weak_sma = None if side == "long" else movers_scan.below_sma(
+                    row.last, closes, movers_scan.DIP_WEAK_SMA)
                 # Exactly the M5 entry gate, on M30 levels (lead decision 2026-09-29, trader can overrule).
                 if not movers_scan.dip_box_ok(row, side, weak_sma):
                     continue
-            else:
-                avwap = anchored_vwap(bars, anchor["_dt"])
-                if not d1_dip_ok(row.last, avwap, side, row.trend_long, weak_sma):
-                    continue
-            since, score, _found = movers_scan.excess_since(
-                bars, spy, anchor["_dt"], atr=row.atr, baseline=baselines.get(symbol))
+            # Daily is raw strength / weakness: only the SMA trend gate (lead decision
+            # 2026-09-30, trader can overrule).
+            elif (row.trend_long if side == "long" else row.trend_short) is False:
+                continue
+            moved, score, _found = movers_scan.excess_since(
+                normalised[symbol], spy, anchor["_dt"], atr=row.atr,
+                baseline=baselines.get(symbol))
             if score is None or (score < 0 if side == "long" else score >= 0):
                 continue
-            scored.append((symbol, row, since, score, avwap))
+            scored.append((symbol, row, moved, score))
         scored.sort(key=lambda t: ((-t[3] if side == "long" else t[3]), t[0]))
-        for _symbol, row, since, score, avwap in scored[:top_n]:
+        for _symbol, row, moved, score in scored[:top_n]:
             data = row.to_dict()
-            data.update(since_start_pct=since, dip_score=score)
-            if tf == TF_D1:
-                data["avwap"] = avwap
+            data.update(since_start_pct=moved, dip_score=score)
             swing[side].append(data)
 
     spy_last = spy[-1] if spy else None
