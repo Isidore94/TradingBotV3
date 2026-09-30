@@ -7892,6 +7892,11 @@ class AlertCenterPanel(
     def attach_movers_timeframe_service(self, service) -> None:
         """Feed the M30 / Daily tabs from `MainWindow`'s one MoversTimeframeService."""
         service.timeframeBoardChanged.connect(self.movers_board.update_timeframe_board)
+        set_since = getattr(service, "set_d1_since", None)
+        if set_since is not None:
+            # The saved Daily start date, stored before the service's first scan; each pick rebuilds.
+            set_since(self.movers_board.d1_since(), rebuild=False)
+            self.movers_board.d1SinceChanged.connect(set_since)
         for tf, board in (service.boards() or {}).items():
             self.movers_board.update_timeframe_board(tf, board)
 

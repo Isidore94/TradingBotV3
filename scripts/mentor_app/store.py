@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 from array import array
 from contextlib import closing
 from datetime import datetime, timezone
@@ -77,6 +78,30 @@ CREATE TABLE IF NOT EXISTS embeddings (
     text TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (kind, ref_id, model)
 );
+CREATE TABLE IF NOT EXISTS news (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    published_utc TEXT NOT NULL DEFAULT '',
+    fetched_utc TEXT NOT NULL,
+    feed TEXT NOT NULL DEFAULT '',
+    UNIQUE (symbol, url)
+);
+CREATE INDEX IF NOT EXISTS news_by_symbol ON news(symbol, published_utc);
+CREATE TABLE IF NOT EXISTS frontier_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_utc TEXT NOT NULL,
+    day_pt TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    est_usd REAL NOT NULL,
+    measured INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS frontier_usage_by_day ON frontier_usage(day_pt);
 """
 
 BUSY_TIMEOUT_MS = 5000
@@ -84,6 +109,12 @@ BUSY_TIMEOUT_MS = 5000
 NOTE_COLUMNS = ("retired_utc", "checked_utc", "asked_utc")
 #: app_state key for one PT day's service counters (uncited numbers, brain-offline minutes).
 DAY_STATS_KEY = "stats:{day}"
+#: app_state key for one symbol's last successful news fetch (UTC ISO; at least one feed answered).
+NEWS_FETCH_KEY = "news:last_fetch:{symbol}"
+#: app_state key for one symbol's last request, failed or not: a restart keeps the 30-min spacing.
+NEWS_ATTEMPT_KEY = "news:last_attempt:{symbol}"
+#: app_state key for one symbol's last feed failure: JSON ``{reason, at_utc, partial}``; "{}" = none.
+NEWS_ERROR_KEY = "news:last_error:{symbol}"
 _CHALLENGES_TABLE = SCHEMA[SCHEMA.index("CREATE TABLE IF NOT EXISTS challenges"):].split(";", 1)[0]
 
 
@@ -157,6 +188,8 @@ class MentorChatStore:
             path = MENTOR_CHAT_DB_FILE
         self.path = Path(path)
         self._ready = False
+        #: One thread sets the store up; the others wait (a second WAL switch mid-write says "locked").
+        self._init_lock = threading.Lock()
 
     # ----------------------------------------------------------------- plumbing
     def _connect(self) -> sqlite3.Connection:
@@ -165,15 +198,17 @@ class MentorChatStore:
         conn.row_factory = sqlite3.Row
         conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
         if not self._ready:
-            try:
-                conn.execute("PRAGMA journal_mode = WAL")
-                conn.executescript(SCHEMA)
-                _open_graded_column(conn)
-                _add_note_columns(conn)
-            except BaseException:
-                conn.close()
-                raise
-            self._ready = True
+            with self._init_lock:
+                if not self._ready:
+                    try:
+                        conn.execute("PRAGMA journal_mode = WAL")
+                        conn.executescript(SCHEMA)
+                        _open_graded_column(conn)
+                        _add_note_columns(conn)
+                    except BaseException:
+                        conn.close()
+                        raise
+                    self._ready = True
         return conn
 
     def _write(self, what: str, sql: str, params: Sequence[Any]) -> int | None:
@@ -236,9 +271,10 @@ class MentorChatStore:
         )[::-1]
 
     # ----------------------------------------------------------------- memory
-    def add_profile_note(self, text: str, source: str = "remember") -> int | None:
+    def add_profile_note(self, text: str, source: str = "remember", *, ts_utc: str = "") -> int | None:
         return self._write(
-            "profile note", "INSERT INTO profile_notes (ts_utc, text, source) VALUES (?, ?, ?)", (utc_now(), text, source)
+            "profile note", "INSERT INTO profile_notes (ts_utc, text, source) VALUES (?, ?, ?)",
+            (ts_utc or utc_now(), text, source),
         )
 
     def profile_notes(self, *, limit: int = 50, include_retired: bool = False) -> list[dict[str, Any]]:
@@ -254,13 +290,13 @@ class MentorChatStore:
         written = self._write(what, f"UPDATE profile_notes SET {column} = ? WHERE id = ?", (when or utc_now(), int(note_id)))
         return written is not None
 
-    def retire_note(self, note_id: int) -> bool:
+    def retire_note(self, note_id: int, when: str = "") -> bool:
         """``/forget``: the note stays in the table, marked retired; it is never deleted."""
-        return self._note_stamp("note retire", "retired_utc", note_id)
+        return self._note_stamp("note retire", "retired_utc", note_id, when)
 
-    def check_note(self, note_id: int) -> bool:
+    def check_note(self, note_id: int, when: str = "") -> bool:
         """``/keep``: the trader says the note is still true; its age restarts."""
-        return self._note_stamp("note keep", "checked_utc", note_id)
+        return self._note_stamp("note keep", "checked_utc", note_id, when)
 
     def mark_note_asked(self, note_id: int, when: str = "") -> bool:
         return self._note_stamp("note asked", "asked_utc", note_id, when)
@@ -335,6 +371,33 @@ class MentorChatStore:
         )
         return written is not None
 
+    # ----------------------------------------------------------------- frontier spend (P11)
+    def add_frontier_usage(self, *, day_pt: str, purpose: str, model: str, input_tokens: int | None,
+                           output_tokens: int | None, est_usd: float, measured: bool = True,
+                           ts_utc: str = "") -> int | None:
+        """One metered frontier call; ``measured`` False = the estimate stood in for missing usage."""
+        return self._write(
+            "frontier usage",
+            "INSERT INTO frontier_usage (ts_utc, day_pt, purpose, model, input_tokens, output_tokens, est_usd, "
+            "measured) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts_utc or utc_now(), str(day_pt), str(purpose), str(model), input_tokens, output_tokens,
+             float(est_usd), 1 if measured else 0),
+        )
+
+    def frontier_spent(self, day_pt: str) -> float | None:
+        """USD spent on ``day_pt`` (PT date); None when the store cannot be read (the caller refuses)."""
+        try:
+            with closing(self._connect()) as conn:
+                row = conn.execute("SELECT COALESCE(SUM(est_usd), 0) FROM frontier_usage WHERE day_pt = ?",
+                                   (str(day_pt),)).fetchone()
+        except Exception:  # noqa: BLE001 - unknown spend is never read as zero
+            logging.exception("Trade Mentor store: frontier spend unreadable (%s)", self.path)
+            return None
+        return float(row[0] or 0.0)
+
+    def frontier_usage(self, day_pt: str) -> list[dict[str, Any]]:
+        return self._read("SELECT * FROM frontier_usage WHERE day_pt = ? ORDER BY id", (str(day_pt),))
+
     # ----------------------------------------------------------------- app state
     def set_state(self, key: str, value: str) -> bool:
         written = self._write(
@@ -346,6 +409,78 @@ class MentorChatStore:
     def get_state(self, key: str) -> str | None:
         rows = self._read("SELECT value FROM app_state WHERE key = ?", (str(key),))
         return str(rows[0]["value"]) if rows else None
+
+    # ----------------------------------------------------------------- news (P7)
+    def put_headlines(self, headlines: Iterable[Any], fetched_utc: str = "") -> int | None:
+        """Insert new headlines (one per symbol + URL; a known one is left alone). Returns rows added.
+
+        A headline without an http(s) URL or a title is never stored.
+        """
+        fetched = fetched_utc or utc_now()
+        rows = []
+        for item in headlines:
+            data = item.as_dict() if hasattr(item, "as_dict") else dict(item)
+            symbol = str(data.get("symbol") or "").strip().upper()
+            title, url = str(data.get("title") or "").strip(), str(data.get("url") or "").strip()
+            if not symbol or not title or not url.startswith(("http://", "https://")):
+                continue
+            rows.append((symbol, title, url, str(data.get("source") or ""), str(data.get("published_utc") or ""),
+                         fetched, str(data.get("feed") or "")))
+        try:
+            with closing(self._connect()) as conn, conn:
+                before = conn.total_changes
+                conn.executemany(
+                    "INSERT OR IGNORE INTO news (symbol, title, url, source, published_utc, fetched_utc, feed) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)", rows,
+                )
+                return int(conn.total_changes - before)
+        except Exception:  # noqa: BLE001 - a lost headline is logged, never raised into the UI
+            logging.exception("Trade Mentor store: news write failed (%s)", self.path)
+            return None
+
+    def headlines(self, symbol: str, since: str = "", limit: int = 8) -> list[dict[str, Any]]:
+        """One symbol's headlines at or after ``since`` (UTC ISO), newest first."""
+        from mentor_packs.news_pack import NEWS_SELECT
+
+        return self._read(NEWS_SELECT, (str(symbol or "").strip().upper(), str(since or ""), int(limit)))
+
+    def set_news_fetched(self, symbol: str, when_utc: str) -> bool:
+        return self.set_state(NEWS_FETCH_KEY.format(symbol=str(symbol).strip().upper()), when_utc)
+
+    def news_fetched(self, symbol: str) -> str | None:
+        return self.get_state(NEWS_FETCH_KEY.format(symbol=str(symbol).strip().upper()))
+
+    def set_news_attempt(self, symbol: str, when_utc: str) -> bool:
+        return self.set_state(NEWS_ATTEMPT_KEY.format(symbol=str(symbol).strip().upper()), when_utc)
+
+    def news_attempt(self, symbol: str) -> str | None:
+        """UTC ISO of the last request for ``symbol`` (failed or not), or None."""
+        return self.get_state(NEWS_ATTEMPT_KEY.format(symbol=str(symbol).strip().upper()))
+
+    def set_news_error(self, symbol: str, reason: str = "", when_utc: str = "", *, partial: bool = False) -> bool:
+        """Keep the last feed failure for ``symbol``; a blank reason clears it."""
+        value = {"reason": str(reason)[:300], "at_utc": when_utc or utc_now(), "partial": bool(partial)} if reason else {}
+        return self.set_state(NEWS_ERROR_KEY.format(symbol=str(symbol).strip().upper()), json.dumps(value, sort_keys=True))
+
+    def news_error(self, symbol: str) -> dict[str, Any] | None:
+        """``{reason, at_utc, partial}`` of the last feed failure, or None."""
+        raw = self.get_state(NEWS_ERROR_KEY.format(symbol=str(symbol).strip().upper()))
+        try:
+            value = json.loads(raw) if raw else {}
+        except ValueError:
+            return None
+        return dict(value) if isinstance(value, dict) and value.get("reason") else None
+
+    def news_fetch_stamps(self) -> dict[str, str]:
+        """``{SYMBOL: last request UTC ISO}`` (the later of the last fetch and the last attempt)."""
+        out: dict[str, str] = {}
+        for key in (NEWS_FETCH_KEY, NEWS_ATTEMPT_KEY):
+            prefix = key.format(symbol="")
+            for row in self._read("SELECT key, value FROM app_state WHERE key LIKE ?", (prefix + "%",)):
+                symbol, value = str(row["key"])[len(prefix):], str(row["value"])
+                if value > out.get(symbol, ""):
+                    out[symbol] = value
+        return out
 
     # ----------------------------------------------------------------- caches
     def put_pack(self, name: str, args: dict[str, Any] | None, pack_json: str, built_utc: str = "") -> int | None:

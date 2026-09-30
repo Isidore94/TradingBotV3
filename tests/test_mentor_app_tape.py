@@ -84,6 +84,15 @@ def test_the_hash_ignores_the_clock_but_not_the_facts():
     assert tape.pack_hash(moved) != tape.pack_hash(early)
 
 
+def test_a_changed_plan_changes_the_tape_hash():
+    later = datetime(2026, 9, 29, 14, 30, tzinfo=timezone.utc)
+    one = regime_pack.build(now=later, sources=replace(regime_pack.fixture_sources(), plan_sha=lambda: "aaaa"))
+    two = regime_pack.build(now=later, sources=replace(regime_pack.fixture_sources(), plan_sha=lambda: "bbbb"))
+    assert [row["text"] for row in one.rows] == [row["text"] for row in two.rows]
+    assert tape.pack_hash(one) != tape.pack_hash(two), "a changed plan re-narrates the tape"
+    assert regime_pack.live_sources().plan_sha is not None, "the live tape carries the plan hash"
+
+
 def test_an_unchanged_pack_is_narrated_once(store):
     calls = []
 

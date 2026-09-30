@@ -157,3 +157,4 @@ session. Never restart the desk or merge to `main` without the trader's word.
 
 Chat as if to a five-year-old: very short, simple words, one idea per sentence. Say what
 you did, what is broken, and what they need to do. Detail goes in commits, not chat.
+If a question or request from the trader is ambiguous, always ask them to clarify first.

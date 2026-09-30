@@ -73,6 +73,9 @@ TASK = (
     "Say n and the floor when you use a win rate; a row that says 'too few' is not evidence. "
     "rule_flags: only for plan lines listed (their plan_id), breaks=true when the pick breaks it. "
     "Never suggest changing the plan, a detector, a score or an alert. Never size or place an order. "
+    "A headline row is a title and a link only: cite its id, never say more than its title, and never "
+    "mention news that is not a row here. A news row that says 'not fetched yet' or 'unknown' is not "
+    "evidence that the news is quiet. "
     "verdict: 'worth a look', 'wait' or 'pass'."
 )
 
@@ -214,6 +217,20 @@ def assess(
     return out
 
 
+def bullet_line(bullet: Mapping[str, Any], pack: Pack | None) -> str:
+    """One card bullet with its ids; a cited headline always shows with its own link (title -> URL)."""
+    from mentor_app.news_jobs import news_links
+
+    cited = list(bullet.get("evidence_refs") or ())
+    refs = " ".join(f"[{ref}]" for ref in cited)
+    line = f"- {bullet.get('text', '')} {refs}".rstrip()
+    links = news_links(cited, pack) if pack is not None else []
+    if links:
+        titles = "; ".join(f"[{title.replace('[', '(').replace(']', ')')}]({url})" for title, url in links)
+        line += f" (news: {titles})"
+    return line
+
+
 def card_markdown(assessment: Assessment, *, side: str = "") -> str:
     """The card the transcript shows. The raw pack is one click away (``evidence:`` link)."""
     head = f"**Pick {assessment.symbol}{' ' + side if side else ''}**"
@@ -222,9 +239,9 @@ def card_markdown(assessment: Assessment, *, side: str = "") -> str:
         why = assessment.error or "no narration"
         return f"{head}: no assessment ({why}). The evidence is still here: {link}"
     lines = [f"{head}: **{assessment.verdict}**", ""]
+    pack = assessment.pack()
     for bullet in assessment.bullets:
-        refs = " ".join(f"[{ref}]" for ref in bullet.get("evidence_refs") or ())
-        lines.append(f"- {bullet.get('text', '')} {refs}".rstrip())
+        lines.append(bullet_line(bullet, pack))
     for flag in assessment.rule_flags:
         word = "breaks" if flag.get("breaks") else "keeps"
         lines.append(f"- Plan {word} [{flag['plan_id']}]: {flag.get('text', '')}".rstrip(": "))

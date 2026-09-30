@@ -1,5 +1,5 @@
 """The Movers M30 and Daily boards (pure): completed bars, pop ranking, SPY anchors,
-Dip-box gates, D1 anchored VWAP (trader 2026-09-29)."""
+Dip-box gates, D1 raw strength since a date (trader 2026-09-29, 2026-09-30)."""
 
 from __future__ import annotations
 
@@ -149,53 +149,68 @@ def test_trend_gate_and_quality_floor_apply_to_the_pop_lists():
 
 
 # ------------------------------------------------------------------ anchors
-def _spy_m30_with_prior_drop(today_closes):
-    """Prior session: flat 400, then 8 red bars down to 392; today: `today_closes`."""
-    prior_day = _weekdays(2)[0]
-    prior = _m30(prior_day, [400.0] * 5 + [399.0, 398.0, 397.0, 396.0, 395.0, 394.0, 393.0,
-                                          392.0], first_open=400.0)
-    return mt.normalize_tf_bars(
-        "m30", prior + _m30(TODAY, today_closes, first_open=392.0),
-        now=datetime(2026, 9, 22, 16, 0, tzinfo=NY))
+def _spy_m30_rise_drop_rise():
+    """9/18 rises to 401 (green run), 9/21 falls to 394 (red run), 9/22 rises to 403."""
+    d2, d1 = _weekdays(3)[:2]
+    raw = (_m30(d2, [395.0, 396.0, 397.0, 398.0, 399.0, 400.0] + [401.0] * 7, first_open=394.0)
+           + _m30(d1, [400.0, 399.0, 398.0, 397.0, 396.0, 395.0] + [394.0] * 7, first_open=401.0)
+           + _m30(TODAY, [395.0, 396.0, 397.0, 398.0, 399.0, 400.0, 401.0, 402.0, 403.0],
+                  first_open=394.0))
+    return mt.normalize_tf_bars("m30", raw, now=datetime(2026, 9, 22, 16, 0, tzinfo=NY))
 
 
-def test_m30_long_anchor_is_the_low_since_the_last_red_ha_run():
-    spy = _spy_m30_with_prior_drop([393.0, 394.0, 395.0, 396.0, 397.0])
-    anchors = mt.tf_anchors("m30", spy)
+def test_m30_long_anchor_is_the_top_the_last_big_dip_fell_from():
+    # Trader 2026-09-30: M30 longs measure from the last major dip in SPY.
+    anchors = mt.tf_anchors("m30", _spy_m30_rise_drop_rise())
     long = anchors["long"]
     assert long["kind"] == "swing"
-    assert long["dt"] == "2026-09-22T09:30:00-04:00"  # the tie goes to the later bar
-    assert long["price"] == 391.5
-    # No 6-bar green run: shorts take the fallback window's (prior + today) high.
-    assert anchors["short"]["kind"] == "window"
-    assert anchors["short"]["price"] == 400.5
+    # Highest high from the 9/18 green run's start through the 9/21 red run's end;
+    # 401.5 ties from 9/18 12:30 to 9/21 09:30 and the tie goes to the later bar.
+    assert long["dt"] == "2026-09-21T09:30:00-04:00"
+    assert long["price"] == 401.5
 
 
-def test_m30_young_anchor_falls_back_to_an_old_enough_bar():
-    # Today keeps falling: the lowest low is the last bar (0 bars old).
-    spy = _spy_m30_with_prior_drop([391.0, 390.0, 389.0])
-    long = mt.tf_anchors("m30", spy)["long"]
-    assert long["kind"] == "window"
-    assert long["dt"] == "2026-09-22T09:30:00-04:00"  # 2 bars old: the newest allowed
+def test_m30_short_anchor_is_the_bottom_the_last_big_rip_rose_from():
+    short = mt.tf_anchors("m30", _spy_m30_rise_drop_rise())["short"]
+    assert short["kind"] == "swing"
+    # Lowest low from the 9/21 red run's start through today's green run; later tie wins.
+    assert short["dt"] == "2026-09-22T09:30:00-04:00"
+    assert short["price"] == 393.5
+
+
+def test_m30_no_run_falls_back_to_the_window_high_and_no_prior_run_uses_the_lookback():
+    prior_day = _weekdays(2)[0]
+    raw = (_m30(prior_day, [400.0] * 13, first_open=400.0)
+           + _m30(TODAY, [401.0, 402.0, 403.0, 404.0, 405.0, 406.0, 407.0], first_open=400.0))
+    spy = mt.normalize_tf_bars("m30", raw, now=datetime(2026, 9, 22, 16, 0, tzinfo=NY))
+    anchors = mt.tf_anchors("m30", spy)
+    # No red run: longs take the fallback window's high among bars 2+ bars old.
+    assert anchors["long"]["kind"] == "window"
+    assert anchors["long"]["dt"] == "2026-09-22T11:30:00-04:00"
+    assert anchors["long"]["price"] == 405.5
+    # Today's green run has no red run before it: its low runs from the lookback start.
+    assert anchors["short"]["kind"] == "swing"
+    assert anchors["short"]["dt"] == "2026-09-22T09:30:00-04:00"
+    assert anchors["short"]["price"] == 399.5
     assert mt.tf_anchors("m30", []) == {"long": None, "short": None}
 
 
-def test_d1_anchor_searches_60_sessions_and_falls_back_to_20():
-    days = _weekdays(80)
-    closes = [400.0] * 68 + [399.0, 398.0, 397.0, 396.0, 395.0, 394.0, 393.0] + \
-        [394.0, 395.0, 396.0, 397.0, 398.0]
-    spy = mt.normalize_tf_bars("d1", _daily(days, closes),
+def test_d1_anchor_is_the_close_of_the_first_spy_session_on_or_after_the_date():
+    # Trader 2026-09-30: "Daily can just be raw strength and weakness maybe let me pick a date?"
+    days = _weekdays(40)
+    spy = mt.normalize_tf_bars("d1", _daily(days, [400.0] * 40),
                                now=datetime(2026, 9, 22, 17, 0, tzinfo=NY))
-    anchors = mt.tf_anchors("d1", spy)
-    assert anchors["long"]["kind"] == "swing"
-    assert anchors["long"]["date"] == days[75].isoformat() and anchors["long"]["time"] == ""
-    # A red run older than 60 sessions is out of the lookback: the 20-day window's low.
-    old = [400.0] * 5 + [399.0, 398.0, 397.0, 396.0, 395.0, 394.0, 393.0] + [394.0] * 68
-    spy_old = mt.normalize_tf_bars("d1", _daily(days, old),
-                                   now=datetime(2026, 9, 22, 17, 0, tzinfo=NY))
-    long = mt.tf_anchors("d1", spy_old)["long"]
-    assert long["kind"] == "window"
-    assert long["date"] >= days[60].isoformat()
+    saturday = date(2026, 9, 12)
+    anchors = mt.d1_anchors(spy, saturday)
+    assert anchors["long"] == anchors["short"]
+    assert anchors["long"]["kind"] == "date" and anchors["long"]["date"] == "2026-09-14"
+    assert anchors["long"]["time"] == "" and anchors["long"]["price"] == 400.0
+    # No date: 20 sessions back (lead decision 2026-09-30, trader can overrule).
+    assert mt.d1_anchors(spy, None)["long"]["date"] == days[-1 - mt.D1_FALLBACK_BARS].isoformat()
+    # Before SPY's first bar: the earliest bar; after its last: no anchor.
+    assert mt.d1_anchors(spy, date(2020, 1, 1))["short"]["date"] == days[0].isoformat()
+    assert mt.d1_anchors(spy, date(2026, 9, 23)) == {"long": None, "short": None}
+    assert mt.d1_anchors([], None) == {"long": None, "short": None}
 
 
 # ------------------------------------------------------------------ Dip boxes
@@ -235,33 +250,38 @@ def test_m30_dip_boxes_use_the_m5_gates_and_unknown_smas_keep_names_off():
     assert "_dt" not in board["swing_anchor"]["long"]
 
 
-def test_d1_dip_strong_needs_the_spy_anchored_vwap_and_the_smas():
+def test_d1_boxes_are_raw_excess_vs_spy_since_the_date_with_the_sma_gate_kept():
     days = _weekdays(220)
     after = datetime(2026, 9, 22, 16, 30, tzinfo=NY)
-    spy_closes = [400.0] * 208 + [399.0, 398.0, 397.0, 396.0, 395.0, 394.0, 393.0] + \
-        [394.0, 395.0, 396.0, 397.0, 398.0]
+    since = days[-7]
+    spy = _daily(days, [400.0] * 220)
     lead = [100.0] * 214 + [101.0, 103.0, 105.0, 107.0, 109.0, 111.0]
-    # Ran, then fell back under its anchored VWAP and its 50 SMA: weak, never strong.
+    # Spiked on heavy volume, then gave most of it back: under a VWAP anchored at the
+    # date (the old gate), still beating SPY since the date (raw strength).
+    spike = [100.0] * 214 + [120.0, 121.0, 120.0, 104.0, 103.0, 102.0]
+    spike_volume = [2e6] * 214 + [2e7, 2e7, 2e7, 2e6, 2e6, 2e6]
     fade = [100.0] * 214 + [101.0, 103.0, 105.0, 107.0, 99.0, 98.0]
+    # Beat SPY since the date but under its long SMAs: the trend gate keeps it off.
+    under = [200.0] * 150 + [100.0] * 64 + [101.0, 102.0, 103.0, 104.0, 105.0, 106.0]
     lag = [200.0] * 150 + [100.0] * 64 + [99.0, 97.0, 95.0, 93.0, 91.0, 89.0]
-    bars = {"LEAD": _daily(days, lead), "FADE": _daily(days, fade), "LAG": _daily(days, lag),
-            "SHORTHIST": _daily(days[-30:], lead[-30:])}
-    board = mt.build_timeframe_board("d1", bars, _daily(days, spy_closes), now=after)
-    strong = board["swing"]["long"]
-    assert [r["symbol"] for r in strong] == ["LEAD"]  # SHORTHIST: SMAs unknown
-    assert strong[0]["avwap"] is not None and strong[0]["last"] > strong[0]["avwap"]
-    assert [r["symbol"] for r in board["swing"]["short"]] == ["LAG", "FADE"]
-    assert all(r["last"] < r["avwap"] for r in board["swing"]["short"])
-
-
-def test_anchored_vwap_starts_at_the_anchor_bar():
-    days = _weekdays(4)
-    bars = mt.normalize_tf_bars("d1", _daily(days, [10.0, 20.0, 30.0, 40.0]),
-                                now=datetime(2026, 9, 22, 17, 0, tzinfo=NY))
-    value = mt.anchored_vwap(bars, bars[2]["dt"])
-    # OHLC/4 of the last two bars, equal volume.
-    assert value == pytest.approx(((20 + 30.5 + 19.5 + 30) / 4 + (30 + 40.5 + 29.5 + 40) / 4) / 2)
-    assert mt.anchored_vwap(bars, datetime(2020, 1, 1, tzinfo=NY)) is None
+    bars = {"LEAD": _daily(days, lead), "SPIKE": _daily(days, spike, volumes=spike_volume),
+            "FADE": _daily(days, fade), "UNDER": _daily(days, under), "LAG": _daily(days, lag)}
+    board = mt.build_timeframe_board("d1", bars, spy, now=after, since=since)
+    strong = [r["symbol"] for r in board["swing"]["long"]]
+    weak = [r["symbol"] for r in board["swing"]["short"]]
+    assert strong == ["LEAD", "SPIKE"]
+    assert weak == ["LAG", "FADE"]
+    assert all("avwap" not in r for r in board["swing"]["long"] + board["swing"]["short"])
+    assert not hasattr(mt, "d1_dip_ok") and not hasattr(mt, "anchored_vwap")
+    lead_row = board["swing"]["long"][0]
+    assert lead_row["since_start_pct"] == pytest.approx((111.0 / 100.0 - 1) * 100)
+    anchor = board["swing_anchor"]
+    assert anchor["long"] == anchor["short"]
+    assert anchor["long"]["kind"] == "date" and anchor["long"]["date"] == since.isoformat()
+    # No date: 20 sessions back, so LEAD (111 vs 100 then) is still strong.
+    default = mt.build_timeframe_board("d1", bars, spy, now=after)
+    assert default["swing_anchor"]["long"]["date"] == days[-21].isoformat()
+    assert "LEAD" in [r["symbol"] for r in default["swing"]["long"]]
 
 
 def test_listed_symbols_and_bad_timeframe():
@@ -270,12 +290,3 @@ def test_listed_symbols_and_bad_timeframe():
     assert mt.listed_symbols(board) == ["A", "B"]
     with pytest.raises(ValueError):
         mt.build_timeframe_board("h1", {}, [], now=NOON)
-
-
-def test_d1_entry_gate_needs_a_known_anchored_vwap_on_the_right_side():
-    assert mt.d1_dip_ok(110.0, 100.0, "long", True, None) is True
-    assert mt.d1_dip_ok(95.0, 100.0, "long", True, None) is False  # SMAs fine, under AVWAP
-    assert mt.d1_dip_ok(110.0, None, "long", True, None) is False  # unknown AVWAP
-    assert mt.d1_dip_ok(110.0, 100.0, "long", None, None) is False  # unknown SMA
-    assert mt.d1_dip_ok(90.0, 100.0, "short", False, True) is True
-    assert mt.d1_dip_ok(90.0, 100.0, "short", False, None) is False

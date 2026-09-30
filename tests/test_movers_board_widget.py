@@ -129,18 +129,18 @@ def test_dip_boxes_read_the_swing_lists_and_name_their_own_anchor(app):
     assert _section_symbols(widget.strong) == ["LEAD"]
     assert _section_symbols(widget.weak) == ["LAG"]
     strong, weak = widget.strong.title_label.text(), widget.weak.title_label.text()
-    # Trader 2026-09-29: longs from SPY's low after the dip, shorts from its high.
-    assert strong.startswith("Dip-strong") and "since SPY's low" in strong
-    assert "not lit" not in strong and "high" not in strong
-    assert weak.startswith("Dip-weak") and "since SPY's high" in weak and "low" not in weak
+    # Trader 2026-09-30: longs from SPY's high after the rip, shorts from its low.
+    assert strong.startswith("Dip-strong") and "since SPY's high" in strong
+    assert "not lit" not in strong and "low" not in strong
+    assert weak.startswith("Dip-weak") and "since SPY's low" in weak and "high" not in weak
     assert strong != weak  # each box names its own swing
     # No major move yet: the low / high of day, said so.
-    board["swing_anchor"]["long"]["kind"] = "lod"
-    board["swing_anchor"]["short"]["kind"] = "hod"
+    board["swing_anchor"]["long"]["kind"] = "hod"
+    board["swing_anchor"]["short"]["kind"] = "lod"
     widget.update_board(board)
     widget.flush_pending_refresh()
-    assert "low of day so far" in widget.strong.title_label.text()
-    assert "high of day so far" in widget.weak.title_label.text()
+    assert "high of day so far" in widget.strong.title_label.text()
+    assert "low of day so far" in widget.weak.title_label.text()
     # Too early for either: the open.
     board["swing_anchor"]["long"]["kind"] = "open"
     board["swing_anchor"]["short"]["kind"] = "open"
@@ -607,6 +607,15 @@ def test_m30_and_daily_tabs_show_the_three_boxes_from_their_boards(app):
     assert not widget.strong.isHidden() and not widget.weak.isHidden()
     assert widget.main.title_label.text().startswith("M30 Movers · 3-bar moves at ")
     assert widget.strong.title_label.text().startswith("M30 Dip-strong · beating SPY since 9/21")
+    # Trader 2026-09-30: M30 longs measure from SPY's high, shorts from its low.
+    assert widget.strong.title_label.text().endswith(" high")
+    assert widget.weak.title_label.text().endswith(" low")
+    widget.update_timeframe_board("m30", dict(_tf_board("m30"), swing={"long": [], "short": []}))
+    widget.flush_pending_refresh()
+    assert widget.strong.empty_label.text() == "No name is beating SPY since the high."
+    assert widget.weak.empty_label.text() == "No name is lagging SPY since the low."
+    widget.update_timeframe_board("m30", _tf_board("m30"))
+    widget.flush_pending_refresh()
     assert [h for _k, h in widget.model._columns][:3] == ["Sym", "90m", "RVOL"]
     # The outcome line rides on each box title's hover.
     assert "Last 20 sessions: +0.8% vs SPY at 3d, 57% beat, n=10" in \
@@ -619,13 +628,60 @@ def test_m30_and_daily_tabs_show_the_three_boxes_from_their_boards(app):
     widget.mode_buttons["d1"].click()
     widget.flush_pending_refresh()
     assert widget.main.title_label.text() == "Daily Movers · 3-day moves to the 9/22 close"
-    assert widget.weak.title_label.text() == "Daily Dip-weak · lagging SPY since 9/22 high"
+    assert widget.weak.title_label.text() == "Daily Dip-weak · lagging SPY since 9/22"
     assert [h for _k, h in widget.model._columns][:2] == ["Sym", "3d"]
     # Copy still copies the shown box.
     widget.main.copy_button.click()
     assert QApplication.clipboard().text() == "TFA,TFZ"
     widget.mode_buttons["pop"].click()
     assert _symbols(widget) == ["AAA", "BBB", "ZZZ"]
+
+
+def test_daily_tab_date_control_persists_and_titles_read_since_the_date(app, monkeypatch):
+    # Trader 2026-09-30: "Daily can just be raw strength and weakness maybe let me pick a date?"
+    from datetime import date
+
+    from PySide6.QtCore import QDate
+
+    import project_paths
+    from ui.widgets import movers_board as mb
+
+    saved = {}
+    monkeypatch.setattr(project_paths, "save_local_setting", lambda k, v: saved.__setitem__(k, v))
+    monkeypatch.setattr(project_paths, "get_local_setting", lambda k, d=None: saved.get(k, d))
+    widget = mb.MoversBoard(persist=True)
+    widget.resize(420, 400)
+    widget.show()
+    assert widget.d1_since() is None
+    board = _tf_board("d1")
+    anchor = {"dt": "2026-09-02T00:00:00-04:00", "date": "2026-09-02", "time": "",
+              "kind": "date", "price": 400.0}
+    board["swing_anchor"] = {"long": anchor, "short": dict(anchor)}
+    widget.update_timeframe_board("d1", board)
+    widget.set_mode("m30")
+    widget.flush_pending_refresh()
+    assert widget.d1_since_edit.isHidden() and widget.d1_reset_button.isHidden()
+    widget.set_mode("d1")
+    widget.flush_pending_refresh()
+    assert not widget.d1_since_edit.isHidden() and not widget.d1_reset_button.isHidden()
+    assert widget.strong.title_label.text() == "Daily Dip-strong · beating SPY since 9/2"
+    assert widget.weak.title_label.text() == "Daily Dip-weak · lagging SPY since 9/2"
+    widget.update_timeframe_board("d1", dict(board, swing={"long": [], "short": []}))
+    widget.flush_pending_refresh()
+    assert widget.strong.empty_label.text() == "No name is beating SPY since 9/2."
+    sent = []
+    widget.d1SinceChanged.connect(sent.append)
+    widget.d1_since_edit.setDate(QDate(2026, 1, 5))
+    assert sent == [date(2026, 1, 5)] and widget.d1_since() == date(2026, 1, 5)
+    assert saved[mb.MOVERS_D1_SINCE_SETTING] == "2026-01-05"
+    # A restart restores the saved date.
+    again = mb.MoversBoard(persist=True)
+    assert again.d1_since() == date(2026, 1, 5)
+    assert again.d1_since_edit.date() == QDate(2026, 1, 5)
+    # "20d" goes back to the default (no date).
+    widget.d1_reset_button.click()
+    assert sent[-1] is None and widget.d1_since() is None
+    assert saved[mb.MOVERS_D1_SINCE_SETTING] == ""
 
 
 def test_timeframe_banner_says_not_scanned_yet_stale_and_failed(app):

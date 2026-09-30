@@ -3078,6 +3078,24 @@ def _system_instruction() -> str:
     )
 
 
+def persona_instruction(role_text: str) -> str:
+    """The base instruction plus one role paragraph; the citation rules always stay in front."""
+    role = str(role_text or "").strip()
+    if not role:
+        raise ValueError("a persona needs a role paragraph")
+    return f"{_system_instruction()}\n\n{role}"
+
+
+def _resolve_system_instruction(system_instruction: str | None) -> str:
+    """``None`` -> today's text; any other text must carry the whole base instruction or is refused."""
+    if system_instruction is None:
+        return _system_instruction()
+    text = str(system_instruction)
+    if not text.startswith(_system_instruction()):
+        raise ValueError("a system instruction must start with the base citation rules (use persona_instruction)")
+    return text
+
+
 #: The one line the package split requires. The model no longer sees the
 #: missing/empty/unfunded sources at all, so it must be told that their absence
 #: is accounted for -- otherwise the predictable failure is a model inventing a
@@ -4021,6 +4039,7 @@ def _request_local_summary(
     schema: Mapping[str, Any] | None = None,
     schema_name: str = "tradingbot_ai_summary",
     endpoint: str = "",
+    system_instruction: str | None = None,
 ) -> tuple[Mapping[str, Any], dict[str, Any], list[dict[str, Any]], str]:
     """One local chat-completions call, validated the same way as the cloud.
 
@@ -4046,6 +4065,7 @@ def _request_local_summary(
             return _local_schema_prompt(evidence, contract, error_text)
         return _local_user_prompt(evidence, error_text)
 
+    system_text = _resolve_system_instruction(system_instruction)
     import ai_pause
 
     paused = ai_pause.reason()
@@ -4063,7 +4083,7 @@ def _request_local_summary(
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": _system_instruction()},
+            {"role": "system", "content": system_text},
             {"role": "user", "content": _prompt(previous_error)},
         ],
         # Two caps (packet N2): the reduce package asks for the synthesis one,
@@ -4240,8 +4260,12 @@ def request_ai_summary(
     schema_name: str = "tradingbot_ai_summary",
     prompt_version: str = AI_SUMMARY_PROMPT_VERSION,
     endpoint: str = "",
+    system_instruction: str | None = None,
 ) -> dict[str, Any]:
     """Call one provider and return validated output plus non-secret metadata.
+
+    ``system_instruction`` None sends today's base instruction; a persona passes
+    :func:`persona_instruction` text, and text without the base rules is refused.
 
     ``previous_error`` is the rejection from an earlier attempt, fed back to
     the model verbatim so the retry is told what to fix.
@@ -4264,6 +4288,7 @@ def request_ai_summary(
         key = LOCAL_PLACEHOLDER_API_KEY
     if not key:
         raise ValueError("provider API key is missing")
+    system_text = _resolve_system_instruction(system_instruction)
     contract = dict(schema) if schema is not None else AI_SUMMARY_JSON_SCHEMA
     own_contract = schema is not None
     # The cloud branches below build their prompt inline; a caller-supplied
@@ -4286,6 +4311,7 @@ def request_ai_summary(
             schema=schema,
             schema_name=schema_name,
             endpoint=endpoint,
+            system_instruction=system_text,
         )
         finished = datetime.now().astimezone()
         return {
@@ -4320,7 +4346,7 @@ def request_ai_summary(
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json={
                 "model": selected_model,
-                "instructions": _system_instruction(),
+                "instructions": system_text,
                 "input": cloud_prompt,
                 "max_output_tokens": 3500,
                 "store": False,
@@ -4348,7 +4374,7 @@ def request_ai_summary(
             json={
                 "model": selected_model,
                 "max_tokens": 3500,
-                "system": _system_instruction(),
+                "system": system_text,
                 "messages": [
                     {
                         "role": "user",
