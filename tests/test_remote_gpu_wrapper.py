@@ -140,3 +140,76 @@ def test_the_night_task_last_fires_at_0530():
 def test_the_local_server_is_readied_even_when_the_5080_is_used():
     code = _wrapper_code()
     assert "-or $remoteReady) {" not in code
+
+
+# ---------------------------------------------------------------- Pause AI (2026-09-30)
+def test_pause_ai_is_read_first_and_leaves_the_host_alone():
+    code = _wrapper_code()
+    assert "$settings.ai_paused_until" in code
+    assert "[DateTimeOffset]::Parse([string]$settings.ai_paused_until) -gt [DateTimeOffset]::Now" in code
+    paused = code.index("if ($aiPausedUntil) {")
+    # The pause branch comes before every remote-GPU branch, so the preflight never runs.
+    assert paused < code.index("Invoke-RemoteGpuPreflight -Alias")
+    branch = code[paused:code.index("} elseif", paused)]
+    assert "$noModelRun = $true" in branch
+    assert 'Write-Log "AI paused until $aiPausedUntil; remote GPU untouched"' in branch
+    assert "TRADINGBOTV3_AI_ENDPOINT_OVERRIDE" not in branch
+    # $noModelRun is what keeps the host-log mirror and the power-off from running.
+    assert "$hostFinished = $script:remoteAlias -and -not $noModelRun -and" in code
+
+
+def _run_wrapper(tmp_path: Path, settings: dict) -> str:
+    """Run the real wrapper in a scratch tree; returns its log. A fake interpreter stands in
+    for the venv Python, and a scratch HOME/LOCALAPPDATA keeps it off the live machine."""
+    import json
+    import os
+    import shutil
+    import subprocess
+
+    powershell = shutil.which("powershell.exe")
+    where = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "where.exe"
+    if not powershell or not where.exists():
+        import pytest
+
+        pytest.skip("needs Windows PowerShell")
+    root = tmp_path / "repo"
+    (root / "scripts" / "remote_gpu").mkdir(parents=True)
+    shutil.copy(SCRIPTS_DIR / "run_ai_jobs.ps1", root / "scripts" / "run_ai_jobs.ps1")
+    shutil.copy(SCRIPTS_DIR / "remote_gpu" / "ollama_up.sh", root / "scripts" / "remote_gpu" / "ollama_up.sh")
+    (root / "scripts" / "run_ai_jobs.py").write_text("", encoding="utf-8")
+    (root / ".venv" / "Scripts").mkdir(parents=True)
+    shutil.copy(where, root / ".venv" / "Scripts" / "python.exe")
+    appdata = tmp_path / "appdata"
+    (appdata / "TradingBotV3").mkdir(parents=True)
+    (appdata / "TradingBotV3" / "local_settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {**os.environ, "LOCALAPPDATA": str(appdata), "USERPROFILE": str(home),
+           "HOMEDRIVE": str(home)[:2], "HOMEPATH": str(home)[2:]}
+    subprocess.run(
+        [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(root / "scripts" / "run_ai_jobs.ps1")],
+        env=env, capture_output=True, text=True, timeout=180,
+    )
+    logs = sorted((appdata / "TradingBotV3" / "logs").glob("ai_jobs-*.log"))
+    assert logs, "the wrapper wrote no log"
+    return logs[-1].read_text(encoding="utf-8-sig")
+
+
+#: An alias that resolves nowhere and a TEST-NET endpoint: nothing real can be reached.
+_SETTINGS = {
+    "ai_local_endpoint_url": "http://192.0.2.1:11434/v1",
+    "ai_remote_gpu_ssh_alias": "pause-ai-test.invalid",
+}
+
+
+def test_a_paused_night_run_touches_no_remote_gpu(tmp_path):
+    log = _run_wrapper(tmp_path, {**_SETTINGS, "ai_paused_until": "2999-01-01T00:00:00-08:00"})
+    assert "AI paused until 2999-01-01T00:00:00-08:00; remote GPU untouched" in log
+    assert "remote GPU:" not in log, "no preflight, no mirror, no power-off while paused"
+    assert not list((tmp_path / "appdata" / "TradingBotV3").glob("gpu_host_*.flag"))
+
+
+def test_an_expired_pause_runs_the_preflight_as_before(tmp_path):
+    log = _run_wrapper(tmp_path, {**_SETTINGS, "ai_paused_until": "2020-01-01T00:00:00-08:00"})
+    assert "AI paused" not in log
+    assert "remote GPU:" in log

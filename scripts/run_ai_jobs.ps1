@@ -213,13 +213,24 @@ try {
     $settingsPath = Join-Path $env:LOCALAPPDATA 'TradingBotV3\local_settings.json'
     $endpoint = ''
     $remoteReady = $false
+    $aiPausedUntil = ''
     if (Test-Path $settingsPath) {
         $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
         $endpoint = $settings.ai_local_endpoint_url
         $script:remoteAlias = [string]$settings.ai_remote_gpu_ssh_alias
         $script:aiStoreDir = [string]$settings.ai_store_dir
+        # Pause AI: a future `ai_paused_until` means this run leaves the 5080 alone.
+        try {
+            if ($settings.ai_paused_until -and [DateTimeOffset]::Parse([string]$settings.ai_paused_until) -gt [DateTimeOffset]::Now) {
+                $aiPausedUntil = [string]$settings.ai_paused_until
+            }
+        } catch { $null = $_ }
     }
-    if ([string]::IsNullOrWhiteSpace($endpoint)) {
+    if ($aiPausedUntil) {
+        # No WOL, no host script, no tunnel, no warm-up, no override, no mirror and no power-off.
+        $noModelRun = $true
+        Write-Log "AI paused until $aiPausedUntil; remote GPU untouched"
+    } elseif ([string]::IsNullOrWhiteSpace($endpoint)) {
         Write-Log "local inference: no endpoint configured; narration is off by design"
     } elseif ($noModelRun -and -not [string]::IsNullOrWhiteSpace($script:remoteAlias)) {
         Write-Log "remote GPU: this run needs no model; the host is not touched"
