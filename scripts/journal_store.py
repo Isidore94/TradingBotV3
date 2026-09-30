@@ -39,6 +39,8 @@ from project_paths import JOURNAL_DB_FILE, JOURNAL_EXPORT_DIR
 
 
 JOURNAL_SCHEMA_VERSION = 3
+#: How long a journal write waits for another process's lock before failing loudly.
+JOURNAL_BUSY_TIMEOUT_MS = 5000
 EPSILON = 0.0000001
 
 #: The three states a setup tag can be in (P6a). A tag is either the trader's
@@ -343,6 +345,10 @@ class JournalStore:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        # Three writer processes (desk, Trade Mentor app, night): wait for a lock,
+        # and let readers run beside a writer. WAL is persistent; the DB is local.
+        conn.execute(f"PRAGMA busy_timeout = {JOURNAL_BUSY_TIMEOUT_MS}")
+        conn.execute("PRAGMA journal_mode = WAL")
         return conn
 
     @contextmanager
