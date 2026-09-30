@@ -112,8 +112,11 @@ def test_the_scope_can_be_selected_on_demand(scope):
     # minutes), the word tagger, TJ-5's week story - the Saturday-only slot the
     # trader actually opens Weekend Prep to read - and TJ-9E's exit-note
     # reader, which is seconds of work per note and must not queue behind the
-    # briefs either. Nothing else may.
-    between = names[names.index("ai_summary") + 1:names.index("ticker_briefs")]
+    # briefs either. Nothing else may. Trader 2026-09-30: the briefs moved LAST, so
+    # the run of stage-2 slots now ends at `mentor_review`, the slot that took their place.
+    assert names[-1] == "ticker_briefs"
+    assert names.index("mentor_review") == names.index("exit_note_fields") + 1
+    between = names[names.index("ai_summary") + 1:names.index("mentor_review")]
     # R1 (2026-09-26): the Day Review Show reads the day story, so it follows
     # it directly.
     allowed = [

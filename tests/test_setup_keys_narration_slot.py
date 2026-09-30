@@ -74,7 +74,8 @@ def test_the_slot_is_stage_three_every_night_and_before_setup_research():
     names = [slot.name for slot in runner.default_slots()]
     assert names.index(SLOT) == names.index("setup_research") - 1
     assert names.index(SLOT) > names.index("review_policy_draft")
-    assert names[-1] == "improvement_ideas"
+    # Trader 2026-09-30: `ticker_briefs` runs last, right after the ideas.
+    assert names[-2:] == ["improvement_ideas", "ticker_briefs"]
     # Nightly since 2026-09-30 (trader): the permutation report it reads is nightly.
     assert SLOT not in runner.WEEKEND_ONLY_SLOTS
     by_name = {slot.name: slot for slot in runner.default_slots()}

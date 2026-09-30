@@ -428,9 +428,12 @@ def test_both_slots_are_appended_and_never_reorder_the_slate():
     assert positions == sorted(positions), "a later phase appends inside its stage"
     assert names.index("journal_enrichment") > names.index("daily_digest")
     assert names.index("review_policy_draft") > names.index("daily_digest")
-    # Both gated slots still sit after the narration pair, in stage 3.
-    assert names.index("journal_enrichment") > names.index("ticker_briefs")
-    assert names.index("review_policy_draft") > names.index("ticker_briefs")
+    # Both gated slots sit after `ai_summary`, in stage 3; since 2026-09-30 (trader)
+    # `ticker_briefs` runs last, after them.
+    assert names.index("journal_enrichment") > names.index("ai_summary")
+    assert names.index("review_policy_draft") > names.index("ai_summary")
+    assert names.index("ticker_briefs") > names.index("journal_enrichment")
+    assert names.index("ticker_briefs") > names.index("review_policy_draft")
 
 
 def test_neither_module_reaches_into_live_decision_code():
