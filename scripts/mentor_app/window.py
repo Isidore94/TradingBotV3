@@ -2212,7 +2212,7 @@ class MentorWindow(QMainWindow):
             self._bridge.debate_card.emit({"seq": seq, "symbol": symbol, "error": f"{type(exc).__name__}: {exc}"})
 
         self.queue.submit(f"debate {symbol}", job, priority=PRIORITY_INTERACTIVE, needs_model=runner is not None,
-                          max_tokens=debate.MAX_OUTPUT_TOKENS, key=f"debate:{seq}",
+                          max_tokens=debate.job_budget(self._model), calls=debate.CALLS, key=f"debate:{seq}",
                           on_done=self._bridge.debate_card.emit, on_error=failed)
 
     def _stop_debates(self) -> None:

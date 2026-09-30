@@ -73,7 +73,7 @@ def _run(pack, **kwargs):
 
 
 # ---------------------------------------------------------------- the two calls
-def test_two_persona_calls_on_the_same_pack_capped_at_400_tokens_medium_effort(pack):
+def test_two_persona_calls_on_the_same_pack_gpt_oss_low_effort_capped_at_600(pack):
     calls, posted = [], []
 
     def request(**kwargs):
@@ -90,8 +90,35 @@ def test_two_persona_calls_on_the_same_pack_capped_at_400_tokens_medium_effort(p
     assert calls[0]["evidence"]["rows"] == calls[1]["evidence"]["rows"], "the same pack for both sides"
     assert all(c["schema"] is debate.SCHEMA and c["endpoint"] == "http://x/v1" for c in calls)
     assert set(debate.SCHEMA["properties"]) == {"case", "weakest_point"}
+    # A reasoning tag thinks inside the cap: low effort and the queue max so the answer survives.
+    assert [p["max_tokens"] for p in posted] == [600, 600]
+    assert [p["reasoning_effort"] for p in posted] == ["low", "low"]
+
+
+def test_a_non_reasoning_tag_keeps_400_tokens_and_sends_no_effort(pack):
+    posted = []
+
+    def request(**kwargs):
+        kwargs["post"]("u", json={"max_tokens": 4000})
+        return _requester()(**kwargs)
+
+    debate.debate(pack, symbol="NVDA", side="LONG", pack_hash="h", model="gemma3:12b", endpoint="http://x/",
+                  request=request, post=lambda url, **kw: posted.append(kw["json"]))
     assert [p["max_tokens"] for p in posted] == [400, 400]
-    assert [p["reasoning_effort"] for p in posted] == ["medium", "medium"]
+    assert all("reasoning_effort" not in p for p in posted)
+    assert debate.call_budget("gemma3:12b") == ("medium", 400)
+    assert debate.call_budget("gpt-oss:20b") == ("low", 600)
+
+
+def test_the_debate_job_declares_both_calls_as_its_budget():
+    from mentor_app.prefetch import MAX_JOB_OUTPUT_TOKENS, PrefetchQueue
+
+    assert debate.job_budget("gpt-oss:20b") == 2 * 600 and debate.job_budget("gemma3:12b") == 2 * 400
+    assert debate.THINKING_MAX_OUTPUT_TOKENS == MAX_JOB_OUTPUT_TOKENS
+    queue = PrefetchQueue()
+    assert queue.submit("d", lambda: None, max_tokens=debate.job_budget("gpt-oss:20b"), calls=debate.CALLS)
+    with pytest.raises(ValueError):
+        queue.submit("one call", lambda: None, max_tokens=MAX_JOB_OUTPUT_TOKENS + 1)
 
 
 def test_uncited_points_are_dropped_and_the_scoreboard_is_computed(pack):
@@ -284,6 +311,8 @@ def test_debate_shows_two_columns_the_scoreboard_and_logs_both_replies(win):
     _up(win)
     win.send("/debate NVDA long")
     assert win.stop_button.isEnabled(), "Stop can cancel a debate"
+    waiting = [job for job in win.queue._jobs if job.key.startswith("debate:")]
+    assert [job.max_tokens for job in waiting] == [1200], "the job declares both gpt-oss calls"
     _drain(win)
     assert len(win.calls) == 2 and not win.stop_button.isEnabled()
     block = win._blocks[-1]
@@ -294,6 +323,7 @@ def test_debate_shows_two_columns_the_scoreboard_and_logs_both_replies(win):
     calls = json.loads(stored["tool_calls_json"])
     assert [c["name"] for c in calls] == ["pick_pack", "debate_bull", "debate_bear"]
     assert calls[1]["dropped"] and calls[1]["reply"]["case"]
+    assert calls[1]["effort"] == "low", "the turn log records the effort the gpt-oss call used"
     win.send("/debate NVDA long")
     _drain(win)
     assert len(win.calls) == 2, "an unchanged pack reuses the cached pair"

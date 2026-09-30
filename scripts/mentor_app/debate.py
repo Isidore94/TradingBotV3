@@ -26,6 +26,10 @@ SCHEMA_NAME = "trade_mentor_debate"
 PROMPT_VERSION = "trade_mentor_debate_v1"
 MAX_OUTPUT_TOKENS = 400
 EFFORT = "medium"
+#: A reasoning tag (gpt-oss) thinks inside the same cap: low effort and the queue's max so the answer survives.
+THINKING_MAX_OUTPUT_TOKENS = 600
+THINKING_EFFORT = "low"
+CALLS = len(("bull", "bear"))
 TIMEOUT_SECONDS = 180
 FOOTER = "*Two arguments from the same evidence; you decide.*"
 
@@ -62,6 +66,20 @@ TASK = (
     "is not evidence. Never size or place an order, never propose changing the plan, a detector, a score or an "
     "alert."
 )
+
+
+def call_budget(model: str) -> tuple[str, int]:
+    """(effort, per-call output cap) for this model tag."""
+    from mentor_app.brain import is_thinking_model
+
+    if is_thinking_model(model):
+        return THINKING_EFFORT, THINKING_MAX_OUTPUT_TOKENS
+    return EFFORT, MAX_OUTPUT_TOKENS
+
+
+def job_budget(model: str) -> int:
+    """The debate job's real output budget: both calls at the per-call cap."""
+    return CALLS * call_budget(model)[1]
 
 
 @dataclass
@@ -181,12 +199,13 @@ def argue(
 
     if request is None:
         request = ai_summary.request_ai_summary
+    effort, cap = call_budget(model)
     raw: Any = None
     try:
         result = request(
             provider="local", model=model, api_key="", evidence=evidence_for(pack, side),
             timeout_seconds=TIMEOUT_SECONDS,
-            post=effort_post(post or requests.post, model=model, effort=EFFORT, max_tokens=MAX_OUTPUT_TOKENS),
+            post=effort_post(post or requests.post, model=model, effort=effort, max_tokens=cap),
             schema=SCHEMA, schema_name=SCHEMA_NAME, prompt_version=PROMPT_VERSION,
             endpoint=f"{endpoint.rstrip('/')}/v1",
             system_instruction=ai_summary.persona_instruction(ROLES[side]),
@@ -381,9 +400,10 @@ def turn_tool_calls(done: Mapping[str, Any]) -> list[dict[str, Any]]:
                                                                       "side": done.get("side")},
                                     "hash": done.get("hash")}]
     if result is not None:
+        effort = call_budget(result.model)[0]
         for name in SIDES:
             reply = getattr(result, name)
-            calls.append({"name": f"debate_{name}", "prompt_version": PROMPT_VERSION, "effort": EFFORT,
+            calls.append({"name": f"debate_{name}", "prompt_version": PROMPT_VERSION, "effort": effort,
                           "reply": reply.reply, "kept": reply.case, "weakest_point": reply.weakest_point,
                           "dropped": reply.dropped, "error": reply.error})
     return calls

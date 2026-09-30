@@ -3,7 +3,7 @@
 One consumer thread, one job at a time, highest priority first (interactive > refresh >
 embed). A job that needs the model waits while an interactive turn is in flight, while
 the brain is down, and through the night window; a deterministic job (a pack rebuild)
-still runs then. A generating job may ask for at most MAX_JOB_OUTPUT_TOKENS. Qt-free:
+still runs then. A generating job may ask for at most MAX_JOB_OUTPUT_TOKENS per model call. Qt-free:
 results come back through ``on_done`` on the consumer thread; the window re-emits them.
 """
 
@@ -67,13 +67,18 @@ class PrefetchQueue:
         priority: int = PRIORITY_REFRESH,
         needs_model: bool = False,
         max_tokens: int = 0,
+        calls: int = 1,
         key: str = "",
         on_done: Callable[[Any], None] | None = None,
         on_error: Callable[[BaseException], None] | None = None,
     ) -> bool:
-        """Queue a job; False when a job with the same key is already waiting."""
-        if int(max_tokens) > MAX_JOB_OUTPUT_TOKENS:
-            raise ValueError(f"a background job may ask for at most {MAX_JOB_OUTPUT_TOKENS} output tokens")
+        """Queue a job; False when a job with the same key is already waiting.
+
+        ``max_tokens`` is the job's whole output budget over its ``calls`` model calls.
+        """
+        calls = max(1, int(calls))
+        if int(max_tokens) > MAX_JOB_OUTPUT_TOKENS * calls:
+            raise ValueError(f"a background job may ask for at most {MAX_JOB_OUTPUT_TOKENS} output tokens per call")
         with self._lock:
             if key and any(job.key == key for job in self._jobs):
                 return False
