@@ -181,6 +181,9 @@ class MentorWindow(QMainWindow):
         self.setCentralWidget(splitter)
         self.status_pill = QLabel("")
         self.status_pill.setObjectName("MentorStatusPill")
+        self.activity_label = QLabel("")
+        self.activity_label.setObjectName("MentorActivity")
+        self.statusBar().addWidget(self.activity_label, 1)
         self.statusBar().addPermanentWidget(self.status_pill)
         self._sync_status()
         self.refresh_inbox()
@@ -481,10 +484,12 @@ class MentorWindow(QMainWindow):
         self.transcript.setTextCursor(cursor)
 
     def _on_tool_call(self, call: dict) -> None:
-        self.statusBar().showMessage(f"reading {call.get('name')}...", 4000)
+        # A quiet label in the window's own status bar, cleared when the turn ends.
+        self.activity_label.setText(f"reading {call.get('name')}...")
 
     def _finish_turn(self) -> None:
         self._worker = None
+        self.activity_label.setText("")
         self.queue.end_interactive()
         self.stop_button.setEnabled(False)
         self.send_button.setEnabled(True)
