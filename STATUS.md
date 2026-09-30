@@ -8,13 +8,13 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   (`849390a2`, `55bbeb26`, `d382986e`, `79e8d658`), p10 research lake + auto regimes
   (`1b56f34f`, research only); rolling RRS, cutoff 1.0 (`TRADINGBOTV3_RRS_ENGINE=desk` =
   old); Movers tint + SMA gate (`13b2e2cb`), Yahoo guard (`56ce3965`), Movers boxes, Dip
-  anchors, focus preview, idle-probe skip (`1751c338`); gates #257-#306, #328.
+  anchors, focus preview, idle-probe skip (`1751c338`); gates #257-#306.
 - **GUI:** 4K design live; selftests 105/105; long combined Qt runs still hit
   worker-lifetime crashes.
 - **Merged 2026-09-30, live at the next desk restart:** Trade Mentor app P0-P12 (`370c6efb`, `8f7664fc` Pause AI, `e9c77690` P7-P12, `152e765f` plan inference): chat, `/plan` `/drop`, `/pick`, `/vetoes`, `/tape`, `/check`, `/news`, `/book` (Questrade + IBKR), `/mirror`, `/tilt`, `/debate`, `/hypotheses`; gates #311-#318, #321-#327. `mentor_app_enabled` off until #312; frontier OFF.
 - **In flight:** Mentor P13 plain-language routing (`claude/mentor-app-p13-routing-2026-09-30`, gate #329): auto-attach, `journal_pack`, checklist, gemma4:12b native tools; trader runs `mentor_eval.py --live`.
 - **Desk:** next launch uses main; live checks are in GATES.
-- **Night throughput (2026-09-30):** slot retries x3, briefs nightly, budget 360 (#328). In flight: Mentor night recall index. Next: all Focus names briefed nightly, per-setup condition reports, morning pre-brief queue.
+- **Night throughput (2026-09-30):** slot retries x3, budget 360, all Focus names briefed nightly, last on the slate (`claude/night-focus-briefs-2026-09-30`, #330). In flight: Mentor night recall index. Next: per-setup condition reports, morning pre-brief queue.
 - **gpt-oss:20b:** trader's word 2026-09-30; effort `high`, 8k think tokens live; on the mini-PC too. Probe 2 10-01 02:05, then flip `ai_local_model_medium`.
 - **Night window:** the night AI starts 22:00 PT. Its model runs on the RTX 5080 host
   (`ai_remote_gpu_ssh_alias` = `claude-host`, ssh tunnel on 11435). No local models on the mini-PC
