@@ -97,7 +97,7 @@ def test_veto_tape_book_and_group_words():
     assert ("book_pack", {}) in _names(attach.plan_attachments("what am I holding right now", KNOWN, NOW))
     # P14: earnings over a group is one earnings_pack over every name with that side, not three pick packs.
     assert _names(attach.plan_attachments("anything reporting this week in my longs?", KNOWN, NOW)) == [
-        ("earnings_pack", {"symbols": ["NVDA", "V"]})]
+        ("earnings_pack", {"symbols": ["NVDA", "V"], "book": []})]
     news = [r.args["symbol"] for r in attach.plan_attachments("any news in my longs?", KNOWN, NOW) if r.name == "pick_pack"]
     assert news == ["NVDA", "V"], "news over a group is still the pick packs"
 
@@ -319,13 +319,68 @@ def test_stopping_for_the_day_reads_tilt_and_todays_journal():
         assert not any(name == "regime_pack" for name, _ in got), question
 
 
-def test_earnings_across_the_book_covers_every_held_or_liked_name_up_to_forty():
+def test_earnings_across_the_book_passes_every_sided_name_and_leaves_the_cap_to_the_pack():
     known = {f"L{index:02d}": "LONG" for index in range(30)} | {f"S{index:02d}": "SHORT" for index in range(15)}
     known |= {"SPY": "LONG", "JRNL": ""}
     got = attach.plan_attachments("anything reporting in my book this week?", known, NOW)
     earn = next(r for r in got if r.name == "earnings_pack")
-    assert len(earn.args["symbols"]) == attach.MAX_EARNINGS_NAMES == 40
+    assert len(earn.args["symbols"]) == 45 and earn.args["book"] == [], "no book given: every sided name, uncapped"
     assert "SPY" not in earn.args["symbols"] and "JRNL" not in earn.args["symbols"], "index and side-less names out"
     assert not any(r.name == "journal_pack" for r in got), "an earnings question is not the journal"
     shorts = next(r for r in attach.plan_attachments("my shorts reporting soon?", known, NOW) if r.name == "earnings_pack")
     assert shorts.args["symbols"] == [f"S{index:02d}" for index in range(15)]
+
+
+def _desk(swing_longs=38, liked=18, m5=70):
+    """The reviewer's desk: 38 swing longs + 18 liked + 70 M5 Focus names, and two open longs QCOM and FCEL."""
+    rows = [{"kind": "focus", "category": "swing", "side": "long", "names": [f"W{i:02d}" for i in range(swing_longs)]},
+            {"kind": "focus", "category": "m5", "side": "long", "names": [f"M{i:02d}" for i in range(m5)]},
+            {"kind": "position", "symbol": "QCOM", "direction": "LONG"},
+            {"kind": "position", "symbol": "FCEL", "direction": "LONG"}]
+    likes = [(f"K{i:02d}", "LONG") for i in range(liked)]
+    return rows, likes, attach.known_symbols(rows, likes, ["JRNL"])
+
+
+def test_the_open_book_comes_first_and_is_never_capped_off():
+    """Review of bba9077c: the 40-name cap cut in Focus order, so the open book fell off after 38 swing longs."""
+    from mentor_packs import earnings_pack, pick_pack
+
+    rows, likes, known = _desk()
+    assert list(known)[:4] == ["QCOM", "FCEL", "K00", "K01"], "book, then likes, then Focus"
+    assert attach.book_symbols(rows) == ["QCOM", "FCEL"]
+    earn = next(r for r in attach.plan_attachments("anything reporting this week in my longs?", known, NOW,
+                                                   book=attach.book_symbols(rows), liked=likes)
+                if r.name == "earnings_pack")
+    assert earn.args["symbols"][:3] == ["QCOM", "FCEL", "K00"] and len(earn.args["symbols"]) == 2 + 18 + 38 + 70
+    assert earn.args["book"] == ["QCOM", "FCEL"]
+    pack = earnings_pack.build(**earn.args, now=pick_pack.FIXTURE_NOW, paths=pick_pack.write_fixture_world(
+        __import__("tempfile").mkdtemp()))
+    ids = pack.ids
+    assert "earn:QCOM" in ids and "earn:FCEL" in ids and "earn:more" in ids
+    more = next(row for row in pack.rows if row["id"] == "earn:more")
+    assert more["text"].startswith("88 more not listed") and "M69" in more["text"]
+
+
+def test_a_book_question_covers_the_whole_book_even_past_forty():
+    from mentor_packs import earnings_pack, pick_pack
+
+    rows = [{"kind": "position", "symbol": f"B{i:02d}", "direction": "LONG"} for i in range(45)]
+    rows.append({"kind": "focus", "category": "swing", "side": "long", "names": ["W00", "W01"]})
+    known = attach.known_symbols(rows, [], [])
+    earn = next(r for r in attach.plan_attachments("any earnings in my book?", known, NOW,
+                                                   book=attach.book_symbols(rows)) if r.name == "earnings_pack")
+    assert earn.args["symbols"] == [f"B{i:02d}" for i in range(45)], "a book question is the book, not the Focus"
+    pack = earnings_pack.build(earn.args["symbols"] + ["W00"], book=earn.args["book"], now=pick_pack.FIXTURE_NOW,
+                               paths=pick_pack.write_fixture_world(__import__("tempfile").mkdtemp()))
+    assert all(f"earn:B{i:02d}" in pack.ids for i in range(45)) and "earn:W00" not in pack.ids
+    assert "1 more not listed" in next(row for row in pack.rows if row["id"] == "earn:more")["text"]
+
+
+def test_earnings_with_no_group_word_reads_the_book_and_the_likes_not_the_journal():
+    rows, likes, known = _desk(swing_longs=3, liked=2, m5=3)
+    for question in ("earnings this week?", "anything reporting tomorrow?", "who reports this week"):
+        got = attach.plan_attachments(question, known, NOW, book=attach.book_symbols(rows), liked=likes)
+        names = [r.name for r in got]
+        assert names == ["earnings_pack"], (question, names)
+        assert got[0].args["symbols"] == ["QCOM", "FCEL", "K00", "K01"], question
+    assert "earnings_pack" not in _only("what does my plan say about shorting into earnings")

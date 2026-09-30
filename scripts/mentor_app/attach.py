@@ -94,8 +94,11 @@ _RECALL = re.compile(r"\byou said\b|\bwe (?:said|talked|discussed)\b|\bremember 
 _GROUP = re.compile(r"\bmy (longs|shorts|focus|names|picks|watchlist|likes|liked|book|positions|holdings)\b"
                     r"|\bfocus (longs|shorts|names)\b|\bopen (longs|shorts|positions)\b|\b(?:i'm|im|i am) (holding)\b")
 _EARNINGS = re.compile(r"\bearnings\b|\breporting\b|\breports?\b")
-#: The earnings pack's cap (one row per name).
-MAX_EARNINGS_NAMES = 40
+#: Earnings as the whole question, with no group named ("earnings this week?"): the book + likes.
+_EARNINGS_ALONE = re.compile(
+    r"^\W*(?:any\s+)?earnings\b|\b(?:earnings|reports?|reporting)\s+(?:this|next)\s+week\b"
+    r"|\b(?:earnings|reports?|reporting)\s+(?:today|tomorrow)\b|\b(?:anything|anyone|who|who's|whos)\s+(?:is\s+)?"
+    r"report(?:s|ing)?\b")
 _SHORT_WORD = re.compile(r"\bshort(?:ing|s|ed)?\b|\bsell(?:ing)? short\b|\bput(?:s)?\b")
 _LONG_WORD = re.compile(r"\blong\b|\bbuy(?:ing)?\b|\bgo long\b|\bcalls?\b")
 
@@ -221,9 +224,14 @@ def market_cue(text: str) -> bool:
 
 
 def plan_attachments(
-    text: str, known_symbols: Mapping[str, Any] | Iterable[str], now: datetime | None = None
+    text: str, known_symbols: Mapping[str, Any] | Iterable[str], now: datetime | None = None, *,
+    book: Iterable[str] = (), liked: Iterable[Any] = (),
 ) -> list[AttachRequest]:
-    """The packs a plain question needs, most important first. Deterministic for (text, known, now)."""
+    """The packs a plain question needs, most important first. Deterministic for the arguments.
+
+    ``book`` (open positions) and ``liked`` (liked chips) order an earnings read over a group: the book
+    first and never capped, then the likes, then Focus; with neither given, every known name with a side.
+    """
     raw = str(text or "")
     lowered = raw.lower()
     known = _normalise_known(known_symbols)
@@ -255,11 +263,13 @@ def plan_attachments(
     stop_day = bool(_STOP_DAY.search(lowered))
     group = _GROUP.search(lowered) if not symbols else None
     earnings_group = bool(group and _EARNINGS.search(lowered))
+    # "earnings this week?" names no group: it means the open book and the liked chips.
+    earnings_alone = bool(not symbols and not group and not _PLAN.search(lowered) and _EARNINGS_ALONE.search(lowered))
     # P14: "today"/"this morning" alone is not the journal ("headlines on MSFT today", "market this morning");
     # yesterday, a weekday, a week or a month is; so is any first-person time question. A veto question
     # (or an earnings question over his book) reads its own pack, not the journal, unless it asks about trades.
     journal_day = bool(day) and (day != today or bool(_FIRST_PERSON.search(lowered)))
-    if journal_words or stop_day or (journal_day and not vetoes and not earnings_group):
+    if journal_words or stop_day or (journal_day and not vetoes and not earnings_group and not earnings_alone):
         add("journal_pack", "journal words" if journal_words else "time words" if day else "stop words",
             day=day or today)
     if vetoes:
@@ -270,13 +280,26 @@ def plan_attachments(
     if tape_words or (market_cue(raw) and not gated and not symbols) or (
             symbols and not gated and _INTENT.search(lowered) and not past):
         add("regime_pack", "market words" if tape_words else "trade intent")
-    if group and earnings_group:
-        which = next(g for g in group.groups() if g)
+    held, likes = _names(book), _names(liked)
+    if (group and earnings_group) or earnings_alone:
+        which = next(g for g in group.groups() if g) if group else "book and likes"
         side = "LONG" if which.startswith("long") else "SHORT" if which.startswith("short") else ""
-        # Names with a side: Focus, liked chips and the open book (journal-only names carry no side).
-        names = [sym for sym, s in known.items() if sym not in INDEX_SYMBOLS and s and (not side or s == side)]
+        sided = [sym for sym, s in known.items() if s]
+        if earnings_alone:
+            pool = held + likes or sided
+        elif which in ("book", "positions", "holdings", "holding"):
+            pool = held or sided
+        else:
+            # Open book, then liked chips, then Focus (the order of ``known``); journal-only names carry no side.
+            pool = held + likes + sided
+        names: list[str] = []
+        for sym in pool:
+            if sym not in names and sym not in INDEX_SYMBOLS and (not side or known.get(sym, side) == side):
+                names.append(sym)
         if names:
-            add("earnings_pack", f"earnings across {which}", symbols=names[:MAX_EARNINGS_NAMES])
+            # The full list: the pack caps it, keeps every book name, and lists the rest by name.
+            add("earnings_pack", f"earnings across {which}", symbols=names,
+                book=[sym for sym in held if sym in names])
     elif group and _NEWS.search(lowered):
         which = next(g for g in group.groups() if g)
         side = "LONG" if which.startswith("long") else "SHORT" if which.startswith("short") else ""
@@ -297,12 +320,34 @@ def plan_attachments(
     return sorted(wanted, key=lambda request: request.priority)
 
 
+def book_symbols(context_rows: Iterable[Mapping[str, Any]] = ()) -> list[str]:
+    """The open book's tickers from the desk context rows, in order."""
+    out: list[str] = []
+    for row in context_rows or ():
+        sym = str(row.get("symbol") or "").strip().upper() if row.get("kind") == "position" else ""
+        if sym and sym not in out:
+            out.append(sym)
+    return out
+
+
+def _names(values: Iterable[Any]) -> list[str]:
+    out: list[str] = []
+    for item in values or ():
+        sym = str(item[0] if isinstance(item, (tuple, list)) and item else item or "").strip().upper()
+        if sym and sym not in out:
+            out.append(sym)
+    return out
+
+
 def known_symbols(
     context_rows: Iterable[Mapping[str, Any]] = (),
     liked: Iterable[Any] = (),
     journal_symbols: Iterable[str] = (),
 ) -> dict[str, str]:
-    """The trader's universe as ``{SYM: side}``: Focus names, liked picks, open book, journal names."""
+    """The trader's universe as ``{SYM: side}``, in this order: open book, liked picks, Focus, journal names.
+
+    The order is what a capped group read (``earnings_pack``) keeps first: the book, never the Focus tail.
+    """
     out: dict[str, str] = {}
 
     def put(sym: Any, side: Any = "") -> None:
@@ -315,11 +360,6 @@ def known_symbols(
             out[key] = value
 
     rows = list(context_rows or ())
-    for category in ("swing", "m5"):
-        for row in rows:
-            if row.get("kind") == "focus" and row.get("category") == category:
-                for name in row.get("names") or ():
-                    put(name, row.get("side"))
     for row in rows:
         if row.get("kind") == "position":
             put(row.get("symbol"), row.get("direction") or "")
@@ -328,6 +368,11 @@ def known_symbols(
             put(item[0], item[1] if len(item) > 1 else "")
         else:
             put(item)
+    for category in ("swing", "m5"):
+        for row in rows:
+            if row.get("kind") == "focus" and row.get("category") == category:
+                for name in row.get("names") or ():
+                    put(name, row.get("side"))
     for sym in journal_symbols or ():
         put(sym)
     return out

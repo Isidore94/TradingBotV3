@@ -40,7 +40,11 @@ def test_at_most_forty_names_and_the_rest_are_counted(tmp_path):
     paths = pick_pack.write_fixture_world(tmp_path)
     names = [f"Z{index:02d}" for index in range(45)]
     pack = earnings_pack.build(names, now=NOW, paths=paths)
-    assert len(pack.rows) == 41 and "5 more name(s) not listed" in pack.rows[0]["text"]
+    assert len(pack.rows) == 42 and "5 more name(s) not listed" in pack.rows[0]["text"]
+    more = pack.rows[1]
+    assert more["id"] == "earn:more" and more["text"].endswith(": Z40, Z41, Z42, Z43, Z44"), "named, second, never cut"
+    held = earnings_pack.build(names, book=["Z44", "Z43"], now=NOW, paths=paths)
+    assert held.ids[2:4] == ("earn:Z44", "earn:Z43") and "earn:Z38" not in held.ids, "the book first, the tail cut"
 
 
 def test_an_unreadable_calendar_is_unknown_for_every_name_never_none(tmp_path):

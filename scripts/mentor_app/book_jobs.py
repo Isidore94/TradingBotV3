@@ -136,34 +136,55 @@ def store_sources(store: Any, base: Any = None) -> Any:
                                ibkr_status=lambda: stored_status(store, "IBKR"))
 
 
-#: Added to ``book:source`` when a chat turn read the journal view and queued a broker read.
+#: Added to ``book:source`` when a chat turn read the journal view and a broker read was queued.
 PENDING_NOTE = "broker fetch running; this is the journal view"
 
 
-def note_pending_fetch(pack: Any, request_fetch: Callable[[], Any], due: Callable[[], bool] = lambda: True) -> Any:
-    """A journal-sourced book pack queues one broker read (when due) and says so in its source row."""
+def chat_fetch_state(store: Any, now: datetime, desk_closed: Callable[[], bool | None] | None = None) -> str:
+    """Why a chat turn would not read Questrade now ("" = read it): fresh, backing off, desk closed, no token."""
+    why = skip_reason(store, now)
+    if why:
+        return "fresh" if why == "fresh" else "broker read backing off"
+    try:
+        if desk_closed is not None and desk_closed() is True:
+            return "desk closed"
+    except Exception:  # noqa: BLE001 - a broken probe is "unknown", never "closed"
+        pass
+    if (stored_status(store) or {}).get("reason") == "no token":
+        return "no broker token"
+    return ""
+
+
+def note_pending_fetch(pack: Any, request_fetch: Callable[[], Any], state: Callable[[], str] = lambda: "") -> Any:
+    """A journal-sourced book pack says why: a broker read queued now, or why none can run (desk closed, ...)."""
     rows = list(getattr(pack, "rows", ()) or ())
     source = next((row for row in rows if row.get("kind") == "source"), None)
     if source is None or source.get("source") != "journal":
         return pack
     try:
-        if not due() or request_fetch() is None:
+        why = state()
+        if why == "fresh":
             return pack
+        if not why:
+            why = "" if request_fetch() is not None else "broker read not queued"
+        elif why == "no broker token":
+            request_fetch()  # no token = no request; a token pasted since is read at once
     except Exception:  # noqa: BLE001 - a failed queue leaves the journal view as it was, unlabelled
         return pack
+    note = PENDING_NOTE if not why else f"journal view ({why})"
     from mentor_packs.registry import make_pack
 
-    noted = [dict(row, text=f"{row.get('text', '')}; {PENDING_NOTE}") if row is source else row for row in rows]
+    noted = [dict(row, text=f"{row.get('text', '')}; {note}") if row is source else row for row in rows]
     return make_pack(getattr(pack, "name", "book_pack"), noted, empty_text=getattr(pack, "empty_text", ""))
 
 
 def chat_pack_builder(build: Callable[[str, Any], Any], *, request_fetch: Callable[[], Any],
-                      due: Callable[[], bool] = lambda: True) -> Callable[[str, Any], Any]:
+                      state: Callable[[], str] = lambda: "") -> Callable[[str, Any], Any]:
     """The chat's pack builder: ``build``, with a journal-sourced ``book_pack`` queueing the broker read."""
 
     def run(name: str, args: Any) -> Any:
         pack = build(name, args)
-        return note_pending_fetch(pack, request_fetch, due) if name == "book_pack" else pack
+        return note_pending_fetch(pack, request_fetch, state) if name == "book_pack" else pack
 
     return run
 

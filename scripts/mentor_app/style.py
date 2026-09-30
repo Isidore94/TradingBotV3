@@ -6,8 +6,8 @@ bullets, a closing question, offer phrases ("would you like", ...), and regime /
 SPY-pause sentences when the question had no market or pre-trade cue.
 
 ``guard(reply)`` rewrites only the wrapper: a ``### X`` header becomes ``**X**``, a bold
-label line alone is dropped, and a trailing offer or closing question with no citation and
-no number is removed. Every other line, citation and number is kept byte for byte.
+label line with no substance is dropped, and a trailing offer or closing question on a line with
+no citation, number or ticker is removed. Every citation, number and ticker is kept byte for byte.
 """
 
 from __future__ import annotations
@@ -90,8 +90,26 @@ def measure(reply: str, question: str = "", *, market_cue: bool | None = None) -
     }
 
 
+def carries_substance(text: str) -> bool:
+    """A citation, a number or a ticker: text the guard never removes."""
+    from mentor_app.grounding import NOT_SYMBOLS
+
+    if _CITATION.search(text) or re.search(r"\d", text):
+        return True
+    return any(match.group(1) not in NOT_SYMBOLS for match in _TICKER.finditer(text))
+
+
+#: An all-capitals word of 2-5 letters (``AMD``, ``$PLTR``): a ticker until proven otherwise.
+_TICKER = re.compile(r"(?<![A-Za-z0-9])\$?([A-Z]{2,5})(?![A-Za-z0-9])")
+
+
 def guard(reply: str) -> tuple[str, list[str]]:
-    """(the reply with headers turned bold and a trailing offer removed, the text that was removed)."""
+    """(the reply with headers turned bold and a trailing offer removed, the text that was removed).
+
+    Only three rewrites, and never on a line with a citation, a number or a ticker except (a):
+    (a) ``### X`` -> ``**X**``; (b) a bold label line ending in ":" is dropped; (c) a trailing offer or
+    closing question is dropped, a sentence at a time, from a last line that carries no substance.
+    """
     removed: list[str] = []
     out: list[str] = []
     for line in str(reply or "").split("\n"):
@@ -99,7 +117,7 @@ def guard(reply: str) -> tuple[str, list[str]]:
         if header:
             out.append(f"**{header.group(1).strip().strip('*').rstrip(':')}**")
             continue
-        if _BOLD_LABEL.match(line):
+        if _BOLD_LABEL.match(line) and not carries_substance(line):
             removed.append(line.strip())
             continue
         out.append(line)
@@ -111,7 +129,7 @@ def guard(reply: str) -> tuple[str, list[str]]:
             break
         last_line = out[-1]
         parts = _sentences(last_line)
-        if not parts or not _droppable_ending(parts[-1]):
+        if not parts or carries_substance(last_line) or not _droppable_ending(parts[-1]):
             break
         cut = last_line.rstrip().rfind(parts[-1])
         removed.append(parts[-1])

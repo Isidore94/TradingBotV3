@@ -7,6 +7,7 @@ The three replies below are verbatim from the 2026-09-30 live eval on gemma4:12b
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -63,6 +64,11 @@ def test_the_system_prompt_carries_the_tone_rules_and_stays_byte_stable():
     assert "never ask permission" in TOOL_PROMPT and "never ask permission" not in PERSONA_PROMPT
     assert "earnings_pack" in TOOL_PROMPT and "No id, no claim" in SYSTEM_PROMPT
     assert '"how did today go" -> journal_pack(day=\'today\')\n' in TOOL_PROMPT, "no regime in the example"
+
+
+def test_a_wrong_premise_is_said_first():
+    """15:27 retest: "why did I lose money tuesday" accepted the premise on a +$53.47 day."""
+    assert "If the question's premise is wrong by the data, say so in the first sentence, then answer" in PERSONA_PROMPT
 
 
 # ---------------------------------------------------------------- the scorer
@@ -136,6 +142,37 @@ def test_a_trailing_question_with_data_or_without_an_ask_is_kept():
     for reply in ("Net +$11.75 [jrn:d:totals]. Is that enough for $100 of risk?",
                   "Net +$11.75 [jrn:d:totals]. Why did TWLO lose? It stopped out at the low [jrn:d:t2]."):
         assert style.guard(reply)[0] == reply
+
+
+def test_the_guard_never_removes_a_line_with_a_citation_a_number_or_a_ticker():
+    """Review of bba9077c: a bold label with a total, and offers carrying data, were deleted."""
+    bold_total = "**Net +$11.75 over 2 trades [jrn:2026-09-30:totals]:**\n- SHOP +12.02 [jrn:a]"
+    offer_with_data = "Net +$5 [jrn:x].\nI can also pull AMD, which reports in 3 days [earn:AMD]."
+    happy = "Happy to walk through the 2 losses [jrn:l1] [jrn:l2]"
+    ticker_ask = "Net +$5 [jrn:x].\nWant me to check AMD too?"
+    for reply in (bold_total, offer_with_data, happy, ticker_ask):
+        out, removed = style.guard(reply)
+        assert out == reply and removed == [], reply
+
+
+def _numbers_and_citations(text):
+    return (sorted(grounding.NUMBER_RE.findall(grounding.CITATION_RE.sub(" ", text))),
+            grounding.CITATION_RE.findall(text), sorted(re.findall(r"\[[^\[\]]+\]", text)))
+
+
+def test_every_live_reply_keeps_all_its_citations_and_numbers_through_the_guard():
+    """Invariant over the 100 replies of the 14:54 and 15:27 live evals (gemma4:12b, 2026-09-30)."""
+    from conftest import load_fixture_contract
+
+    replies = load_fixture_contract("mentor_eval_replies")["replies"]
+    assert len(replies) == 100 and {r["run"] for r in replies} == {"14:54", "15:27"}
+    changed = 0
+    for item in replies:
+        out, removed = style.guard(item["reply"])
+        assert _numbers_and_citations(out) == _numbers_and_citations(item["reply"]), (item["run"], item["q"])
+        assert all(not style.carries_substance(text) for text in removed), (item["q"], removed)
+        changed += out != item["reply"]
+    assert changed, "the guard still does its job on some replies"
 
 
 # ---------------------------------------------------------------- earnings symbol grounding
@@ -213,10 +250,18 @@ def test_the_window_shows_and_stores_the_guarded_reply_with_its_style(app, tmp_p
         assert "Anything specific" not in shown and "Today's Performance:" not in shown
         assert "You're holding steady in a bearish environment." in shown and "21 open positions" in shown
         row = win.store.turns()[-1]
-        assert "Anything specific" not in row["text"] and win.chat.turns[-1].text == row["text"]
+        assert row["text"] == HOW_AM_I_DOING, "the turn log keeps the model's raw words"
+        assert "Anything specific" not in win.chat.turns[-1].text, "the conversation carries what was shown"
         kept = json.loads(row["timings_json"])["style"]
         assert kept["headers"] == 2 and kept["closing_question"] and kept["context_lines_unasked"] == 3
         assert kept["stripped"][-1] == "Anything specific you want to review?"
     finally:
         win.shutdown()
         win.deleteLater()
+
+
+def test_names_the_earnings_pack_only_listed_as_not_read_never_ground_a_claim():
+    rows = "## earnings_pack\n[earn:QCOM] QCOM: REPORTS Wed 2026-10-07, in 7 days\n[earn:more] 2 more not listed (no earnings read for them; say so, never guess): QTUM, FCEL"
+    claim = "QTUM and FCEL have no earnings this week."
+    assert grounding.mark_ungrounded_earnings(claim, [rows]) != claim
+    assert grounding.mark_ungrounded_earnings("QCOM reports Wednesday [earn:QCOM].", [rows]) == "QCOM reports Wednesday [earn:QCOM]."

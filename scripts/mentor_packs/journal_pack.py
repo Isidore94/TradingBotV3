@@ -6,8 +6,8 @@ close times (ET), size, R on the planned risk or $ with "R unknown", hold time, 
 account's tax class. Then totals (count, wins, net R over the trades that have one, net $,
 largest loss) and the open positions. Ids: ``jrn:<day>:<trade_id>`` (a spread joins its trade
 ids with ``+``), ``jrn:<day>:totals``, ``jrn:<day>:open:<trade_id>``. A week's ``<day>`` is
-``wk<monday>``; a month's is ``mo<YYYY-MM>`` (its totals row comes first and carries the win rate,
-so a long month survives the attach budget). The journal store class is never built; missing data is "unknown".
+``wk<monday>``; a month's is ``mo<YYYY-MM>``. A day's and a month's totals row comes first (a month's
+carries the win rate), so the answer survives the attach budget. The journal store class is never built; missing data is "unknown".
 """
 
 from __future__ import annotations
@@ -207,8 +207,8 @@ def build(day: Any = "today", *, now: datetime | None = None, journal: Path | st
         totals += f"; win rate {100 * wins / len(known_values):.0f}% ({wins} of {len(known_values)} with a PnL)"
     total_row = {"id": f"jrn:{label}:totals", "kind": "totals", "count": len(closed_units), "wins": wins,
                  "net": sum(known_values) if known_values else None, "open": len(open_trades), "text": totals}
-    # A month is many rows: its totals go first so a tight attach budget keeps the answer.
-    rows.insert(0 if month else len(rows), total_row)
+    # A day or a month answers from its totals first (a wrong premise shows at once; a tight budget keeps it).
+    rows.insert(len(rows) if label.startswith("wk") else 0, total_row)
     for trade in open_trades:
         opened = journal_read.parse_time(trade.get("opened_at"))
         qty = (journal_read.num(trade.get("quantity_opened")) or 0) - (journal_read.num(trade.get("quantity_closed")) or 0)

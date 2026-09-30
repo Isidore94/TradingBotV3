@@ -103,3 +103,11 @@ def test_month_puts_its_totals_first_with_the_win_rate(journal):
     assert {"jrn:mo2026-09:Y1", "jrn:mo2026-09:W1"} <= set(_rows(pack))
     assert journal_pack.resolve("last_month", NOW.date())[1:] == (datetime(2026, 8, 1).date(), datetime(2026, 8, 31).date())
     assert "win rate" not in _rows(journal_pack.build("week", now=NOW, journal=journal))["jrn:wk2026-09-28:totals"]["text"]
+
+
+def test_a_day_puts_its_totals_first_so_a_wrong_premise_shows_at_once(journal):
+    """15:27 retest: "why did I lose money tuesday" on a green day; the day's net must lead the pack."""
+    for day, label in (("today", "2026-09-30"), ("tuesday", "2026-09-29"), ("yesterday", "2026-09-29")):
+        assert journal_pack.build(day, now=NOW, journal=journal).rows[0]["id"] == f"jrn:{label}:totals", day
+    week = journal_pack.build("week", now=NOW, journal=journal).rows
+    assert week[0]["id"] != "jrn:wk2026-09-28:totals", "a week keeps its trades first"

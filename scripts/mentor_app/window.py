@@ -1108,17 +1108,18 @@ class MentorWindow(QMainWindow):
         # P13: the app reads the question and attaches the packs it needs; the model may still call more.
         context_rows = self._context_pack.rows if self._context_pack is not None else ()
         known = attach.known_symbols(context_rows, self._liked_names, self._journal_symbols)
-        attachments = attach.plan_attachments(text, known, self._now())
+        attachments = attach.plan_attachments(text, known, self._now(), book=attach.book_symbols(context_rows),
+                                              liked=self._liked_names)
         seen = attach.recent_cited_ids(self.chat.turns[:-1], attach.DEDUPE_TURNS)
         # P14: a book_pack built from the journal (no fresh broker snapshot) queues the broker read on the
         # news thread and says so; the next turn reads the fresh snapshot.
         from mentor_app import book_jobs
 
-        store, now = self.store, self._now
+        store, now, probe = self.store, self._now, self._desk_probe
         build_pack = book_jobs.chat_pack_builder(
             self._pack_builder or self._chat_pack,
             request_fetch=lambda: self._queue_book_fetch("chat"),
-            due=lambda: not book_jobs.skip_reason(store, now()),
+            state=lambda: book_jobs.chat_fetch_state(store, now(), probe),
         )
         worker = brain.StreamWorker(
             messages,
@@ -1307,11 +1308,15 @@ class MentorWindow(QMainWindow):
         style_numbers = style.measure(raw, question)
         text, stripped = style.guard(raw)
         style_numbers["stripped"] = stripped
+        # The turn log keeps the model's raw words (plus the app's appendix); the transcript shows the guarded ones.
+        stored = raw
         if result.get("appendix"):
             # The pre-trade checklist: the app adds the pack's own rows for every section the reply skipped.
             text = f"{text.rstrip()}\n\n{result['appendix']}"
+            stored = f"{stored.rstrip()}\n\n{result['appendix']}"
         if result.get("cancelled"):
             text += " *(stopped)*"
+            stored += " *(stopped)*"
         # Guardrail 2: a number no pack sent this turn is grey, never hidden.
         grounds = [self._context_text, *(result.get("pack_texts") or ())]
         shown = grounding.mark_uncited_numbers(text, grounds)
@@ -1331,7 +1336,7 @@ class MentorWindow(QMainWindow):
                                "pack_texts": list(result.get("pack_texts") or ())}
         self._store_turn(
             "assistant",
-            text,
+            stored,
             pack_ids=result.get("pack_ids") or (),
             model=str(result.get("model") or self._model),
             latency_ms=result.get("first_token_ms"),

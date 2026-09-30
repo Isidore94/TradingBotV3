@@ -84,6 +84,8 @@ def earnings_symbols(pack_texts: Iterable[str]) -> set[str]:
     found: set[str] = set()
     for text in pack_texts:
         for line in str(text or "").split("\n"):
+            if line.startswith("[earn:more]"):
+                continue  # names the pack did not read: never grounds an earnings claim
             if _EARNINGS_WORDS.search(line) or re.search(r"\[[^\]]*(?:earn|peer)[^\]]*\]", line):
                 found.update(match.group(1) for match in _TICKER.finditer(line.replace(":", " ")))
     return found

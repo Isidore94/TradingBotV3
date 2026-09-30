@@ -30,7 +30,9 @@ SCHEMA: dict[str, Any] = {
             "type": "object",
             "properties": {
                 "symbols": {"type": "array", "items": {"type": "string"},
-                            "description": "Tickers, e.g. ['NVDA', 'TSLA'] (at most 40)."},
+                            "description": "Tickers, e.g. ['NVDA', 'TSLA']; past 40 the rest are listed by name only."},
+                "book": {"type": "array", "items": {"type": "string"},
+                         "description": "Open positions: always listed, whatever the count."},
             },
             "required": ["symbols"],
         },
@@ -76,18 +78,29 @@ def _peer_text(sym: str, today: date, dates: Mapping[str, list[date]], industrie
     return f"nearest peer {peer} {when:%a %Y-%m-%d}, {pick_pack._day_word((when - today).days)}"
 
 
-def build(symbols: Any = (), *, now: datetime | None = None, paths: pick_pack.PickPaths | None = None) -> Pack:
-    """One row per name (at most 40). File reads: call it on a worker."""
-    names = _symbols(symbols)
+def build(symbols: Any = (), book: Any = (), *, now: datetime | None = None,
+          paths: pick_pack.PickPaths | None = None) -> Pack:
+    """One row per name: every ``book`` name, then the others up to 40 in all; the rest listed by name.
+
+    File reads: call it on a worker.
+    """
+    held = _symbols(book)
+    names = held + [sym for sym in _symbols(symbols) if sym not in held]
     if not names:
         return make_pack(NAME, (), empty_text="earnings_pack needs tickers, e.g. ['NVDA', 'TSLA']")
     moment = pick_pack._now(now)
     today = moment.astimezone(pick_pack.ET).date()
     src = paths or pick_pack.live_paths()
-    shown, extra = names[:MAX_NAMES], len(names) - MAX_NAMES
+    # The open book is never cut; the tail (liked, then Focus) fills what is left of the 40.
+    shown = names[:max(MAX_NAMES, len(held))]
+    rest = names[len(shown):]
     head = (f"Earnings for {len(shown)} name(s) as of market date {today.isoformat()}: own next report and nearest "
-            f"industry peer within {WINDOW_DAYS} days" + (f"; {extra} more name(s) not listed" if extra > 0 else ""))
+            f"industry peer within {WINDOW_DAYS} days" + (f"; {len(rest)} more name(s) not listed" if rest else ""))
     rows: list[dict[str, Any]] = [{"id": "earn:asof", "kind": "asof", "text": head}]
+    if rest:
+        rows.append({"id": "earn:more", "kind": "more", "symbols": rest,
+                     "text": f"{len(rest)} more not listed (no earnings read for them; say so, never guess): "
+                             + ", ".join(rest)})
     try:
         dates = pick_pack._earnings_dates(src, today)
     except Exception as exc:  # noqa: BLE001 - an unreadable calendar is unknown for every name, never "none"
