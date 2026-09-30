@@ -161,7 +161,11 @@ def test_commands_route_and_stub():
     assert commands.handle("/tape").action == "tape"
     # P2 built /pick: it routes to the window with the symbol (was a Phase 2 stub).
     assert commands.handle("/pick nvda").action == "pick" and commands.handle("/pick nvda").arg == ("NVDA", "")
-    assert "Phase 3" in commands.handle("/vetoes").reply
+    # P3 built /vetoes: it routes to the window with the optional date (was a Phase 3 stub).
+    assert commands.handle("/vetoes").action == "vetoes" and commands.handle("/vetoes").arg == ""
+    assert commands.handle("/vetoes 2026-09-29").arg == "2026-09-29"
+    assert commands.handle("/vetoes yesterday").action == "error"
+    assert commands.handle("/scorecard").action == "scorecard"
     assert commands.handle("/nope").action == "error"
 
 

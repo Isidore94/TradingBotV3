@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS challenges (
     claim TEXT NOT NULL,
     evidence_ids_json TEXT NOT NULL DEFAULT '[]',
     issued_utc TEXT NOT NULL,
-    graded_utc TEXT NOT NULL DEFAULT '',
+    graded_utc TEXT,
     outcome_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS profile_notes (
@@ -86,6 +86,16 @@ def _args_key(args: dict[str, Any] | None) -> str:
     return json.dumps(dict(args or {}), sort_keys=True, default=str)
 
 
+def _open_graded_column(conn: sqlite3.Connection) -> None:
+    """Phase 0-2 created ``graded_utc`` NOT NULL; nothing wrote a challenge then, so an empty table is rebuilt."""
+    columns = {row[1]: row for row in conn.execute("PRAGMA table_info(challenges)").fetchall()}
+    graded = columns.get("graded_utc")
+    if graded is not None and graded[3]:
+        if conn.execute("SELECT COUNT(*) FROM challenges").fetchone()[0] == 0:
+            conn.execute("DROP TABLE challenges")
+            conn.executescript(SCHEMA)
+
+
 class MentorChatStore:
     def __init__(self, path: Path | str | None = None) -> None:
         if path is None:
@@ -104,6 +114,7 @@ class MentorChatStore:
         if not self._ready:
             conn.execute("PRAGMA journal_mode = WAL")
             conn.executescript(SCHEMA)
+            _open_graded_column(conn)
             self._ready = True
         return conn
 
@@ -174,6 +185,47 @@ class MentorChatStore:
 
     def profile_notes(self, *, limit: int = 50) -> list[dict[str, Any]]:
         return self._read("SELECT * FROM profile_notes ORDER BY id DESC LIMIT ?", (int(limit),))[::-1]
+
+    # ----------------------------------------------------------------- challenges
+    def add_challenge(
+        self,
+        challenge_id: str,
+        *,
+        kind: str,
+        symbol: str,
+        claim: str,
+        evidence_ids: Iterable[str] = (),
+        issued_utc: str = "",
+        outcome: dict[str, Any] | None = None,
+    ) -> bool:
+        """Insert one open challenge (``graded_utc`` NULL); an id already issued is left alone."""
+        rowid = self._write(
+            "challenge",
+            "INSERT OR IGNORE INTO challenges (id, kind, symbol, claim, evidence_ids_json, issued_utc, graded_utc, "
+            "outcome_json) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)",
+            (str(challenge_id), str(kind), str(symbol or ""), str(claim), _json(evidence_ids),
+             issued_utc or utc_now(), json.dumps(dict(outcome or {}), sort_keys=True, default=str)),
+        )
+        return bool(rowid)
+
+    def challenges(self, *, kind: str | None = None, open_only: bool = False) -> list[dict[str, Any]]:
+        """Challenges oldest first; ``open_only`` = not yet graded (NULL, or '' in an old table)."""
+        sql = "SELECT * FROM challenges WHERE 1 = 1"
+        params: list[Any] = []
+        if kind:
+            sql += " AND kind = ?"
+            params.append(kind)
+        if open_only:
+            sql += " AND (graded_utc IS NULL OR graded_utc = '')"
+        return self._read(sql + " ORDER BY issued_utc, id", params)
+
+    def update_challenge(self, challenge_id: str, *, outcome: dict[str, Any], graded_utc: str | None = None) -> bool:
+        written = self._write(
+            "challenge grade",
+            "UPDATE challenges SET outcome_json = ?, graded_utc = ? WHERE id = ?",
+            (json.dumps(dict(outcome), sort_keys=True, default=str), graded_utc, str(challenge_id)),
+        )
+        return written is not None
 
     # ----------------------------------------------------------------- caches
     def put_pack(self, name: str, args: dict[str, Any] | None, pack_json: str, built_utc: str = "") -> int | None:

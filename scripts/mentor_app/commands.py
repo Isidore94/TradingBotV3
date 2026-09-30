@@ -16,7 +16,8 @@ HELP_TEXT = (
     "- `/read` give a market read now (Trade Mentor card)\n"
     "- `/pause` no Trade Mentor questions for the rest of today\n"
     "- `/pick SYM` what the desk knows about a pick, narrated (or tap a Focus chip)\n"
-    "- `/vetoes` veto challenges (coming in Phase 3)\n"
+    "- `/vetoes [YYYY-MM-DD]` the last session's vetoes (or that one's), each with its slice and any challenge\n"
+    "- `/scorecard` how the veto challenges have done, with n\n"
 )
 MAX_QUIET = timedelta(hours=12)
 
@@ -76,5 +77,9 @@ def handle(text: str) -> CommandResult | None:
         side = parts[1] if len(parts) > 1 and parts[1] in ("LONG", "SHORT") else ""
         return CommandResult("pick", "", (symbol, side))
     if name == "vetoes":
-        return CommandResult("stub", "`/vetoes` is coming in Phase 3.")
+        if rest and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", rest):
+            return CommandResult("error", "Try `/vetoes` or `/vetoes 2026-09-29`.")
+        return CommandResult("vetoes", "", rest)
+    if name == "scorecard":
+        return CommandResult("scorecard")
     return CommandResult("error", f"I don't know `/{name}`. Type `/help`.")

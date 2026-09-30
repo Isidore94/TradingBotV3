@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from mentor_app import assess as pick_assess
-from mentor_app import brain, commands, grounding, pick_jobs, settings
+from mentor_app import brain, challenge, commands, grounding, pick_jobs, settings
 from mentor_app.chat_model import ChatModel
 from mentor_app.inbox import Inbox
 from mentor_app.prefetch import (
@@ -67,6 +67,10 @@ class _Bridge(QObject):
     pick_card = Signal(object)
     pick_failed = Signal(object)
     liked_ready = Signal(object)
+    veto_built = Signal(object)
+    veto_card = Signal(object)
+    veto_failed = Signal(object)
+    veto_morning = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -100,6 +104,9 @@ class MentorWindow(QMainWindow):
         assess_request: Callable[..., Any] | None = None,
         focus_source: Callable[[], Any] | None = None,
         liked_source: Callable[[], Any] | None = None,
+        veto_builder: Callable[[str], Any] | None = None,
+        challenge_request: Callable[..., Any] | None = None,
+        veto_outcomes: Any = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -140,6 +147,10 @@ class MentorWindow(QMainWindow):
         self._bridge.pick_card.connect(self._on_pick_card)
         self._bridge.pick_failed.connect(self._on_pick_failed)
         self._bridge.liked_ready.connect(self._sync_pick_chips)
+        self._bridge.veto_built.connect(self._on_veto_built)
+        self._bridge.veto_card.connect(self._on_veto_card)
+        self._bridge.veto_failed.connect(self._on_veto_failed)
+        self._bridge.veto_morning.connect(self._on_veto_morning)
         # P2 pick assessments: the pack builder, the narration call and the Focus reader are injectable.
         self._pick_builder = pick_builder
         self._assess_request = assess_request
@@ -153,6 +164,16 @@ class MentorWindow(QMainWindow):
         self._pick_packs: dict[tuple[str, str], Any] = {}
         self._pick_blocks: dict[str, int] = {}
         self._pick_schedule = pick_jobs.PickSchedule()
+        # P3 veto challenges: the pack builder, the wording call and the cohort outcomes are injectable.
+        self._veto_builder = veto_builder
+        self._challenge_request = challenge_request
+        self._veto_outcomes = veto_outcomes
+        self._veto_block: int | None = None
+        self._veto_token: object | None = None
+        self._veto_schedule = challenge.VetoSchedule()
+        self._veto_inbox_waiting: list[tuple[str, str]] = []
+        self._inbox_cards: dict[int, str] = {}
+        self._graded_on: Any = None
         # P1: with `mentor_app_enabled` on, this process owns the Trade Mentor card.
         self.card_host = card_host
         if self.card_host is None:
@@ -174,6 +195,7 @@ class MentorWindow(QMainWindow):
         self._pick_timer = QTimer(self)
         self._pick_timer.setInterval(PICK_CHECK_MS)
         self._pick_timer.timeout.connect(self.maybe_prefetch_picks)
+        self._pick_timer.timeout.connect(self.maybe_veto_card)
         self._add_note("Hi. Ask me anything, or type `/help`.")
 
     # ------------------------------------------------------------------ UI
@@ -550,7 +572,11 @@ class MentorWindow(QMainWindow):
         item_id = int(row.data(Qt.ItemDataRole.UserRole))
         for item in self.inbox.items():
             if item.id == item_id:
-                self._add_note(item.text)
+                card = self._inbox_cards.get(item_id)
+                if card:
+                    self._add_block(card)
+                else:
+                    self._add_note(item.text)
         self.inbox.mark_read(item_id)
         self.refresh_inbox()
 
@@ -623,6 +649,11 @@ class MentorWindow(QMainWindow):
         elif result.action == "pick":
             symbol, side = result.arg
             self.show_pick(symbol, side)
+        elif result.action == "vetoes":
+            self.show_vetoes(str(result.arg or ""))
+        elif result.action == "scorecard":
+            self.queue.submit("scorecard", lambda: challenge.scorecard(self.store), priority=PRIORITY_INTERACTIVE,
+                              key="scorecard", on_done=self._bridge.note.emit)
         elif result.action == "tape":
             if self._context_pack is None:
                 self._add_note("The desk context is still loading; try again in a moment.")
@@ -963,3 +994,179 @@ class MentorWindow(QMainWindow):
             return len(names)
 
         self.queue.submit("pick_prefetch_plan", plan, priority=PRIORITY_REFRESH, key="pick_prefetch_plan")
+
+    # ------------------------------------------------------------------ vetoes (P3)
+    def _build_veto(self, day: str) -> Any:
+        if self._veto_builder is not None:
+            return self._veto_builder(day)
+        from mentor_packs import veto_pack
+
+        return veto_pack.build(day)
+
+    def _veto_build_job(self, day: str, source: str) -> Callable[[], dict]:
+        """Build the pack; reuse the cached card for (session, hash); a card with no candidate needs no model."""
+
+        def job() -> dict:
+            from mentor_packs import veto_pack
+
+            pack = self._build_veto(day)
+            digest = veto_pack.pack_hash(pack)
+            session = next((str(row["id"]).split(":")[1] for row in pack.rows if row.get("kind") == "summary"), "")
+            key = {"date": session, "hash": digest}
+            card = None
+            row = self.store.get_pack(challenge.CACHE_NAME, key) if session else None
+            if row:
+                try:
+                    card = challenge.VetoCard.from_json(str(row["pack_json"]))
+                except (ValueError, TypeError, KeyError):
+                    card = None
+            if card is None and session and not challenge.candidates(pack):
+                card = challenge.word(pack, pack_hash=digest, model="", endpoint="", now=self._now)
+                self.store.put_pack(challenge.CACHE_NAME, key, card.to_json(), card.built_utc)
+            events = sum(1 for r in pack.rows if r.get("kind") in ("veto", "pass"))
+            return {"pack": pack, "hash": digest, "session": session, "card": card, "events": events, "source": source}
+
+        return job
+
+    def _veto_word_job(self, built: dict, source: str) -> Callable[[], dict]:
+        endpoint, model, request = self._endpoint, self._model, self._challenge_request
+
+        def job() -> dict:
+            card = challenge.word(built["pack"], pack_hash=built["hash"], model=model, endpoint=endpoint,
+                                  request=request, now=self._now)
+            if card.done:
+                self.store.put_pack(challenge.CACHE_NAME, {"date": built["session"], "hash": built["hash"]},
+                                    card.to_json(), card.built_utc)
+                challenge.record(self.store, card)
+            return {**built, "card": card, "source": source}
+
+        return job
+
+    def show_vetoes(self, day: str = "") -> None:
+        """The /vetoes card: the cached one when the pack is unchanged, else built and worded off-thread."""
+        if self._veto_block is not None:
+            self.activity_label.setText("the vetoes card is still being built...")
+            return
+        self._veto_block = len(self._blocks)
+        self._add_block("**Vetoes**: building...")
+        self.activity_label.setText("building the vetoes card...")
+        self.queue.submit("veto_pack", self._veto_build_job(day, "live"), priority=PRIORITY_INTERACTIVE,
+                          key="vetoes-live", on_done=self._bridge.veto_built.emit,
+                          on_error=self._bridge.veto_failed.emit)
+
+    def _replace_veto_block(self, markdown: str) -> None:
+        index = self._veto_block
+        if index is not None and index < len(self._blocks):
+            self._blocks[index] = markdown
+            self._render()
+        else:
+            self._add_block(markdown)
+
+    def _on_veto_built(self, built: dict) -> None:
+        pack, card = built["pack"], built.get("card")
+        if not built.get("session"):
+            self._finish_veto(f"**Vetoes**: {pack.empty_text or 'nothing to show'}")
+            return
+        if card is not None and card.done:
+            self._show_veto_card(built)
+            return
+        if not self._brain_ok:
+            offline = challenge.VetoCard(session=built["session"], pack_hash=built["hash"], pack_json=pack.as_json(),
+                                         error=f"the brain is off: {self._brain_reason or 'not connected'}")
+            self._show_veto_card({**built, "card": offline})
+            return
+        self._replace_veto_block("**Vetoes**: wording the challenges...")
+        self.queue.submit("veto_challenges", self._veto_word_job(built, "live"), priority=PRIORITY_INTERACTIVE,
+                          needs_model=True, max_tokens=challenge.MAX_OUTPUT_TOKENS, key="vetoes-word",
+                          on_done=self._bridge.veto_card.emit, on_error=self._bridge.veto_failed.emit)
+        token = self._veto_token = object()
+        QTimer.singleShot(self.assess_wait_ms, self, lambda: self._veto_deadline(built, token))
+
+    def _veto_deadline(self, built: dict, token: object) -> bool:
+        """The wording never got the model in time: show the slices alone."""
+        if self._veto_token is not token or not self.queue.cancel("vetoes-word"):
+            return False
+        busy = challenge.VetoCard(session=built["session"], pack_hash=built["hash"], pack_json=built["pack"].as_json(),
+                                  error="the brain is busy or off; the model was not free in time")
+        self._show_veto_card({**built, "card": busy})
+        return True
+
+    def _on_veto_card(self, done: dict) -> None:
+        if done.get("source") == "morning":
+            if done["card"].done:
+                self._queue_veto_inbox(done["card"])
+            return  # a failed morning wording never posts; /vetoes still answers
+        self._show_veto_card(done)
+
+    def _show_veto_card(self, done: dict) -> None:
+        card = done["card"]
+        markdown = challenge.card_markdown(card)
+        self._finish_veto(markdown)
+        # The card joins the conversation, so a follow-up question sees it (veto_pack stays a tool).
+        self.chat.add("assistant", markdown)
+        pack = done.get("pack")
+        self._store_turn(
+            "assistant", markdown, pack_ids=getattr(pack, "ids", ()), model=card.model or "",
+            tool_calls=[{"name": "veto_pack", "arguments": {"date": card.session}, "hash": card.pack_hash,
+                         "dropped": card.dropped, "error": card.error}],
+        )
+
+    def _finish_veto(self, markdown: str) -> None:
+        self._replace_veto_block(markdown)
+        self._veto_block = None
+        self._veto_token = None
+        self.activity_label.setText("")
+
+    def _on_veto_failed(self, exc: Any) -> None:
+        self._finish_veto(f"**Vetoes**: could not be built ({type(exc).__name__}: {exc}).")
+
+    # ------------------------------------------------------------------ the 06:45 card and the daily grading
+    def maybe_veto_card(self) -> None:
+        """Every minute: deliver a waiting card, grade once a day, and from 06:45 PT build the morning card."""
+        now = self._now()
+        self._deliver_veto_inbox()
+        local_day = now.astimezone(challenge.PT).date()
+        if self._graded_on != local_day:
+            self._graded_on = local_day
+            self.queue.submit(
+                "grade_challenges",
+                lambda: challenge.grade_open(self.store, self._now(), veto_outcomes=self._veto_outcomes),
+                priority=PRIORITY_IDLE, key="grade_challenges",
+            )
+        if not self._veto_schedule.due(now):
+            return
+        self._veto_schedule.mark(now)
+        if not challenge.is_session_day(now):
+            return  # weekends and holidays: no morning card
+        self.queue.submit("veto_morning_pack", self._veto_build_job("", "morning"), priority=PRIORITY_REFRESH,
+                          key="veto-morning", on_done=self._bridge.veto_morning.emit)
+
+    def _on_veto_morning(self, built: dict) -> None:
+        if not built.get("session") or not built.get("events"):
+            return  # no vetoes or passes last session: nothing to say
+        card = built.get("card")
+        if card is not None and card.done:
+            self._queue_veto_inbox(card)
+            return
+        self.queue.submit("veto_morning_word", self._veto_word_job(built, "morning"), priority=PRIORITY_REFRESH,
+                          needs_model=True, max_tokens=challenge.MAX_OUTPUT_TOKENS, key="veto-morning-word",
+                          on_done=self._bridge.veto_card.emit)
+
+    def _queue_veto_inbox(self, card: Any) -> None:
+        self._veto_inbox_waiting.append((challenge.inbox_line(card), challenge.card_markdown(card)))
+        self._deliver_veto_inbox()
+
+    def _deliver_veto_inbox(self) -> None:
+        """Post the waiting morning card once quiet hours or a mute end; a used daily cap drops it."""
+        while self._veto_inbox_waiting:
+            line, markdown = self._veto_inbox_waiting[0]
+            item = self.inbox.add("vetoes", line)
+            if item is None:
+                if "cap" in self.inbox.last_refusal:
+                    logging.info("Trade Mentor: the vetoes card was dropped (%s)", self.inbox.last_refusal)
+                    self._veto_inbox_waiting.pop(0)
+                    continue
+                return  # quiet hours or muted: try again next minute
+            self._veto_inbox_waiting.pop(0)
+            self._inbox_cards[item.id] = markdown
+            self.refresh_inbox()
