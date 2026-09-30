@@ -20,8 +20,8 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 - **Night throughput (2026-09-30):** slot retries x3, briefs nightly, budget 360 (#328). In flight: Mentor night recall index. Next: all Focus names briefed nightly, per-setup condition reports, morning pre-brief queue.
 - **gpt-oss:20b:** trader's word 2026-09-30; effort `high`, 8k think tokens live; on the mini-PC too. Probe 2 10-01 02:05, then flip `ai_local_model_medium`.
 - **Night window:** the night AI starts 22:00 PT. Its model runs on the RTX 5080 host
-  (`ai_remote_gpu_ssh_alias` = `claude-host`, ssh tunnel on 11435); falls back to local Ollama
-  (also mid-run). One pass + one recheck, then unload and shut down; last firing 05:30. No builders, merges or test runs
+  (`ai_remote_gpu_ssh_alias` = `claude-host`, ssh tunnel on 11435). No local models on the mini-PC
+  (trader 2026-09-30): host down = facts only; rerun a missed night with `--session <date> --force`. One pass + one recheck, then unload and shut down; last firing 05:30. No builders, merges or test runs
   22:00-02:00 PT.
 - **Owed:** rolling-RRS leftovers still on % (industry board, autopilot open-scan RS,
   setup_group_context, D1 group strength; bounce CSV lacks `rrs_engine`, ask first); TLT/USO/HYG daily bars (scan-side, ask first); halted-name refetch; movers
