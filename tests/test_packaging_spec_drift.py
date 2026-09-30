@@ -55,7 +55,13 @@ SCRIPTS = ROOT / "scripts"
 # launch_gui.py, the frozen entry point, can import it. All four below were
 # re-verified against the tree at the 2026-08-09 merge, and the frozen
 # --selftest exercises the lazy engines that would expose a wrong call here.
-PACKAGES_NOT_IN_THE_BUNDLE = {}
+PACKAGES_NOT_IN_THE_BUNDLE = {
+    "mentor_app": (
+        "the Trade Mentor app is its own process started from source by launch_mentor.py; "
+        "the desk's launcher refuses in a frozen run before any mentor_app import."
+    ),
+    "mentor_packs": "read only by mentor_app, which runs from source.",
+}
 #: The A4 suite's name for the same allowlist.
 UNCOLLECTED_PACKAGES = PACKAGES_NOT_IN_THE_BUNDLE
 
