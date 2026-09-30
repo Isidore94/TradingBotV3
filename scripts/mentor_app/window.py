@@ -54,6 +54,8 @@ RECONNECT_BACKOFF_SECONDS = 10 * 60
 #: On close the app waits at most this long for each model unload.
 SHUTDOWN_UNLOAD_SECONDS = 4
 CHIP_KINDS = ("auto_mode", "d1_env", "regime")
+#: A background tape narration that fails is tried once more for the same pack hash, then not again.
+TAPE_MAX_FAILURES_PER_HASH = 2
 
 
 class _Bridge(QObject):
@@ -197,6 +199,8 @@ class MentorWindow(QMainWindow):
         self._tape_block: int | None = None
         self._tape_schedule = tape.TapeSchedule()
         self._push_checked_day: Any = None
+        #: pack hash -> failed background narrations; cleared when the brain comes back from down.
+        self._tape_failures: dict[str, int] = {}
         self._bridge.tape_ready.connect(self._on_tape_ready)
         self._bridge.tape_refreshed.connect(self._on_tape_refreshed)
         # P1: with `mentor_app_enabled` on, this process owns the Trade Mentor card.
@@ -495,6 +499,8 @@ class MentorWindow(QMainWindow):
 
     def _on_brain_state(self, state: dict) -> None:
         self._connecting = False
+        if state.get("ok") and not self._brain_ok:
+            self._tape_failures.clear()  # the brain is back: a failed tape may be read again
         self._brain_ok = bool(state.get("ok"))
         self._brain_reason = str(state.get("reason") or "")
         self._host = str(state.get("host") or self._host)
@@ -1217,8 +1223,16 @@ class MentorWindow(QMainWindow):
         changed = bool(result.get("changed"))
         self._remember_tape(result)
         card = self._tape_last["card"]
-        if result.get("narrated") or result.get("yielded"):
-            return  # a narration came back (or yielded to a chat turn): the next rebuild tries again
+        digest = str(result.get("hash") or "")
+        if result.get("narrated"):
+            fresh = result.get("card")
+            if fresh is not None and not fresh.narrated:
+                self._tape_failures[digest] = self._tape_failures.get(digest, 0) + 1
+            return
+        if result.get("yielded"):
+            return  # yielded to a chat turn: the next rebuild tries again
+        if self._tape_failures.get(digest, 0) >= TAPE_MAX_FAILURES_PER_HASH:
+            return  # failed twice on this tape: wait for a new hash or the brain coming back
         if (changed or card is None) and not (card is not None and card.narrated):
             self._queue_tape_narration(PRIORITY_REFRESH, "prefetch")
 

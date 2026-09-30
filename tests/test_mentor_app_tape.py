@@ -272,6 +272,41 @@ def test_a_failed_re_read_keeps_the_good_read_for_the_same_tape(win):
     assert win._tape_last["card"] is good
 
 
+def test_a_failing_narration_is_retried_once_per_hash_not_every_30_min(win):
+    _up(win)
+    calls = []
+
+    def failing(**kwargs):
+        calls.append(1)
+        raise ConnectionError("host dropped")
+
+    win._tape_request = failing
+
+    def tick(minutes=30):
+        win.clock["now"] += timedelta(minutes=minutes)
+        win.maybe_prefetch_tape()
+        _drain(win)
+
+    tick(0)
+    assert len(calls) == 1
+    tick()
+    assert len(calls) == 2, "one retry for the same tape"
+    tick()
+    tick()
+    assert len(calls) == 2, "then no more for that hash"
+    win._on_brain_state({"ok": False, "reason": "down"})
+    win._on_brain_state({"ok": True, "endpoint": win._endpoint, "model": win._model})
+    tick()
+    assert len(calls) == 3, "the brain came back: try again"
+    tick()
+    tick()
+    assert len(calls) == 4
+    win._tape_builder = lambda: regime_pack.build(now=win.clock["now"], sources=replace(
+        regime_pack.fixture_sources(), d1_env=lambda day: "bullish_trend"))
+    tick()
+    assert len(calls) == 5, "a changed tape is read again"
+
+
 def test_turning_the_push_on_after_0630_still_sends_once_that_day(win, monkeypatch):
     enabled = {"on": False}
     monkeypatch.setattr(settings, "push_brief_enabled", lambda: enabled["on"])
