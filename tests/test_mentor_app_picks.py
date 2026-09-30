@@ -401,3 +401,19 @@ def test_a_free_chat_reply_greys_an_invented_number(window):
     html = window.transcript.toHtml()
     assert "#8a8a8a" in html
     assert window._blocks[-1].count('class="uncited"') == 1 and ">7</span>" in window._blocks[-1]
+
+
+def test_a_second_click_while_building_strands_no_placeholder(window, app):
+    window.show_pick("NVDA")
+    window.show_pick("NVDA")
+    assert sum("building" in block for block in window._blocks) == 1
+    _drain(window, app)
+    assert not any("building" in block for block in window._blocks)
+
+
+def test_a_failed_build_says_so_and_frees_the_symbol(window, app):
+    window._pick_builder = lambda sym, side: (_ for _ in ()).throw(OSError("disk gone"))
+    window.show_pick("NVDA")
+    _drain(window, app)
+    assert "could not be built (OSError: disk gone)" in _text(window)
+    assert "NVDA" not in window._pick_blocks

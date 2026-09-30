@@ -57,6 +57,7 @@ class _Bridge(QObject):
     note = Signal(str)
     pick_built = Signal(object)
     pick_card = Signal(object)
+    pick_failed = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -127,6 +128,7 @@ class MentorWindow(QMainWindow):
         self._bridge.note.connect(self._add_note)
         self._bridge.pick_built.connect(self._on_pick_built)
         self._bridge.pick_card.connect(self._on_pick_card)
+        self._bridge.pick_failed.connect(self._on_pick_failed)
         # P2 pick assessments: the pack builder, the narration call and the Focus reader are injectable.
         self._pick_builder = pick_builder
         self._assess_request = assess_request
@@ -718,6 +720,9 @@ class MentorWindow(QMainWindow):
     def show_pick(self, symbol: str, side: str = "") -> None:
         """The pick's card: the cached one at once, then a rebuild off-thread; narrate if the pack changed."""
         symbol = str(symbol or "").upper()
+        if symbol in self._pick_blocks:
+            self.activity_label.setText(f"{symbol} is still being built...")
+            return  # one card per pick at a time; a second click never strands a placeholder
         self._pick_blocks[symbol] = len(self._blocks)
         cached = self._pick_cards.get(symbol)
         if cached is not None:
@@ -736,7 +741,8 @@ class MentorWindow(QMainWindow):
             return {"symbol": symbol, "side": side, "pack": pack, "hash": digest, "assessment": found}
 
         self.queue.submit(f"pick_pack {symbol}", job, priority=PRIORITY_INTERACTIVE, key=f"pick-live:{symbol}",
-                          on_done=self._bridge.pick_built.emit)
+                          on_done=self._bridge.pick_built.emit,
+                          on_error=lambda exc: self._bridge.pick_failed.emit((symbol, exc)))
 
     def _on_pick_built(self, built: dict) -> None:
         symbol, digest = built["symbol"], built["hash"]
@@ -777,7 +783,8 @@ class MentorWindow(QMainWindow):
 
         self.queue.submit(f"pick_assess {symbol}", job, priority=PRIORITY_INTERACTIVE, needs_model=True,
                           max_tokens=pick_assess.MAX_OUTPUT_TOKENS, key=f"pick-assess:{symbol}",
-                          on_done=self._bridge.pick_card.emit)
+                          on_done=self._bridge.pick_card.emit,
+                          on_error=lambda exc: self._bridge.pick_failed.emit((symbol, exc)))
 
     def _on_pick_card(self, done: dict) -> None:
         """A live or prefetched narration finished."""
@@ -790,6 +797,12 @@ class MentorWindow(QMainWindow):
         elif assessment.narrated:
             # A prefetched card waits in memory; the transcript only moves when the trader asks.
             self._pick_cards[done["symbol"]] = assessment
+
+    def _on_pick_failed(self, failed: Any) -> None:
+        symbol, exc = failed
+        self._replace_pick_block(symbol, f"**Pick {symbol}**: could not be built ({type(exc).__name__}: {exc}).")
+        self._pick_blocks.pop(symbol, None)
+        self.activity_label.setText("")
 
     def _replace_pick_block(self, symbol: str, markdown: str) -> None:
         index = self._pick_blocks.get(symbol)
