@@ -128,6 +128,13 @@ class InputBox(QPlainTextEdit):
         super().keyPressEvent(event)
 
 
+def _ibkr_fetch_book(now: Any) -> Any:
+    """The real IBKR read (``ibkr_positions.fetch_book``), imported on the news thread."""
+    import ibkr_positions
+
+    return ibkr_positions.fetch_book(now)
+
+
 class MentorWindow(QMainWindow):
     def __init__(
         self,
@@ -162,6 +169,7 @@ class MentorWindow(QMainWindow):
         news_queue: PrefetchQueue | None = None,
         book_fetch: Callable[..., Any] | None = None,
         book_sources: Callable[[], Any] | None = None,
+        ibkr_fetch: Callable[..., Any] | None = None,
         mirror_builder: Callable[[int], Any] | None = None,
         mirror_request: Callable[..., Any] | None = None,
         tilt_builder: Callable[[], Any] | None = None,
@@ -319,9 +327,11 @@ class MentorWindow(QMainWindow):
         self._bridge.news_card.connect(self._on_news_card)
         self._pick_timer.timeout.connect(self.maybe_refresh_news)
         # P8 book: Questrade read on demand (/book, /check, 06:20 PT) on the news thread; injectable.
+        # P12: then IBKR, over its own short-lived read-only TWS client (id 9155).
         from mentor_app import book_jobs
 
         self._book_fetch = book_fetch
+        self._ibkr_fetch = ibkr_fetch if ibkr_fetch is not None else _ibkr_fetch_book
         self._book_sources = book_sources
         self._book_schedule = book_jobs.BookSchedule()
         self._book_blocks: dict[int, int] = {}
@@ -1586,7 +1596,8 @@ class MentorWindow(QMainWindow):
         from mentor_packs import gate_pack
 
         book = self._book_pack_sources()
-        sources = dataclasses.replace(gate_pack.live_sources(), book_snapshot=book.snapshot, book_status=book.status)
+        sources = dataclasses.replace(gate_pack.live_sources(), book_snapshot=book.snapshot, book_status=book.status,
+                                      ibkr_book_snapshot=book.ibkr_snapshot, ibkr_book_status=book.ibkr_status)
         return gate_pack.build(request.side, request.symbol, request.size, request.stop, request.entry,
                                sources=sources)
 
@@ -1882,11 +1893,11 @@ class MentorWindow(QMainWindow):
             if self._book_event is not None and "book-fetch" in self.news_queue.pending_keys():
                 return self._book_event
             event = self._book_event = threading.Event()
-        store, now, fetch, probe = self.store, self._now, self._book_fetch, self._desk_probe
+        store, now, fetch, probe, ibkr = self.store, self._now, self._book_fetch, self._desk_probe, self._ibkr_fetch
 
         def job() -> dict:
             try:
-                out = book_jobs.ensure_book(store, now(), fetch=fetch, desk_closed=probe)
+                out = book_jobs.ensure_book(store, now(), fetch=fetch, desk_closed=probe, ibkr_fetch=ibkr)
                 logging.info("Trade Mentor book (%s): %s", why, out)
                 return out
             finally:
@@ -1913,14 +1924,13 @@ class MentorWindow(QMainWindow):
         seq = self._book_seq
         self._book_blocks[seq] = len(self._blocks)
         self._add_block("**Book**: reading...")
-        store, now, fetch, probe = self.store, self._now, self._book_fetch, self._desk_probe
+        store, now, fetch, probe, ibkr = self.store, self._now, self._book_fetch, self._desk_probe, self._ibkr_fetch
 
         def job() -> dict:
             from mentor_packs import book_pack
 
-            out = book_jobs.ensure_book(store, now(), fetch=fetch, desk_closed=probe)
-            reason = str(out.get("reason") or "")
-            note = "" if out.get("fetched") or reason in ("", "fresh") else f"not read from Questrade now: {reason}"
+            out = book_jobs.ensure_book(store, now(), fetch=fetch, desk_closed=probe, ibkr_fetch=ibkr)
+            note = book_jobs.fetch_note(out)
             pack = book_pack.build(now=now(), sources=self._book_pack_sources())
             return {"seq": seq, "pack": pack, "markdown": book_jobs.card_markdown(pack, note=note)}
 

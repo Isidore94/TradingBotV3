@@ -8,7 +8,8 @@ embedded VERBATIM with ``gate:<SYM>:`` put in front of their own ids (so
 are left out because the plan has its own section); the open book from ``book_pack`` (one
 source, named in ``book:source``: fresh Questrade positions ``book:pos:<ACCT>:<SYM>``, else
 the journal's open trades ``book:<TRADE_ID>``), its accounts and hints, ``book:industry``
-and, for a short, ``book:hint:short_account``; and the plan lines (``plan:<line>``). It never sizes, orders or
+and, for a short, ``book:hint:short_account`` (P12: Questrade and IBKR side by side, each its own
+source; journal-mode ids unchanged); and the plan lines (``plan:<line>``). It never sizes, orders or
 writes. A source that cannot be read gives an "unknown" row, never a guess.
 """
 
@@ -73,6 +74,9 @@ class Sources:
     book_status: Callable[[], Mapping[str, Any] | None] = field(default=lambda: None, compare=False)
     accounts: Callable[[], list[Mapping[str, Any]]] = field(default=lambda: [], compare=False)
     max_positions: Callable[[], Any] = field(default=lambda: None, compare=False)
+    #: The stored IBKR snapshot and its last failure (P12); both None = IBKR not read yet.
+    ibkr_book_snapshot: Callable[[], Mapping[str, Any] | None] = field(default=lambda: None, compare=False)
+    ibkr_book_status: Callable[[], Mapping[str, Any] | None] = field(default=lambda: None, compare=False)
 
 
 def _live_risk() -> Any:
@@ -122,13 +126,15 @@ def live_sources() -> Sources:
     live_book = book_pack.live_sources()
     return Sources(risk_setting=_live_risk, open_trades=_live_open_trades, industry_map=_live_industry_map,
                    book_snapshot=live_book.snapshot, book_status=live_book.status, accounts=live_book.accounts,
-                   max_positions=live_book.max_positions)
+                   max_positions=live_book.max_positions, ibkr_book_snapshot=live_book.ibkr_snapshot,
+                   ibkr_book_status=live_book.ibkr_status)
 
 
 def book_sources(src: Sources) -> book_pack.Sources:
     """The book pack's sources from the gate's own (the journal fallback is the gate's open trades)."""
     return book_pack.Sources(snapshot=src.book_snapshot, status=src.book_status, open_trades=src.open_trades,
-                             accounts=src.accounts, industry_map=src.industry_map, max_positions=src.max_positions)
+                             accounts=src.accounts, industry_map=src.industry_map, max_positions=src.max_positions,
+                             ibkr_snapshot=src.ibkr_book_snapshot, ibkr_status=src.ibkr_book_status)
 
 
 # ---------------------------------------------------------------- small helpers
@@ -196,7 +202,9 @@ def _risk_row(prefix: str, side: str, size: float | None, stop: float | None, en
 
 def _book_rows(prefix: str, symbol: str, side: str, src: Sources,
                moment: datetime | None = None) -> list[dict[str, Any]]:
-    """The book section from ``book_pack``'s one source (fresh Questrade, else the journal), never both."""
+    """The book section from ``book_pack``: each broker from its fresh snapshot, else its journal trades.
+
+    With no fresh broker read it is the legacy journal section (``book:<TRADE_ID>`` ids)."""
     book = book_pack.load_book(book_sources(src), moment)
     head = [row for row in book_pack.book_rows(book) if row.get("kind") in ("source", "account")]
     short = book_pack.short_hint(book) if side == "SHORT" else None
@@ -205,8 +213,8 @@ def _book_rows(prefix: str, symbol: str, side: str, src: Sources,
         imap = src.industry_map() or {}
     except Exception:  # noqa: BLE001 - industry is a label; unreadable = unknown
         imap = {}
-    body = _questrade_rows(prefix, symbol, book, imap) if book.source == "questrade" else _journal_rows(
-        prefix, symbol, src, imap)
+    body = _journal_rows(prefix, symbol, src, imap) if book.source == "journal" else _questrade_rows(
+        prefix, symbol, book, imap)
     return _embed(prefix, head) + body + tail
 
 
@@ -220,10 +228,10 @@ def _questrade_rows(prefix: str, symbol: str, book: book_pack.Book,
     own = _industry(symbol, imap)
     names = sorted({row["symbol"] for row in rows if own and row.get("industry") == own})
     if own:
-        text = (f"Open book (Questrade): {len(rows)} open position(s); {len(names)} open name(s) in {own}"
+        text = (f"Open book ({book.label}): {len(rows)} open position(s); {len(names)} open name(s) in {own}"
                 + (f" ({', '.join(names)})" if names else ""))
     else:
-        text = f"Open book (Questrade): {len(rows)} open position(s); {symbol}'s industry unknown"
+        text = f"Open book ({book.label}): {len(rows)} open position(s); {symbol}'s industry unknown"
     return rows + [{"id": f"{prefix}:book:industry", "kind": "book_industry", "industry": own,
                     "same_industry_count": len(names), "open_count": len(rows),
                     "same_symbol_open": any(row["same_symbol"] for row in rows), "text": text}]

@@ -1,10 +1,13 @@
 """Book pack: the trader's open book by account, with account/tax hints. Read-only.
 
-One source per pack, named in ``book:source``: the Questrade snapshot when it is fresh
-(at most 15 min old; the app's ``/book`` fetch keeps it in its own chat store), else the
-journal's open trades (``mode=ro``) with the reason Questrade was not used. The two are
-never mixed. Rows: ``book:asof``, ``book:source``, ``book:acct:<N>`` (label, tax class,
-position count, cash when known), ``book:pos:<ACCT>:<SYM>`` (side, qty, avg, market
+One source per broker, named in ``book:source``: each broker's snapshot (Questrade; IBKR
+from P12) when it is fresh (at most 15 min old; the app's ``/book`` fetch keeps it in its
+own chat store), else that broker's journal open trades (``mode=ro``) with the reason. A
+broker's snapshot and its journal trades are never mixed; the two brokers are different
+accounts and sit side by side. IBKR takes part once it has been read (a snapshot or a
+failure is stored). Rows: ``book:asof``, ``book:source``, ``book:acct:<N>`` (IBKR:
+``book:acct:IBKR:<N>``; label, tax class, position count, cash per currency when known),
+``book:pos:<ACCT>:<SYM>`` (IBKR: ``book:pos:IBKR:<ACCT>:<SYM>``; side, qty, avg, market
 value, $ at risk when the journal has a planned stop), ``book:side:<LONG|SHORT>``,
 ``book:industry:<name>`` (top 3 by count and every cluster of 2+), ``book:hint:<k>``
 (deterministic: no shorts in registered accounts, industry clusters, room per account
@@ -33,7 +36,8 @@ SCHEMA: dict[str, Any] = {
         "description": (
             "The trader's open book: accounts (TFSA/RRSP are registered and cannot hold shorts), open "
             "positions with side, size, average and market value, exposure by side and industry, and "
-            "account hints. Says whether it came from Questrade or the journal. Never sizes or orders."
+            "account hints. Says whether each broker (Questrade, IBKR) came from the broker or the journal. "
+            "Cash is per currency with no FX conversion. Never sizes or orders."
         ),
         "parameters": {"type": "object", "properties": {}},
     },
@@ -43,6 +47,9 @@ PT = ZoneInfo("America/Los_Angeles")
 MAX_POSITIONS_SETTING = "mentor_max_positions_per_account"
 SNAPSHOT_KEY = "book:snapshot"
 STATUS_KEY = "book:last_error"
+IBKR_SNAPSHOT_KEY = "book:ibkr:snapshot"
+IBKR_STATUS_KEY = "book:ibkr:last_error"
+BROKER_NAMES = {"QUESTRADE": "Questrade", "IBKR": "IBKR"}
 TOP_INDUSTRIES = 3
 #: Tax-free / tax-deferred account words (``journal_analytics.REGISTERED_ACCOUNT_WORDS``).
 TAX_FREE_WORDS = ("TFSA", "FHSA")
@@ -62,6 +69,9 @@ class Sources:
     accounts: Callable[[], list[Mapping[str, Any]]]
     industry_map: Callable[[], Mapping[str, Mapping[str, Any]]]
     max_positions: Callable[[], Any] = lambda: None
+    #: The last stored IBKR snapshot / failure (P12); both None = IBKR not read yet, not in the pack.
+    ibkr_snapshot: Callable[[], Mapping[str, Any] | None] = lambda: None
+    ibkr_status: Callable[[], Mapping[str, Any] | None] = lambda: None
     now: datetime | None = field(default=None, compare=False)
 
 
@@ -99,8 +109,12 @@ def db_snapshot_reader(path: Path | str) -> Callable[[], dict[str, Any] | None]:
     return lambda: _json_state(Path(path), SNAPSHOT_KEY)
 
 
-def db_status_reader(path: Path | str) -> Callable[[], dict[str, Any] | None]:
-    return lambda: _json_state(Path(path), STATUS_KEY)
+def db_status_reader(path: Path | str, key: str = STATUS_KEY) -> Callable[[], dict[str, Any] | None]:
+    return lambda: _json_state(Path(path), key)
+
+
+def db_ibkr_snapshot_reader(path: Path | str) -> Callable[[], dict[str, Any] | None]:
+    return lambda: _json_state(Path(path), IBKR_SNAPSHOT_KEY)
 
 
 def read_accounts(path: Path) -> list[dict[str, Any]]:
@@ -129,6 +143,8 @@ def live_sources() -> Sources:
         accounts=lambda: read_accounts(Path(JOURNAL_DB_FILE)),
         industry_map=gate_pack._live_industry_map,
         max_positions=lambda: get_local_setting(MAX_POSITIONS_SETTING, None),
+        ibkr_snapshot=db_ibkr_snapshot_reader(MENTOR_CHAT_DB_FILE),
+        ibkr_status=db_status_reader(MENTOR_CHAT_DB_FILE, IBKR_STATUS_KEY),
     )
 
 
@@ -211,14 +227,28 @@ def is_registered(klass: str) -> bool:
     return klass in ("tax_free", "tax_deferred")
 
 
-# ---------------------------------------------------------------- the book, from one source
-def _questrade_book(snap: Mapping[str, Any], journal_accounts: list[Mapping[str, Any]]) -> tuple[list, list]:
-    by_number = {str(a.get("account_number") or ""): a for a in journal_accounts}
+# ---------------------------------------------------------------- the book, one source per broker
+def broker_of(value: Any) -> str:
+    """``IBKR`` for any IBKR spelling (``IBKR``, ``IBKR_SOCKET``); everything else is ``QUESTRADE``."""
+    return "IBKR" if str(value or "").strip().upper().startswith("IBKR") else "QUESTRADE"
+
+
+def _snapshot_book(snap: Mapping[str, Any], journal_accounts: list[Mapping[str, Any]],
+                   broker: str) -> tuple[list, list]:
+    """A broker snapshot's accounts (with the trader's journal tax status) and positions."""
+    by_number: dict[str, Mapping[str, Any]] = {}
+    for row in journal_accounts:
+        number = str(row.get("account_number") or "")
+        if number and (broker_of(row.get("broker")) == broker or number not in by_number):
+            by_number[number] = row
     accounts = []
     for account in snap.get("accounts") or ():
         number = str(account.get("account_number") or "")
         own = by_number.get(number) or {}
-        accounts.append({**dict(account), "tax_status": own.get("tax_status") or ""})
+        row = {**dict(account), "tax_status": own.get("tax_status") or ""}
+        if not row.get("account_type") and own.get("account_type"):
+            row["account_type"] = own["account_type"]
+        accounts.append(row)
     return accounts, [dict(p) for p in snap.get("positions") or ()]
 
 
@@ -250,7 +280,8 @@ def _journal_book(trades: Iterable[Mapping[str, Any]], journal_accounts: list[Ma
     for pos in positions:
         known.setdefault(pos["account_number"], {"account_number": pos["account_number"],
                                                  "account_label": pos["account_label"] or pos["account_number"]})
-    accounts = [{**a, "cash": None, "cash_known": False} for a in known.values() if a.get("account_number")]
+    accounts = [{**a, "cash": None, "cash_known": False, "from_journal": True}
+                for a in known.values() if a.get("account_number")]
     return accounts, positions
 
 
@@ -305,17 +336,35 @@ def _setting_int(value: Any) -> int | None:
 class Book:
     """The parsed book the rows are built from (also the gate pack's book section)."""
 
-    source: str  # "questrade" | "journal"
+    #: "journal" (no fresh broker read), "questrade", "ibkr", "brokers" (both fresh) or "mixed"
+    #: (a fresh broker beside another broker's journal trades).
+    source: str
     source_text: str
     accounts: list[dict[str, Any]]
     positions: list[dict[str, Any]]
     industries: dict[str, str]
     max_positions: int | None
     asof: str
+    #: e.g. "Questrade", "Questrade + IBKR", "Questrade + IBKR journal" (the gate's book line).
+    label: str = "journal"
+
+
+def _why_not(snap: Any, status: Mapping[str, Any], moment: datetime) -> str:
+    """Why a broker's snapshot is not used: its age, the last failure (with the backoff left), or never read."""
+    from questrade_positions import backoff_left
+
+    if snap is not None and status.get("at_utc", "") <= snap.fetched_utc:
+        age = snap.age(moment)
+        return f"last snapshot {int(age.total_seconds() // 60)} min old" if age is not None else "snapshot unreadable"
+    if status.get("reason"):
+        why = str(status["reason"])
+        left = backoff_left(status.get("at_utc"), moment) if why != "no token" else None
+        return why + (f" (backing off {int(left.total_seconds() // 60) + 1} min)" if left is not None else "")
+    return "not fetched yet"
 
 
 def load_book(src: Sources, now: datetime | None = None) -> Book:
-    """Choose the source (fresh Questrade, else the journal) and read it. File/DB reads: a worker only."""
+    """Choose each broker's source (fresh snapshot, else its journal trades) and read it. A worker only."""
     from questrade_positions import BookSnapshot
 
     moment = _now(now or src.now)
@@ -323,25 +372,53 @@ def load_book(src: Sources, now: datetime | None = None) -> Book:
         journal_accounts = list(src.accounts() or ())
     except Exception:  # noqa: BLE001 - the tax label is optional; unreadable = the type words
         journal_accounts = []
-    raw = src.snapshot()
-    snap = BookSnapshot.from_dict(raw) if raw else None
     trades = list(src.open_trades() or ())
-    if snap is not None and snap.is_fresh(moment):
-        accounts, positions = _questrade_book(snap.as_dict(), journal_accounts)
-        source, asof = "questrade", snap.fetched_utc
-        text = f"Source: Questrade positions at {_pt(asof)}"
-    else:
-        status = src.status() or {}
-        if snap is not None and status.get("at_utc", "") <= snap.fetched_utc:
-            age = snap.age(moment)
-            why = f"last snapshot {int(age.total_seconds() // 60)} min old" if age is not None else "snapshot unreadable"
-        elif status.get("reason"):
-            why = str(status["reason"])
+    feeds = {"QUESTRADE": (src.snapshot(), src.status() or {}),
+             "IBKR": (src.ibkr_snapshot(), src.ibkr_status() or {})}
+    in_play = ["QUESTRADE"] + (["IBKR"] if feeds["IBKR"][0] or feeds["IBKR"][1] else [])
+    fresh: dict[str, Any] = {}
+    why: dict[str, str] = {}
+    for broker in in_play:
+        raw, status = feeds[broker]
+        snap = BookSnapshot.from_dict(raw) if raw else None
+        if snap is not None and snap.is_fresh(moment):
+            fresh[broker] = snap
         else:
-            why = "not fetched yet"
-        accounts, positions = _journal_book(trades, journal_accounts)
-        source, asof = "journal", moment.astimezone(timezone.utc).isoformat(timespec="seconds")
-        text = f"Source: journal open trades (Questrade unavailable: {why})"
+            why[broker] = _why_not(snap, status, moment)
+    # A journal row's broker: its own column, else its account's; IBKR not read yet = the one legacy book.
+    acct_broker = {str(a.get("account_number") or ""): broker_of(a.get("broker")) for a in journal_accounts}
+
+    def bucket(row: Mapping[str, Any]) -> str:
+        found = broker_of(row["broker"]) if row.get("broker") else acct_broker.get(
+            str(row.get("account_number") or ""), "QUESTRADE")
+        return found if found in in_play else "QUESTRADE"
+
+    accounts: list[dict[str, Any]] = []
+    positions: list[dict[str, Any]] = []
+    for broker in in_play:
+        if broker in fresh:
+            got = _snapshot_book(fresh[broker].as_dict(), journal_accounts, broker)
+        else:
+            got = _journal_book([t for t in trades if bucket(t) == broker],
+                                [a for a in journal_accounts if bucket(a) == broker])
+        for row in (*got[0], *got[1]):
+            row["broker"] = broker
+        accounts += got[0]
+        positions += got[1]
+    missing = [b for b in in_play if b not in fresh]
+    gone = "; ".join(f"{BROKER_NAMES[b]} unavailable: {why[b]}" for b in missing)
+    now_utc = moment.astimezone(timezone.utc).isoformat(timespec="seconds")
+    if not fresh:
+        source, asof, label = "journal", now_utc, "journal"
+        text = f"Source: journal open trades ({gone})"
+    else:
+        named = [b for b in in_play if b in fresh]
+        source = "mixed" if missing else "brokers" if len(named) > 1 else named[0].lower()
+        asof = now_utc if missing else min(fresh[b].fetched_utc for b in named)
+        label = " + ".join(BROKER_NAMES[b] + ("" if b in fresh else " journal") for b in in_play)
+        text = "Source: " + "; ".join(f"{BROKER_NAMES[b]} positions at {_pt(fresh[b].fetched_utc)}" for b in named)
+        if missing:
+            text += f"; journal open trades for {' and '.join(BROKER_NAMES[b] for b in missing)} ({gone})"
     stops = _stops(trades)
     for pos in positions:
         stop = _stop_for(stops, pos)
@@ -362,27 +439,50 @@ def load_book(src: Sources, now: datetime | None = None) -> Book:
         max_positions = None
     for account in accounts:
         account["class"] = tax_class(account)
-        account["count"] = sum(1 for p in positions if str(p.get("account_number")) == str(account["account_number"]))
-    return Book(source, text, accounts, positions, industries, max_positions, asof)
+        account["count"] = sum(1 for p in positions if _acct_key(p) == _acct_key(account))
+    return Book(source, text, accounts, positions, industries, max_positions, asof, label)
 
 
 # ---------------------------------------------------------------- rows
+def _acct_key(row: Mapping[str, Any]) -> tuple[str, str]:
+    return str(row.get("broker") or "QUESTRADE"), str(row.get("account_number") or "")
+
+
+def _acct_id(row: Mapping[str, Any]) -> str:
+    """The id part for an account: ``<N>`` (Questrade and the legacy book), ``IBKR:<N>`` for IBKR."""
+    prefix = "IBKR:" if row.get("broker") == "IBKR" else ""
+    return prefix + _id_part(row.get("account_number"))
+
+
 def _label(account: Mapping[str, Any]) -> str:
-    return str(account.get("account_label") or account.get("account_number") or "account")
+    label = str(account.get("account_label") or account.get("account_number") or "account")
+    return f"IBKR {label}" if account.get("broker") == "IBKR" and "IBKR" not in label.upper() else label
+
+
+def _per_currency(values: Mapping[str, Any]) -> str:
+    return ", ".join(f"{cur} {value:,.2f}" for cur, value in sorted(values.items()))
 
 
 def _cash_text(account: Mapping[str, Any], source: str) -> str:
+    """Cash per currency as the broker reports it. IBKR adds "no FX conversion" and its net liquidation."""
     cash = account.get("cash")
     if account.get("cash_known") and isinstance(cash, Mapping):
-        return "cash " + ", ".join(f"{cur} {value:,.2f}" for cur, value in sorted(cash.items()))
-    return "cash unknown" + (" (the journal has no cash)" if source == "journal" else "")
+        text = "cash " + _per_currency(cash)
+        if account.get("broker") == "IBKR":
+            net = account.get("net_liquidation")
+            text += " (no FX conversion)"
+            text += f"; net liquidation {_per_currency(net)}" if isinstance(net, Mapping) and net else ""
+        return text
+    journal = source == "journal" or bool(account.get("from_journal"))
+    return "cash unknown" + (" (the journal has no cash)" if journal else "")
 
 
 def account_rows(book: Book) -> list[dict[str, Any]]:
     rows = []
     for account in book.accounts:
         klass = account["class"]
-        rows.append({"id": f"book:acct:{_id_part(account['account_number'])}", "kind": "account",
+        rows.append({"id": f"book:acct:{_acct_id(account)}", "kind": "account",
+                     "broker": str(account.get("broker") or "QUESTRADE"),
                      "account_number": str(account["account_number"]), "label": _label(account),
                      "class": klass, "count": account["count"],
                      "text": (f"Account {_label(account)} ({account.get('account_type') or 'type unknown'}): "
@@ -392,11 +492,10 @@ def account_rows(book: Book) -> list[dict[str, Any]]:
 
 def position_rows(book: Book) -> list[dict[str, Any]]:
     rows, seen = [], set()
-    labels = {str(a["account_number"]): _label(a) for a in book.accounts}
-    for pos in sorted(book.positions, key=lambda p: (str(p.get("account_number")), _sym(p.get("symbol")),
-                                                      str(p.get("side")))):
+    labels = {_acct_key(a): _label(a) for a in book.accounts}
+    for pos in sorted(book.positions, key=lambda p: (_acct_key(p), _sym(p.get("symbol")), str(p.get("side")))):
         acct, sym, side = str(pos.get("account_number") or ""), _sym(pos.get("symbol")), str(pos.get("side") or "?")
-        row_id = f"book:pos:{_id_part(acct)}:{_id_part(sym)}"
+        row_id = f"book:pos:{_acct_id(pos)}:{_id_part(sym)}"
         if row_id in seen:
             row_id += f":{side}"
         seen.add(row_id)
@@ -407,11 +506,12 @@ def position_rows(book: Book) -> list[dict[str, Any]]:
             risk = f"$ at risk {_money(pos['at_risk'])} (stop {pos['stop']:g})"
         else:
             risk = "stop unknown"
-        rows.append({"id": row_id, "kind": "position", "account_number": acct, "symbol": sym, "side": side,
+        rows.append({"id": row_id, "kind": "position", "broker": str(pos.get("broker") or "QUESTRADE"),
+                     "account_number": acct, "symbol": sym, "side": side,
                      "qty": qty, "avg_price": avg, "market_value": value, "at_risk": pos.get("at_risk"),
                      "industry": book.industries.get(sym, ""),
                      "text": (f"{side} {sym} {_qty(qty)} @ {'unknown' if avg is None else f'{avg:,.2f}'} in "
-                              f"{labels.get(acct, acct)}; market value {_money(value)}; {risk}")})
+                              f"{labels.get(_acct_key(pos), acct)}; market value {_money(value)}; {risk}")})
     return rows
 
 
@@ -470,7 +570,7 @@ def hint_rows(book: Book) -> list[dict[str, Any]]:
             room = book.max_positions - account["count"]
             text = (f"{_label(account)} has room: {room} position(s) (max {book.max_positions} per account)"
                     if room > 0 else f"{_label(account)} is full: {account['count']} of {book.max_positions} positions")
-            rows.append({"id": f"book:hint:room:{_id_part(account['account_number'])}", "kind": "hint_room",
+            rows.append({"id": f"book:hint:room:{_acct_id(account)}", "kind": "hint_room",
                          "account_number": str(account["account_number"]), "room": max(0, room),
                          "class": account["class"], "text": text})
     return rows

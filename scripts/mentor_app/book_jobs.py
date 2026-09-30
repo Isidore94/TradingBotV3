@@ -1,11 +1,12 @@
-"""Book jobs (P8): when the app reads Questrade, and the ``/book`` card. Qt-free; no model.
+"""Book jobs (P8, P12): when the app reads Questrade and IBKR, and the ``/book`` card. Qt-free; no model.
 
-On demand only: ``/book``, ``/check`` and once at 06:20 PT on weekdays. A snapshot at most
-15 min old is reused; after a failed read, no new one for 1 hour (the refresh token is
-single-use and rotates, so the chain is never hammered); no token = no request; with the
-desk closed, no fetch. Never a periodic poll. The fetch runs on the app's news thread
-(network, no GPU), so Pause AI does not block it. The snapshot and the last failure go
-to the app's own chat store (``app_state``); nothing else is written.
+On demand only: ``/book``, ``/check`` and once at 06:20 PT on weekdays. Each broker is read
+in turn (Questrade, then IBKR over its own short-lived TWS client, id 9155), each with its
+own cache: a snapshot at most 15 min old is reused; after a failed read, no new one for 1
+hour (the Questrade refresh token is single-use; TWS is not hammered); no Questrade token =
+no request; with the desk closed, no fetch. Never a periodic poll. The fetch runs on the
+app's news thread (network, no GPU), so Pause AI does not block it. Snapshots and last
+failures go to the app's own chat store (``app_state``); nothing else is written.
 """
 
 from __future__ import annotations
@@ -22,36 +23,51 @@ MORNING_END = time(13, 30)
 FOOTER = "*read-only: positions and cash only; it never orders*"
 
 
+def fetch_note(out: dict[str, Any]) -> str:
+    """The card's note for a broker not read now ("" when read or fresh)."""
+    notes = []
+    for name, part in (("Questrade", out), ("IBKR", out.get("ibkr"))):
+        reason = str((part or {}).get("reason") or "")
+        if part is not None and not part.get("fetched") and reason not in ("", "fresh"):
+            notes.append(f"not read from {name} now: {reason}")
+    return "; ".join(notes)
+
+
 def _aware(now: datetime) -> datetime:
     return now if now.tzinfo else now.astimezone()
 
 
-def stored_snapshot(store: Any) -> Any:
-    from mentor_packs.book_pack import SNAPSHOT_KEY
+def _keys(broker: str) -> tuple[str, str]:
+    from mentor_packs import book_pack
+
+    if broker == "IBKR":
+        return book_pack.IBKR_SNAPSHOT_KEY, book_pack.IBKR_STATUS_KEY
+    return book_pack.SNAPSHOT_KEY, book_pack.STATUS_KEY
+
+
+def stored_snapshot(store: Any, broker: str = "QUESTRADE") -> Any:
     from questrade_positions import BookSnapshot
 
-    return BookSnapshot.from_json(store.get_state(SNAPSHOT_KEY))
+    return BookSnapshot.from_json(store.get_state(_keys(broker)[0]))
 
 
-def stored_status(store: Any) -> dict[str, Any] | None:
-    from mentor_packs.book_pack import STATUS_KEY
-
+def stored_status(store: Any, broker: str = "QUESTRADE") -> dict[str, Any] | None:
     try:
-        value = json.loads(store.get_state(STATUS_KEY) or "null")
+        value = json.loads(store.get_state(_keys(broker)[1]) or "null")
     except ValueError:
         return None
     return value if isinstance(value, dict) and value else None
 
 
-def skip_reason(store: Any, now: datetime) -> str:
+def skip_reason(store: Any, now: datetime, broker: str = "QUESTRADE") -> str:
     """Why no fetch now ("" = fetch): a fresh snapshot, or the 1-hour backoff after a failure."""
     from questrade_positions import backoff_left
 
     moment = _aware(now)
-    snap = stored_snapshot(store)
+    snap = stored_snapshot(store, broker)
     if snap is not None and snap.is_fresh(moment):
         return "fresh"
-    status = stored_status(store) or {}
+    status = stored_status(store, broker) or {}
     if status.get("reason") and status.get("reason") != "no token":
         left = backoff_left(status.get("at_utc"), moment)
         if left is not None:
@@ -60,33 +76,50 @@ def skip_reason(store: Any, now: datetime) -> str:
 
 
 def ensure_book(store: Any, now: datetime, *, fetch: Callable[..., Any] | None = None,
-                desk_closed: Callable[[], bool | None] | None = None) -> dict[str, Any]:
-    """Fetch the Questrade book when due. Never raises; returns ``{fetched, reason}``."""
-    from mentor_packs.book_pack import SNAPSHOT_KEY, STATUS_KEY
+                desk_closed: Callable[[], bool | None] | None = None,
+                ibkr_fetch: Callable[..., Any] | None = None) -> dict[str, Any]:
+    """Read each broker when due, in turn. Never raises.
 
+    Returns Questrade's ``{fetched, reason}`` plus ``ibkr`` (the same for IBKR) when an IBKR
+    reader is given; ``ibkr_fetch=None`` reads no IBKR (the app passes the real reader).
+    """
     moment = _aware(now)
-    why = skip_reason(store, moment)
-    if why:
-        return {"fetched": False, "reason": why}
-    if desk_closed is not None:
-        try:
-            closed = desk_closed() is True
-        except Exception:  # noqa: BLE001 - a broken probe is "unknown", never "closed"
-            closed = False
-        if closed:
-            return {"fetched": False, "reason": "the desk is closed"}
+    probed: list[bool] = []
+
+    def closed() -> bool:
+        if not probed:
+            try:
+                probed.append(desk_closed is not None and desk_closed() is True)
+            except Exception:  # noqa: BLE001 - a broken probe is "unknown", never "closed"
+                probed.append(False)
+        return probed[0]
+
     if fetch is None:
         from questrade_positions import fetch_book as fetch
+    out = _ensure_one(store, moment, fetch, "QUESTRADE", closed)
+    if ibkr_fetch is not None:
+        out["ibkr"] = _ensure_one(store, moment, ibkr_fetch, "IBKR", closed)
+    return out
+
+
+def _ensure_one(store: Any, moment: datetime, fetch: Callable[..., Any], broker: str,
+                closed: Callable[[], bool]) -> dict[str, Any]:
+    why = skip_reason(store, moment, broker)
+    if why:
+        return {"fetched": False, "reason": why}
+    if closed():
+        return {"fetched": False, "reason": "the desk is closed"}
+    snapshot_key, status_key = _keys(broker)
     try:
         snap, reason = fetch(moment)
-    except Exception as exc:  # noqa: BLE001 - the fetcher never raises; a stub might
+    except Exception as exc:  # noqa: BLE001 - the fetchers never raise; a stub might
         snap, reason = None, f"{type(exc).__name__}: {exc}"[:200]
     stamp = moment.astimezone(timezone.utc).isoformat(timespec="seconds")
     if snap is None:
-        store.set_state(STATUS_KEY, json.dumps({"reason": str(reason or "unknown"), "at_utc": stamp}, sort_keys=True))
+        store.set_state(status_key, json.dumps({"reason": str(reason or "unknown"), "at_utc": stamp}, sort_keys=True))
         return {"fetched": False, "reason": str(reason or "unknown"), "failed": True}
-    store.set_state(SNAPSHOT_KEY, snap.as_json())
-    store.set_state(STATUS_KEY, "{}")
+    store.set_state(snapshot_key, snap.as_json())
+    store.set_state(status_key, "{}")
     return {"fetched": True, "reason": ""}
 
 
@@ -98,7 +131,9 @@ def store_sources(store: Any, base: Any = None) -> Any:
 
     src = base or book_pack.live_sources()
     return dataclasses.replace(src, snapshot=lambda: _as_dict(stored_snapshot(store)),
-                               status=lambda: stored_status(store))
+                               status=lambda: stored_status(store),
+                               ibkr_snapshot=lambda: _as_dict(stored_snapshot(store, "IBKR")),
+                               ibkr_status=lambda: stored_status(store, "IBKR"))
 
 
 def _as_dict(snap: Any) -> dict[str, Any] | None:
