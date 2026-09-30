@@ -23,11 +23,12 @@ model's roles.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from PySide6.QtCore import (
     QAbstractTableModel,
+    QDate,
     QModelIndex,
     QSortFilterProxyModel,
     Qt,
@@ -42,6 +43,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QButtonGroup,
+    QDateEdit,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -93,6 +95,8 @@ MOVERS_MODE_SETTING = "movers_board_mode"
 MOVERS_DEEP_READ_SETTING = "movers_board_deep_read"
 #: {"day": "YYYY-MM-DD", "keys": ["SYM|side", ...]}: rows the trader hid today.
 MOVERS_HIDDEN_SETTING = "movers_board_hidden"
+#: "YYYY-MM-DD" the Daily Dip boxes measure from ("" = 20 sessions back).
+MOVERS_D1_SINCE_SETTING = "movers_board_d1_since"
 #: Raw value a column sorts by (None = unmeasured, always last).
 SORT_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 _TEXT_SORT_KEYS = {"symbol", "group"}
@@ -153,7 +157,7 @@ def _swing_title(side: str, anchor: dict[str, Any] | None) -> str:
         return f"{name} · no SPY bars today yet"
     when = _local_clock(anchor.get("dt")) or anchor.get("time") or ""
     verb = "beating" if side == "long" else "lagging"
-    point = "low" if side == "long" else "high"
+    point = "high" if side == "long" else "low"
     kind = anchor.get("kind")
     if kind == "open":
         since = "the open"
@@ -196,16 +200,19 @@ def tf_main_title(tf: str, board: dict[str, Any] | None) -> str:
 
 
 def tf_swing_title(tf: str, side: str, anchor: dict[str, Any] | None) -> str:
-    """'Daily Dip-strong · beating SPY since 9/22 low' (the anchor's own date / time)."""
+    """'M30 Dip-strong · beating SPY since 9/21 10:30 high' / 'Daily Dip-weak ·
+    lagging SPY since 9/2' (the anchor's own date / time)."""
     label = movers_timeframe.TF_LABELS.get(tf, tf)
     name = "Dip-strong" if side == "long" else "Dip-weak"
     if not anchor:
         return f"{label} {name} · no SPY anchor yet"
     verb = "beating" if side == "long" else "lagging"
-    point = "low" if side == "long" else "high"
     when = _short_date(anchor.get("date") or anchor.get("dt"))
-    if tf == "m30":
-        when = f"{when} {_local_clock(anchor.get('dt')) or anchor.get('time') or ''}".strip()
+    if tf != "m30":
+        return f"{label} {name} · {verb} SPY since {when}"
+    # M30: longs from SPY's high before its last big dip, shorts from the low (trader 2026-09-30).
+    point = "high" if side == "long" else "low"
+    when = f"{when} {_local_clock(anchor.get('dt')) or anchor.get('time') or ''}".strip()
     return f"{label} {name} · {verb} SPY since {when} {point}"
 
 
@@ -519,8 +526,6 @@ def _row_tooltip(row: dict[str, Any]) -> str:
         verdict = ("yes" if trend else "NO" if trend is False
                    else f"unknown ({int(row.get('daily_bars') or 0)} daily bars)")
         parts.append(f"{want}: {verdict}")
-    if row.get("avwap") is not None:
-        parts.append(f"VWAP from SPY's anchor {float(row['avwap']):.2f}")
     if row.get("stale"):
         parts.append("stale bars")
     if row.get("note"):
@@ -703,6 +708,8 @@ class MoversBoard(QWidget):
     focusAddRequested = Signal(str, str)
     #: The trader's explicit PB / Line click: (symbol, "long"|"short", kind). Never automatic.
     alertArmRequested = Signal(str, str, str)
+    #: The trader picked the Daily Dip boxes' start date (a `date`, or None = 20 sessions back).
+    d1SinceChanged = Signal(object)
 
     def __init__(self, parent=None, *, persist: bool = True) -> None:
         super().__init__(parent)
@@ -729,6 +736,7 @@ class MoversBoard(QWidget):
         self._focus_service = None
         # Rows the trader hid today ("SYM|side").
         self._hidden_day, self._hidden = self._load_hidden()
+        self._d1_since = self._load_d1_since()
         self._render_coalescer = SignalCoalescer(self._render, parent=self)
         self._counts_coalescer = SignalCoalescer(self._render_counts, parent=self)
 
@@ -783,6 +791,26 @@ class MoversBoard(QWidget):
             self.mode_group.addButton(button)
             self.mode_buttons[mode] = button
             modes_row.addWidget(button)
+        # Daily tab only: the date its Dip boxes measure from (trader 2026-09-30).
+        self.d1_since_edit = QDateEdit()
+        self.d1_since_edit.setCalendarPopup(True)
+        self.d1_since_edit.setDisplayFormat("M/d/yy")
+        self.d1_since_edit.setToolTip(
+            "Daily Dip boxes: beating / lagging SPY since this day's close.")
+        self.d1_since_edit.setMaximumDate(QDate.currentDate())
+        self.d1_since_edit.setDate(self._qdate_for_since())
+        self.d1_since_edit.dateChanged.connect(self._on_d1_date_changed)
+        self.d1_since_edit.setVisible(False)
+        modes_row.addWidget(self.d1_since_edit)
+        self.d1_reset_button = QToolButton()
+        self.d1_reset_button.setObjectName("MoversChip")
+        self.d1_reset_button.setText("20d")
+        self.d1_reset_button.setCheckable(True)
+        self.d1_reset_button.setToolTip("Measure from 20 sessions back (the default).")
+        self.d1_reset_button.setChecked(self._d1_since is None)
+        self.d1_reset_button.clicked.connect(lambda _checked=False: self.set_d1_since(None))
+        self.d1_reset_button.setVisible(False)
+        modes_row.addWidget(self.d1_reset_button)
         self.add_focus_button = QToolButton()
         self.add_focus_button.setObjectName("MoversChip")
         self.add_focus_button.setText("+F")
@@ -893,6 +921,35 @@ class MoversBoard(QWidget):
         if not isinstance(saved, dict):
             return "", set()
         return str(saved.get("day") or ""), {str(k) for k in saved.get("keys") or [] if k}
+
+    def _load_d1_since(self) -> date | None:
+        try:
+            return date.fromisoformat(str(self._setting(MOVERS_D1_SINCE_SETTING, "") or ""))
+        except ValueError:
+            return None
+
+    def _qdate_for_since(self) -> QDate:
+        day = self._d1_since or (datetime.now().date() - timedelta(days=28))
+        return QDate(day.year, day.month, day.day)
+
+    # ------------------------------------------------------------ Daily start date
+    def d1_since(self) -> date | None:
+        """The Daily Dip boxes' start date (None: 20 sessions back)."""
+        return self._d1_since
+
+    def set_d1_since(self, day: date | None) -> None:
+        """The trader's pick: saved, shown, and sent to the service."""
+        self._d1_since = day
+        self._save(MOVERS_D1_SINCE_SETTING, day.isoformat() if day else "")
+        if day is not None:
+            self.d1_since_edit.blockSignals(True)
+            self.d1_since_edit.setDate(self._qdate_for_since())
+            self.d1_since_edit.blockSignals(False)
+        self.d1_reset_button.setChecked(day is None)
+        self.d1SinceChanged.emit(day)
+
+    def _on_d1_date_changed(self, value: QDate) -> None:
+        self.set_d1_since(date(value.year(), value.month(), value.day()))
 
     def _board_day(self) -> str:
         return str(self._board.get("as_of") or "")[:10] or datetime.now().date().isoformat()
@@ -1097,6 +1154,10 @@ class MoversBoard(QWidget):
         button = self.mode_buttons[self._mode]
         if not button.isChecked():
             button.setChecked(True)
+        daily = self._mode == "d1"
+        for control in (self.d1_since_edit, self.d1_reset_button):
+            if control.isHidden() == daily:
+                control.setVisible(daily)
         self._fit_columns()
 
     def _hidden_in_view(self) -> list[dict[str, Any]]:
@@ -1333,10 +1394,15 @@ class MoversBoard(QWidget):
             board = self._view_board()
             if not board:
                 return "" if name != "pop" else tf_banner_text(self._mode, board)
+            anchor = (board.get("swing_anchor") or {}).get("long" if name == "strong" else "short")
+            if self._mode == "m30":
+                since = "the high" if name == "strong" else "the low"
+            else:
+                since = _short_date((anchor or {}).get("date")) or "the date"
             if name == "strong":
-                return "No name is beating SPY since the low."
+                return f"No name is beating SPY since {since}."
             if name == "weak":
-                return "No name is lagging SPY since the high."
+                return f"No name is lagging SPY since {since}."
             if self._hidden_in_view():
                 return "Every name is hidden. Tap Unhide to see them."
             return "Nothing moved enough."
@@ -1345,10 +1411,10 @@ class MoversBoard(QWidget):
         if "swing" in (self._board or {}):
             if name == "strong":
                 return "" if (self._board.get("swing_anchor") or {}).get("long") is None else (
-                    "No name is beating SPY since the low.")
+                    "No name is beating SPY since the high.")
             if name == "weak":
                 return "" if (self._board.get("swing_anchor") or {}).get("short") is None else (
-                    "No name is lagging SPY since the high.")
+                    "No name is lagging SPY since the low.")
         if name in ("strong", "weak") and not self._dip_live():
             return ""  # the box title says it is not lit
         if name == "strong":

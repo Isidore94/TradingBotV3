@@ -18,6 +18,10 @@ names, builds the board (`movers_timeframe`), logs its picks and resolves due
 outcomes (`movers_timeframe_outcomes`, the Daily scan only), attaches the
 summaries, saves the board atomically and emits it. A failed scan keeps and
 re-shows the last good board with the error. Nothing heavy runs on the Qt thread.
+
+The Daily Dip boxes measure from a date the trader picks (`set_d1_since`); a new
+date rebuilds the Daily board from this session's cached daily bars off the Qt
+thread without logging picks, or runs a normal Daily scan when none are cached.
 """
 
 from __future__ import annotations
@@ -175,6 +179,8 @@ class MoversTimeframeService(QObject):
 
     timeframeBoardChanged = Signal(str, dict)
     statusChanged = Signal(str)
+    #: A worker ended (queued to the Qt thread): apply a date that waited for it.
+    _workerDone = Signal()
 
     def __init__(
         self,
@@ -228,6 +234,11 @@ class MoversTimeframeService(QObject):
         self._tries: dict[tuple[str, str], int] = {}
         self._running = False
         self._stopped = False
+        # The Daily Dip boxes' start date (None: 20 sessions back) and whether a
+        # date change waits for the running worker.
+        self._d1_since: date | None = None
+        self._since_pending = False
+        self._workerDone.connect(self._after_worker)
         # Last good boards, shown right after a restart (two small JSON reads).
         self._boards: dict[str, dict[str, Any]] = {
             tf: load_board(self._board_paths.get(tf), tf) for tf in mtf.TIMEFRAMES
@@ -267,6 +278,40 @@ class MoversTimeframeService(QObject):
         return "Movers " + (" · ".join(parts)) + (" · scanning..." if self._running else "")
 
     # ------------------------------------------------------------ control
+    @property
+    def d1_since(self) -> date | None:
+        return self._d1_since
+
+    def set_d1_since(self, day: date | None, *, rebuild: bool = True) -> None:
+        """The Daily Dip boxes' start date. `rebuild=False` only stores it (the
+        restored date on start); otherwise the Daily board is rebuilt, after the
+        running worker when one runs."""
+        self._d1_since = day
+        if not rebuild or self._stopped:
+            return
+        if self._running:
+            self._since_pending = True
+            return
+        self._apply_d1_since()
+
+    def _apply_d1_since(self) -> None:
+        target = d1_target_session(self._now())
+        cache = self._daily_cache
+        if (target is not None and cache.get("session") == target.isoformat()
+                and (cache.get("bars") or {}).get("SPY") is not None):
+            self._running = True
+            self._spawn(self._rebuild_worker)
+        else:
+            self._start([mtf.TF_D1])
+
+    def _after_worker(self) -> None:
+        if self._since_pending and not self._running:
+            self._since_pending = False
+            self._apply_d1_since()
+
+    def _spawn(self, target: Callable[[], None]) -> None:
+        threading.Thread(target=target, name="movers-timeframe", daemon=True).start()
+
     def shutdown(self) -> None:
         self._stopped = True
         self._timer.stop()
@@ -350,8 +395,7 @@ class MoversTimeframeService(QObject):
             return False
         self._running = True
         snapshot = self._snapshot()
-        threading.Thread(target=self._worker, args=(list(tfs), snapshot),
-                         name="movers-timeframe", daemon=True).start()
+        self._spawn(lambda: self._worker(list(tfs), snapshot))
         return True
 
     # ------------------------------------------------------------ worker
@@ -373,6 +417,27 @@ class MoversTimeframeService(QObject):
         finally:
             self._running = False
             self.statusChanged.emit(self.status_text())
+            self._workerDone.emit()
+
+    def _rebuild_worker(self) -> None:
+        """The Daily board again from the cached daily bars for a new start date.
+        Logs no picks and resolves no outcomes (only the scheduled scan does)."""
+        try:
+            now = self._now()
+            bars = dict(self._daily_cache.get("bars") or {})
+            spy = bars.pop("SPY")
+            records: list[dict[str, Any]] = []
+            if self._picks_path is not None:
+                records = mto.load_records(Path(self._picks_path))
+            board = self._build(mtf.TF_D1, bars, spy, now, None)
+            board["summaries"] = mto.summaries(records, mtf.TF_D1)
+            self._publish(mtf.TF_D1, board)
+        except Exception:
+            logging.exception("Movers Daily rebuild for a new date failed")
+        finally:
+            self._running = False
+            self.statusChanged.emit(self.status_text())
+            self._workerDone.emit()
 
     def _stamped(self, tf: str, board: Mapping[str, Any], now: datetime) -> dict[str, Any]:
         out = dict(board)
@@ -442,24 +507,7 @@ class MoversTimeframeService(QObject):
         if not bars.get("SPY"):
             raise RuntimeError("no SPY bars from Yahoo")
         spy = bars.pop("SPY")
-        try:
-            industry = dict(self._industry_provider() or {})
-        except Exception:
-            industry = {}
-        try:
-            earnings = set(self._earnings_provider(ny.date()) or ())
-        except Exception:
-            earnings = set()
-
-        def build() -> dict[str, Any]:
-            return mtf.build_timeframe_board(
-                tf, bars, spy, now=scan_now, daily_bars=daily,
-                fundamentals={s: {"market_cap_m": self._caps.get(s)} for s in bars},
-                industry=industry, earnings=earnings)
-
-        board = build()
-        if self._fetch_caps(mtf.listed_symbols(board)):
-            board = build()
+        board = self._build(tf, bars, spy, scan_now, daily)
         new_rows = mto.new_picks(board, records)
         if tf == mtf.TF_D1:
             normalised = {s: mtf.normalize_tf_bars(mtf.TF_D1, b, now=now)
@@ -469,6 +517,34 @@ class MoversTimeframeService(QObject):
         if self._picks_path is not None and new_rows:
             mto.append_records(Path(self._picks_path), new_rows)
         board["summaries"] = mto.summaries([*records, *new_rows], tf)
+        self._publish(tf, board)
+
+    def _build(self, tf: str, bars: Mapping[str, Any], spy: Any, scan_now: datetime,
+               daily: Mapping[str, Any] | None) -> dict[str, Any]:
+        """One board (worker thread); market caps for newly listed names, then again."""
+        ny_day = scan_now.astimezone(NY_TZ).date()
+        try:
+            industry = dict(self._industry_provider() or {})
+        except Exception:
+            industry = {}
+        try:
+            earnings = set(self._earnings_provider(ny_day) or ())
+        except Exception:
+            earnings = set()
+
+        def build() -> dict[str, Any]:
+            return mtf.build_timeframe_board(
+                tf, bars, spy, now=scan_now, daily_bars=daily,
+                fundamentals={s: {"market_cap_m": self._caps.get(s)} for s in bars},
+                industry=industry, earnings=earnings,
+                since=self._d1_since if tf == mtf.TF_D1 else None)
+
+        board = build()
+        if self._fetch_caps(mtf.listed_symbols(board)):
+            board = build()
+        return board
+
+    def _publish(self, tf: str, board: dict[str, Any]) -> None:
         self._boards[tf] = board
         save_board(self._board_paths.get(tf), board)
         self.timeframeBoardChanged.emit(tf, self._stamped(tf, board, self._now()))
