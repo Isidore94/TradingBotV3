@@ -1,6 +1,6 @@
 """Setup keys narration (WISHLIST P1-4 / 4d): three cited sentences per family.
 
-A Saturday slot. It hands the local model the permutation report as FACTS
+A nightly slot (weekly until 2026-09-30). It hands the local model the permutation report as FACTS
 ONLY - each fact a short line with an id - and asks for at most three
 sentences per family, each citing fact ids of that family. The pattern is the
 nightly ideas slot's (TJ-6):

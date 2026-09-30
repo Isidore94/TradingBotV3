@@ -416,6 +416,8 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         # regime rows that read it.
         "lake_history_topup",
         "market_regime_daily",
+        # Nightly permutation report (trader 2026-09-30), deterministic, stage 1.
+        "permutation_report",
         "market_story_rollups",
         "measured_report",
         # AI-R3 refreshes the bounded facts before any story reads them.
@@ -441,13 +443,11 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         # weeknight does not carry - so here it sits between the word tagger
         # and the briefs.
         "exit_note_fields",
-        # Trader 2026-09-30: `ticker_briefs` is back on the weeknight slate
-        # (Saturday-only 2026-09-24 to 2026-09-30).
-        "ticker_briefs",
-        # Mentor app P4 (2026-09-30): `mentor_review`, directly after the briefs.
+        # Mentor app P4 (2026-09-30): `mentor_review`, directly after the
+        # exit-note reader since the briefs moved last.
         "mentor_review",
         # Econ morning brief (2026-09-24): a stage 2 model slot directly after
-        # the briefs.
+        # `mentor_review`.
         "econ_brief",
         "market_story_narration",
         # LEAD AMENDMENT 2026-09-26 (S17.2): the regime read joins the market
@@ -460,9 +460,14 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         "review_policy_draft",
         # P1-7 7b (2026-09-25): plan challenges, a stage 3 model slot.
         "plan_review",
+        # Trader 2026-09-30: the setup-keys narration is nightly (the report is too).
+        "setup_keys_narration",
         # TJ-6 (2026-09-20) appended after `setup_research`, last of stage 3.
         "setup_research",
         "improvement_ideas",
+        # Trader 2026-09-30: `ticker_briefs` is back on the weeknight slate
+        # (Saturday-only 2026-09-24 to 2026-09-30) and runs LAST.
+        "ticker_briefs",
     )
     assert tuple(slot.name for slot in runner.slots_for("weeknight")) == expected
 

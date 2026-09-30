@@ -82,6 +82,7 @@ LEAD_GOAL_MAP = {
     "preference_trade_outcomes": "journal",
     "mentor_review": "journal",
     "setup_keys_narration": "permutations",
+    "permutation_report": "permutations",
     "read_grades_mature": "market_read",
     "prediction_contrast": "market_read",
     "market_story_rollups": "market_read",

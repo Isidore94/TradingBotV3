@@ -376,9 +376,11 @@ def test_every_deterministic_slot_precedes_the_narration_pair():
         "preference_trade_outcomes", "evidence_report", "daily_digest",
     ):
         assert names.index(deterministic) < narration_at, deterministic
-    # And the model-gated slots still sit after the narration pair.
+    # The model-gated slots sit after `ai_summary`; since 2026-09-30 (trader)
+    # `ticker_briefs` runs last, after them.
     for gated in ("journal_enrichment", "review_policy_draft", "setup_research"):
-        assert names.index(gated) > names.index("ticker_briefs"), gated
+        assert names.index(gated) > names.index("ai_summary"), gated
+        assert names.index(gated) < names.index("ticker_briefs"), gated
 
 
 def _stub_slots(names, *, raises=()):

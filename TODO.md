@@ -29,7 +29,7 @@ here.
   P13 plain-language routing built (trader 2026-09-30, `claude/mentor-app-p13-routing-2026-09-30`,
   gate #329): native tools by capability (gemma4:12b default), auto-attach, `journal_pack`, M5 cell,
   pre-trade checklist, `/today` `/latency`, `mentor_eval.py`.
-  P14 tone built (trader 2026-09-30, `claude/mentor-app-p14-tone-2026-09-30`, gate #330): short answers,
+  P14 tone built (trader 2026-09-30, `claude/mentor-app-p14-tone-2026-09-30`, gate #332): short answers,
   style guard + score, market-cue-only regime, `earnings_pack`, month window, tilt on "stop trading", chat book fetch.
   Next only by the trader's word: an alerts pack, a movers pack, more recall sources.
 
@@ -351,5 +351,4 @@ S1 and keep the order. The two 500 MB logs are read with
   a mood with a result), TJ-9E (exit fields in the day pack; `CLOSED_PARTIAL` spelling
   in 4 ask-first places; `ai_summary._journal_source` exit words).
 - Housekeeping: dead-script review needs the trader's yes; 142 owed gates need a batch
-  pass/drop; the live `permutation_report.json` names a scratch parquet as its source
-  (the Saturday job must write it from the live warehouse).
+  pass/drop.
