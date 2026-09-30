@@ -124,6 +124,16 @@ LOCAL_EVIDENCE_BUDGET_SETTING_KEY = "ai_local_evidence_budget_chars"
 #: own model to 65536 on 2026-08-28 and set this to match.
 LOCAL_CONTEXT_SETTING_KEY = "ai_local_context_tokens"
 DEFAULT_LOCAL_CONTEXT_TOKENS = 12_288
+#: Model families that reason before they answer (gpt-oss on Ollama). The
+#: reasoning comes back apart from `message.content`, but its tokens count
+#: against `max_tokens`, so these tags get an effort level and an output
+#: allowance a plain-answer model such as gemma3 never receives.
+THINKING_MODEL_PREFIXES = ("gpt-oss",)
+LOCAL_REASONING_EFFORT_SETTING_KEY = "ai_local_reasoning_effort"
+LOCAL_REASONING_EFFORTS = ("low", "medium", "high")
+DEFAULT_LOCAL_REASONING_EFFORT = "low"
+LOCAL_REASONING_TOKENS_SETTING_KEY = "ai_local_reasoning_tokens"
+DEFAULT_LOCAL_REASONING_TOKENS = 2_000
 #: `max_tokens` a local MAP request sends -- a single-shot summary or one slice
 #: of the map-reduce. It comes out of the same window as the prompt, so it is
 #: subtracted before any of it is offered to evidence, and it is THIS cap that
@@ -905,6 +915,31 @@ def local_context_tokens() -> int:
     return value if value > 0 else DEFAULT_LOCAL_CONTEXT_TOKENS
 
 
+def model_thinks(model: str) -> bool:
+    """True for a model tag whose answer is preceded by hidden reasoning."""
+    tag = str(model or "").strip().lower()
+    tag = tag.split("/")[-1]
+    return tag.startswith(THINKING_MODEL_PREFIXES)
+
+
+def local_reasoning_effort() -> str:
+    """The reasoning level a thinking model is asked for (settings; low by default)."""
+    raw = str(get_local_setting(LOCAL_REASONING_EFFORT_SETTING_KEY, "") or "").strip().lower()
+    return raw if raw in LOCAL_REASONING_EFFORTS else DEFAULT_LOCAL_REASONING_EFFORT
+
+
+def local_reasoning_tokens() -> int:
+    """Output tokens set aside for a thinking model's reasoning, on top of the answer cap."""
+    raw = get_local_setting(LOCAL_REASONING_TOKENS_SETTING_KEY, DEFAULT_LOCAL_REASONING_TOKENS)
+    if isinstance(raw, bool):
+        return DEFAULT_LOCAL_REASONING_TOKENS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_LOCAL_REASONING_TOKENS
+    return value if value >= 0 else DEFAULT_LOCAL_REASONING_TOKENS
+
+
 #: A per-symbol brief is one of 50-120 model calls in one overnight window; the
 #: session summary is one. Sharing a budget between them means either the
 #: summary is starved or the brief job cannot finish, and on this desk it was
@@ -957,6 +992,9 @@ def local_evidence_budget_ceiling_chars() -> int:
     which is the failure this budget exists to make visible.
     """
     usable = local_context_tokens() - LOCAL_GENERATION_TOKENS
+    if model_thinks(local_model("medium")):
+        # The reasoning allowance shares the window too.
+        usable -= local_reasoning_tokens()
     if usable <= 0:
         return 1_000
     prompt_chars = usable * _BUDGET_CHARS_PER_TOKEN * _BUDGET_RETRY_HEADROOM
@@ -4048,6 +4086,12 @@ def _request_local_summary(
             },
         },
     }
+    if model_thinks(model):
+        # Ollama's OpenAI shim reads `reasoning_effort`; the reasoning tokens
+        # it spends come out of `max_tokens`, so the answer cap grows by the
+        # allowance rather than losing the answer to the thinking.
+        payload["reasoning_effort"] = local_reasoning_effort()
+        payload["max_tokens"] = int(payload["max_tokens"]) + local_reasoning_tokens()
     last_error: Exception | None = None
     #: What to send next when the backend cannot compile the grammar: the same
     #: contract without repetition bounds, then plain JSON-object mode. These

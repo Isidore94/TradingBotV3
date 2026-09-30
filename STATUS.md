@@ -18,6 +18,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 - **Merged 2026-09-30 (`370c6efb`), live at the next desk restart:** Trade Mentor app P0-P6 (shell to `/check` gate), gates #311-#317; `mentor_app_enabled` stays off until gate #312.
 - **In flight:** Pause AI (`claude/pause-ai-mode-2026-09-30`, gate #318), live at the next restart once merged.
 - **Desk:** next launch uses main; live checks are in GATES.
+- **gpt-oss:20b:** code merged, inert for gemma3; probe 2 on 10-01 02:05, then the trader's word.
 - **Night window:** the night AI starts 22:00 PT. Its model runs on the RTX 5080 host
   (`ai_remote_gpu_ssh_alias` = `claude-host`, ssh tunnel on 11435); falls back to local Ollama
   (also mid-run). One pass + one recheck, then unload and shut down; last firing 05:30. No builders, merges or test runs
@@ -37,4 +38,4 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   `map_freshness.py --apply`; desk down + market closed: `journal_pnl_repair.py` (#205),
   the options-journal repair (#162), `journal_questrade_gaps.py --statement`; the
   Saturday large-model probe; live click checks; consider rotating the market-prep
-  OpenAI key (a test read it once in the A5 suite run).
+  OpenAI key.
