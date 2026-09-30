@@ -150,8 +150,13 @@ def _run_model_probe(tier: str, *, force: bool = False) -> int:
     re-spends ONLY the already-measured check. It never buys the clock and
     never beats a held lock.
     """
+    import ai_pause
     from ai_jobs import ledger, model_probe
 
+    paused = ai_pause.reason()
+    if paused:
+        print(f"model probe refused: {paused} (no local inference while paused)")
+        return 1
     try:
         outcome = model_probe.run_model_probe(
             tier=tier, force=force, lock=model_probe.runner_lock

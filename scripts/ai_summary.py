@@ -868,8 +868,12 @@ def remote_endpoint_active(url: str) -> bool:
 
 
 def local_endpoint_url() -> str:
-    """Configured local inference base URL, or "" when the provider is off."""
-    configured = str(get_local_setting(LOCAL_ENDPOINT_SETTING_KEY, "") or "").strip().rstrip("/")
+    """Configured local inference base URL, or "" when the provider is off or AI is paused."""
+    import ai_pause
+
+    if ai_pause.is_paused():
+        return ""
+    configured =str(get_local_setting(LOCAL_ENDPOINT_SETTING_KEY, "") or "").strip().rstrip("/")
     override = os.environ.get(LOCAL_ENDPOINT_OVERRIDE_ENV, "").strip().rstrip("/")
     # The override only redirects an enabled provider, and only while it answers.
     if configured and override and _remote_alive(override):
@@ -4004,8 +4008,14 @@ def _request_local_summary(
             return _local_schema_prompt(evidence, contract, error_text)
         return _local_user_prompt(evidence, error_text)
 
+    import ai_pause
+
+    paused = ai_pause.reason()
+    if paused:
+        # Pause AI covers an explicit endpoint too: no local model call at all.
+        raise RuntimeError(f"local AI is off: {paused}")
     # `endpoint` is an explicit OpenAI-compatible base (the Trade Mentor app's 5080 tunnel).
-    base_url = str(endpoint or "").strip().rstrip("/") or local_endpoint_url()
+    base_url =str(endpoint or "").strip().rstrip("/") or local_endpoint_url()
     if not base_url:
         raise RuntimeError(
             "local AI provider selected but no endpoint is configured "
