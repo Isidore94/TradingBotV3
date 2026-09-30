@@ -720,8 +720,8 @@ class MentorWindow(QMainWindow):
         elif result.action == "vetoes":
             self.show_vetoes(str(result.arg or ""))
         elif result.action == "scorecard":
-            self.queue.submit("scorecard", lambda: challenge.scorecard(self.store), priority=PRIORITY_INTERACTIVE,
-                              key="scorecard", on_done=self._bridge.note.emit)
+            self.queue.submit("scorecard", lambda: challenge.scorecard(self.store, facts=memory.load_facts(self._memory_root)),
+                              priority=PRIORITY_INTERACTIVE, key="scorecard", on_done=self._bridge.note.emit)
         elif result.action == "tape":
             if self._context_pack is None:
                 self._add_note("The desk context is still loading; try again in a moment.")

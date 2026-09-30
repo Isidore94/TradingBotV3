@@ -391,13 +391,12 @@ def grade_open(store: Any, now: datetime, *, veto_outcomes: Path | str | None = 
     return updated
 
 
-def scorecard(store: Any, *, floor: int | None = None) -> str:
-    """Issued / graded veto challenges and the 5-session hit rate with n; "too few" under the floor."""
-    if floor is None:
-        from evidence_stats import MIN_REPORTABLE_N
+#: Kinds the scorecard always lists (later phases add ``pick`` and ``gate`` rows); any other kind found is listed too.
+SCORECARD_KINDS = ("veto",)
+SERVICE_DAYS = 7
 
-        floor = int(MIN_REPORTABLE_N)
-    rows = store.challenges(kind=KIND)
+
+def _kind_lines(rows: list[dict[str, Any]], kind: str, floor: int) -> list[str]:
     issued = len(rows)
     graded = sum(1 for row in rows if row.get("graded_utc"))
     hits = []
@@ -408,7 +407,52 @@ def scorecard(store: Any, *, floor: int | None = None) -> str:
             continue
         if "hit" in outcome:
             hits.append(bool(outcome["hit"]))
-    head = f"**Scorecard: veto challenges**\n\n- issued {issued}, fully graded {graded}"
+    lines = [f"**Scorecard: {kind} challenges**", "", f"- issued {issued}, fully graded {graded}"]
     if len(hits) < floor:
-        return head + f"\n- {HIT_HORIZON}-session hit rate: too few (n={len(hits)}, floor {floor})"
-    return head + f"\n- {HIT_HORIZON}-session hit rate {sum(hits) / len(hits):.0%} (n={len(hits)}, floor {floor})"
+        lines.append(f"- {HIT_HORIZON}-session hit rate: too few (n={len(hits)}, floor {floor})")
+    else:
+        lines.append(f"- {HIT_HORIZON}-session hit rate {sum(hits) / len(hits):.0%} (n={len(hits)}, floor {floor})")
+    return lines
+
+
+def _median(values: list[float]) -> float | None:
+    ordered = sorted(values)
+    if not ordered:
+        return None
+    middle = len(ordered) // 2
+    return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def service_lines(facts: Any) -> list[str]:
+    """The app's own service over the last SERVICE_DAYS ``mentor_day_facts``: latency, outages, uncited numbers."""
+    days = sorted((dict(row) for row in facts or () if isinstance(row, Mapping) and row.get("session_date")),
+                  key=lambda row: str(row["session_date"]), reverse=True)[:SERVICE_DAYS]
+    lines = ["**The app itself** (last "
+             f"{len(days)} night{'s' if len(days) != 1 else ''} of facts)", ""]
+    if not days:
+        return lines + ["- no night facts yet (the `mentor_review` slot writes them)"]
+    latencies = [float(v) for row in days for v in (row.get("first_token_ms") or {}).get("values") or ()]
+    p50 = _median(latencies)
+    lines.append(f"- first token p50 {p50:.0f} ms (n={len(latencies)})" if p50 is not None
+                 else "- first token p50: unknown (n=0)")
+    offline = sum(float(row.get("brain_offline_min") or 0) for row in days)
+    lines.append(f"- brain offline {offline:.0f} min")
+    numbers = sum(int(row.get("numbers") or 0) for row in days)
+    uncited = sum(int(row.get("uncited_numbers") or 0) for row in days)
+    lines.append(f"- uncited numbers {uncited} of {numbers} ({uncited / numbers:.0%})" if numbers
+                 else "- uncited numbers: none counted yet (n=0)")
+    return lines
+
+
+def scorecard(store: Any, *, floor: int | None = None, facts: Any = ()) -> str:
+    """Per challenge kind: issued / graded and the 5-session hit rate with n ("too few" under the floor);
+    then the app's own service stats from the night's ``mentor_day_facts``."""
+    if floor is None:
+        from evidence_stats import MIN_REPORTABLE_N
+
+        floor = int(MIN_REPORTABLE_N)
+    rows = store.challenges()
+    kinds = list(SCORECARD_KINDS) + sorted({str(row.get("kind")) for row in rows} - set(SCORECARD_KINDS))
+    blocks = ["\n".join(_kind_lines([row for row in rows if row.get("kind") == kind], kind, floor)) for kind in kinds]
+    blocks.append("\n".join(service_lines(facts)))
+    return "\n\n".join(blocks)

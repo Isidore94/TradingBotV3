@@ -126,6 +126,18 @@ def load(store: Any, *, ai_root: Path | str | None = None, budget_tokens: int = 
     return render([*digest_items(publications), *note_items(notes)], budget_tokens=budget_tokens)
 
 
+def load_facts(ai_root: Path | str | None = None, *, days: int = 7) -> list[dict[str, Any]]:
+    """The newest ``days`` ``mentor_day_facts`` publications (for /scorecard); [] when none or unreadable."""
+    from ai_jobs.mentor_review import FACTS_STEM, read_published
+
+    try:
+        root = Path(ai_root) if ai_root is not None else _digests_root()
+        return read_published(root, FACTS_STEM, limit=days) if root is not None else []
+    except Exception:  # noqa: BLE001 - no facts is "no night facts yet"
+        logging.warning("Trade Mentor: the night facts could not be read", exc_info=True)
+        return []
+
+
 def as_listing(memory: Memory) -> str:
     """What ``/memory`` prints: every loaded item with its id."""
     if not memory.items:
