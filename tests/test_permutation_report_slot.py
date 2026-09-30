@@ -257,3 +257,12 @@ def test_force_re_runs_the_slot(world, tmp_path):
     assert len(world["calls"]) == 2, "one nightly run, then one forced re-run"
     assert not [row for row in again.results if row.get("status") == ledger.STATUS_OK]
     assert [row["status"] for row in forced.results] in ([ledger.STATUS_OK], [ledger.STATUS_MANUAL])
+
+
+def test_live_inputs_read_the_scan_snapshots_where_scan_manifest_writes_them():
+    """The slot spells the folder itself (no detector import); it must stay the manifest's."""
+    from master_avwap_lib import scan_manifest
+
+    from ai_jobs import permutation_report
+
+    assert permutation_report.live_inputs().scan_reports == Path(scan_manifest.scan_reports_dir())

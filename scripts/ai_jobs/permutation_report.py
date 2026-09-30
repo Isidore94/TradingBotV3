@@ -65,7 +65,6 @@ class Outputs:
 
 def live_inputs() -> Inputs:
     import project_paths as pp
-    from master_avwap_lib import scan_manifest
 
     return Inputs(
         features=Path(pp.D1_FEATURES_HISTORY_FILE),
@@ -77,7 +76,9 @@ def live_inputs() -> Inputs:
         environment=Path(pp.D1_ENVIRONMENT_FILE),
         review_events_dir=Path(pp.ALERT_REVIEW_EVENTS_DIR),
         review_events_file=Path(pp.ALERT_REVIEW_EVENTS_FILE),
-        scan_reports=Path(scan_manifest.scan_reports_dir()),
+        # Same folder as `master_avwap_lib.scan_manifest.scan_reports_dir()`, spelled
+        # here so no AI job imports a detector package (pinned by the slot test).
+        scan_reports=Path(pp.get_diagnostics_dir()) / "scan_reports",
     )
 
 
