@@ -17,6 +17,7 @@ only when ``mentor_max_positions_per_account`` is set). Never sizes, orders or w
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 from collections import Counter
@@ -359,7 +360,7 @@ def _why_not(snap: Any, status: Mapping[str, Any], moment: datetime) -> str:
     if status.get("reason"):
         why = str(status["reason"])
         left = backoff_left(status.get("at_utc"), moment) if why != "no token" else None
-        return why + (f" (backing off {int(left.total_seconds() // 60) + 1} min)" if left is not None else "")
+        return why + (f" (backing off {math.ceil(left.total_seconds() / 60)} min)" if left is not None else "")
     return "not fetched yet"
 
 
