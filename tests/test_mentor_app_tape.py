@@ -272,6 +272,22 @@ def test_a_failed_re_read_keeps_the_good_read_for_the_same_tape(win):
     assert win._tape_last["card"] is good
 
 
+def test_turning_the_push_on_after_0630_still_sends_once_that_day(win, monkeypatch):
+    enabled = {"on": False}
+    monkeypatch.setattr(settings, "push_brief_enabled", lambda: enabled["on"])
+    for minutes in (0, 10):
+        win.clock["now"] = TUE_0631 + timedelta(minutes=minutes)
+        win.maybe_push_brief()
+        _drain(win)
+    assert win.sent == []
+    enabled["on"] = True  # the trader flips it on at 06:50
+    for minutes in (19, 20, 40):
+        win.clock["now"] = TUE_0631 + timedelta(minutes=minutes)
+        win.maybe_push_brief()
+        _drain(win)
+    assert len(win.sent) == 1
+
+
 def test_the_window_pushes_once_a_day_only_with_the_setting_on(win, monkeypatch):
     win.clock["now"] = TUE_0631
     monkeypatch.setattr(settings, "push_brief_enabled", lambda: False)

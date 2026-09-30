@@ -1239,15 +1239,21 @@ class MentorWindow(QMainWindow):
         local = now.astimezone(brief_push.PT)
         if self._push_checked_day == local.date() or not (brief_push.SEND_FROM <= local.time() < brief_push.SEND_UNTIL):
             return
-        self._push_checked_day = local.date()  # one job a day; brief_push keeps the persisted once-a-day mark
-        send = self._push_send
+        # Read each check, so turning it on inside the window still sends that day.
+        if not settings.push_brief_enabled():
+            return
+        send, day = self._push_send, local.date()
 
         def job() -> str:
-            if not settings.push_brief_enabled():
+            if self.store.get_state(brief_push.STATE_KEY) == day.isoformat():
+                self._push_checked_day = day  # already sent (maybe before a restart)
                 return ""
             last = self._tape_last
             pack = last["pack"] if last is not None and now - last["at_utc"] < tape.REFRESH_EVERY else self._build_tape()
-            return brief_push.maybe_send(self.store, pack, now=now, enabled=True, send=send)
+            line = brief_push.maybe_send(self.store, pack, now=now, enabled=True, send=send)
+            if line:
+                self._push_checked_day = day  # sent: no more checks today
+            return line
 
         self.queue.submit("tape_push", job, priority=PRIORITY_REFRESH, key="tape-push")
 
