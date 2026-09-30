@@ -676,6 +676,8 @@ def test_the_scope_can_be_selected_on_demand():
         # and before the two-hour briefs.
         "exit_note_fields",
         "ticker_briefs",
+        # Mentor app P4 (2026-09-30): the app's day, graded and digested, directly after the briefs.
+        "mentor_review",
         # Econ morning brief (2026-09-24): "what to watch today" from the
         # pasted brief, a stage 2 model slot directly after the briefs.
         "econ_brief",

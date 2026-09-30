@@ -648,7 +648,10 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
     assert slate[slate.index("exit_note_fields") - 3] == "day_review_narration"
     assert slate[slate.index("exit_note_fields") - 2] == "day_review_show"
     assert slate[slate.index("exit_note_fields") - 1] == "observation_tags"
-    assert slate[slate.index("exit_note_fields") + 1] == "econ_brief"
+    # Mentor app P4 (2026-09-30): `mentor_review` sits directly after the briefs'
+    # place, so on a weeknight it follows the exit-note reader and `econ_brief` is next.
+    assert slate[slate.index("exit_note_fields") + 1] == "mentor_review"
+    assert slate[slate.index("exit_note_fields") + 2] == "econ_brief"
     # AMENDMENT 2026-09-25 (Plan to 8/10 P4): `note_vocabulary_audit` was
     # deleted (its report had no reader), so it leaves the pinned set and every
     # position after it moves up one: the moved triple is now 11-13.
@@ -695,6 +698,9 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
         # Econ morning brief (2026-09-24): `econ_brief`, pinned by
         # `EXPECTED_SLOT_ORDER` last in stage 2 and set aside here.
         "econ_brief",
+        # Mentor app P4 (2026-09-30): `mentor_review`, pinned by `EXPECTED_SLOT_ORDER`
+        # directly after `ticker_briefs` and set aside here.
+        "mentor_review",
         # P1-7 7b (2026-09-25): `plan_review`, pinned by `EXPECTED_SLOT_ORDER`
         # in stage 3 and set aside here.
         "plan_review",
