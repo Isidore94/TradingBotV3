@@ -1,0 +1,199 @@
+"""Trade Mentor pick pack: golden fixtures, unique ids, floors out loud, unknown never guessed, read-only."""
+
+from __future__ import annotations
+
+import sys
+from dataclasses import replace
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = ROOT_DIR / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from mentor_packs import pick_pack, registry  # noqa: E402
+
+NOW = pick_pack.FIXTURE_NOW
+
+NVDA_GOLDEN = """## pick_pack
+[pick:NVDA:asof] NVDA as of market date 2026-09-29
+[pick:NVDA:membership] Focus: swing long (pick clock from 2026-09-22, added)
+[pick:NVDA:claim:LONG:avwap_breakout] Claim: LONG avwap_breakout since session 2026-09-29 (d1)
+[pick:NVDA:fb:2026-09-28T06:50:00] Verdict 2026-09-28: like LONG (swing, from d1)
+[pick:NVDA:side] Side assessed: LONG
+[pick:NVDA:cell] Setup cell avwap_breakout LONG (setup from the trader's claim), 5-session D1 outcomes: n=40 (floor 30), win rate 60%, Wilson LB 0.45, avg side return +0.60%
+[pick:NVDA:cell_r] Leaderboard avwap_breakout LONG: avg closed R +0.06 over n=100 closed setups (floor 30)
+[pick:NVDA:earn] Own earnings: Thu 2026-11-19, in 51 days (long and short alike)
+[pick:NVDA:industry] Industry: Semiconductors (5 peers); 2 report within +-7 calendar days, nearest 2 listed
+[pick:NVDA:peer:AVGO] Peer AVGO earnings Wed 2026-09-30, tomorrow
+[pick:NVDA:peer:MU] Peer MU earnings Thu 2026-09-24, 5 days ago
+[pick:NVDA:plan:risk:1] Plan [plan:risk:1]: Max 3 open shorts at once.
+[pick:NVDA:plan:risk:2] Plan [plan:risk:2]: No new entries after 12:30 PT.
+[pick:NVDA:cohort:1] Cohort human_focus_swing LONG 1d: n=101 (floor 30), win rate 52%, avg side return +0.40%
+[pick:NVDA:cohort:3] Cohort human_focus_swing LONG 3d: n=103 (floor 30), win rate 52%, avg side return +0.40%
+[pick:NVDA:cohort:5] Cohort human_focus_swing LONG 5d: n=105 (floor 30), win rate 52%, avg side return +0.40%
+[pick:NVDA:cohort:10] Cohort human_focus_swing LONG 10d: n=110 (floor 30), win rate 52%, avg side return +0.40%
+[pick:NVDA:cohort:d1:1] Cohort human_focus_swing_d1 LONG 1d: too few, n=11 (floor 30)
+[pick:NVDA:cohort:d1:3] Cohort human_focus_swing_d1 LONG 3d: too few, n=13 (floor 30)
+[pick:NVDA:cohort:d1:5] Cohort human_focus_swing_d1 LONG 5d: too few, n=15 (floor 30)
+[pick:NVDA:cohort:d1:10] Cohort human_focus_swing_d1 LONG 10d: too few, n=20 (floor 30)"""
+
+
+@pytest.fixture()
+def world(tmp_path, monkeypatch):
+    # Any reach for a live path fails the test.
+    monkeypatch.setattr(pick_pack, "live_paths", lambda: pytest.fail("the pack reached for live paths"))
+    return pick_pack.write_fixture_world(tmp_path / "desk")
+
+
+def _rows(pack):
+    return {row["id"]: row for row in pack.rows}
+
+
+def test_registered_as_a_tool_with_a_symbol_argument():
+    assert "pick_pack" in registry.names()
+    schema = registry.modules()["pick_pack"].SCHEMA
+    assert schema["function"]["parameters"]["required"] == ["symbol"]
+
+
+def test_long_golden(world):
+    pack = pick_pack.build("nvda", now=NOW, paths=world)
+    assert pack.as_text() == NVDA_GOLDEN
+
+
+def test_short_golden(world):
+    rows = _rows(pick_pack.build("TSLA", now=NOW, paths=world))
+    assert rows["pick:TSLA:membership"]["text"] == "Focus: swing short (pick clock from 2026-09-25, added)"
+    assert rows["pick:TSLA:side"]["side"] == "SHORT"
+    assert rows["pick:TSLA:cell"]["text"] == (
+        "Setup cell avwap_band_bounce SHORT (setup from the latest D1 scan row, 2026-09-26), 5-session D1 "
+        "outcomes: n=35 (floor 30), win rate 40%, Wilson LB 0.26, avg side return -0.20%"
+    )
+    assert rows["pick:TSLA:claim"]["text"] == "Claim: no standing claim"
+    assert rows["pick:TSLA:earn"]["date"] == "2026-10-21"
+    assert "0 report within" in rows["pick:TSLA:industry"]["text"]
+    assert rows["pick:TSLA:cohort:5"]["text"].startswith("Cohort human_focus_swing SHORT 5d: n=85")
+    assert "pick:TSLA:cohort:manual:1" not in rows, "an origin sub-cohort with no rows is left out"
+
+
+def test_a_peer_reporting_tomorrow_is_listed_first_with_its_date(world):
+    pack = pick_pack.build("NVDA", now=NOW, paths=world)
+    peers = [row for row in pack.rows if row["kind"] == "peer_earnings"]
+    assert [row["peer"] for row in peers] == ["AVGO", "MU"]  # AMAT (+21 d) is outside +-7
+    assert peers[0]["date"] == "2026-09-30" and peers[0]["days"] == 1 and "tomorrow" in peers[0]["text"]
+
+
+def test_peers_are_capped_at_twelve_nearest_first(world):
+    from datetime import date, timedelta
+
+    day = date(2026, 9, 29)
+    many = {f"P{i:02d}": {"events": [{"earnings_date": (day + timedelta(days=i - 7)).isoformat()}]} for i in range(15)}
+    members = ["NVDA", *many]
+    import json
+
+    world.earnings_history.write_text(json.dumps({"symbols": many}), encoding="utf-8")
+    paths = replace(world, industry_map=lambda: {"NVDA": {"industry": "Semis", "industry_member_symbols": members}})
+    peers = [row for row in pick_pack.build("NVDA", now=NOW, paths=paths).rows if row["kind"] == "peer_earnings"]
+    assert len(peers) == pick_pack.PEER_MAX_ROWS
+    assert [abs(row["days"]) for row in peers] == sorted(abs(row["days"]) for row in peers)
+    assert all(abs(row["days"]) <= 7 for row in peers)
+
+
+def test_below_the_n_floor_says_too_few_and_carries_n(world):
+    rows = _rows(pick_pack.build("AMD", now=NOW, paths=world))
+    cell = rows["pick:AMD:cell"]
+    assert cell["n"] == 12
+    assert "too few, n=12 (floor 30)" in cell["text"]
+    assert "win rate" not in cell["text"] and "Wilson" not in cell["text"]
+
+
+def test_an_empty_plan_is_one_row_and_no_rule_ids(tmp_path):
+    paths = pick_pack.write_fixture_world(tmp_path / "desk", plan_text="# Trading plan\n")
+    pack = pick_pack.build("NVDA", now=NOW, paths=paths)
+    plan_rows = [row for row in pack.rows if row["id"].startswith("pick:NVDA:plan")]
+    assert [row["id"] for row in plan_rows] == ["pick:NVDA:plan"]
+    assert plan_rows[0]["text"] == "Plan: no plan lines"
+    assert pick_pack.plan_ids(pack) == set()
+
+
+def test_unknown_earnings_is_unknown_never_a_guess(world):
+    rows = _rows(pick_pack.build("ZZZ", now=NOW, paths=world))
+    assert rows["pick:ZZZ:earn"]["text"] == "Own earnings: unknown (no upcoming date in the earnings calendar)"
+    assert "date" not in rows["pick:ZZZ:earn"]
+    assert rows["pick:ZZZ:peers"]["text"] == "Peer earnings: industry unknown"
+    assert rows["pick:ZZZ:cell"]["text"] == "Setup cell: no setup known for ZZZ LONG"
+
+
+def test_a_missing_calendar_is_unknown_and_does_not_blank_the_rest(world):
+    world.earnings_history.unlink()
+    rows = _rows(pick_pack.build("NVDA", now=NOW, paths=world))
+    assert rows["pick:NVDA:earn"]["kind"] == "unknown" and "unknown" in rows["pick:NVDA:earn"]["text"]
+    assert rows["pick:NVDA:peers"]["kind"] == "unknown"
+    assert rows["pick:NVDA:cell"]["kind"] == "cell"
+
+
+@pytest.mark.parametrize("symbol", ["NVDA", "TSLA", "AMD", "ZZZ", "QQQ"])
+def test_ids_are_unique_stable_and_all_prefixed(world, symbol):
+    first = pick_pack.build(symbol, now=NOW, paths=world)
+    again = pick_pack.build(symbol, now=NOW, paths=world)
+    assert len(first.ids) == len(set(first.ids)) == len(first.rows)
+    assert first.ids == again.ids
+    assert all(row_id.startswith(f"pick:{symbol}:") for row_id in first.ids)
+    assert all(f"[{row_id}]" in first.as_text() for row_id in first.ids)
+
+
+def test_dates_are_market_dates_and_the_stamp_is_tz_aware(world):
+    # 23:30 PT on the 28th is already the 29th in New York: the market date wins.
+    late = datetime.fromisoformat("2026-09-29T06:30:00+00:00")
+    rows = _rows(pick_pack.build("NVDA", now=late, paths=world))
+    assert datetime.fromisoformat(rows["pick:NVDA:asof"]["at_utc"]).tzinfo is not None
+    assert "2026-09-29" in rows["pick:NVDA:asof"]["text"]
+    assert rows["pick:NVDA:peer:AVGO"]["days"] == 1
+
+
+def test_the_hash_ignores_the_stamp_but_not_the_evidence(world):
+    a = pick_pack.build("NVDA", now=NOW, paths=world)
+    b = pick_pack.build("NVDA", now=NOW.replace(minute=30), paths=world)
+    assert a.built_utc or b.built_utc
+    assert pick_pack.pack_hash(a) == pick_pack.pack_hash(b)
+    world.focus_swing_longs.write_text("ZZZ\n", encoding="utf-8")  # NVDA left Focus
+    c = pick_pack.build("NVDA", now=NOW, paths=world)
+    assert pick_pack.pack_hash(c) != pick_pack.pack_hash(a)
+
+
+def test_the_big_csv_is_reread_when_it_changes(world):
+    before = _rows(pick_pack.build("NVDA", now=NOW, paths=world))["pick:NVDA:cell"]["n"]
+    with world.tier_outcomes.open("a", encoding="utf-8") as handle:
+        handle.write("X99,LONG,avwap_breakout,2026-09-01,5,True,1.0,False\n")
+    after = _rows(pick_pack.build("NVDA", now=NOW, paths=world))["pick:NVDA:cell"]["n"]
+    assert (before, after) == (40, 41)
+
+
+def test_the_pack_writes_nothing(world):
+    files = sorted(p for p in world.focus_longs.parent.iterdir())
+    before = {p.name: p.stat().st_mtime_ns for p in files}
+    pick_pack.build("NVDA", now=NOW, paths=world)
+    after = {p.name: p.stat().st_mtime_ns for p in sorted(world.focus_longs.parent.iterdir())}
+    assert after == before
+
+
+def test_every_path_in_the_fixture_is_under_the_fixture_root(world):
+    root = world.focus_longs.parent
+    for name in ("focus_longs", "focus_shorts", "focus_swing_longs", "focus_swing_shorts", "pick_clocks",
+                 "claimed_picks", "pick_feedback", "tier_outcomes", "leaderboard", "earnings_history",
+                 "cohort_performance", "plan"):
+        assert getattr(world, name).parent == root, name
+
+
+def test_a_bad_ticker_is_an_empty_pack():
+    assert pick_pack.build("", now=NOW).ids == ()
+    assert pick_pack.build("NV DA; drop", now=NOW).ids == ()
+
+
+def test_the_pack_never_constructs_the_writing_stores():
+    source = (SCRIPTS_DIR / "mentor_packs" / "pick_pack.py").read_text(encoding="utf-8")
+    assert "FocusPickStore(" not in source and "JournalStore(" not in source
+    assert "from ui" not in source and "import ui" not in source and "PySide6" not in source
