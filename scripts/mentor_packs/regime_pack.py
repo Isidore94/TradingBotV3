@@ -121,8 +121,13 @@ def _float(value: Any) -> float | None:
         return None
 
 
+_BRACKET_ID = re.compile(r"\s*\[[^\]]+\]")
+
+
 def _sentences(paragraph: str) -> list[str]:
-    parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(])", paragraph) if part.strip()]
+    """The read's sentences without the night model's own bracketed ids (they are foreign to the tape)."""
+    clean = _BRACKET_ID.sub("", paragraph)
+    parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(])", clean) if part.strip()]
     return parts[:NIGHT_MAX_LINES]
 
 

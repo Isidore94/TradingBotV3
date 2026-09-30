@@ -131,6 +131,18 @@ def test_live_readers_read_files_only(tmp_path, monkeypatch):
     assert regime_pack._live_index_rrs() == {}, "no file-based index RRS: nothing, never computed"
 
 
+def test_night_read_lines_lose_the_night_models_own_ids():
+    """The live read cites its own ids on every line; the tape model would copy them and be rejected."""
+    live_shaped = replace(regime_pack.fixture_sources(), night_read=lambda session: {
+        "session_date": "2026-09-28",
+        "read": {"paragraph": "SPY stayed in a bear channel [regime:1] [structure:2026-09-28:SPY]. "
+                              "QQQ held its weekly trend [structure:2026-09-28:QQQ]."}})
+    night = [row for row in regime_pack.build(now=NOW, sources=live_shaped).rows if row["kind"] == "night"]
+    assert [row["id"] for row in night] == ["tape:night:1", "tape:night:2"]
+    assert [row["text"] for row in night] == ["(night read, 2026-09-28) SPY stayed in a bear channel.",
+                                             "(night read, 2026-09-28) QQQ held its weekly trend."]
+
+
 def test_the_night_read_comes_from_market_regimes_latest(tmp_path):
     import market_regimes
 
