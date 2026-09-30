@@ -3,6 +3,7 @@
 One line per live check the trader or lead still owes, newest first. A green test suite is not live proof.
 When a gate passes, delete its line. The full wording is in `notes/CURRENT_CHECKPOINT.md` (local only).
 
+- #323 Trade Mentor app P10 debate (2026-09-30): first live `/debate`: both columns cite only ids from the pick pack; a rejected side shows as rejected, not replaced; the two calls finish in under 60 s on the 5080 [trader]
 - #322 Trade Mentor app P9 mirror + tilt (2026-09-30): first live week: `/mirror` numbers for one cut match a hand count; the Monday "Your week in the mirror" item appears once; a tilt observation, if any, arrives as one Inbox item with leg ids and no pop; `/tilt` base rates say "too few" honestly [trader]
 - #321 Trade Mentor app P8 book (2026-09-30): first live `/book`: its positions match the Questrade app for one account; the card says which source it used (Questrade or journal); the next night's journal import still refreshes the Questrade token (night ledger) [trader]
 - #319 Trade Mentor app P7 news (2026-09-30): first live day with the app open: `/news` on a chip name shows headlines, each with a link, a source and a PT time; no headline shows without a link; the app log's "news cycle" lines show at most 40 symbols fetched per 30-min cycle; the desk shows no stutter at the 30-min mark (`desk_perf_report.py --day`) [trader]

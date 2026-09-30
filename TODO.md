@@ -7,7 +7,7 @@ here.
 ## Trade Mentor app (approved 2026-09-29)
 
 - Trade Mentor app: P0 shell -> P1 mentor move (flag `mentor_app_enabled`) -> P2 picks ->
-  P3 vetoes -> P4 night memory -> P5 tape -> P6 gate -> P7 news -> P8 book -> P9 mirror + tilt. Owed by the trader:
+  P3 vetoes -> P4 night memory -> P5 tape -> P6 gate -> P7 news -> P8 book -> P9 mirror + tilt -> P10 debate. Owed by the trader:
   `trading_plan.md` lines before P2, Risk per trade before P6.
   In flight: P1 mentor move (`claude/mentor-app-p1-mentor-move-2026-09-30`, flag off by
   default); after one live week with the flag on, delete `_MentorPopup` and the flag.
@@ -18,7 +18,8 @@ here.
   (`claude/mentor-app-p6-gate-2026-09-30`, gate #317). P7 news built
   (`claude/mentor-app-p7-news-2026-09-30`, gate #319). P8 book built
   (`claude/mentor-app-p8-book-2026-09-30`, gate #321). P9 mirror + tilt built
-  (`claude/mentor-app-p9-mirror-tilt-2026-09-30`, gate #322). Next: P10 debate (bull/bear on one pick pack).
+  (`claude/mentor-app-p9-mirror-tilt-2026-09-30`, gate #322). P10 debate built
+  (`claude/mentor-app-p10-debate-2026-09-30`, gate #323). Next: P11 research hook + frontier switch.
 
 ## Plan to 8/10, round 2 (trader's brief, 2026-09-25 evening)
 
