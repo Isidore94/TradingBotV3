@@ -3,8 +3,9 @@
 ``run_turn`` is Qt-free and takes injected ``stream_post``/``post`` callables so tests
 never touch the network. ``StreamWorker`` runs it on a QThread and re-emits tokens,
 tool calls, the result and failures as signals. At most MAX_TOOL_CALLS packs per turn;
-after that the model must answer without tools. Models without native tool calling
-(gemma) get a one-shot JSON "which packs do you need" step first.
+after that the model must answer without tools. Native tool calling is decided by the
+model's own capabilities (``/api/show``), never by its tag; a model without ``tools``, or
+one whose capabilities are unknown, gets a one-shot JSON "which packs do you need" step.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import json
 import logging
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 import requests
@@ -20,8 +22,10 @@ from PySide6.QtCore import QThread, Signal
 
 MAX_TOOL_CALLS = 4
 THINKING_MODEL_PREFIXES = ("gpt-oss",)
-#: Families Ollama serves without native tool calling.
-NO_NATIVE_TOOLS_MARKERS = ("gemma",)
+#: How long a tag's probed capabilities are trusted (app_state cache).
+CAPS_TTL = timedelta(hours=24)
+CAPS_STATE_PREFIX = "model_caps:"
+SHOW_TIMEOUT = 20
 CHAT_REASONING_EFFORT = "low"
 STREAM_TIMEOUT = (10, 300)
 SELECT_TIMEOUT = 120
@@ -40,9 +44,71 @@ def is_thinking_model(model: str) -> bool:
     return str(model or "").strip().lower().startswith(THINKING_MODEL_PREFIXES)
 
 
-def has_native_tools(model: str) -> bool:
-    lowered = str(model or "").lower()
-    return not any(marker in lowered for marker in NO_NATIVE_TOOLS_MARKERS)
+#: Tags whose failed or unknown capability probe was already logged (once per tag per process).
+_probe_logged: set[str] = set()
+
+
+def _log_probe_once(model: str, why: str) -> None:
+    if model in _probe_logged:
+        return
+    _probe_logged.add(model)
+    logging.info("Trade Mentor: %s capabilities unknown (%s); tools: fallback", model, why)
+
+
+def show_model(endpoint: str, model: str, *, post: Post) -> Mapping[str, Any] | None:
+    """Ollama ``POST /api/show`` for one tag; None when the host does not describe it."""
+    reply = post(f"{endpoint.rstrip('/')}/api/show", {"model": model}, SHOW_TIMEOUT)
+    if isinstance(reply, Mapping) and ("capabilities" in reply or "details" in reply):
+        return reply
+    return None
+
+
+def _caps_of(reply: Mapping[str, Any] | None) -> tuple[str, ...] | None:
+    caps = (reply or {}).get("capabilities")
+    if not isinstance(caps, (list, tuple)):
+        return None
+    return tuple(str(cap).strip().lower() for cap in caps)
+
+
+def model_capabilities(
+    endpoint: str, model: str, *, post: Post, store: Any = None, now: datetime | None = None
+) -> tuple[str, ...] | None:
+    """The tag's capabilities (e.g. ``("completion", "tools")``), cached 24 h in app_state; None = unknown."""
+    moment = now or datetime.now(timezone.utc)
+    key = CAPS_STATE_PREFIX + str(model)
+    if store is not None:
+        try:
+            cached = json.loads(store.get_state(key) or "{}")
+            at = datetime.fromisoformat(str(cached.get("at_utc") or ""))
+            if isinstance(cached.get("caps"), list) and timedelta(0) <= moment - at < CAPS_TTL:
+                return tuple(str(cap) for cap in cached["caps"])
+        except (TypeError, ValueError, AttributeError):
+            pass
+    try:
+        caps = _caps_of(show_model(endpoint, model, post=post))
+    except Exception as exc:  # noqa: BLE001 - a failed probe is "unknown", never "native"
+        _log_probe_once(model, f"{type(exc).__name__}: {exc}")
+        return None
+    if caps is None:
+        _log_probe_once(model, "the host listed no capabilities")
+        return None
+    if store is not None:
+        store.set_state(key, json.dumps({"caps": list(caps), "at_utc": moment.astimezone(timezone.utc).isoformat()}))
+    return caps
+
+
+def native_tools_for(caps: Sequence[str] | None) -> bool:
+    """Native tool calling only when the model lists ``tools``; unknown = the fallback."""
+    return caps is not None and "tools" in caps
+
+
+def model_present(endpoint: str, model: str, *, post: Post) -> bool:
+    """True when the host describes ``model`` (``/api/show`` answers for it); any failure = absent."""
+    try:
+        return show_model(endpoint, model, post=post) is not None
+    except Exception as exc:  # noqa: BLE001
+        logging.info("Trade Mentor: %s is not on the host (%s)", model, exc)
+        return False
 
 
 def chat_payload(
@@ -189,6 +255,7 @@ def run_turn(
     keep_alive: Any = -1,
     num_ctx: int | None = None,
     tools: Sequence[Mapping[str, Any]] | None = None,
+    native_tools: bool | None = None,
     stream_post: StreamPost = default_stream_post,
     post: Post = default_post,
     build_pack: Callable[[str, Mapping[str, Any]], Any] = _default_build,
@@ -197,7 +264,10 @@ def run_turn(
     cancelled: Callable[[], bool] = lambda: False,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
-    """One chat turn, tools included. Returns the result dict ``done`` carries."""
+    """One chat turn, tools included. Returns the result dict ``done`` carries.
+
+    ``native_tools`` is the probed capability (:func:`native_tools_for`); None (unknown) = the fallback.
+    """
     url = f"{endpoint.rstrip('/')}/api/chat"
     started = clock()
     convo = [dict(message) for message in messages]
@@ -228,7 +298,7 @@ def run_turn(
                 result["pack_ids"].append(pack_id)
         return pack
 
-    native = bool(tools) and has_native_tools(model)
+    native = bool(tools) and native_tools is True
     if tools and not native:
         catalog = "\n".join(
             f"- {tool['function']['name']}: {tool['function'].get('description', '')}" for tool in tools

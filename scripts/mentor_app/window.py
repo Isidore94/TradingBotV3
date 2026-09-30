@@ -197,6 +197,8 @@ class MentorWindow(QMainWindow):
         self._model = ""
         self._endpoint = ""
         self._latency_ms: int | None = None
+        #: The model's probed native tool calling (False = the one-shot fallback, also when unknown).
+        self._native_tools = False
         #: When the Pause AI switch ends, as last seen; None = AI on.
         self._paused_until: datetime | None = None
         self.queue =queue or PrefetchQueue(blocked=self._gpu_reason, model_ready=lambda: self._brain_ok)
@@ -535,7 +537,8 @@ class MentorWindow(QMainWindow):
         host = self._host or "no host"
         latency = f"{self._latency_ms} ms" if self._latency_ms is not None else "-"
         state = "ready" if self._brain_ok else "off"
-        self.status_pill.setText(f"{host} · {model} · {latency} · brain {state}")
+        tools = "native" if self._native_tools else "fallback"
+        self.status_pill.setText(f"{host} · {model} · tools: {tools} · {latency} · brain {state}")
         self.banner.setVisible(not self._brain_ok)
         self.banner.setText(f"Brain is off: {self._brain_reason}. Packs still work: try /tape.")
         self.ai_pause_button.refresh()
@@ -792,7 +795,13 @@ class MentorWindow(QMainWindow):
                 state["reason"] = status.reason
                 return
             state["endpoint"] = self._tunnel.endpoint
-            single = int(getattr(status, "slots", 2) or 2) == 1
+            if not settings.explicit_model() and brain.model_present(state["endpoint"], settings.DAY_MODEL,
+                                                                     post=self._post):
+                state["model"] = settings.DAY_MODEL
+            caps = brain.model_capabilities(state["endpoint"], state["model"], post=self._post, store=self.store,
+                                            now=self._now())
+            state["native_tools"] = brain.native_tools_for(caps)
+            single =int(getattr(status, "slots", 2) or 2) == 1
             if single:
                 # The night left Ollama running with one slot: background jobs yield fully.
                 logging.info("Trade Mentor: Ollama already running: 1 slot, night-started")
@@ -862,6 +871,8 @@ class MentorWindow(QMainWindow):
         self._brain_reason = str(state.get("reason") or "")
         self._host = str(state.get("host") or self._host)
         self._model = str(state.get("model") or self._model)
+        if "native_tools" in state:
+            self._native_tools = bool(state["native_tools"])
         self._endpoint = str(state.get("endpoint") or self._endpoint)
         self._sync_status()
         if self._brain_ok:
@@ -1047,6 +1058,7 @@ class MentorWindow(QMainWindow):
             keep_alive=settings.keep_alive(),
             num_ctx=settings.context_tokens(),
             tools=registry.tool_schemas(),
+            native_tools=self._native_tools,
             stream_post=self._stream_post,
             post=self._post,
         )

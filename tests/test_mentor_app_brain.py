@@ -52,7 +52,7 @@ def test_a_plain_answer_streams_tokens_and_counts():
     ticks = iter([0.0, 0.4, 1.0])
     result = brain.run_turn(
         [{"role": "user", "content": "mode?"}], model="gpt-oss:20b", endpoint="http://127.0.0.1:11436",
-        keep_alive=-1, num_ctx=65536, tools=TOOLS, stream_post=stream_post, on_token=seen.append,
+        keep_alive=-1, num_ctx=65536, tools=TOOLS, native_tools=True, stream_post=stream_post, on_token=seen.append,
         clock=lambda: next(ticks),
     )
     assert seen == ["Auto is ", "DESK [ctx:auto_mode]."]
@@ -83,7 +83,7 @@ def test_the_tool_loop_stops_at_four_calls_and_then_answers_without_tools():
 
     calls: list[dict] = []
     result = brain.run_turn(
-        [{"role": "user", "content": "go"}], model="gpt-oss:20b", endpoint="http://x", tools=TOOLS,
+        [{"role": "user", "content": "go"}], model="gpt-oss:20b", endpoint="http://x", tools=TOOLS, native_tools=True,
         stream_post=stream_post, build_pack=build, on_tool_call=calls.append,
     )
     assert len(built) == brain.MAX_TOOL_CALLS == 4
@@ -103,7 +103,7 @@ def test_many_calls_in_one_reply_are_still_capped():
         return _answer("ok")
 
     built: list[str] = []
-    brain.run_turn([{"role": "user", "content": "go"}], model="qwen3:14b", endpoint="http://x", tools=TOOLS,
+    brain.run_turn([{"role": "user", "content": "go"}], model="qwen3:14b", endpoint="http://x", tools=TOOLS, native_tools=True,
                    stream_post=stream_post, build_pack=lambda n, a: built.append(n) or _fake_pack(n, a))
     assert len(built) == 4
 
@@ -237,3 +237,100 @@ def test_the_stream_worker_emits_tokens_and_done_off_the_qt_thread():
     assert worker.wait(5000)
     app.processEvents()
     assert tokens == ["a", "b"] and done and done[0]["text"] == "ab"
+
+
+# ---------------------------------------------------------------- P13 step 1: native tools by capability
+def _show_post(caps_by_model, calls):
+    def post(url, payload, timeout):
+        calls.append((url, payload.get("model")))
+        if not url.endswith("/api/show"):
+            return {}
+        caps = caps_by_model.get(payload["model"])
+        if caps is None:
+            raise brain.BrainError("HTTP 404: model not found")
+        return {"details": {"family": "x"}, "capabilities": caps}
+    return post
+
+
+class _State:
+    def __init__(self):
+        self.values = {}
+
+    def get_state(self, key):
+        return self.values.get(key)
+
+    def set_state(self, key, value):
+        self.values[key] = value
+        return True
+
+
+def test_the_capability_probe_is_cached_for_24_hours():
+    from datetime import datetime, timedelta, timezone
+
+    calls: list = []
+    post = _show_post({"gemma4:12b": ["completion", "tools"]}, calls)
+    store = _State()
+    t0 = datetime(2026, 9, 30, 14, 0, tzinfo=timezone.utc)
+    assert brain.model_capabilities("http://x", "gemma4:12b", post=post, store=store, now=t0) == ("completion", "tools")
+    assert brain.model_capabilities("http://x", "gemma4:12b", post=post, store=store,
+                                    now=t0 + timedelta(hours=23)) == ("completion", "tools")
+    assert len(calls) == 1, "a second probe inside 24 h reads the app_state cache"
+    brain.model_capabilities("http://x", "gemma4:12b", post=post, store=store, now=t0 + timedelta(hours=25))
+    assert len(calls) == 2, "after 24 h the host is asked again"
+    assert "model_caps:gemma4:12b" in store.values
+
+
+def _tool_turn(model, caps):
+    payloads: list[dict] = []
+    brain.run_turn([{"role": "user", "content": "x"}], model=model, endpoint="http://x", tools=TOOLS,
+                   native_tools=brain.native_tools_for(caps),
+                   post=lambda u, p, t: {"message": {"content": json.dumps({"packs": []})}},
+                   stream_post=lambda u, p, c: payloads.append(p) or _answer("ok"))
+    return payloads
+
+
+def test_gemma4_with_tools_in_its_capabilities_gets_native_tool_calls():
+    caps = brain.model_capabilities("http://x", "gemma4:12b",
+                                    post=_show_post({"gemma4:12b": ["completion", "tools"]}, []))
+    payload = _tool_turn("gemma4:12b", caps)[0]
+    assert payload["tools"] == TOOLS
+    assert "reasoning_effort" not in payload and "think" not in payload, "plain tool calls, no gpt-oss extras"
+
+
+def test_gemma3_without_tools_gets_the_one_shot_fallback():
+    caps = brain.model_capabilities("http://x", "gemma3:12b-tbv3ctx-64k",
+                                    post=_show_post({"gemma3:12b-tbv3ctx-64k": ["completion", "vision"]}, []))
+    assert brain.native_tools_for(caps) is False
+    assert "tools" not in _tool_turn("gemma3:12b-tbv3ctx-64k", caps)[0]
+
+
+def test_gpt_oss_is_native_and_keeps_its_reasoning_extras():
+    caps = brain.model_capabilities("http://x", "gpt-oss:20b",
+                                    post=_show_post({"gpt-oss:20b": ["completion", "tools", "thinking"]}, []))
+    payload = _tool_turn("gpt-oss:20b", caps)[0]
+    assert payload["tools"] == TOOLS and payload["reasoning_effort"] == "low" and payload["think"] == "low"
+
+
+def test_a_failed_probe_is_the_fallback_and_is_logged_once(caplog):
+    def boom(url, payload, timeout):
+        raise ConnectionError("tunnel down")
+
+    brain._probe_logged.discard("qwen9:1b")
+    with caplog.at_level("INFO"):
+        first = brain.model_capabilities("http://x", "qwen9:1b", post=boom)
+        second = brain.model_capabilities("http://x", "qwen9:1b", post=boom)
+    assert first is None and second is None and brain.native_tools_for(first) is False
+    assert caplog.text.count("qwen9:1b capabilities unknown") == 1
+    assert "tools" not in _tool_turn("qwen9:1b", first)[0]
+
+
+def test_the_default_model_is_gemma4_when_the_host_has_it(monkeypatch):
+    from mentor_app import settings
+
+    monkeypatch.setattr(settings, "_setting", lambda key, default=None: default)
+    assert settings.mentor_model(lambda tag: tag == "gemma4:12b") == "gemma4:12b"
+    medium = settings.mentor_model(lambda tag: False)
+    assert medium != "gemma4:12b" and medium == settings.mentor_model()
+    monkeypatch.setattr(settings, "_setting",
+                        lambda key, default=None: "gpt-oss:20b" if key == "mentor_model" else default)
+    assert settings.mentor_model(lambda tag: True) == "gpt-oss:20b", "the trader's own setting wins"

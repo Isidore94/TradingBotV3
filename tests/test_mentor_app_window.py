@@ -204,6 +204,68 @@ def test_connect_warms_the_model_on_the_tunnel(window, monkeypatch, app):
     recall.set_searcher(None)
 
 
+def test_connect_picks_gemma4_when_the_host_has_it_and_the_pill_says_native_tools(window, monkeypatch, app):
+    window._tunnel = SimpleNamespace(
+        preflight=lambda: SimpleNamespace(ok=True, reason="ready", host="192.168.0.220"),
+        endpoint="http://127.0.0.1:11436",
+        stop=lambda: None,
+    )
+    shown: list = []
+
+    def post(url, payload, timeout):
+        if url.endswith("/api/show"):
+            shown.append(payload["model"])
+            if payload["model"] == "gemma4:12b":
+                return {"details": {}, "capabilities": ["completion", "tools"]}
+            raise RuntimeError("HTTP 404")
+        return {}
+
+    window._post = post
+    monkeypatch.setattr(settings, "mentor_model", lambda: "gemma3:12b-tbv3ctx-64k")
+    monkeypatch.setattr(settings, "explicit_model", lambda: "")
+    window._connecting = True
+    window._connect_worker()
+    app.processEvents()
+    assert window._model == "gemma4:12b" and window._native_tools is True
+    assert "gemma4:12b" in window.status_pill.text() and "tools: native" in window.status_pill.text()
+    # A second connect reads the capability cache (only the presence check asks the host again).
+    shown.clear()
+    window._connecting = True
+    window._connect_worker()
+    app.processEvents()
+    assert shown == ["gemma4:12b"]
+    from mentor_packs import recall
+
+    recall.set_searcher(None)
+
+
+def test_connect_without_gemma4_keeps_the_medium_model_on_the_fallback(window, monkeypatch, app):
+    window._tunnel = SimpleNamespace(
+        preflight=lambda: SimpleNamespace(ok=True, reason="ready", host="192.168.0.220"),
+        endpoint="http://127.0.0.1:11436",
+        stop=lambda: None,
+    )
+
+    def post(url, payload, timeout):
+        if url.endswith("/api/show"):
+            if payload["model"] == "gemma3:12b-tbv3ctx-64k":
+                return {"details": {}, "capabilities": ["completion", "vision"]}
+            raise RuntimeError("HTTP 404")
+        return {}
+
+    window._post = post
+    monkeypatch.setattr(settings, "mentor_model", lambda: "gemma3:12b-tbv3ctx-64k")
+    monkeypatch.setattr(settings, "explicit_model", lambda: "")
+    window._connecting = True
+    window._connect_worker()
+    app.processEvents()
+    assert window._model == "gemma3:12b-tbv3ctx-64k" and window._native_tools is False
+    assert "tools: fallback" in window.status_pill.text()
+    from mentor_packs import recall
+
+    recall.set_searcher(None)
+
+
 def test_tape_and_chips_show_the_context_pack(window):
     from mentor_packs import context_pack
 
