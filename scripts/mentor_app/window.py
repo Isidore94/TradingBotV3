@@ -521,16 +521,35 @@ class MentorWindow(QMainWindow):
 
         recall.set_searcher(None)
         self._brain_ok = False
-        endpoint, model, tunnel = self._endpoint, self._model, self._tunnel
+        endpoint, tunnel = self._endpoint, self._tunnel
+        models = self._pause_unload_models()
 
         def release() -> None:
             if endpoint:
-                self._unload(endpoint, model)
+                self._unload(endpoint, models[0], extra=models[1:])
             if tunnel is not None:
                 tunnel.stop()
 
         self._spawn("mentor-pause", release)
         self._sync_status()
+
+    def _pause_unload_models(self) -> tuple[str, ...]:
+        """The app's chat model (the setting when none is known yet), then the night's model
+        tags: a pause frees the GPU of all of them (unloading an idle model is harmless)."""
+        import ai_summary
+
+        names: list[str] = []
+        for read in (lambda: self._model or settings.mentor_model(),
+                     lambda: ai_summary.local_model("medium"),
+                     lambda: ai_summary.local_model("large")):
+            try:
+                name = str(read() or "").strip()
+            except Exception:  # noqa: BLE001 - an unreadable tag is skipped, never fatal
+                logging.debug("Trade Mentor: a model tag could not be read.", exc_info=True)
+                continue
+            if name and name not in names:
+                names.append(name)
+        return tuple(names) or ("",)
 
     def _leave_pause(self) -> None:
         """AI is back: the normal start (tunnel, warm-up, prefetch), subject to the night window."""
@@ -689,9 +708,10 @@ class MentorWindow(QMainWindow):
             if time.monotonic() - self._last_connect >= RECONNECT_BACKOFF_SECONDS or self._last_connect == 0:
                 self.connect_brain()
 
-    def _unload(self, endpoint: str, model: str, timeout: float = 60) -> None:
-        """Unload the chat model and the embedder (keep_alive 0)."""
-        for name, unload in ((model, brain.unload), (settings.EMBED_MODEL, brain.unload_embedder)):
+    def _unload(self, endpoint: str, model: str, timeout: float = 60, extra: tuple[str, ...] = ()) -> None:
+        """Unload the chat model, any ``extra`` chat models, and the embedder (keep_alive 0)."""
+        chats = [(name, brain.unload) for name in (model, *extra)]
+        for name, unload in (*chats, (settings.EMBED_MODEL, brain.unload_embedder)):
             if not name:
                 continue
             try:

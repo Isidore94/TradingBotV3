@@ -128,11 +128,30 @@ def test_ai_off_unloads_both_models_closes_the_tunnel_and_shows_paused(window):
 
     assert ai_pause.is_paused(NOW)
     assert not window._brain_ok
-    assert _unloaded(window) == sorted(["gpt-oss:20b", settings.EMBED_MODEL])
+    assert {"gpt-oss:20b", settings.EMBED_MODEL} <= set(_unloaded(window))
     assert window._tunnel.stops == 1
     assert window.status_pill.text() == "AI paused until 12:00"
     assert window.banner.isVisibleTo(window) and "`/ai on` resumes" in window.banner.text()
     assert window.ai_pause_button.text() == "AI paused"
+
+
+def test_a_pause_also_unloads_the_nights_model_tags(window):
+    project_paths.save_local_settings({"ai_local_model_medium": "gemma3:12b", "ai_local_model_large": "gpt-oss:120b"})
+    _up(window)
+    window.send("/ai off 2h")
+    _join(window)
+
+    assert _unloaded(window) == sorted(["gpt-oss:20b", "gemma3:12b", "gpt-oss:120b", settings.EMBED_MODEL])
+
+
+def test_a_pause_before_the_model_is_known_unloads_the_configured_chat_model(window):
+    project_paths.save_local_settings({settings.MODEL_KEY: "qwen3:14b", "ai_local_model_medium": "qwen3:14b",
+                                       "ai_local_model_large": "qwen3:14b"})
+    window._brain_ok, window._endpoint, window._model = True, "http://127.0.0.1:11436", ""
+    window.send("/ai off 2h")
+    _join(window)
+
+    assert _unloaded(window) == sorted(["qwen3:14b", settings.EMBED_MODEL])
 
 
 def test_a_chat_turn_while_paused_makes_no_model_call(window):
