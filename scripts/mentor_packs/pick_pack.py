@@ -83,6 +83,9 @@ class PickPaths:
     industry_map: Callable[[], Mapping[str, Mapping[str, Any]]] | None = field(default=None, compare=False)
     #: (symbol, since UTC ISO, limit) -> stored headlines (``news_pack.Reader``); None = no news source.
     news: Callable[[str, str, int], Any] | None = field(default=None, compare=False)
+    #: symbol -> last good fetch UTC ISO / last feed failure (``news_pack`` readers); None = not known.
+    news_stamps: Callable[[str], Any] | None = field(default=None, compare=False)
+    news_errors: Callable[[str], Any] | None = field(default=None, compare=False)
 
 
 def live_paths() -> PickPaths:
@@ -111,6 +114,8 @@ def live_paths() -> PickPaths:
         plan=None,
         industry_map=industry_map,
         news=news_pack.live_reader(),
+        news_stamps=news_pack.live_stamp_reader(),
+        news_errors=news_pack.live_error_reader(),
     )
 
 
@@ -493,8 +498,18 @@ def _news_rows(symbol: str, moment: datetime, paths: PickPaths) -> list[dict[str
         return [{"id": f"pick:{symbol}:news", "kind": "news_empty", "text": "News: not read (no news source)"}]
     found = news_pack.headline_rows(symbol, now=moment, days=NEWS_DAYS, limit=NEWS_MAX_ROWS, reader=paths.news)
     rows = [{**row, "id": f"pick:{symbol}:news:{row['id'].rsplit(':', 1)[-1]}", "news_id": row["id"]} for row in found]
-    return rows or [{"id": f"pick:{symbol}:news", "kind": "news_empty",
-                     "text": f"News: no stored headlines in the last {NEWS_DAYS} days"}]
+    fetched, error = news_pack.read_status(symbol, paths.news_stamps, paths.news_errors)
+    state = news_pack.news_state(fetched, error)
+    if state == news_pack.STATE_UNKNOWN:
+        # The last request failed on every feed: whatever is stored may be stale, and "none" is unknown.
+        rows.append({"id": f"pick:{symbol}:news", "kind": "unknown", "text": news_pack.empty_text(state, error, NEWS_DAYS)})
+    elif not rows and state == news_pack.STATE_NOT_FETCHED:
+        rows = [{"id": f"pick:{symbol}:news", "kind": "news_not_fetched",
+                 "text": news_pack.empty_text(state, error, NEWS_DAYS)}]
+    elif not rows:
+        rows = [{"id": f"pick:{symbol}:news", "kind": "news_empty",
+                 "text": f"News: no stored headlines in the last {NEWS_DAYS} days"}]
+    return rows
 
 
 # ---------------------------------------------------------------- build
@@ -710,6 +725,7 @@ def write_fixture_world(root: Path | str, *, plan_text: str | None = None) -> Pi
         plan=plan,
         industry_map=lambda: industries,
         news=news_pack.fixture_reader(),
+        news_stamps=news_pack.fixture_stamps,
     )
 
 

@@ -68,7 +68,23 @@ def test_never_fetched_says_so_and_max_eight_newest_first():
     assert heads == [f"news:AMD:{i}" for i in range(1, 9)]
     assert "never fetched" in _rows(pack)["news:AMD:asof"]["text"]
     empty = news_pack.build("ZZZ", now=NOW, reader=news_pack.list_reader([]), stamps=lambda s: None)
-    assert _rows(empty)["news:ZZZ:none"]["text"] == "Headlines: not fetched yet in the last 3 days"
+    assert _rows(empty)["news:ZZZ:none"]["text"] == "News: not fetched yet (this is not evidence the name is quiet)"
+    assert _rows(empty)["news:ZZZ:none"]["kind"] == "news_not_fetched"
+
+
+def test_a_failed_last_fetch_is_unknown_even_with_old_headlines_stored():
+    error = {"reason": "every feed failed: yahoo: TimeoutError", "at_utc": "2026-09-29T13:45:00+00:00", "partial": False}
+    pack = news_pack.build("NVDA", now=NOW, reader=news_pack.fixture_reader(), stamps=news_pack.fixture_stamps,
+                           errors=lambda s: error)
+    rows = _rows(pack)
+    assert "news:NVDA:12" in rows, "stored headlines still show, each with its URL"
+    assert rows["news:NVDA:none"]["kind"] == "unknown"
+    assert rows["news:NVDA:none"]["text"] == (
+        "News unknown: last fetch failed (every feed failed: yahoo: TimeoutError) at Tue 09-29 06:45 PT")
+    older = {**error, "at_utc": "2026-09-29T12:00:00+00:00"}
+    healed = news_pack.build("NVDA", now=NOW, reader=news_pack.fixture_reader(), stamps=news_pack.fixture_stamps,
+                             errors=lambda s: older)
+    assert "news:NVDA:none" not in _rows(healed), "a good fetch after the failure is not unknown"
 
 
 def test_days_window_and_clamp():

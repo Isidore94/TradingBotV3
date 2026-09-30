@@ -149,6 +149,7 @@ class MentorWindow(QMainWindow):
         quit_app: Callable[[], Any] | None = None,
         news_fetcher: Any = None,
         news_open_symbols: Callable[[], Any] | None = None,
+        news_queue: PrefetchQueue | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -285,7 +286,9 @@ class MentorWindow(QMainWindow):
 
         self._news_fetcher = news_fetcher or NewsFetcher()
         self._news_open_symbols = news_open_symbols
-        self._news_named: list[str] = []
+        self._news_named = news_jobs.NamedSymbols()
+        #: News fetches are network-bound: their own one-thread queue, so /pick, /check and /news never wait.
+        self.news_queue = news_queue or PrefetchQueue()
         self._news_seeded = False
         self._news_schedule = news_jobs.NewsSchedule()
         self._news_blocks: dict[int, int] = {}
@@ -439,6 +442,7 @@ class MentorWindow(QMainWindow):
 
         self._focus_server = make_focus_server(self, self.bring_to_front)
         self.queue.start()
+        self.news_queue.start()
         if self.card_host is not None:
             self.card_host.start()
         self._context_timer.start()
@@ -475,6 +479,7 @@ class MentorWindow(QMainWindow):
             self._worker.cancel()
             self._worker.wait(3000)
         self.queue.stop()
+        self.news_queue.stop(timeout=0.5)  # a fetch stuck on the network is a daemon; never wait 10 s for it
         if self.card_host is not None:
             self.card_host.shutdown()
         if self._endpoint and self._paused_until is None:
@@ -1597,15 +1602,11 @@ class MentorWindow(QMainWindow):
 
     # ------------------------------------------------------------------ news (P7)
     def _name_for_news(self, symbol: str) -> None:
-        """A symbol the trader typed joins today's news scope (named names go first)."""
-        from news_feed import clean_symbol
-
-        sym = clean_symbol(symbol)
-        if sym and sym not in self._news_named:
-            self._news_named.append(sym)
+        """A symbol the trader typed joins today's news scope (newest first, at most 10, dropped at day end)."""
+        self._news_named.add(symbol, self._now())
 
     def _seed_news(self) -> None:
-        """Queue thread, once: the store's last-fetch stamps keep the 30-min spacing across a restart."""
+        """News thread, once: the store's last request stamps keep the 30-min spacing across a restart."""
         if not self._news_seeded:
             from mentor_app import news_jobs
 
@@ -1623,7 +1624,8 @@ class MentorWindow(QMainWindow):
         return [str(row.get("symbol") or "") for row in gate_pack.read_open_trades(Path(JOURNAL_DB_FILE))]
 
     def show_news(self, symbol: str, days: int = 3) -> None:
-        """/news: the stored headlines at once off-thread; a never-fetched symbol is fetched once first. No model."""
+        """/news: the stored headlines at once (main queue, no network); a symbol with no good fetch yet is
+        then fetched once on the news thread and the card is redrawn. No model."""
         from mentor_app import news_jobs
 
         self._name_for_news(symbol)
@@ -1631,27 +1633,49 @@ class MentorWindow(QMainWindow):
         seq = self._news_seq
         self._news_blocks[seq] = len(self._blocks)
         self._add_block(f"**News {symbol}**: reading...")
-        store, fetcher, now = self.store, self._news_fetcher, self._now
+        store, now = self.store, self._now
 
         def job() -> dict:
-            self._seed_news()
-            return {**news_jobs.news_card(symbol, days, store=store, fetcher=fetcher, now=now()), "seq": seq}
+            card = news_jobs.news_card(symbol, days, store=store, now=now())
+            return {**card, "seq": seq, "days": days, "need_fetch": news_jobs.needs_first_fetch(store, symbol)}
 
+        self.queue.submit(f"news {symbol}", job, priority=PRIORITY_INTERACTIVE, key=f"news-live:{seq}",
+                          on_done=self._bridge.news_card.emit, on_error=self._news_failed(seq, symbol))
+
+    def _news_failed(self, seq: int, symbol: str) -> Callable[[BaseException], None]:
         def failed(exc: BaseException) -> None:
             self._bridge.news_card.emit({"seq": seq, "markdown": (
                 f"**News {symbol}**: could not be read ({type(exc).__name__}: {exc}).")})
 
-        self.queue.submit(f"news {symbol}", job, priority=PRIORITY_INTERACTIVE, key=f"news-live:{seq}",
-                          on_done=self._bridge.news_card.emit, on_error=failed)
+        return failed
+
+    def _first_fetch(self, seq: int, symbol: str, days: int) -> None:
+        """News thread, ahead of the refresh cycle's waiting symbols: fetch once, then redraw the card."""
+        from mentor_app import news_jobs
+
+        def job() -> dict:
+            self._seed_news()
+            out = news_jobs.refresh_symbol(symbol, store=self.store, fetcher=self._news_fetcher, now=self._now())
+            card = news_jobs.news_card(symbol, days, store=self.store, now=self._now(), note=news_jobs.fetch_note(out))
+            return {**card, "seq": seq, "need_fetch": False}
+
+        self.news_queue.submit(f"news_first {symbol}", job, priority=PRIORITY_INTERACTIVE, key=f"news-first:{seq}",
+                               on_done=self._bridge.news_card.emit, on_error=self._news_failed(seq, symbol))
 
     def _on_news_card(self, done: dict) -> None:
-        index = self._news_blocks.pop(done.get("seq"), None)
+        seq = done.get("seq")
+        index = self._news_blocks.get(seq)
         markdown = str(done.get("markdown") or "")
         if index is not None and index < len(self._blocks):
             self._blocks[index] = markdown
             self._render()
         else:
+            self._news_blocks[seq] = len(self._blocks)
             self._add_block(markdown)
+        if done.get("need_fetch") and not self._shut:
+            self._first_fetch(seq, str(done.get("symbol") or ""), int(done.get("days") or 3))
+            return  # the fetched card replaces this one
+        self._news_blocks.pop(seq, None)
         # The card joins the conversation, so a follow-up sees it (news_pack stays a tool).
         self.chat.add("assistant", markdown)
         pack = done.get("pack")
@@ -1659,15 +1683,16 @@ class MentorWindow(QMainWindow):
                          tool_calls=[{"name": "news_pack", "arguments": {"symbol": done.get("symbol")}}])
 
     def maybe_refresh_news(self) -> None:
-        """Every 30 min, 06:00-13:30 PT weekdays: fetch the scope's headlines off-thread. Runs while AI is
-        paused (news is not the GPU); skipped while the desk is closed. Never the Inbox, never the transcript."""
+        """Every 30 min, 06:00-13:30 PT weekdays: fetch the scope's headlines on the news thread (never the
+        main queue, so no /pick waits). Runs while AI is paused (news is not the GPU); skipped while the desk
+        is closed. Never the Inbox, never the transcript."""
         from mentor_app import news_jobs
 
         now = self._now()
         if self._shut or not self._news_schedule.due(now):
             return
         self._news_schedule.mark(now)
-        probe, named = self._desk_probe, list(self._news_named)
+        probe, named = self._desk_probe, self._news_named.today(now)
 
         def plan() -> int:
             try:
@@ -1689,7 +1714,7 @@ class MentorWindow(QMainWindow):
             for symbol in scope:
                 if not self._news_fetcher.due(symbol, self._now()):
                     continue
-                self.queue.submit(
+                self.news_queue.submit(
                     f"news_fetch {symbol}",
                     lambda symbol=symbol: news_jobs.refresh_symbol(symbol, store=self.store,
                                                                    fetcher=self._news_fetcher, now=self._now()),
@@ -1700,7 +1725,7 @@ class MentorWindow(QMainWindow):
                          len(scope), queued, self._news_fetcher.max_per_cycle)
             return queued
 
-        self.queue.submit("news_plan", plan, priority=PRIORITY_REFRESH, key="news-plan")
+        self.news_queue.submit("news_plan", plan, priority=PRIORITY_REFRESH, key="news-plan")
 
     # ------------------------------------------------------------------ vetoes (P3)
     def _build_veto(self, day: str) -> Any:

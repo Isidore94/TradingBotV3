@@ -74,7 +74,8 @@ TASK = (
     "rule_flags: only for plan lines listed (their plan_id), breaks=true when the pick breaks it. "
     "Never suggest changing the plan, a detector, a score or an alert. Never size or place an order. "
     "A headline row is a title and a link only: cite its id, never say more than its title, and never "
-    "mention news that is not a row here. "
+    "mention news that is not a row here. A news row that says 'not fetched yet' or 'unknown' is not "
+    "evidence that the news is quiet. "
     "verdict: 'worth a look', 'wait' or 'pass'."
 )
 

@@ -52,11 +52,14 @@ NEWS_SELECT = (
     "ORDER BY COALESCE(NULLIF(published_utc, ''), fetched_utc) DESC, id DESC LIMIT ?"
 )
 FETCH_KEY = "news:last_fetch:{symbol}"
+ERROR_KEY = "news:last_error:{symbol}"
 
 #: (symbol, since UTC ISO, limit) -> stored rows, newest first.
 Reader = Callable[[str, str, int], Iterable[Mapping[str, Any]]]
-#: symbol -> the last fetch UTC ISO, or None when never fetched.
+#: symbol -> the last good fetch UTC ISO, or None when never fetched.
 StampReader = Callable[[str], "str | None"]
+#: symbol -> the last feed failure ``{reason, at_utc, partial}``, or None.
+ErrorReader = Callable[[str], "Mapping[str, Any] | None"]
 
 
 def _sym(value: Any) -> str:
@@ -94,7 +97,7 @@ def db_reader(path: Path | str) -> Reader:
     return read
 
 
-def db_stamp_reader(path: Path | str) -> StampReader:
+def _state_reader(path: Path | str, key: str) -> Callable[[str], "str | None"]:
     target = Path(path)
 
     def read(symbol: str) -> str | None:
@@ -102,7 +105,7 @@ def db_stamp_reader(path: Path | str) -> StampReader:
         if conn is None:
             return None
         try:
-            row = conn.execute("SELECT value FROM app_state WHERE key = ?", (FETCH_KEY.format(symbol=_sym(symbol)),))
+            row = conn.execute("SELECT value FROM app_state WHERE key = ?", (key.format(symbol=_sym(symbol)),))
             found = row.fetchone()
             return str(found["value"]) if found else None
         except sqlite3.Error:
@@ -111,6 +114,31 @@ def db_stamp_reader(path: Path | str) -> StampReader:
             conn.close()
 
     return read
+
+
+def db_stamp_reader(path: Path | str) -> StampReader:
+    return _state_reader(path, FETCH_KEY)
+
+
+def db_error_reader(path: Path | str) -> ErrorReader:
+    raw = _state_reader(path, ERROR_KEY)
+
+    def read(symbol: str) -> dict[str, Any] | None:
+        import json
+
+        try:
+            value = json.loads(raw(symbol) or "{}")
+        except ValueError:
+            return None
+        return value if isinstance(value, dict) and value.get("reason") else None
+
+    return read
+
+
+def live_error_reader() -> ErrorReader:
+    from project_paths import MENTOR_CHAT_DB_FILE
+
+    return db_error_reader(MENTOR_CHAT_DB_FILE)
 
 
 def live_reader() -> Reader:
@@ -174,6 +202,7 @@ def build(
     now: datetime | None = None,
     reader: Reader | None = None,
     stamps: StampReader | None = None,
+    errors: "ErrorReader | None" = None,
 ) -> Pack:
     """Build the news pack for ``symbol`` from the stored headlines. A DB read: call it on a worker."""
     sym = _sym(symbol)
@@ -181,13 +210,15 @@ def build(
         return make_pack(NAME, (), empty_text="news_pack needs a ticker, e.g. NVDA")
     window = clamp_days(days)
     moment = _now(now)
-    reader = reader or live_reader()
-    stamps = stamps or live_stamp_reader()
-    try:
-        fetched = stamps(sym)
-    except Exception:  # noqa: BLE001 - the stamp is a label; unreadable = unknown
-        fetched = None
+    if reader is None:  # live: every reader from the app's store; a test passes its own
+        reader = live_reader()
+        stamps = stamps or live_stamp_reader()
+        errors = errors or live_error_reader()
+    fetched, error = read_status(sym, stamps, errors)
+    state = news_state(fetched, error)
     last = f"last fetched {when_text(fetched)}" if fetched else "never fetched"
+    if error and error.get("partial") and state == STATE_FETCHED and _newer(error, fetched):
+        last += f"; {error.get('reason')} at {when_text(error.get('at_utc'))}"
     rows: list[dict[str, Any]] = [{
         "id": f"news:{sym}:asof",
         "kind": "asof",
@@ -199,10 +230,52 @@ def build(
     except Exception as exc:  # noqa: BLE001 - an unreadable store is unknown, never "no news"
         return make_pack(NAME, rows + [{"id": f"news:{sym}:none", "kind": "unknown",
                                         "text": f"Headlines: unknown ({type(exc).__name__})"}])
-    if not found:
-        why = "none stored" if fetched else "not fetched yet"
-        found = [{"id": f"news:{sym}:none", "kind": "news_empty", "text": f"Headlines: {why} in the last {window} days"}]
+    if state == STATE_UNKNOWN:
+        found.append({"id": f"news:{sym}:none", "kind": "unknown", "text": empty_text(state, error, window)})
+    elif not found:
+        kind = "news_empty" if state == STATE_FETCHED else "news_not_fetched"
+        found = [{"id": f"news:{sym}:none", "kind": kind, "text": empty_text(state, error, window)}]
     return make_pack(NAME, rows + found)
+
+
+STATE_FETCHED = "fetched"
+STATE_NOT_FETCHED = "not_fetched"
+STATE_UNKNOWN = "unknown"
+
+
+def _newer(error: Mapping[str, Any] | None, fetched: str | None) -> bool:
+    return bool(error) and (not fetched or str(error.get("at_utc") or "") >= str(fetched))
+
+
+def news_state(fetched: str | None, error: Mapping[str, Any] | None) -> str:
+    """``unknown`` when the last request failed on every feed after the last good fetch; else fetched / not yet."""
+    if error and not error.get("partial") and _newer(error, fetched):
+        return STATE_UNKNOWN
+    return STATE_FETCHED if fetched else STATE_NOT_FETCHED
+
+
+def empty_text(state: str, error: Mapping[str, Any] | None, days: int) -> str:
+    """What an empty news section says; "not fetched" and "unknown" are never "no news"."""
+    if state == STATE_UNKNOWN and error:
+        return f"News unknown: last fetch failed ({error.get('reason')}) at {when_text(error.get('at_utc'))}"
+    if state == STATE_NOT_FETCHED:
+        return "News: not fetched yet (this is not evidence the name is quiet)"
+    return f"Headlines: none stored in the last {days} days"
+
+
+def read_status(symbol: str, stamps: StampReader | None, errors: ErrorReader | None) -> tuple[str | None, dict | None]:
+    """(last good fetch UTC ISO, last failure) for ``symbol``; an unreadable stamp is None."""
+    fetched = error = None
+    try:
+        fetched = stamps(symbol) if stamps is not None else None
+    except Exception:  # noqa: BLE001 - the stamp is a label; unreadable = unknown
+        fetched = None
+    try:
+        found = errors(symbol) if errors is not None else None
+        error = dict(found) if found else None
+    except Exception:  # noqa: BLE001
+        error = None
+    return fetched, error
 
 
 # ---------------------------------------------------------------- fixture

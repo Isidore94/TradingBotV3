@@ -96,8 +96,12 @@ BUSY_TIMEOUT_MS = 5000
 NOTE_COLUMNS = ("retired_utc", "checked_utc", "asked_utc")
 #: app_state key for one PT day's service counters (uncited numbers, brain-offline minutes).
 DAY_STATS_KEY = "stats:{day}"
-#: app_state key for one symbol's last news fetch (UTC ISO), so a restart keeps the 30-min spacing.
+#: app_state key for one symbol's last successful news fetch (UTC ISO; at least one feed answered).
 NEWS_FETCH_KEY = "news:last_fetch:{symbol}"
+#: app_state key for one symbol's last request, failed or not: a restart keeps the 30-min spacing.
+NEWS_ATTEMPT_KEY = "news:last_attempt:{symbol}"
+#: app_state key for one symbol's last feed failure: JSON ``{reason, at_utc, partial}``; "{}" = none.
+NEWS_ERROR_KEY = "news:last_error:{symbol}"
 _CHALLENGES_TABLE = SCHEMA[SCHEMA.index("CREATE TABLE IF NOT EXISTS challenges"):].split(";", 1)[0]
 
 
@@ -401,11 +405,33 @@ class MentorChatStore:
     def news_fetched(self, symbol: str) -> str | None:
         return self.get_state(NEWS_FETCH_KEY.format(symbol=str(symbol).strip().upper()))
 
+    def set_news_attempt(self, symbol: str, when_utc: str) -> bool:
+        return self.set_state(NEWS_ATTEMPT_KEY.format(symbol=str(symbol).strip().upper()), when_utc)
+
+    def set_news_error(self, symbol: str, reason: str = "", when_utc: str = "", *, partial: bool = False) -> bool:
+        """Keep the last feed failure for ``symbol``; a blank reason clears it."""
+        value = {"reason": str(reason)[:300], "at_utc": when_utc or utc_now(), "partial": bool(partial)} if reason else {}
+        return self.set_state(NEWS_ERROR_KEY.format(symbol=str(symbol).strip().upper()), json.dumps(value, sort_keys=True))
+
+    def news_error(self, symbol: str) -> dict[str, Any] | None:
+        """``{reason, at_utc, partial}`` of the last feed failure, or None."""
+        raw = self.get_state(NEWS_ERROR_KEY.format(symbol=str(symbol).strip().upper()))
+        try:
+            value = json.loads(raw) if raw else {}
+        except ValueError:
+            return None
+        return dict(value) if isinstance(value, dict) and value.get("reason") else None
+
     def news_fetch_stamps(self) -> dict[str, str]:
-        """``{SYMBOL: last fetch UTC ISO}`` for every symbol ever fetched."""
-        prefix = NEWS_FETCH_KEY.format(symbol="")
-        rows = self._read("SELECT key, value FROM app_state WHERE key LIKE ?", (prefix + "%",))
-        return {str(row["key"])[len(prefix):]: str(row["value"]) for row in rows}
+        """``{SYMBOL: last request UTC ISO}`` (the later of the last fetch and the last attempt)."""
+        out: dict[str, str] = {}
+        for key in (NEWS_FETCH_KEY, NEWS_ATTEMPT_KEY):
+            prefix = key.format(symbol="")
+            for row in self._read("SELECT key, value FROM app_state WHERE key LIKE ?", (prefix + "%",)):
+                symbol, value = str(row["key"])[len(prefix):], str(row["value"])
+                if value > out.get(symbol, ""):
+                    out[symbol] = value
+        return out
 
     # ----------------------------------------------------------------- caches
     def put_pack(self, name: str, args: dict[str, Any] | None, pack_json: str, built_utc: str = "") -> int | None:

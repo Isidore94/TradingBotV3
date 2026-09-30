@@ -204,13 +204,21 @@ def fetch_symbol(
 class FetchResult:
     symbol: str
     headlines: list[Headline] = field(default_factory=list)
-    #: "" = fetched; else why nothing was fetched ("too soon", "cycle cap", "not a ticker").
+    #: "" = fetched (at least one feed answered); else why not ("too soon", "cycle cap",
+    #: "not a ticker", "every feed failed: ...").
     reason: str = ""
     errors: dict[str, str] = field(default_factory=dict)
+    #: True when a request was sent (a failed one too): the per-symbol spacing counts it.
+    attempted: bool = False
 
     @property
     def fetched(self) -> bool:
         return not self.reason
+
+    @property
+    def failed(self) -> bool:
+        """Sent, and no feed answered: the news is unknown, never "none"."""
+        return self.attempted and bool(self.reason)
 
 
 class NewsFetcher:
@@ -236,7 +244,7 @@ class NewsFetcher:
         self.last_error: dict[str, str] = {}
 
     def seed(self, symbol: str, when: datetime) -> None:
-        """Remember a fetch made before a restart (the store's last-fetch stamp)."""
+        """Remember a request made before a restart (the store's last attempt, failed or not)."""
         sym = clean_symbol(symbol)
         if sym and when is not None:
             with self._lock:
@@ -275,6 +283,11 @@ class NewsFetcher:
         with self._lock:
             for feed, _ in feed_urls(sym):
                 self.last_error[feed] = errors.get(feed, "")
+        if len(errors) >= len(feed_urls(sym)):
+            reason = "every feed failed: " + "; ".join(f"{feed}: {why}" for feed, why in sorted(errors.items()))
+            logging.warning("Trade Mentor news: %s not fetched (%s; %d/%d symbols this cycle)",
+                            sym, reason, count, self.max_per_cycle)
+            return FetchResult(sym, reason=reason[:300], errors=errors, attempted=True)
         logging.info("Trade Mentor news: %s fetched (%d headlines; %d/%d symbols this cycle)%s",
                      sym, len(headlines), count, self.max_per_cycle, f" errors {errors}" if errors else "")
-        return FetchResult(sym, headlines=headlines, errors=errors)
+        return FetchResult(sym, headlines=headlines, errors=errors, attempted=True)
