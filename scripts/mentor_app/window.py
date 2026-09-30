@@ -642,6 +642,8 @@ class MentorWindow(QMainWindow):
         return index
 
     def _on_token(self, text: str) -> None:
+        if self._stream_index is None:
+            return  # the turn already ended: a late token from its stream is dropped
         index = self._stream_slot()
         self._blocks[index] += text
         if index != len(self._blocks) - 1:

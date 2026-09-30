@@ -1,6 +1,6 @@
 """Pick assessments as queue jobs: the 06:15 PT pass over every Focus name, hourly refreshes. Qt-free.
 
-The morning pass narrates every Focus name whose cached card was not built today; an
+The morning pass narrates every liked pick whose cached card was not built today; an
 hourly pass narrates only names whose pick pack hash changed. A card is cached in the
 chat store under (symbol, pack hash), so an unchanged pack is never narrated twice.
 A job yields (returns without a model call) when a chat turn needs the only slot.
@@ -129,8 +129,26 @@ def run_pick_job(
 
 
 # ---------------------------------------------------------------- the liked set
+# Decision (lead, 2026-09-30, the trader can overrule with `mentor_liked_sources`):
+# Strength Board likes are browsing clicks, not trade intent; claims after fade are
+# the names still standing. So the default set is standing claims, 30-day likes from
+# every other screen, and swing favourites; `likes_strength_board` opts those likes in.
 LIKED_DAYS = 30
 MAX_CHIPS = 24
+SOURCE_CLAIMS = "claims"
+SOURCE_LIKES = "likes"
+SOURCE_FAVORITES = "favorites"
+SOURCE_LIKES_STRENGTH_BOARD = "likes_strength_board"
+LIKED_SOURCES = (SOURCE_CLAIMS, SOURCE_LIKES, SOURCE_FAVORITES, SOURCE_LIKES_STRENGTH_BOARD)
+DEFAULT_LIKED_SOURCES = (SOURCE_CLAIMS, SOURCE_LIKES, SOURCE_FAVORITES)
+STRENGTH_BOARD_ORIGIN = "strength_board"
+
+
+def parse_liked_sources(raw: Any) -> frozenset[str]:
+    """Tokens from ``"claims,likes,favorites"``; unknown tokens are ignored, blank = the default."""
+    tokens = {part.strip().lower() for part in str(raw or "").replace(";", ",").split(",") if part.strip()}
+    known = frozenset(tokens & set(LIKED_SOURCES))
+    return known or frozenset(DEFAULT_LIKED_SOURCES)
 
 
 def _norm_side(value: Any) -> str:
@@ -144,33 +162,49 @@ def liked_picks(
     claims_path: Any = None,
     feedback_path: Any = None,
     favorites_path: Any = None,
+    sources: Iterable[str] | None = None,
 ) -> list[tuple[str, str]]:
     """The trader's own picks, newest first, each symbol once: ``[(SYMBOL, SIDE)]``.
 
-    A standing claim (``claimed_picks``), a like in ``pick_feedback`` within LIKED_DAYS,
-    or a swing favourite still standing from a session within LIKED_DAYS. Read-only.
+    A claim still standing after the fade (``claimed_picks.active_claims``), a like in
+    ``pick_feedback`` within LIKED_DAYS (Strength Board likes only with the
+    ``likes_strength_board`` token), or a swing favourite still standing from a session
+    within LIKED_DAYS. ``sources`` None reads the ``mentor_liked_sources`` setting. Read-only.
     """
     import claimed_picks
     import pick_feedback
     import swing_favorites
 
+    if sources is None:
+        from mentor_app import settings
+
+        wanted = settings.liked_sources()
+    else:
+        wanted = parse_liked_sources(",".join(sources))
     since = (today - timedelta(days=LIKED_DAYS)).isoformat()
     seen: list[tuple[str, str, Any]] = []  # (when, symbol, side)
-    for row in claimed_picks.active_claims(claims_path or claimed_picks.CLAIMED_PICKS_FILE, as_of=today):
-        seen.append((str(row.get("claim_at") or row.get("session_date") or ""), str(row.get("symbol") or ""), row.get("side")))
-    for row in pick_feedback.load_pick_feedback(feedback_path or pick_feedback.PICK_FEEDBACK_FILE):
-        if row.get("verdict") == "like" and str(row.get("trade_date") or "")[:10] >= since:
+    if SOURCE_CLAIMS in wanted:
+        for row in claimed_picks.active_claims(claims_path or claimed_picks.CLAIMED_PICKS_FILE, as_of=today):
+            seen.append((str(row.get("claim_at") or row.get("session_date") or ""), str(row.get("symbol") or ""), row.get("side")))
+    if SOURCE_LIKES in wanted or SOURCE_LIKES_STRENGTH_BOARD in wanted:
+        for row in pick_feedback.load_pick_feedback(feedback_path or pick_feedback.PICK_FEEDBACK_FILE):
+            if row.get("verdict") != "like" or str(row.get("trade_date") or "")[:10] < since:
+                continue
+            board = str(row.get("origin") or "").strip().lower() == STRENGTH_BOARD_ORIGIN
+            if (SOURCE_LIKES_STRENGTH_BOARD if board else SOURCE_LIKES) not in wanted:
+                continue
             seen.append((str(row.get("ts") or ""), str(row.get("symbol") or ""), row.get("side")))
     standing: dict[tuple[str, str], str] = {}
-    for row in swing_favorites.load_rows(favorites_path or swing_favorites.SWING_FAVORITES_FILE):
-        if str(row.get("session_date") or "") < since:
-            continue
-        key = (str(row.get("symbol") or "").strip().upper(), _norm_side(row.get("side")))
-        action = str(row.get("action") or "").strip().lower()
-        if action == "remove":
-            standing.pop(key, None)
-        elif action == "add":
-            standing[key] = str(row.get("event_at") or row.get("session_date") or "")
+    if SOURCE_FAVORITES in wanted:
+        for row in swing_favorites.load_rows(favorites_path or swing_favorites.SWING_FAVORITES_FILE):
+            if str(row.get("session_date") or "") < since:
+                continue
+            key = (str(row.get("symbol") or "").strip().upper(), _norm_side(row.get("side")))
+            action = str(row.get("action") or "").strip().lower()
+            if action == "remove":
+                standing.pop(key, None)
+            elif action == "add":
+                standing[key] = str(row.get("event_at") or row.get("session_date") or "")
     seen.extend((when, symbol, side) for (symbol, side), when in standing.items())
     out: list[tuple[str, str]] = []
     done: set[str] = set()

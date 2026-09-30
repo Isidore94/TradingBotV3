@@ -557,3 +557,70 @@ def test_only_the_24_newest_liked_picks_get_the_high_effort_pass(window, app):
     assert all(jobs[f"pick_prefetch S{i:02d}"] == PRIORITY_REFRESH for i in range(24))
     assert all(jobs[f"pick_prefetch S{i:02d}"] == PRIORITY_IDLE for i in range(24, 30))
     assert "pick_prefetch AMD" not in jobs, "scope liked never reaches the rest of Focus"
+
+
+# ---------------------------------------------------------------- P2 follow-ups (P3 branch)
+def _liked_world(tmp_path):
+    claims = tmp_path / "claimed_picks.jsonl"
+    claims.write_text("\n".join(json.dumps(row) for row in (
+        {"action": "claim", "symbol": "FORM", "side": "LONG", "claimed_setup_id": "x",
+         "claim_at": "2026-09-29T12:10:02-07:00", "session_date": "2026-09-29"},
+        {"action": "claim", "symbol": "FADED", "side": "SHORT", "claimed_setup_id": "x",
+         "claim_at": "2026-09-01T09:00:00-07:00", "session_date": "2026-09-01"},
+    )) + "\n", encoding="utf-8")
+    feedback = tmp_path / "pick_feedback.jsonl"
+    feedback.write_text("\n".join(json.dumps(row) for row in (
+        {"ts": "2026-09-28T07:00:00", "trade_date": "2026-09-28", "symbol": "NVDA", "side": "LONG",
+         "verdict": "like", "origin": "d1"},
+        {"ts": "2026-09-29T07:30:00", "trade_date": "2026-09-29", "symbol": "BOARD", "side": "LONG",
+         "verdict": "like", "origin": "strength_board"},
+    )) + "\n", encoding="utf-8")
+    favourites = tmp_path / "swing_favorites.jsonl"
+    favourites.write_text("", encoding="utf-8")
+    return {"claims_path": claims, "feedback_path": feedback, "favorites_path": favourites}
+
+
+def test_a_strength_board_like_is_out_by_default_and_in_with_its_token(tmp_path):
+    from datetime import date
+
+    paths = _liked_world(tmp_path)
+    default = pick_jobs.liked_picks(today=date(2026, 9, 29), sources=pick_jobs.DEFAULT_LIKED_SOURCES, **paths)
+    assert [sym for sym, _ in default] == ["FORM", "NVDA"], "a Strength Board like is a browsing click"
+    opted = pick_jobs.liked_picks(
+        today=date(2026, 9, 29), sources=(*pick_jobs.DEFAULT_LIKED_SOURCES, "likes_strength_board"), **paths
+    )
+    assert [sym for sym, _ in opted] == ["FORM", "BOARD", "NVDA"]
+
+
+def test_a_faded_claim_is_not_a_liked_pick(tmp_path):
+    from datetime import date
+
+    got = pick_jobs.liked_picks(today=date(2026, 9, 29), sources=("claims",), **_liked_world(tmp_path))
+    assert got == [("FORM", "LONG")], "FADED was claimed 20 sessions ago: past the fade"
+
+
+def test_the_liked_sources_setting_is_the_default(tmp_path, monkeypatch):
+    from datetime import date
+
+    from mentor_app import settings
+
+    saved = {"mentor_liked_sources": "claims"}
+    monkeypatch.setattr(settings, "_setting", lambda key, default=None: saved.get(key, default))
+    assert pick_jobs.liked_picks(today=date(2026, 9, 29), **_liked_world(tmp_path)) == [("FORM", "LONG")]
+    saved["mentor_liked_sources"] = "nonsense"
+    assert settings.liked_sources() == frozenset(pick_jobs.DEFAULT_LIKED_SOURCES), "unknown tokens fall back"
+
+
+def test_a_token_after_the_turn_ended_changes_nothing(window, app):
+    window._blocks[:] = ["Hi. Ask me anything.", "**Mentor:** "]
+    window._stream_index = 1
+    window._worker = object()
+    window.queue.begin_interactive()
+    window._on_token("Done")
+    window._on_done({"text": "Done.", "pack_texts": [], "model": "m"})
+    window.show_pick("NVDA")
+    _drain(window, app)
+    before = list(window._blocks)
+    window._on_token("STALE")
+    assert window._blocks == before, "a late token from a finished stream never lands in a card"
+    assert "STALE" not in _text(window)

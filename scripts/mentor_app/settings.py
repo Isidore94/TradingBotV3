@@ -112,6 +112,17 @@ def prefetch_scope() -> str:
     return raw if raw in PREFETCH_SCOPES else "liked"
 
 
+LIKED_SOURCES_KEY = "mentor_liked_sources"
+DEFAULT_LIKED_SOURCES = "claims,likes,favorites"
+
+
+def liked_sources() -> frozenset[str]:
+    """Which stores make a liked pick: ``claims,likes,favorites`` (+ opt-in ``likes_strength_board``)."""
+    from mentor_app.pick_jobs import parse_liked_sources
+
+    return parse_liked_sources(_setting(LIKED_SOURCES_KEY, DEFAULT_LIKED_SOURCES))
+
+
 def gpu_block_reason(now: datetime | None = None) -> str:
     """"" while the app may use the model; otherwise why the night owns the GPU.
 
