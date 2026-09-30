@@ -48,6 +48,8 @@ TASK = (
     "A headline row is a title and a link only: cite its id, never say more than its title, and never "
     "mention news that is not a row here. A news row that says 'not fetched yet' or 'unknown' is not "
     "evidence that the news is quiet. "
+    "The book source row says whether the book came from Questrade or the journal; an account hint row "
+    "(registered accounts hold no shorts, which account has room) is a fact to cite, never sizing advice. "
     "verdict: 'go', 'wait' or 'breaks a rule'."
 )
 

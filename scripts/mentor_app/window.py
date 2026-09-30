@@ -48,6 +48,8 @@ from mentor_app.store import MentorChatStore
 CONTEXT_REFRESH_MS = 5 * 60 * 1000
 #: The /check narration's output cap (gate.MAX_OUTPUT_TOKENS).
 MAX_GATE_TOKENS = 600
+#: How long a /check waits for the Questrade read it queued (then it uses the journal).
+BOOK_WAIT_SECONDS = 10.0
 GPU_CHECK_MS = 60 * 1000
 #: How often the app looks at the Pause AI switch (the desk may flip it).
 PAUSE_CHECK_MS = 5 * 1000
@@ -102,6 +104,7 @@ class _Bridge(QObject):
     check_card = Signal(object)
     desk_state = Signal(object)
     news_card = Signal(object)
+    book_card = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -150,6 +153,8 @@ class MentorWindow(QMainWindow):
         news_fetcher: Any = None,
         news_open_symbols: Callable[[], Any] | None = None,
         news_queue: PrefetchQueue | None = None,
+        book_fetch: Callable[..., Any] | None = None,
+        book_sources: Callable[[], Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -295,6 +300,18 @@ class MentorWindow(QMainWindow):
         self._news_seq = 0
         self._bridge.news_card.connect(self._on_news_card)
         self._pick_timer.timeout.connect(self.maybe_refresh_news)
+        # P8 book: Questrade read on demand (/book, /check, 06:20 PT) on the news thread; injectable.
+        from mentor_app import book_jobs
+
+        self._book_fetch = book_fetch
+        self._book_sources = book_sources
+        self._book_schedule = book_jobs.BookSchedule()
+        self._book_blocks: dict[int, int] = {}
+        self._book_seq = 0
+        self._book_event: threading.Event | None = None
+        self._book_lock = threading.Lock()
+        self._bridge.book_card.connect(self._on_book_card)
+        self._pick_timer.timeout.connect(self.maybe_fetch_book)
         self._add_note("Hi. Ask me anything, or type `/help`.")
 
     # ------------------------------------------------------------------ UI
@@ -1012,6 +1029,8 @@ class MentorWindow(QMainWindow):
         elif result.action == "check":
             self._name_for_news(result.arg.symbol)
             self.show_check(result.arg)
+        elif result.action == "book":
+            self.show_book()
         elif result.action == "ai_off":
             self.set_ai_pause(result.arg)
         elif result.action == "ai_on":
@@ -1456,9 +1475,14 @@ class MentorWindow(QMainWindow):
     def _build_gate(self, request: Any) -> Any:
         if self._gate_builder is not None:
             return self._gate_builder(request)
+        import dataclasses
+
         from mentor_packs import gate_pack
 
-        return gate_pack.build(request.side, request.symbol, request.size, request.stop, request.entry)
+        book = self._book_pack_sources()
+        sources = dataclasses.replace(gate_pack.live_sources(), book_snapshot=book.snapshot, book_status=book.status)
+        return gate_pack.build(request.side, request.symbol, request.size, request.stop, request.entry,
+                               sources=sources)
 
     def show_check(self, request: Any) -> None:
         """/check: build the gate pack off-thread, narrate once (never cached across requests), store the claim."""
@@ -1466,6 +1490,9 @@ class MentorWindow(QMainWindow):
         seq = self._check_seq
         self._check_blocks[seq] = len(self._blocks)
         self._add_block(f"**Check {request.side} {request.symbol}**: building...")
+        # The book is read on the news thread; the gate waits a little for it only while that thread runs.
+        book_done = self._queue_book_fetch("check")
+        book_wait = BOOK_WAIT_SECONDS if self.news_queue.running() else 0.0
         live = self._brain_ok and bool(self._endpoint) and not self._gpu_reason()
         paused = self._pause_reason()
         why = "" if live else (paused or f"the brain is off: {self._gpu_reason() or self._brain_reason or 'not connected'}")
@@ -1476,6 +1503,8 @@ class MentorWindow(QMainWindow):
             from mentor_app import gate
             from mentor_packs import gate_pack
 
+            if book_done is not None and book_wait:
+                book_done.wait(book_wait)
             pack = self._build_gate(request)
             digest = gate.request_hash(request, gate_pack.pack_hash(pack))
             if live:
@@ -1726,6 +1755,89 @@ class MentorWindow(QMainWindow):
             return queued
 
         self.news_queue.submit("news_plan", plan, priority=PRIORITY_REFRESH, key="news-plan")
+
+    # ------------------------------------------------------------------ book (P8)
+    def _book_pack_sources(self) -> Any:
+        """``book_pack`` sources: the snapshot from this app's store, the journal ``mode=ro``."""
+        from mentor_app import book_jobs
+
+        base = self._book_sources() if self._book_sources is not None else None
+        return book_jobs.store_sources(self.store, base)
+
+    def _queue_book_fetch(self, why: str, priority: int = PRIORITY_INTERACTIVE) -> threading.Event | None:
+        """Queue one Questrade read on the news thread (fresh / backoff / no token / desk closed skip it inside).
+
+        Returns the event set when that read finishes (shared with a read already waiting)."""
+        from mentor_app import book_jobs
+
+        if self._shut:
+            return None
+        with self._book_lock:
+            if self._book_event is not None and "book-fetch" in self.news_queue.pending_keys():
+                return self._book_event
+            event = self._book_event = threading.Event()
+        store, now, fetch, probe = self.store, self._now, self._book_fetch, self._desk_probe
+
+        def job() -> dict:
+            try:
+                out = book_jobs.ensure_book(store, now(), fetch=fetch, desk_closed=probe)
+                logging.info("Trade Mentor book (%s): %s", why, out)
+                return out
+            finally:
+                event.set()
+
+        if not self.news_queue.submit(f"book_fetch {why}", job, priority=priority, key="book-fetch",
+                                      on_error=lambda exc: event.set()):
+            event.set()
+        return event
+
+    def maybe_fetch_book(self) -> None:
+        """Once a weekday from 06:20 PT: one Questrade read at refresh priority (never a poll)."""
+        now = self._now()
+        if self._shut or not self._book_schedule.due(now):
+            return
+        self._book_schedule.mark(now)
+        self._queue_book_fetch("06:20", priority=PRIORITY_REFRESH)
+
+    def show_book(self) -> None:
+        """/book: read Questrade when due (news thread), then the card from book_pack. No model."""
+        from mentor_app import book_jobs
+
+        self._book_seq += 1
+        seq = self._book_seq
+        self._book_blocks[seq] = len(self._blocks)
+        self._add_block("**Book**: reading...")
+        store, now, fetch, probe = self.store, self._now, self._book_fetch, self._desk_probe
+
+        def job() -> dict:
+            from mentor_packs import book_pack
+
+            out = book_jobs.ensure_book(store, now(), fetch=fetch, desk_closed=probe)
+            reason = str(out.get("reason") or "")
+            note = "" if out.get("fetched") or reason in ("", "fresh") else f"not read from Questrade now: {reason}"
+            pack = book_pack.build(now=now(), sources=self._book_pack_sources())
+            return {"seq": seq, "pack": pack, "markdown": book_jobs.card_markdown(pack, note=note)}
+
+        def failed(exc: BaseException) -> None:
+            self._bridge.book_card.emit({"seq": seq, "markdown": (
+                f"**Book**: could not be read ({type(exc).__name__}: {exc}).\n\n{book_jobs.FOOTER}")})
+
+        self.news_queue.submit("book", job, priority=PRIORITY_INTERACTIVE, key=f"book:{seq}",
+                               on_done=self._bridge.book_card.emit, on_error=failed)
+
+    def _on_book_card(self, done: dict) -> None:
+        index = self._book_blocks.pop(done.get("seq"), None)
+        markdown = str(done.get("markdown") or "")
+        if index is not None and index < len(self._blocks):
+            self._blocks[index] = markdown
+            self._render()
+        else:
+            self._add_block(markdown)
+        # The card joins the conversation, so a follow-up sees it (book_pack stays a tool).
+        self.chat.add("assistant", markdown)
+        pack = done.get("pack")
+        self._store_turn("assistant", markdown, pack_ids=getattr(pack, "ids", ()),
+                         tool_calls=[{"name": "book_pack", "arguments": {}}])
 
     # ------------------------------------------------------------------ vetoes (P3)
     def _build_veto(self, day: str) -> Any:

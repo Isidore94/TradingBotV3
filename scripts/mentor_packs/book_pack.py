@@ -437,6 +437,38 @@ def hint_rows(book: Book) -> list[dict[str, Any]]:
     return rows
 
 
+def short_hint(book: Book) -> dict[str, Any] | None:
+    """For a short request: which accounts cannot take it and, when room is set, whether any that can has room.
+
+    None when every account can hold a short (or there are none): nothing to say.
+    """
+    blocked = [a for a in book.accounts if a["class"] in NO_SHORTS]
+    if not blocked:
+        return None
+    names = ", ".join(_label(a) for a in blocked)
+    row: dict[str, Any] = {"id": "book:hint:short_account", "kind": "hint_short",
+                           "blocked": [str(a["account_number"]) for a in blocked], "no_room_for_short": False}
+    if book.max_positions is None:
+        row["text"] = f"This short cannot go in {names} (no shorts there)"
+        return row
+    room = [a for a in book.accounts if book.max_positions - a["count"] > 0]
+    margin = [a for a in room if a["class"] == "margin"]
+    unknown = [a for a in room if a["class"] not in NO_SHORTS and a["class"] != "margin"]
+    if not room:
+        row["no_room_for_short"] = True
+        row["text"] = f"No account has room (max {book.max_positions} per account); {names} cannot hold a short anyway"
+    elif margin:
+        row["text"] = f"{', '.join(_label(a) for a in margin)} has room for this short; {names} cannot hold one"
+    elif unknown:
+        row["text"] = (f"{', '.join(_label(a) for a in unknown)} has room, but whether it can hold a short is "
+                       f"unknown; {names} cannot hold one")
+    else:
+        row["no_room_for_short"] = True
+        row["text"] = (f"Only {', '.join(_label(a) for a in room)} has room, and it cannot hold a short: "
+                       f"no account with room can take this short")
+    return row
+
+
 def book_rows(book: Book) -> list[dict[str, Any]]:
     rows = [{"id": "book:asof", "kind": "asof", "text": f"Book as of {_pt(book.asof)}"},
             {"id": "book:source", "kind": "source", "source": book.source, "text": book.source_text}]

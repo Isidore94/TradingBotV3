@@ -170,6 +170,73 @@ def test_any_plan_edit_changes_the_hash_even_one_that_adds_no_line(tmp_path):
     assert gate_pack.pack_hash(a) != gate_pack.pack_hash(b), "a changed plan re-narrates the check"
 
 
+# ---------------------------------------------------------------- P8: the book section from book_pack
+def _book_src(tmp_path, *, snapshot=None, max_positions=None, trades=None):
+    import dataclasses
+
+    from mentor_packs import book_pack
+
+    src = gate_pack.fixture_sources(tmp_path, trades=trades)
+    return dataclasses.replace(src, book_snapshot=lambda: snapshot, accounts=lambda: book_pack.FIXTURE_JOURNAL_ACCOUNTS,
+                               max_positions=lambda: max_positions)
+
+
+def _fresh_snapshot(positions=None):
+    from datetime import timezone
+
+    import questrade_positions as qp
+
+    return qp.fixture_snapshot(NOW.astimezone(timezone.utc).isoformat(timespec="seconds"), positions).as_dict()
+
+
+MARGIN_FULL = [
+    {"account_number": "222", "account_label": "Margin 222", "symbol": sym, "side": "SHORT", "open_qty": 10,
+     "avg_price": 10.0, "market_value": -100.0} for sym in ("AMD", "TSLA")
+]
+
+
+def test_a_short_when_only_the_tfsa_has_room_gets_the_registered_account_hint(tmp_path):
+    src = _book_src(tmp_path, snapshot=_fresh_snapshot(MARGIN_FULL), max_positions=2)
+    pack = gate_pack.build("SHORT", "NVDA", 400, 3.2, 3.05, now=NOW, sources=src)
+    hint = _row(pack, "NVDA:book:hint:short_account")
+    assert hint["text"] == ("Only TFSA 111 has room, and it cannot hold a short: no account with room can take "
+                            "this short")
+    assert hint["no_room_for_short"] is True and hint["source_id"] == "book:hint:short_account"
+    assert _row(pack, "NVDA:book:hint:no_shorts_registered")
+    assert "Questrade positions" in _row(pack, "NVDA:book:source")["text"]
+    assert "gate:NVDA:book:pos:222:AMD" in pack.ids and "gate:NVDA:book:T1" not in pack.ids, "never both sources"
+    assert _row(pack, "NVDA:book:industry")["same_industry_count"] == 1
+    assert len(pack.ids) == len(set(pack.ids))
+
+
+def test_a_short_with_margin_room_says_so_and_a_long_gets_no_short_hint(tmp_path):
+    src = _book_src(tmp_path, snapshot=_fresh_snapshot(), max_positions=2)
+    pack = gate_pack.build("SHORT", "NVDA", now=NOW, sources=src)
+    assert _row(pack, "NVDA:book:hint:short_account")["text"] == (
+        "Margin 222 has room for this short; TFSA 111 cannot hold one")
+    long_pack = gate_pack.build("LONG", "NVDA", now=NOW, sources=src)
+    assert "gate:NVDA:book:hint:short_account" not in long_pack.ids
+    assert _row(long_pack, "NVDA:book:pos:111:NVDA")["same_symbol"] is True
+
+
+def test_journal_fallback_keeps_the_trade_rows_and_labels_the_source(tmp_path):
+    pack = gate_pack.build("SHORT", "NVDA", now=NOW, sources=_book_src(tmp_path))
+    assert "Questrade unavailable: not fetched yet" in _row(pack, "NVDA:book:source")["text"]
+    assert "gate:NVDA:book:T1" in pack.ids and not any(":book:pos:" in i for i in pack.ids)
+    assert _row(pack, "NVDA:book:hint:short_account")["text"] == "This short cannot go in TFSA 111 (no shorts there)"
+
+
+def test_a_gate_reply_may_cite_a_book_hint(tmp_path):
+    from mentor_app import assess
+
+    src = _book_src(tmp_path, snapshot=_fresh_snapshot(MARGIN_FULL), max_positions=2)
+    pack = gate_pack.build("SHORT", "NVDA", 400, 3.2, 3.05, now=NOW, sources=src)
+    kept, _, dropped = assess.check_reply({"bullets": [
+        {"text": "No account with room can hold this short.", "evidence_refs": ["gate:NVDA:book:hint:short_account"]}
+    ]}, pack)
+    assert [b["text"] for b in kept] == ["No account with room can hold this short."] and not dropped
+
+
 def test_the_gate_carries_the_pick_headlines_with_their_urls(tmp_path):
     pack = _build(tmp_path, "SHORT", "NVDA", 400, 3.2, 3.05)
     news = [row for row in pack.rows if row["kind"] == "news"]

@@ -22,6 +22,7 @@ HELP_TEXT = (
     "- `/news SYM [days]` the stored headlines for a stock (title, source, time, link; 3 days unless you say)\n"
     "- `/vetoes [YYYY-MM-DD]` the last session's vetoes (or that one's), each with its slice and any challenge\n"
     "- `/check short NVDA 400 stop 3.20 entry 3.05` check a trade before you take it (advice only; it never orders)\n"
+    "- `/book` your open positions by account (Questrade when it can be read, else the journal; read-only)\n"
     "- `/scorecard` how the challenges have done by kind, with n, and how the app itself is doing\n"
     "- `/ai off [2h|4h|tonight]` pause every local-AI use of the GPU host (default: until 06:00);"
     " `/ai on` resumes; `/ai` says which\n"
@@ -121,6 +122,10 @@ def handle(text: str) -> CommandResult | None:
         return CommandResult("check", "", request)
     if name == "scorecard":
         return CommandResult("scorecard")
+    if name == "book":
+        if rest:
+            return CommandResult("error", "Try `/book` (no arguments).")
+        return CommandResult("book")
     if name == "ai":
         return _ai_command(rest)
     return CommandResult("error", f"I don't know `/{name}`. Type `/help`.")

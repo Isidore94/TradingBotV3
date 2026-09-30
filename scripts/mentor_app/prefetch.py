@@ -111,6 +111,10 @@ class PrefetchQueue:
                     return True
         return False
 
+    def running(self) -> bool:
+        """True while the consumer thread is alive."""
+        return self._thread is not None and self._thread.is_alive() and not self._stop.is_set()
+
     def pending_keys(self) -> list[str]:
         with self._lock:
             return [job.key for job in self._jobs]

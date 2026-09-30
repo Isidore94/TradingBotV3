@@ -5,8 +5,10 @@ risk against the Settings > General "Risk per trade ($)" value (``risk``); the p
 pack's rows and the regime pack's mode / D1 environment / regime / SPY pause rows,
 embedded VERBATIM with ``gate:<SYM>:`` put in front of their own ids (so
 ``pick:NVDA:cell`` becomes ``gate:NVDA:pick:NVDA:cell``; the pick pack's own plan rows
-are left out because the plan has its own section); the open book (``book:<TRADE_ID>``
-and ``book:industry``); and the plan lines (``plan:<line>``). It never sizes, orders or
+are left out because the plan has its own section); the open book from ``book_pack`` (one
+source, named in ``book:source``: fresh Questrade positions ``book:pos:<ACCT>:<SYM>``, else
+the journal's open trades ``book:<TRADE_ID>``), its accounts and hints, ``book:industry``
+and, for a short, ``book:hint:short_account``; and the plan lines (``plan:<line>``). It never sizes, orders or
 writes. A source that cannot be read gives an "unknown" row, never a guess.
 """
 
@@ -19,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from mentor_packs import pick_pack, plan_lines, regime_pack
+from mentor_packs import book_pack, pick_pack, plan_lines, regime_pack
 from mentor_packs.registry import Pack, make_pack
 
 NAME = "gate_pack"
@@ -66,6 +68,11 @@ class Sources:
     plan: Path | None = None
     #: Tests pin the pack's clock; None = now.
     now: datetime | None = field(default=None, compare=False)
+    #: The stored Questrade snapshot and its last failure (``book_pack``); None = the journal only.
+    book_snapshot: Callable[[], Mapping[str, Any] | None] = field(default=lambda: None, compare=False)
+    book_status: Callable[[], Mapping[str, Any] | None] = field(default=lambda: None, compare=False)
+    accounts: Callable[[], list[Mapping[str, Any]]] = field(default=lambda: [], compare=False)
+    max_positions: Callable[[], Any] = field(default=lambda: None, compare=False)
 
 
 def _live_risk() -> Any:
@@ -112,7 +119,16 @@ def _live_industry_map() -> Mapping[str, Mapping[str, Any]]:
 
 
 def live_sources() -> Sources:
-    return Sources(risk_setting=_live_risk, open_trades=_live_open_trades, industry_map=_live_industry_map)
+    live_book = book_pack.live_sources()
+    return Sources(risk_setting=_live_risk, open_trades=_live_open_trades, industry_map=_live_industry_map,
+                   book_snapshot=live_book.snapshot, book_status=live_book.status, accounts=live_book.accounts,
+                   max_positions=live_book.max_positions)
+
+
+def book_sources(src: Sources) -> book_pack.Sources:
+    """The book pack's sources from the gate's own (the journal fallback is the gate's open trades)."""
+    return book_pack.Sources(snapshot=src.book_snapshot, status=src.book_status, open_trades=src.open_trades,
+                             accounts=src.accounts, industry_map=src.industry_map, max_positions=src.max_positions)
 
 
 # ---------------------------------------------------------------- small helpers
@@ -178,12 +194,44 @@ def _risk_row(prefix: str, side: str, size: float | None, stop: float | None, en
     return row
 
 
-def _book_rows(prefix: str, symbol: str, side: str, src: Sources) -> list[dict[str, Any]]:
-    trades = list(src.open_trades() or ())
+def _book_rows(prefix: str, symbol: str, side: str, src: Sources,
+               moment: datetime | None = None) -> list[dict[str, Any]]:
+    """The book section from ``book_pack``'s one source (fresh Questrade, else the journal), never both."""
+    book = book_pack.load_book(book_sources(src), moment)
+    head = [row for row in book_pack.book_rows(book) if row.get("kind") in ("source", "account")]
+    short = book_pack.short_hint(book) if side == "SHORT" else None
+    tail = _embed(prefix, book_pack.hint_rows(book) + ([short] if short else []))
     try:
         imap = src.industry_map() or {}
     except Exception:  # noqa: BLE001 - industry is a label; unreadable = unknown
         imap = {}
+    body = _questrade_rows(prefix, symbol, book, imap) if book.source == "questrade" else _journal_rows(
+        prefix, symbol, src, imap)
+    return _embed(prefix, head) + body + tail
+
+
+def _questrade_rows(prefix: str, symbol: str, book: book_pack.Book,
+                    imap: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+    rows = []
+    for row in book_pack.position_rows(book):
+        same = row["symbol"] == symbol
+        rows.append({**row, "id": f"{prefix}:{row['id']}", "source_id": row["id"], "same_symbol": same,
+                     "text": row["text"] + (" -- SAME SYMBOL as this request" if same else "")})
+    own = _industry(symbol, imap)
+    names = sorted({row["symbol"] for row in rows if own and row.get("industry") == own})
+    if own:
+        text = (f"Open book (Questrade): {len(rows)} open position(s); {len(names)} open name(s) in {own}"
+                + (f" ({', '.join(names)})" if names else ""))
+    else:
+        text = f"Open book (Questrade): {len(rows)} open position(s); {symbol}'s industry unknown"
+    return rows + [{"id": f"{prefix}:book:industry", "kind": "book_industry", "industry": own,
+                    "same_industry_count": len(names), "open_count": len(rows),
+                    "same_symbol_open": any(row["same_symbol"] for row in rows), "text": text}]
+
+
+def _journal_rows(prefix: str, symbol: str, src: Sources,
+                  imap: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+    trades = list(src.open_trades() or ())
     own_industry = _industry(symbol, imap)
     rows: list[dict[str, Any]] = []
     same_industry: list[str] = []
@@ -270,7 +318,7 @@ def build(side: str = "", symbol: str = "", size: Any = None, stop: Any = None, 
     except Exception as exc:  # noqa: BLE001
         rows.append(_unknown(f"{prefix}:tape:none", "Tape", exc))
     try:
-        rows.extend(_book_rows(prefix, sym, chosen, src))
+        rows.extend(_book_rows(prefix, sym, chosen, src, moment))
     except Exception as exc:  # noqa: BLE001
         rows.append(_unknown(f"{prefix}:book:industry", "Open book", exc))
     try:
