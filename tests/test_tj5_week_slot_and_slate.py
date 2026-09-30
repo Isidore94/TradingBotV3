@@ -141,7 +141,9 @@ def test_the_week_story_sits_in_stage_two_between_the_tags_and_the_briefs():
     # TJ-9E's exit-note reader between them. That slot is seconds of work per
     # note and must not queue behind the briefs' 120 minutes either.
     assert names[names.index(SLOT) + 1] == "exit_note_fields"
-    assert names[names.index("exit_note_fields") + 1] == "ticker_briefs"
+    # Trader 2026-09-30: the briefs moved LAST; the week story still runs before them.
+    assert names[-1] == "ticker_briefs"
+    assert names.index(SLOT) < names.index("ticker_briefs")
     # It is in stage 2, which means AFTER the slot that closes stage 1.
     assert names.index(SLOT) > names.index(runner._STAGE_ONE_LAST_SLOT)
 

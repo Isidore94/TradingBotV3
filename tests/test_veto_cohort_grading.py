@@ -673,13 +673,13 @@ def test_the_scope_can_be_selected_on_demand():
         "week_review_narration",
         # TJ-9E (2026-09-21): the exit-note reader, appended inside stage 2
         # after the week story (TJ-5 pins that DIRECTLY after the word tagger)
-        # and before the two-hour briefs.
+        # and before the briefs.
         "exit_note_fields",
-        "ticker_briefs",
-        # Mentor app P4 (2026-09-30): the app's day, graded and digested, directly after the briefs.
+        # Mentor app P4 (2026-09-30): the app's day, graded and digested, directly
+        # after the exit-note reader since the briefs moved last.
         "mentor_review",
         # Econ morning brief (2026-09-24): "what to watch today" from the
-        # pasted brief, a stage 2 model slot directly after the briefs.
+        # pasted brief, a stage 2 model slot directly after `mentor_review`.
         "econ_brief",
         "market_story_narration",
         # S17.2 (2026-09-26): the regime read joins the market story, a stage 2
@@ -701,6 +701,8 @@ def test_the_scope_can_be_selected_on_demand():
         "setup_research",
         # TJ-6 (2026-09-20), appended LAST inside stage 3.
         "improvement_ideas",
+        # Trader 2026-09-30: every care name briefed nightly, so the briefs run last.
+        "ticker_briefs",
     ]
     # And the override is per-call: building again without it is untouched.
     # BY NAME rather than by index - decision 0018 moved the slot.

@@ -108,7 +108,9 @@ def test_the_ideas_slot_is_the_last_slot_of_stage_three():
 
     names = [slot.name for slot in runner.default_slots()]
     assert SLOT in names, f"{SLOT} is not a registered slot: {names[-3:]}"
-    assert names[-1] == SLOT, names[-3:]
+    # Trader 2026-09-30: `ticker_briefs` moved behind it (every care name, 100+
+    # minutes); the ideas never read the briefs, so they stay last of stage 3.
+    assert names[-2:] == [SLOT, "ticker_briefs"], names[-3:]
     assert names.index(SLOT) > names.index("setup_research")
     # Stage 3 means AFTER the slot that closes stage 1 - which is also what
     # keeps it off the Sunday deterministic slate.
@@ -132,7 +134,7 @@ def test_the_runner_order_pin_names_the_ideas_slot_too():
     spec.loader.exec_module(module)
     expected = tuple(module.EXPECTED_SLOT_ORDER)
 
-    assert expected[-1] == SLOT, expected[-3:]
+    assert expected[-2:] == (SLOT, "ticker_briefs"), expected[-3:]
     assert tuple(slot.name for slot in runner.default_slots()) == expected
 
 

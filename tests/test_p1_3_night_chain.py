@@ -473,14 +473,16 @@ def _week_sources(tmp_path: Path) -> dict:
     db = tmp_path / "journal.sqlite3"
     conn = sqlite3.connect(db)
     conn.execute(
-        "CREATE TABLE trades (symbol TEXT, opened_at TEXT, closed_at TEXT, trade_date TEXT)"
+        # `status` is the live journal's column; the roster reads open positions from it.
+        "CREATE TABLE trades (symbol TEXT, status TEXT, opened_at TEXT, closed_at TEXT, "
+        "trade_date TEXT)"
     )
     conn.executemany(
-        "INSERT INTO trades VALUES (?, ?, ?, ?)",
+        "INSERT INTO trades VALUES (?, ?, ?, ?, ?)",
         [
-            ("TSLA", "2026-09-22T10:00:00", "2026-09-22T11:00:00", "2026-09-22"),
-            ("AAPL 261016C00250000", "2026-09-23T10:00:00", "", "2026-09-23"),
-            ("OLD", "2026-09-10T10:00:00", "2026-09-10T11:00:00", "2026-09-10"),
+            ("TSLA", "CLOSED", "2026-09-22T10:00:00", "2026-09-22T11:00:00", "2026-09-22"),
+            ("AAPL 261016C00250000", "OPEN", "2026-09-23T10:00:00", "", "2026-09-23"),
+            ("OLD", "CLOSED", "2026-09-10T10:00:00", "2026-09-10T11:00:00", "2026-09-10"),
         ],
     )
     conn.commit()
@@ -574,19 +576,21 @@ def test_the_briefs_skip_names_outside_the_week_and_over_the_cap(tmp_path, monke
         watchlist_paths={"focus_longs": focus},
         output_root=tmp_path / "briefs",
         morning_path=tmp_path / "morning.txt",
-        week=_week({"MSFT": "traded", "NVDA": "alerted"}),
+        # Trader 2026-09-30: the cap binds alert-only names; care names are uncapped.
+        week=_week({"MSFT": "traded", "NVDA": "alerted", "PLTR": "alerted"}),
         name_cap=1,
     )
 
-    assert calls == ["MSFT"]
+    assert calls == ["MSFT", "NVDA"]
     assert outcome["status"] == "ok"
     assert (
-        "1 watchlist name(s) skipped: not picked, alerted or traded in week 2026-W33; "
-        "1 week name(s) skipped: over the 1-name cap"
+        "1 watchlist name(s) skipped: not a care name or alerted in week 2026-W33; "
+        "1 alert-only name(s) skipped: over the 1-name cap"
     ) in outcome["reason"]
 
 
-def test_the_week_cache_reuses_a_brief_for_the_same_symbol_and_week(tmp_path, monkeypatch):
+def test_the_evidence_cache_reuses_a_brief_while_its_evidence_is_unchanged(tmp_path, monkeypatch):
+    # Was a (symbol, week) cache; trader 2026-09-30: reuse by evidence hash, not by week.
     from ai_jobs import briefs
 
     calls: list[str] = []
@@ -603,17 +607,17 @@ def test_the_week_cache_reuses_a_brief_for_the_same_symbol_and_week(tmp_path, mo
     briefs.run_ticker_briefs(session_date="2026-08-11", **common)
     assert calls == ["MSFT", "NVDA"]
 
-    # a different session of the same week: its manifest is new, the week cache is not
+    # a different session: its manifest is new, the evidence cache is not
     second = briefs.run_ticker_briefs(session_date="2026-08-12", **common)
-    assert calls == ["MSFT", "NVDA"], "no model call for a name briefed this week"
-    assert second["tokens"]["tickers_week_cache_reused"] == 2
-    assert "2 reused from the week cache" in second["reason"]
+    assert calls == ["MSFT", "NVDA"], "no model call for a name whose evidence did not move"
+    assert second["tokens"]["tickers_evidence_cache_reused"] == 2
+    assert "2 reused: evidence unchanged" in second["reason"]
 
-    # a new week briefs again
+    # a new week with the same evidence reuses too
     briefs.run_ticker_briefs(
         session_date="2026-08-18", **{**common, "week": _week({"MSFT": "traded"}, "2026-W34")}
     )
-    assert calls == ["MSFT", "NVDA", "MSFT"]
+    assert calls == ["MSFT", "NVDA"]
 
 
 def test_an_unreadable_empty_week_refuses_rather_than_publishing_nothing(tmp_path, monkeypatch):
