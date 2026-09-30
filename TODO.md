@@ -13,7 +13,8 @@ here.
   default); after one live week with the flag on, delete `_MentorPopup` and the flag.
   P2 picks built (`claude/mentor-app-p2-picks-2026-09-30`, gate #313). P3 vetoes built
   (`claude/mentor-app-p3-vetoes-2026-09-30`, gate #314). P4 night memory built
-  (`claude/mentor-app-p4-night-memory-2026-09-30`, gate #315). Next: P5 tape.
+  (`claude/mentor-app-p4-night-memory-2026-09-30`, gate #315). P5 tape built
+  (`claude/mentor-app-p5-tape-2026-09-30`, gate #316). Next: P6 gate.
 
 ## Plan to 8/10, round 2 (trader's brief, 2026-09-25 evening)
 
