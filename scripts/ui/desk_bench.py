@@ -549,7 +549,6 @@ def synthetic_movers_board(rows: int, *, variant: int = 0) -> dict[str, Any]:
             "short": [row(f"S{i:03d}", -1.0, i) for i in range(int(rows) - half)],
         },
         "dip": {"long": [], "short": []},
-        "mine": {"long": [], "short": []},
     }
 
 

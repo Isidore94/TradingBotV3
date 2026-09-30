@@ -241,7 +241,6 @@ def _rally_board():
         "pop": {"long": [_mover("MU")], "short": []},
         "rip": {"long": [_mover("MU")], "short": [_mover("MU"), _mover("FAR")]},
         "dip": {"long": [], "short": []},
-        "mine": {"long": [], "short": []},
     }
 
 

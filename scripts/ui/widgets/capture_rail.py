@@ -570,6 +570,7 @@ class CaptureRail(QFrame):
             self.side_input.blockSignals(True)
             self.side_input.setCurrentText(resolved)
             self.side_input.blockSignals(False)
+            self._relabel_veto_reasons()
         if last_price is not None:
             self._last_price = float(last_price)
         if timeframe:
@@ -626,6 +627,19 @@ class CaptureRail(QFrame):
 
     def _on_side_changed(self, text: str) -> None:
         self._side = "SHORT" if str(text).upper().startswith("SHORT") else "LONG"
+        self._relabel_veto_reasons()
+
+    def _relabel_veto_reasons(self) -> None:
+        """Show each veto reason in the current side's words; codes never change."""
+        if self._vocabulary is None:
+            return
+        for row in range(self.reason_list.count()):
+            item = self.reason_list.item(row)
+            reason = self._vocabulary.reason(str(item.data(_REASON_ROLE) or ""))
+            if reason is None:
+                continue
+            item.setText(f"{reason.hotkey}  {reason.label_for(self._side)}")
+            item.setToolTip(reason.hint_for(self._side))
 
     # ------------------------------------------------------------------
     # keyboard entry points

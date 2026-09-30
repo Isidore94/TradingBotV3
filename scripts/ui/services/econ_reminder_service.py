@@ -116,6 +116,12 @@ def plan_reminders(view: Mapping[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def morning_has_started(moment: datetime) -> bool:
+    """At or after `MORNING_START_PT` Pacific, on the ET session's date (shared with the app)."""
+    local = moment.astimezone(PACIFIC)
+    return local.date() == moment.astimezone(EASTERN).date() and local.hour >= MORNING_START_PT
+
+
 def session_for(now: datetime) -> str:
     """Today's ET date when it is a trading session, else ""."""
     day = now.astimezone(EASTERN).date()
@@ -222,9 +228,7 @@ class EconReminderService(QObject):
         The date check keeps a late Pacific evening (already tomorrow in ET)
         from counting as tomorrow's morning.
         """
-        moment = now or self._clock()
-        local = moment.astimezone(PACIFIC)
-        return local.date() == moment.astimezone(EASTERN).date() and local.hour >= MORNING_START_PT
+        return morning_has_started(now or self._clock())
 
     def phone_mode(self) -> bool:
         return self._mode in PHONE_MODES

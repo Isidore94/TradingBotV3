@@ -29,6 +29,8 @@ from contextlib import contextmanager
 #: source launch and the frozen exe live in different directories and are still
 #: the same desk.
 DESK_LOCK_KEY = "tradingbotv3-desk"
+#: The Trade Mentor app's own slot: a different key, so desk and app never block each other.
+MENTOR_LOCK_KEY = "tradingbotv3-mentor"
 
 #: Short on purpose. Waiting is pointless - the other desk holds this for its
 #: whole session - so the only question is whether somebody has it right now.
@@ -42,6 +44,10 @@ class AnotherDeskIsRunning(RuntimeError):
     """Another process on this machine holds the desk slot."""
 
 
+class AnotherMentorIsRunning(AnotherDeskIsRunning):
+    """Another process on this machine holds the Trade Mentor app's slot."""
+
+
 @contextmanager
 def desk_slot(*, allow_second: bool = False, key: str = DESK_LOCK_KEY):
     """Hold the machine's desk slot for the length of the session.
@@ -50,6 +56,37 @@ def desk_slot(*, allow_second: bool = False, key: str = DESK_LOCK_KEY):
     short description of what protection is actually in force, so the caller can
     log the honest answer rather than assuming one.
     """
+    with _slot(key=key, allow_second=allow_second, label="desk", error=AnotherDeskIsRunning) as note:
+        yield note
+
+
+@contextmanager
+def mentor_slot(*, allow_second: bool = False, key: str = MENTOR_LOCK_KEY):
+    """Hold the Trade Mentor app's slot; raises :class:`AnotherMentorIsRunning` when taken."""
+    with _slot(key=key, allow_second=allow_second, label="mentor", error=AnotherMentorIsRunning) as note:
+        yield note
+
+
+def slot_is_free(key: str = MENTOR_LOCK_KEY, *, timeout_seconds: float = 0.2) -> bool | None:
+    """Probe a slot without keeping it: True free, False held, None when unknown."""
+    try:
+        from local_writer_lock import LocalLockUnavailable, local_writer_lock
+    except Exception:
+        return None
+    try:
+        with local_writer_lock(key, timeout_seconds=timeout_seconds):
+            return True
+    except LocalLockUnavailable as exc:
+        if "no machine-local exclusion primitive" in str(exc):
+            return None
+        return False
+    except Exception:  # noqa: BLE001 - a broken probe is "unknown", never "free"
+        return None
+
+
+@contextmanager
+def _slot(*, key: str, allow_second: bool, label: str, error: type[AnotherDeskIsRunning]):
+    """Shared body of :func:`desk_slot` and :func:`mentor_slot`."""
     if allow_second:
         yield "override: second instance allowed by flag"
         return
@@ -73,8 +110,9 @@ def desk_slot(*, allow_second: bool = False, key: str = DESK_LOCK_KEY):
             logging.warning("Single-instance guard has no primitive on this machine: %s", message)
             yield "guard unavailable: no OS primitive"
             return
-        raise AnotherDeskIsRunning(
-            f"another TradingBotV3 desk is already running on {socket.gethostname()} "
+        what = "desk" if label == "desk" else "Trade Mentor app"
+        raise error(
+            f"another TradingBotV3 {what} is already running on {socket.gethostname()} "
             f"(pid {os.getpid()} tried to start a second one). Close the other window, "
             f"or pass {OVERRIDE_FLAG} if you really want two."
         ) from exc
@@ -86,6 +124,6 @@ def desk_slot(*, allow_second: bool = False, key: str = DESK_LOCK_KEY):
     try:
         held = getattr(entered, "mutex", "?")
         file_lock = getattr(entered, "file_lock", "?")
-        yield f"desk slot held (mutex: {held}, file lock: {file_lock})"
+        yield f"{label} slot held (mutex: {held}, file lock: {file_lock})"
     finally:
         manager.__exit__(None, None, None)

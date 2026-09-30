@@ -4016,6 +4016,7 @@ def _request_local_summary(
     previous_error: str = "",
     schema: Mapping[str, Any] | None = None,
     schema_name: str = "tradingbot_ai_summary",
+    endpoint: str = "",
 ) -> tuple[Mapping[str, Any], dict[str, Any], list[dict[str, Any]], str]:
     """One local chat-completions call, validated the same way as the cloud.
 
@@ -4041,7 +4042,8 @@ def _request_local_summary(
             return _local_schema_prompt(evidence, contract, error_text)
         return _local_user_prompt(evidence, error_text)
 
-    base_url = local_endpoint_url()
+    # `endpoint` is an explicit OpenAI-compatible base (the Trade Mentor app's 5080 tunnel).
+    base_url = str(endpoint or "").strip().rstrip("/") or local_endpoint_url()
     if not base_url:
         raise RuntimeError(
             "local AI provider selected but no endpoint is configured "
@@ -4227,6 +4229,7 @@ def request_ai_summary(
     schema: Mapping[str, Any] | None = None,
     schema_name: str = "tradingbot_ai_summary",
     prompt_version: str = AI_SUMMARY_PROMPT_VERSION,
+    endpoint: str = "",
 ) -> dict[str, Any]:
     """Call one provider and return validated output plus non-secret metadata.
 
@@ -4272,6 +4275,7 @@ def request_ai_summary(
             previous_error=previous_error,
             schema=schema,
             schema_name=schema_name,
+            endpoint=endpoint,
         )
         finished = datetime.now().astimezone()
         return {

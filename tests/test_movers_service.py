@@ -158,8 +158,8 @@ def test_small_bot_universe_adds_the_yahoo_sweep_and_caches_baselines():
     board = emitted[-1]
     assert board["bot_universe"] == 1
     assert board["yahoo_universe"] >= 2
-    assert board["mine"]["long"][0]["symbol"] == "AAA"
-    assert board["mine"]["long"][0]["rvol"] is not None  # baseline arrived
+    assert "mine" not in board
+    assert service._baselines.get("AAA") is not None  # the Focus name's baseline arrived
     assert "fetch_m5_chart_bars" not in bot.calls
 
     downloader.calls.clear()
@@ -206,6 +206,32 @@ def test_the_service_remembers_todays_dip_box_names_for_the_next_tick():
     assert service._held_today(NOW)["short"] == ["OLD"]
     tomorrow = NOW + timedelta(days=1)
     assert service._held_today(tomorrow) == {"long": [], "short": []}
+
+
+def test_the_service_carries_last_ticks_dip_anchors_into_the_next_scan(monkeypatch):
+    # Trader 2026-09-29: a fresh (<30 min) anchor keeps last tick's; the pure
+    # scan gets it as `previous_anchors`, today only.
+    popping = _naive_la_bars([100.0] * 11 + [100.5, 101.0, 101.5])
+    bot = FakeBot(["AAA"], {"AAA": popping, "SPY": _naive_la_bars([400.0] * 14)})
+    service = _service(bot, FakeDownloader({s: _history_frame() for s in ("QQQ", "AAA", "SPY")}))
+    emitted = []
+    service.moversChanged.connect(emitted.append)
+    seen = []
+    real = svc.movers_scan.build_movers_board
+
+    def spy_build(*args, **kwargs):
+        seen.append(kwargs.get("previous_anchors"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(svc.movers_scan, "build_movers_board", spy_build)
+    service._run_once(service._focus_snapshot())
+    assert seen[0] in (None, {}) or not any(seen[0].values())
+    first = emitted[-1]["swing_anchor"]
+    assert first["long"] is not None and first["short"] is not None
+    service._run_once(service._focus_snapshot())
+    assert seen[-1] == first
+    tomorrow = NOW + timedelta(days=1)
+    assert service._previous_anchors_today(tomorrow) == {}
 
 
 def test_quality_floor_drops_a_small_cap_after_its_cap_is_fetched():

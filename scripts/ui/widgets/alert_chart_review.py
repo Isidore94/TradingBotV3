@@ -505,62 +505,81 @@ class AlertChartReview(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
 
-        # The Mentor is a small reusable modeless window, never a row under the
-        # chart.  The arm bar therefore keeps its fixed home and scheduled
-        # prompts cannot steal chart height.
-        from ui.widgets.trade_mentor_card import TradeMentorCard
+        # Trade Mentor app (P1): with `mentor_app_enabled` on, the card, the econ
+        # block and "Give a read" live in the app; this row gets one button to open it.
+        from ui.services.mentor_launcher import mentor_app_enabled
 
-        self.mentor_popup = _MentorPopup(
-            self,
-            Qt.WindowType.Window
-            | Qt.WindowType.WindowTitleHint
-            | Qt.WindowType.WindowCloseButtonHint,
-        )
-        self.mentor_popup.setObjectName("TradeMentorPopup")
-        self.mentor_popup.setWindowTitle("Trade Mentor")
-        self.mentor_popup.setModal(False)
-        self.mentor_popup.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.mentor_popup.setMinimumSize(*_MentorPopup.MINIMUM_SIZE)
-        self.mentor_popup.restore_saved_size()
-        popup_layout = QVBoxLayout(self.mentor_popup)
-        popup_layout.setContentsMargins(0, 0, 0, 0)
-        self.mentor_card = TradeMentorCard(
-            self.mentor_popup, context_service=mentor_context_service
-        )
-        self.mentor_scroll = QScrollArea(self.mentor_popup)
-        self.mentor_scroll.setObjectName("TradeMentorScroll")
-        self.mentor_scroll.setWidgetResizable(True)
-        self.mentor_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # The morning "Today's news & econ" block sits above the card in the
-        # same popup; it can be up with no prompt due.
-        from ui.widgets.econ_brief_block import EconBriefBlock
+        self.mentor_app_enabled = mentor_app_enabled()
+        if self.mentor_app_enabled:
+            self.mentor_popup = None
+            self.mentor_card = None
+            self.mentor_scroll = None
+            self.econ_block = None
+            self.open_trade_mentor_button = QPushButton("Open Trade Mentor")
+            self.open_trade_mentor_button.setObjectName("OpenTradeMentorButton")
+            self.open_trade_mentor_button.setToolTip(
+                "Open the Trade Mentor app: due questions, market reads and Give a read."
+            )
+            self.open_trade_mentor_button.clicked.connect(self._on_open_trade_mentor)
+            # Same slot in the verb row that "Give a read" held.
+            self.give_a_read_button = self.open_trade_mentor_button
+        else:
+            # The Mentor is a small reusable modeless window, never a row under the
+            # chart.  The arm bar therefore keeps its fixed home and scheduled
+            # prompts cannot steal chart height.
+            from ui.widgets.trade_mentor_card import TradeMentorCard
 
-        mentor_body = QWidget(self.mentor_popup)
-        mentor_body_layout = QVBoxLayout(mentor_body)
-        mentor_body_layout.setContentsMargins(0, 0, 0, 0)
-        mentor_body_layout.setSpacing(6)
-        self.econ_block = EconBriefBlock(mentor_body)
-        self.econ_block.setVisible(False)
-        self.econ_block.hideRequested.connect(self.hide_econ_brief)
-        mentor_body_layout.addWidget(self.econ_block)
-        mentor_body_layout.addWidget(self.mentor_card)
-        mentor_body_layout.addStretch(1)
-        self.mentor_scroll.setWidget(mentor_body)
-        popup_layout.addWidget(self.mentor_scroll)
-        self.mentor_card.setVisible(False)
-        self.mentor_popup.dismissed.connect(self._dismiss_mentor_popup)
-        self.mentor_card.answered.connect(lambda _slot_id: self._hide_mentor_popup_window())
-        self.mentor_card.skipped.connect(lambda _record: self._hide_mentor_popup_window())
-        # Always reachable, whether or not anything is due: "I want to write a
-        # read now" must never require waiting for the top of an hour. It sits
-        # in the existing verb row rather than adding a second one - CLAUDE.md
-        # allows exactly one row between the charts and the tab strip.
-        self.give_a_read_button = QPushButton("Give a read")
-        self.give_a_read_button.setToolTip(
-            "Write a market read right now and file it in the Market Journal. "
-            "Always available - it does not need a scheduled prompt."
-        )
-        self.give_a_read_button.clicked.connect(self._on_give_a_read)
+            self.mentor_popup = _MentorPopup(
+                self,
+                Qt.WindowType.Window
+                | Qt.WindowType.WindowTitleHint
+                | Qt.WindowType.WindowCloseButtonHint,
+            )
+            self.mentor_popup.setObjectName("TradeMentorPopup")
+            self.mentor_popup.setWindowTitle("Trade Mentor")
+            self.mentor_popup.setModal(False)
+            self.mentor_popup.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+            self.mentor_popup.setMinimumSize(*_MentorPopup.MINIMUM_SIZE)
+            self.mentor_popup.restore_saved_size()
+            popup_layout = QVBoxLayout(self.mentor_popup)
+            popup_layout.setContentsMargins(0, 0, 0, 0)
+            self.mentor_card = TradeMentorCard(
+                self.mentor_popup, context_service=mentor_context_service
+            )
+            self.mentor_scroll = QScrollArea(self.mentor_popup)
+            self.mentor_scroll.setObjectName("TradeMentorScroll")
+            self.mentor_scroll.setWidgetResizable(True)
+            self.mentor_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            # The morning "Today's news & econ" block sits above the card in the
+            # same popup; it can be up with no prompt due.
+            from ui.widgets.econ_brief_block import EconBriefBlock
+
+            mentor_body = QWidget(self.mentor_popup)
+            mentor_body_layout = QVBoxLayout(mentor_body)
+            mentor_body_layout.setContentsMargins(0, 0, 0, 0)
+            mentor_body_layout.setSpacing(6)
+            self.econ_block = EconBriefBlock(mentor_body)
+            self.econ_block.setVisible(False)
+            self.econ_block.hideRequested.connect(self.hide_econ_brief)
+            mentor_body_layout.addWidget(self.econ_block)
+            mentor_body_layout.addWidget(self.mentor_card)
+            mentor_body_layout.addStretch(1)
+            self.mentor_scroll.setWidget(mentor_body)
+            popup_layout.addWidget(self.mentor_scroll)
+            self.mentor_card.setVisible(False)
+            self.mentor_popup.dismissed.connect(self._dismiss_mentor_popup)
+            self.mentor_card.answered.connect(lambda _slot_id: self._hide_mentor_popup_window())
+            self.mentor_card.skipped.connect(lambda _record: self._hide_mentor_popup_window())
+            # Always reachable, whether or not anything is due: "I want to write a
+            # read now" must never require waiting for the top of an hour. It sits
+            # in the existing verb row rather than adding a second one - CLAUDE.md
+            # allows exactly one row between the charts and the tab strip.
+            self.give_a_read_button = QPushButton("Give a read")
+            self.give_a_read_button.setToolTip(
+                "Write a market read right now and file it in the Market Journal. "
+                "Always available - it does not need a scheduled prompt."
+            )
+            self.give_a_read_button.clicked.connect(self._on_give_a_read)
 
         buttons = QHBoxLayout()
         self._verb_layout = buttons
@@ -1005,6 +1024,11 @@ class AlertChartReview(QWidget):
 
             logging.debug("Trade Mentor could not open on a trade.", exc_info=True)
             return ""
+
+    def _on_open_trade_mentor(self) -> None:
+        from ui.services.mentor_launcher import launch_or_focus
+
+        launch_or_focus()
 
     def _on_give_a_read(self) -> None:
         try:

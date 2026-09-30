@@ -41,7 +41,6 @@ def _board(pullback=False, start="2026-09-22T10:15:00-04:00"):
         "pop": {"long": [_row("AAA"), _row("BBB", rvol=None)], "short": [_row("ZZZ", move15_pct=-1.0)]},
         "dip": {"long": [_row("HOLD", dip_score=1.2, since_start_pct=0.3)] if pullback else [],
                 "short": [_row("SINK", dip_score=-1.5, since_start_pct=-0.9)] if pullback else []},
-        "mine": {"long": [_row("MYA", pop_score=0.2), _row("MYB", pop_score=2.0)], "short": []},
     }
 
 
@@ -63,28 +62,32 @@ def test_pop_mode_shows_both_sides_and_rvol_none_as_dash(app):
     widget = _widget(app)
     widget.update_board(_board())
     widget.flush_pending_refresh()
-    assert widget.mode == "pop" and widget.side == "long"
-    # Pop always lists longs and shorts together; its side toggle is hidden.
+    assert widget.mode == "pop"
+    # Pop always lists longs and shorts together.
     assert _symbols(widget) == ["AAA", "BBB", "ZZZ"]
-    assert widget.side_button.isHidden()
     rvol_col = [key for key, _h in widget.model._columns].index("rvol")
     assert widget.model.data(widget.model.index(1, rvol_col), Qt.ItemDataRole.DisplayRole) == "—"
     assert widget.model.data(widget.model.index(0, rvol_col), Qt.ItemDataRole.BackgroundRole) is not None
     assert widget.model.data(widget.model.index(1, rvol_col), Qt.ItemDataRole.BackgroundRole) is None
     assert "no pullback" in widget.banner.text()
-    widget.mode_buttons["mine"].click()
-    assert not widget.side_button.isHidden()
 
 
-def test_side_toggle_and_mine_sorted_by_score(app):
-    widget = _widget(app)
-    widget.update_board(_board())
-    widget.flush_pending_refresh()
-    widget.mode_buttons["mine"].click()
-    widget.side_button.click()
-    assert widget.side == "short" and _symbols(widget) == []
-    widget.side_button.click()
-    assert _symbols(widget) == ["MYB", "MYA"]
+def test_my_names_is_gone_and_a_saved_mine_mode_loads_as_pop(app, monkeypatch):
+    # Trader 2026-09-29: "lets remove the 'my names' section of Movers".
+    import project_paths
+    from ui.widgets import movers_board
+    from ui.widgets.movers_board import MoversBoard
+
+    assert "mine" not in movers_board.MODES and "mine" not in movers_board.COLUMNS
+    assert not hasattr(movers_board.movers_scan, "sort_mine")
+    monkeypatch.setattr(project_paths, "get_local_setting",
+                        lambda key, default=None: "mine" if key == "movers_board_mode" else default)
+    widget = MoversBoard(persist=True)
+    assert widget.mode == "pop"
+    assert "mine" not in widget.mode_buttons
+    assert not hasattr(widget, "side_button")
+    widget.set_mode("mine")
+    assert widget.mode == "pop"
 
 
 def _section_symbols(section):
@@ -93,10 +96,8 @@ def _section_symbols(section):
 
 def test_pullback_lights_both_dip_tables_under_pop_and_auto_switches_once(app):
     widget = _widget(app)
-    widget.set_mode("mine")
     widget.update_board(_board(pullback=False))
     widget.flush_pending_refresh()
-    assert widget.mode == "mine"
     widget.update_board(_board(pullback=True))
     widget.flush_pending_refresh()
     # Pop, Dip-strong and Dip-weak all show at once.
@@ -110,16 +111,6 @@ def test_pullback_lights_both_dip_tables_under_pop_and_auto_switches_once(app):
     assert _section_symbols(widget.weak) == ["SINK"]
     assert widget.strong.title_label.text().startswith("Dip-strong")
     assert widget.weak.title_label.text().startswith("Dip-weak")
-    # The trader goes to My names; the same episode does not pull them away again.
-    widget.mode_buttons["mine"].click()
-    assert widget.strong.isHidden() and widget.weak.isHidden()
-    widget.update_board(_board(pullback=True))
-    widget.flush_pending_refresh()
-    assert widget.mode == "mine"
-    # A new episode does.
-    widget.update_board(_board(pullback=True, start="2026-09-22T12:00:00-04:00"))
-    widget.flush_pending_refresh()
-    assert widget.mode == "pop"
 
 
 def test_dip_boxes_read_the_swing_lists_and_name_their_own_anchor(app):
@@ -128,9 +119,9 @@ def test_dip_boxes_read_the_swing_lists_and_name_their_own_anchor(app):
     board["swing"] = {"long": [_row("LEAD", dip_score=1.1, since_start_pct=1.5)],
                       "short": [_row("LAG", dip_score=-0.9, since_start_pct=-1.2, held=True)]}
     board["swing_anchor"] = {
-        "long": {"dt": "2026-09-22T12:25:00-04:00", "time": "12:25", "price": 404.5,
+        "long": {"dt": "2026-09-22T12:25:00-04:00", "time": "12:25", "price": 398.0,
                  "kind": "swing"},
-        "short": {"dt": "2026-09-22T10:55:00-04:00", "time": "10:55", "price": 398.0,
+        "short": {"dt": "2026-09-22T10:55:00-04:00", "time": "10:55", "price": 404.5,
                   "kind": "swing"},
     }
     widget.update_board(board)
@@ -138,17 +129,31 @@ def test_dip_boxes_read_the_swing_lists_and_name_their_own_anchor(app):
     assert _section_symbols(widget.strong) == ["LEAD"]
     assert _section_symbols(widget.weak) == ["LAG"]
     strong, weak = widget.strong.title_label.text(), widget.weak.title_label.text()
-    # Longs from the high the dip fell from, shorts from the low the rip rose from.
-    assert strong.startswith("Dip-strong") and strong.endswith(" high") and "not lit" not in strong
-    assert weak.startswith("Dip-weak") and weak.endswith(" low")
+    # Trader 2026-09-29: longs from SPY's low after the dip, shorts from its high.
+    assert strong.startswith("Dip-strong") and "since SPY's low" in strong
+    assert "not lit" not in strong and "high" not in strong
+    assert weak.startswith("Dip-weak") and "since SPY's high" in weak and "low" not in weak
     assert strong != weak  # each box names its own swing
-    # No major move yet: the high / low of day, said so.
-    board["swing_anchor"]["long"]["kind"] = "hod"
-    board["swing_anchor"]["short"]["kind"] = "lod"
+    # No major move yet: the low / high of day, said so.
+    board["swing_anchor"]["long"]["kind"] = "lod"
+    board["swing_anchor"]["short"]["kind"] = "hod"
     widget.update_board(board)
     widget.flush_pending_refresh()
-    assert "high of day so far" in widget.strong.title_label.text()
-    assert "low of day so far" in widget.weak.title_label.text()
+    assert "low of day so far" in widget.strong.title_label.text()
+    assert "high of day so far" in widget.weak.title_label.text()
+    # Too early for either: the open.
+    board["swing_anchor"]["long"]["kind"] = "open"
+    board["swing_anchor"]["short"]["kind"] = "open"
+    widget.update_board(board)
+    widget.flush_pending_refresh()
+    assert "since the open" in widget.strong.title_label.text()
+    assert "since the open" in widget.weak.title_label.text()
+    # A fresh anchor under 30 minutes old: last tick's is kept, said so.
+    board["swing_anchor"]["long"].update(kind="swing", held_from_previous=True)
+    widget.update_board(board)
+    widget.flush_pending_refresh()
+    assert "held" in widget.strong.title_label.text()
+    assert "held" not in widget.weak.title_label.text()
     # No SPY bars at all: the boxes say so and stay empty.
     board["swing"] = {"long": [], "short": []}
     board["swing_anchor"] = {"long": None, "short": None}
@@ -207,7 +212,7 @@ def test_pop_symbol_cells_carry_the_side_colour_and_new_names_a_stronger_tint(ap
     assert background[0].rgb() == QColor(theme.color("long")).rgb()
     assert background[3].rgb() == QColor(theme.color("short")).rgb()  # SINK is a short
     # A single-side table tints only its new names.
-    widget.model.set_rows(widget.model.rows(), "mine", "long")
+    widget.model.set_rows(widget.model.rows(), "dip", "long")
     background = [widget.model.data(widget.model.index(r, col), Qt.ItemDataRole.BackgroundRole)
                   for r in range(3)]
     assert background[1] is not None
@@ -226,7 +231,7 @@ def test_d1_trend_tags_unknown_and_failing_rows(app):
     widget.flush_pending_refresh()
     assert _cell(widget, 0, "symbol") == "NVDA ER ▲2"
     assert _cell(widget, 1, "symbol") == "AMD new D1?"
-    # My names keeps a failing row and says so; a short row reads its own side.
+    # A failing row says so; a short row reads its own side.
     assert symbol_text({"symbol": "XXX", "_side": "long", "trend_long": False,
                         "trend_short": True, "last": 100.0}) == "XXX D1✗"
     assert symbol_text({"symbol": "YYY", "_side": "short", "trend_long": False,
@@ -237,7 +242,7 @@ def test_d1_trend_tags_unknown_and_failing_rows(app):
 
 def test_unknown_state_banner_and_dip_hint(app):
     widget = _widget(app)
-    widget.update_board({"state": {"state": "unknown"}, "pop": {}, "dip": {}, "mine": {}})
+    widget.update_board({"state": {"state": "unknown"}, "pop": {}, "dip": {}})
     widget.flush_pending_refresh()
     assert "unknown" in widget.banner.text()
     # Pop mode always shows three boxes; unlit Dip tables sit empty under their titles.
@@ -371,7 +376,7 @@ def test_sym_cell_carries_er_and_rank_change_and_lvl_tags(app):
 def test_column_priority_sym_score_rvol_lvl_first(app):
     from ui.widgets.movers_board import COLUMNS
 
-    for mode, main in (("pop", "move15_pct"), ("dip", "dip_score"), ("mine", "move15_pct")):
+    for mode, main in (("pop", "move15_pct"), ("dip", "dip_score")):
         keys = [k for k, _h in COLUMNS[mode]]
         assert keys[:4] == ["symbol", main, "rvol", "lvl"]
 
@@ -403,41 +408,6 @@ def test_model_updates_in_place_without_reset(app):
     widget.update_board(_board())
     widget.flush_pending_refresh()
     assert resets == []
-
-
-def _day_board(state, as_of="2026-09-22T10:40:00-04:00"):
-    board = _board()
-    board["state"] = dict(board["state"], state=state)
-    board["as_of"] = as_of
-    return board
-
-
-def test_side_follows_the_day_until_the_trader_taps_it(app):
-    widget = _widget(app)
-    widget.update_board(_day_board("down_day"))
-    widget.flush_pending_refresh()
-    assert widget.side == "short"
-    # The trader taps Long; the same down day does not pull them back.
-    widget.side_button.click()
-    widget.update_board(_day_board("down_day", as_of="2026-09-22T10:45:00-04:00"))
-    widget.flush_pending_refresh()
-    assert widget.side == "long"
-    # The day turns up: follow it again.
-    widget.update_board(_day_board("up_day", as_of="2026-09-22T11:30:00-04:00"))
-    widget.flush_pending_refresh()
-    assert widget.side == "long"
-    widget.update_board(_day_board("down_day", as_of="2026-09-22T13:00:00-04:00"))
-    widget.flush_pending_refresh()
-    assert widget.side == "short"
-
-
-def test_side_does_not_follow_flat_or_unknown_days(app):
-    widget = _widget(app)
-    widget.set_side("short", user=True)
-    for state in ("flat", "unknown"):
-        widget.update_board(_day_board(state))
-        widget.flush_pending_refresh()
-        assert widget.side == "short"
 
 
 def _view_symbols(widget):
@@ -550,3 +520,183 @@ def test_hide_persists_through_the_local_setting(app, monkeypatch):
     second.update_board(_sort_board())
     second.flush_pending_refresh()
     assert "ZZZ" not in _view_symbols(second)
+
+
+def test_each_box_copy_button_puts_its_symbols_on_the_clipboard_in_view_order(app):
+    """Trader 2026-09-29: one Copy per box, comma-joined for TC2000 / TradingView."""
+    from PySide6.QtWidgets import QApplication
+
+    widget = _widget(app)
+    board = _board(pullback=True)
+    board["pop"] = _sort_board()["pop"]
+    board["pop"]["long"].append(_row(" aaa ", move15_pct=0.1))  # duplicate, lower case, padded
+    board["pop"]["long"].append(_row("", move15_pct=0.05))  # blank symbol
+    widget.update_board(board)
+    widget.flush_pending_refresh()
+    assert widget.mode == "pop"
+    clipboard = QApplication.clipboard()
+    for section in widget.sections:
+        assert not section.copy_button.isHidden()
+        assert section.copy_button.isEnabled()
+    widget.main.copy_button.click()
+    assert clipboard.text() == "AAA,ZZZ,BBB"
+    assert widget.main.copy_button.text() == "Copied 3"
+    widget.strong.copy_button.click()
+    assert clipboard.text() == "HOLD"
+    widget.weak.copy_button.click()
+    assert clipboard.text() == "SINK"
+    # A header sort changes the on-screen order, and the copy follows it.
+    col = [k for k, _h in widget.model._columns].index("move15_pct")
+    widget.table.horizontalHeader().sectionClicked.emit(col)
+    widget.main.copy_button.click()
+    assert clipboard.text() == "BBB,AAA,ZZZ"
+
+
+def test_empty_box_copy_button_is_disabled_and_leaves_the_clipboard(app):
+    from PySide6.QtWidgets import QApplication
+
+    widget = _widget(app)
+    widget.update_board(_board(pullback=False))
+    widget.flush_pending_refresh()
+    clipboard = QApplication.clipboard()
+    clipboard.setText("KEEP")
+    assert not widget.strong.copy_button.isEnabled()
+    assert not widget.weak.copy_button.isEnabled()
+    assert widget.strong.copy_symbols() == ""
+    assert clipboard.text() == "KEEP"
+    assert widget.main.copy_button.isEnabled()
+
+
+# ------------------------------------------------------------------ M30 / Daily tabs
+def _tf_board(tf="m30", session="2026-09-22"):
+    as_of = f"{session}T11:30:00-04:00" if tf == "m30" else f"{session}T00:00:00-04:00"
+    line = {"n": {"1": 4, "3": 10, "5": 0}, "mean_excess_pct": {"1": 0.2, "3": 0.8, "5": None},
+            "beat_pct": {"1": 50.0, "3": 57.0, "5": None}, "lookback_sessions": 20}
+    empty = {"n": {"1": 0, "3": 0, "5": 0}}
+    return {
+        "tf": tf, "session": session, "as_of": as_of,
+        "scanned_at": f"{session}T12:00:05-04:00", "stale": False, "last_error": "",
+        "state": {"state": "up_day", "spy_day_pct": 0.42},
+        "pop": {"long": [_row("TFA", pop_score=2.0)], "short": [_row("TFZ", pop_score=-1.0)]},
+        "swing": {"long": [_row("TFS", dip_score=1.1)], "short": [_row("TFW", dip_score=-0.7)]},
+        "swing_anchor": {"long": {"dt": "2026-09-21T14:00:00-04:00", "date": "2026-09-21",
+                                  "time": "14:00", "kind": "swing"},
+                         "short": {"dt": f"{session}T00:00:00-04:00", "date": session,
+                                   "time": "", "kind": "window"}},
+        "summaries": {"pop": {"long": line, "short": empty},
+                      "dip_strong": {"long": line}, "dip_weak": {"short": empty}},
+        "offered": 900, "measured": 850,
+    }
+
+
+def test_m30_and_daily_tabs_show_the_three_boxes_from_their_boards(app):
+    from PySide6.QtWidgets import QApplication
+
+    from ui.widgets.movers_board import MODE_LABELS
+
+    widget = _widget(app)
+    assert [MODE_LABELS[m] for m in widget.mode_buttons] == ["Pop + Dip", "M30", "Daily"]
+    widget.update_board(_board())
+    widget.update_timeframe_board("m30", _tf_board("m30"))
+    widget.update_timeframe_board("d1", _tf_board("d1"))
+    widget.mode_buttons["m30"].click()
+    widget.flush_pending_refresh()
+    assert widget.mode == "m30"
+    assert _symbols(widget) == ["TFA", "TFZ"]
+    assert _section_symbols(widget.strong) == ["TFS"] and _section_symbols(widget.weak) == ["TFW"]
+    assert not widget.strong.isHidden() and not widget.weak.isHidden()
+    assert widget.main.title_label.text().startswith("M30 Movers · 3-bar moves at ")
+    assert widget.strong.title_label.text().startswith("M30 Dip-strong · beating SPY since 9/21")
+    assert [h for _k, h in widget.model._columns][:3] == ["Sym", "90m", "RVOL"]
+    # The outcome line rides on each box title's hover.
+    assert "Last 20 sessions: +0.8% vs SPY at 3d, 57% beat, n=10" in \
+        widget.main.title_label.toolTip()
+    assert widget.strong.title_label.toolTip() == \
+        "Last 20 sessions: +0.8% vs SPY at 3d, 57% beat, n=10"
+    assert widget.weak.title_label.toolTip() == "no results yet"
+    assert "M30 scanned 9/22" in widget.banner.text()
+    assert "850 of 900 measured" in widget.banner.text()
+    widget.mode_buttons["d1"].click()
+    widget.flush_pending_refresh()
+    assert widget.main.title_label.text() == "Daily Movers · 3-day moves to the 9/22 close"
+    assert widget.weak.title_label.text() == "Daily Dip-weak · lagging SPY since 9/22 high"
+    assert [h for _k, h in widget.model._columns][:2] == ["Sym", "3d"]
+    # Copy still copies the shown box.
+    widget.main.copy_button.click()
+    assert QApplication.clipboard().text() == "TFA,TFZ"
+    widget.mode_buttons["pop"].click()
+    assert _symbols(widget) == ["AAA", "BBB", "ZZZ"]
+
+
+def test_timeframe_banner_says_not_scanned_yet_stale_and_failed(app):
+    widget = _widget(app)
+    widget.set_mode("m30")
+    widget.flush_pending_refresh()
+    assert "M30: not scanned yet" in widget.banner.text()
+    assert widget.main.title_label.text() == "M30 Movers · not scanned yet"
+    board = dict(_tf_board("d1"), stale=True, last_error="no SPY bars from Yahoo")
+    widget.update_timeframe_board("d1", board)
+    widget.set_mode("d1")
+    widget.flush_pending_refresh()
+    assert "stale" in widget.banner.text() and "last scan FAILED" in widget.banner.text()
+    assert widget.meta_label.text() == "9/22 stale"
+
+
+def test_pb_and_line_chips_emit_arm_requests_with_the_row_side_in_every_mode(app):
+    widget = _widget(app)
+    widget.resize(700, 400)
+    widget.update_board(_board(pullback=True))
+    widget.update_timeframe_board("d1", _tf_board("d1"))
+    widget.flush_pending_refresh()
+    asked = []
+    widget.alertArmRequested.connect(lambda *args: asked.append(args))
+    assert not widget.arm_buttons["pullback"].isEnabled()
+    widget.weak.table.selectRow(0)  # SINK, a Dip-weak (short) row
+    widget.arm_buttons["pullback"].click()
+    widget.arm_buttons["d1_line_pullback"].click()
+    assert asked == [("SINK", "short", "pullback"), ("SINK", "short", "d1_line_pullback")]
+    widget.set_mode("d1")
+    widget.flush_pending_refresh()
+    widget.table.selectRow(0)
+    widget.arm_buttons["pullback"].click()
+    assert asked[-1] == ("TFA", "long", "pullback")
+
+
+def test_row_menu_arms_and_shows_disarm_when_armed(app):
+    widget = _widget(app)
+    widget.update_timeframe_board("m30", _tf_board("m30"))
+    widget.set_mode("m30")
+    widget.flush_pending_refresh()
+    armed = {"TFW": {"d1_line_pullback"}}
+    widget.set_armed_kinds_provider(lambda symbol: armed.get(symbol, set()))
+    index = widget.weak.proxy.index(0, 0)
+    texts = [a.text() for a in widget.row_menu(index).actions()]
+    assert "Arm D1 Pullback (fast) TFW (short)" in texts
+    assert "✓ Disarm Pullback to D1 line TFW" in texts
+    asked = []
+    widget.alertArmRequested.connect(lambda *args: asked.append(args))
+    action = next(a for a in widget.row_menu(index).actions() if a.text().startswith("✓"))
+    action.trigger()
+    assert asked == [("TFW", "short", "d1_line_pullback")]
+    widget.weak.table.selectRow(0)
+    assert widget.arm_buttons["d1_line_pullback"].text() == "Line ✓"
+    assert widget.arm_buttons["pullback"].text() == "PB"
+
+
+def test_a_pullback_pulls_to_pop_once_but_a_rally_never_leaves_m30(app):
+    widget = _widget(app)
+    widget.set_mode("m30")
+    widget.update_board(_board(pullback=True))
+    widget.flush_pending_refresh()
+    assert widget.mode == "pop"
+    # The trader goes back to M30; the same episode does not pull them away again.
+    widget.mode_buttons["m30"].click()
+    widget.update_board(_board(pullback=True))
+    widget.flush_pending_refresh()
+    assert widget.mode == "m30"
+    rally = _board()
+    rally["state"] = dict(rally["state"], state="up_day", rally=True,
+                          start_dt="2026-09-22T12:30:00-04:00")
+    widget.update_board(rally)
+    widget.flush_pending_refresh()
+    assert widget.mode == "m30"

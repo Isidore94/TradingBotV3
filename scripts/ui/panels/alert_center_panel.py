@@ -249,6 +249,15 @@ _HELD_RUN_INDEX_MEMO: dict | None = None
 _CLAIM_KEYS_UNREAD = object()
 
 
+
+def _movers_row(board: dict, lists: tuple[str, ...], side: str, symbol: str) -> dict | None:
+    """The first row for `symbol` on one side of a Movers board's `lists`."""
+    for mode in lists:
+        for candidate in ((board.get(mode) or {}).get(side)) or []:
+            if str(candidate.get("symbol") or "").upper() == symbol:
+                return candidate
+    return None
+
 class AlertCenterPanel(
     StrengthBoardAdoptionMixin,
     WallGateMixin,
@@ -977,6 +986,10 @@ class AlertCenterPanel(
             lambda symbol, side: self._chart_board_symbol(symbol, side, "the Movers board")
         )
         self.movers_board.focusAddRequested.connect(self._add_movers_row_to_focus)
+        # PB / Line chips: the trader's explicit arm click (never automatic).
+        self.movers_board.alertArmRequested.connect(self._arm_movers_alert)
+        self.movers_board.set_armed_kinds_provider(self._movers_armed_kinds)
+        self.armedWatchesChanged.connect(self.movers_board.refresh_arm_state)
         self.movers_board.reviewAllRequested.connect(self.review_focus_picks)
         self.movers_board.fadedReviewRequested.connect(self.review_faded_picks)
         if self.focus_service is not None:
@@ -7794,33 +7807,38 @@ class AlertCenterPanel(
         symbol = str(symbol or "").strip().upper()
         side = "short" if str(side or "").lower().startswith("short") else "long"
         board = self.movers_board.board()
-        row = None
-        for mode in ("pop", "dip", "rip", "mine"):
-            for candidate in ((board.get(mode) or {}).get(side)) or []:
-                if str(candidate.get("symbol") or "").upper() == symbol:
-                    row = candidate
-                    break
-            if row is not None:
-                break
+        # Today's M5 row first (live levels), then the M30 / Daily tab's own row.
+        row = _movers_row(board, ("pop", "dip", "rip", "swing"), side, symbol)
+        session = str(board.get("as_of") or "")[:10]
+        context = f"movers 15m {row.get('move15_pct')}" if row else ""
+        tf = self.movers_board.mode
+        refusal = ""
+        if row is None and tf in ("m30", "d1"):
+            tf_board = self.movers_board.timeframe_board(tf)
+            tf_row = _movers_row(tf_board, ("pop", "swing"), side, symbol)
+            if tf_row is not None:
+                # A once-a-day row's levels are not today's live M5 levels: never gate on them.
+                label = "Daily" if tf == "d1" else "M30"
+                refusal = (f"{label} row: today's M5 levels are unknown until it shows "
+                           "on the M5 board")
         if self.focus_service is None:
             message = f"✕ {symbol} (no Focus service on this desk)"
+        elif refusal:
+            message = f"✕ {symbol} ({refusal})"
         elif row is None:
             message = f"✕ {symbol} (no longer on the board)"
         else:
             # The same row gate as the automatic Movers feed (prior session checked).
             import movers_notify
 
-            state, reason, _levels = movers_notify.row_level_gate(
-                row, side, str(board.get("as_of") or "")[:10]
-            )
+            state, reason, _levels = movers_notify.row_level_gate(row, side, session)
             passes = state == focus_adoption_gate.OPEN
             if not passes:
                 message = f"✕ {symbol} ({reason})"
             else:
                 try:
                     added = self.focus_service.add(
-                        symbol, side, "m5", origin="movers_board",
-                        context=f"movers 15m {row.get('move15_pct')}",
+                        symbol, side, "m5", origin="movers_board", context=context,
                     )
                     message = (
                         f"★ {symbol} added to M5 Focus ({side})." if added
@@ -7831,6 +7849,51 @@ class AlertCenterPanel(
                     message = f"✕ {symbol} (add failed)"
         self.movers_board.show_status(message)
         self.statusChanged.emit(message)
+
+    def _movers_armed_kinds(self, symbol: str) -> set[str]:
+        """The Movers PB / Line kinds armed on `symbol` (in-memory lists)."""
+        kinds = {kind for kind in self.armed_watch_kinds(symbol) if kind == PULLBACK_KIND}
+        kinds |= {k for k in self.armed_d1_event_kinds(symbol) if k == "d1_line_pullback"}
+        return kinds
+
+    def _arm_movers_alert(self, symbol: str, side: str, kind: str) -> None:
+        """A Movers PB / Line click: arm or disarm through the D1 menu's own toggles."""
+        symbol = str(symbol or "").strip().upper()
+        wanted = "SHORT" if str(side or "").lower().startswith("short") else "LONG"
+        if not symbol or kind not in (PULLBACK_KIND, "d1_line_pullback"):
+            return
+        label = "D1 Pullback (fast)" if kind == PULLBACK_KIND else "Pullback to D1 line"
+        was_armed = kind in self._movers_armed_kinds(symbol)
+        said: list[str] = []
+        self.statusChanged.connect(said.append)
+        try:
+            if kind == PULLBACK_KIND:
+                self.toggle_chart_watch(symbol, wanted, kind,
+                                        source_text=f"Movers board {symbol} {wanted}")
+            else:
+                self.toggle_d1_event_watch(symbol, kind, side=wanted)
+        except Exception:
+            logging.warning("Movers could not arm %s on %s.", label, symbol, exc_info=True)
+        finally:
+            self.statusChanged.disconnect(said.append)
+        armed = kind in self._movers_armed_kinds(symbol)
+        lane = "watch" if kind == PULLBACK_KIND else "d1_event"
+        if armed and not was_armed:
+            message = f"✓ {symbol}: {label} armed ({wanted.lower()})."
+        elif was_armed and not armed:
+            message = f"{symbol}: {label} disarmed."
+        elif kind in self.pending_arm_kinds(symbol).get(lane, set()):
+            message = f"… {symbol}: arming {label} ({wanted.lower()})."
+        else:
+            message = said[-1] if said else f"✕ {symbol}: {label} not armed."
+        self.movers_board.show_status(message)
+        self.movers_board.refresh_arm_state()
+
+    def attach_movers_timeframe_service(self, service) -> None:
+        """Feed the M30 / Daily tabs from `MainWindow`'s one MoversTimeframeService."""
+        service.timeframeBoardChanged.connect(self.movers_board.update_timeframe_board)
+        for tf, board in (service.boards() or {}).items():
+            self.movers_board.update_timeframe_board(tf, board)
 
     def attach_movers_service(self, service) -> None:
         """Feed the Movers board from `MainWindow`'s one MoversService. Hosting only."""

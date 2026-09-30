@@ -553,6 +553,12 @@ MOVERS_DIP_OUTCOMES_FILE = PERSISTENT_DATA_DIR / "movers_dip_outcomes.jsonl"
 # Movers board Pop outcome log (P8 P7, 2026-09-25): append-only evidence of each
 # name's entry on the Pop list and its +15/+30/+60 minute move, MFE and MAE in ATRs.
 MOVERS_POP_OUTCOMES_FILE = PERSISTENT_DATA_DIR / "movers_pop_outcomes.jsonl"
+# Movers M30 / Daily boards (2026-09-29): append-only evidence of each scan's box
+# rows and their +1/+3/+5 session returns vs SPY (`movers_timeframe_outcomes.py`).
+MOVERS_TIMEFRAME_PICKS_FILE = PERSISTENT_DATA_DIR / "movers_timeframe_picks.jsonl"
+# The last good M30 and Daily boards, so the tabs show them right after a restart.
+MOVERS_M30_BOARD_FILE = PERSISTENT_DATA_DIR / "movers_m30_board.json"
+MOVERS_D1_BOARD_FILE = PERSISTENT_DATA_DIR / "movers_d1_board.json"
 # Best-right-now log (B6, 2026-09-25): append-only evidence of each name's first
 # appearance on the strip per day; `best_now_outcomes.py` grades it vs SPY.
 BEST_NOW_LOG_FILE = PERSISTENT_DATA_DIR / "best_now_log.jsonl"
@@ -857,6 +863,8 @@ MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "maste
 MASTER_AVWAP_SCORING_TUNER_REPORT_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_scoring_tuner_report.txt"
 MASTER_AVWAP_USER_FAVORITES_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_user_favorites.csv"
 JOURNAL_DB_FILE = PERSISTENT_RUNTIME_DATA_DIR / "trade_journal.sqlite3"
+#: The Trade Mentor app's chat log, caches and memory. Single owner: the mentor app.
+MENTOR_CHAT_DB_FILE = PERSISTENT_RUNTIME_DATA_DIR / "mentor_chat.sqlite3"
 #: Weekend Prep stepper progress (R8). Compact operational state, so it
 #: belongs in the shared home folder beside the journal rather than in a
 #: per-machine cache - a routine half-finished on Saturday is still

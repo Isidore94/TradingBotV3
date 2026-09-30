@@ -252,7 +252,6 @@ def _rally_widget_board(start="2026-09-22T10:30:00-04:00"):
                 "short": [_row("SINK", dip_score=-1.4, since_start_pct=-1.0, streak=1,
                                rank_change=None),
                           _row("LAG", dip_score=-0.6, since_start_pct=0.0)]},
-        "mine": {"long": [], "short": []},
     }
 
 
@@ -312,18 +311,9 @@ def test_rip_weak_rows_are_shorts_and_sort_hide_plus_focus_and_new_cell_work(app
     assert _names(widget.weak) == ["LAG"]
 
 
-def test_a_rally_does_not_pull_the_trader_off_my_names(app):
-    widget = _widget(app)
-    widget.set_mode("mine")
-    widget.update_board(_rally_widget_board())
-    widget.flush_pending_refresh()
-    assert widget.mode == "mine"
-
-
 def test_no_turn_hint_names_the_rally_too(app):
     widget = _widget(app)
-    widget.update_board({"state": {"state": "up_day"}, "pop": {}, "dip": {}, "rip": {},
-                         "mine": {}})
+    widget.update_board({"state": {"state": "up_day"}, "pop": {}, "dip": {}, "rip": {}})
     widget.flush_pending_refresh()
     assert "rally" in widget.strong.title_label.toolTip()
     assert not widget.strong.isHidden() and not widget.weak.isHidden()

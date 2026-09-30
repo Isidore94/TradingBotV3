@@ -18,7 +18,21 @@ from datetime import datetime
 from typing import Any, Iterable
 
 from PySide6.QtCore import QObject, QThread, Signal
+from local_writer_lock import local_writer_lock, lock_key_for_path
 from swallowed import note_swallowed
+
+
+def market_journal_lock_key(ledger) -> str:
+    """The one lock key every Market Journal appender on this machine agrees on."""
+    from pathlib import Path
+
+    directory = getattr(ledger, "directory", None)
+    if directory is None:
+        from evidence_ledger import default_ledger_dir
+
+        directory = default_ledger_dir()
+    stream = str(getattr(ledger, "stream", "") or "market_journal")
+    return lock_key_for_path(Path(directory) / f"{stream}.jsonl")
 
 def _forecast_origin() -> str:
     import market_journal
@@ -145,11 +159,14 @@ class MarketJournalService(QObject):
             # entirely. No production caller passed `now` before WISHLIST 10J,
             # which is why it never showed; the Trade Mentor's injected clock is
             # what found it.
-            row = self._stream().append(
-                entry,
-                now=now,
-                subject_session_date=session_date,
-            )
+            ledger = self._stream()
+            # Two appenders (the desk and the Trade Mentor app): one machine-local lock.
+            with local_writer_lock(market_journal_lock_key(ledger)):
+                row = ledger.append(
+                    entry,
+                    now=now,
+                    subject_session_date=session_date,
+                )
         except Exception as exc:  # noqa: BLE001
             logging.warning("Market journal entry not written: %s", exc)
             self.statusChanged.emit(f"entry NOT saved: {exc}")

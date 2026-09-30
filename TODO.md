@@ -4,6 +4,19 @@ The next work, in order. Delete an item when it's done; don't archive it. Only t
 trader adds items. An idea in `WISHLIST.md` becomes work only when the trader moves it
 here.
 
+## Trade Mentor app (approved 2026-09-29)
+
+- Trade Mentor app: P0 shell -> P1 mentor move (flag `mentor_app_enabled`) -> P2 picks ->
+  P3 vetoes -> P4 night memory -> P5 tape -> P6 gate -> P7 news. Owed by the trader:
+  `trading_plan.md` lines before P2, Risk per trade before P6.
+  In flight: P1 mentor move (`claude/mentor-app-p1-mentor-move-2026-09-30`, flag off by
+  default); after one live week with the flag on, delete `_MentorPopup` and the flag.
+  P2 picks built (`claude/mentor-app-p2-picks-2026-09-30`, gate #313). P3 vetoes built
+  (`claude/mentor-app-p3-vetoes-2026-09-30`, gate #314). P4 night memory built
+  (`claude/mentor-app-p4-night-memory-2026-09-30`, gate #315). P5 tape built
+  (`claude/mentor-app-p5-tape-2026-09-30`, gate #316). P6 gate built
+  (`claude/mentor-app-p6-gate-2026-09-30`, gate #317). Next: P7 news, by the trader's word only.
+
 ## Plan to 8/10, round 2 (trader's brief, 2026-09-25 evening)
 
 Scores after the round-1 merge (`7d160b4b`): intraday 7, grades/points 6, permutations 6,

@@ -54,6 +54,10 @@ _FAMILY_RE = re.compile(r"^[a-z][a-z0-9_]{2,31}$")
 _RESERVED_CODE_PREFIXES = ("focus_", "veto_")
 
 
+def _is_short(side: str) -> bool:
+    return str(side or "").strip().upper().startswith("SHORT")
+
+
 class VocabularyError(RuntimeError):
     """A vocabulary file is missing, unreadable, or violates its contract."""
 
@@ -67,6 +71,16 @@ class VetoReason:
     hotkey: str
     note_required: bool
     hint: str
+    short_label: str = ""
+    short_hint: str = ""
+
+    def label_for(self, side: str) -> str:
+        """The label for ``side``; a SHORT shows its inverted words when it has them."""
+        return self.short_label if _is_short(side) and self.short_label else self.label
+
+    def hint_for(self, side: str) -> str:
+        """The hint for ``side``; a SHORT shows its inverted words when it has them."""
+        return self.short_hint if _is_short(side) and self.short_hint else self.hint
 
     def accepts(self, note: str) -> bool:
         """Whether ``note`` satisfies this reason's note requirement."""
@@ -196,6 +210,11 @@ def _parse(
             isinstance(note_required, bool),
             f"{where}: note_required must be a boolean",
         )
+        for field in ("short_label", "short_hint"):
+            _require(
+                isinstance(entry.get(field, ""), str),
+                f"{where}: {field} must be text when present",
+            )
         seen_codes.add(code)
         seen_hotkeys.add(hotkey)
         reasons.append(
@@ -205,6 +224,8 @@ def _parse(
                 hotkey=hotkey,
                 note_required=note_required,
                 hint=str(entry.get("hint") or "").strip(),
+                short_label=str(entry.get("short_label") or "").strip(),
+                short_hint=str(entry.get("short_hint") or "").strip(),
             )
         )
 
