@@ -93,8 +93,10 @@ def read_open_trades(path: Path) -> list[dict[str, Any]]:
         ).fetchone()
         stop_sql = "a.planned_stop" if has_annotations else "NULL"
         join = "LEFT JOIN trade_annotations a ON a.trade_id = t.trade_id" if has_annotations else ""
+        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(trades)")}
+        account = ", ".join(f"t.{c}" if c in columns else f"'' AS {c}" for c in ("account_number", "account_label"))
         sql = (
-            "SELECT t.trade_id, t.symbol, t.direction, t.quantity_opened, t.quantity_closed, "
+            f"SELECT t.trade_id, {account}, t.symbol, t.direction, t.quantity_opened, t.quantity_closed, "
             f"t.average_entry_price, t.opened_at, {stop_sql} AS planned_stop FROM trades t {join} "
             "WHERE t.status = 'OPEN' ORDER BY t.opened_at, t.trade_id"
         )
