@@ -38,6 +38,10 @@ SECTIONS = tuple(heading for heading in trading_plan.HEADINGS if heading != trad
 WRITES_KEY = "plan_infer:writes:{day}"
 CAPPED_KEY = "plan_infer:capped:{day}"
 SOURCE_KEY = "plan_src:{digest}"
+#: The rule text an id last showed (in /plan or an Added/Updated line); /drop must still find it there.
+SHOWN_KEY = "plan_shown:{plan_id}"
+#: Never equal to a rule: a /drop of an id the app never showed is refused as moved.
+_NEVER_SHOWN = "\x00never shown"
 
 DROP_NOT_AN_OBJECT = "not_an_object"
 DROP_BAD_OP = "bad_op"
@@ -90,6 +94,9 @@ DROPPED = "Dropped from your plan: {text} (a Decisions line keeps it)"
 NOT_SAVED = "Not saved to your plan: {text} ({error})"
 CAPPED = "I changed your plan {cap} times today, the daily cap; I will not add more until tomorrow."
 TRADERS_OWN = "{plan_id} is your own line, so I will not drop it. Edit trading_plan.md to change it."
+MOVED = "That rule moved, so I did not drop {plan_id}. Run /plan and try again."
+REMEMBER_CAPPED = ("Kept as a note, but not added to your plan today: I already changed your plan {cap} times "
+                   "today, the daily cap.")
 
 
 class InferRejected(ValueError):
@@ -273,7 +280,9 @@ def apply(
         store.set_state(_source_key(text), json.dumps(
             {"turn_ids": list(op.get("turn_ids") or ()), "quote": str(op.get("quote") or "")[:QUOTE_CHARS]}))
         template = ADDED if kind == "add" else UPDATED
-        shown.append(template.format(text=text, plan_id=result.get("plan_id") or op.get("plan_id")))
+        plan_id = result.get("plan_id") or op.get("plan_id")
+        store.set_state(SHOWN_KEY.format(plan_id=plan_id), text)
+        shown.append(template.format(text=text, plan_id=plan_id))
     return shown
 
 
@@ -292,20 +301,31 @@ def remember_rule(note: Any, *, store: Any, day: str, now: datetime | None = Non
         text = trading_plan.clean_ai_text(words)
     except trading_plan.PlanLineRefused as exc:
         return [f"Kept as a note only, not in your plan: {exc}."]
+    if int(store.get_state(WRITES_KEY.format(day=day)) or 0) >= MAX_WRITES_PER_DAY:
+        return [REMEMBER_CAPPED.format(cap=MAX_WRITES_PER_DAY)]
     op = {"op": "add", "section": "Rules", "text": text, "turn_ids": [], "quote": _clean(note)[:QUOTE_CHARS]}
     return apply([op], store=store, day=day, now=now, path=path, say_duplicates=True)
 
 
-def drop(plan_id: str, *, day: str, now: datetime | None = None, path: Path | None = None) -> str:
-    """``/drop <plan_id>``: retire one AI line; the trader's own lines are refused in plain words."""
+def drop(plan_id: str, *, store: Any, day: str, now: datetime | None = None, path: Path | None = None) -> str:
+    """``/drop <plan_id>``: retire the AI line that id last showed; the trader's own lines are refused.
+
+    The line must still say the rule the id showed in /plan or an Added line (checked under the plan's
+    lock), so a stale id never drops a different rule.
+    """
+    shown = store.get_state(SHOWN_KEY.format(plan_id=plan_id)) or _NEVER_SHOWN
     try:
-        result = trading_plan.retire_ai_line(plan_id, now=now, day=day, path=path)
+        result = trading_plan.retire_ai_line(plan_id, expect_text=shown, now=now, day=day, path=path)
     except trading_plan.PlanLineRefused as exc:
-        if getattr(exc, "kind", "") == "trader":
+        kind = getattr(exc, "kind", "")
+        if kind == "trader":
             return TRADERS_OWN.format(plan_id=plan_id)
+        if kind == "moved":
+            return MOVED.format(plan_id=plan_id)
         return f"There is no AI line {plan_id}. `/plan` shows the ids."
     except trading_plan.PlanWriteError as exc:
         return NOT_SAVED.format(text=f"dropping {plan_id}", error=exc)
+    store.set_state(SHOWN_KEY.format(plan_id=plan_id), "")
     return DROPPED.format(text=result.get("text") or "")
 
 
@@ -326,6 +346,7 @@ def listing(*, store: Any, path: Path | None = None) -> str:
         for row in mine:
             line = f"- [{row['id']}] {row['text']}"
             if row.get("ai"):
+                store.set_state(SHOWN_KEY.format(plan_id=row["id"]), row["rule"])
                 try:
                     source = json.loads(store.get_state(_source_key(row["rule"])) or "{}")
                 except ValueError:

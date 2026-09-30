@@ -959,7 +959,7 @@ class MentorWindow(QMainWindow):
             self._submit_io(lambda: self._bridge.note.emit(plan_infer.listing(store=self.store, path=path)))
         elif result.action == "drop":
             plan_id, day, now, path = str(result.arg), self._pt_day(), self._now(), self._plan_path
-            self._submit_io(lambda: self._bridge.note.emit(plan_infer.drop(plan_id, day=day, now=now, path=path)))
+            self._submit_io(lambda: self._bridge.note.emit(plan_infer.drop(plan_id, store=self.store, day=day, now=now, path=path)))
         elif result.action == "forget":
             note_id = int(result.arg)
 

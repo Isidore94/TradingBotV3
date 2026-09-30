@@ -180,12 +180,47 @@ def test_the_traders_own_line_is_never_touched_even_if_a_check_is_bypassed(world
 
 
 def test_drop_refuses_the_traders_line_and_retires_an_ai_line(world):
-    assert plan_infer.drop("plan:rules:1", day=DAY, now=NOW, path=world["plan"]) == (
+    store = world["store"]
+    plan_infer.listing(store=store, path=world["plan"])  # /plan shows the ids first
+    assert plan_infer.drop("plan:rules:1", store=store, day=DAY, now=NOW, path=world["plan"]) == (
         "plan:rules:1 is your own line, so I will not drop it. Edit trading_plan.md to change it.")
-    assert "no AI line" in plan_infer.drop("plan:rules:9", day=DAY, now=NOW, path=world["plan"])
-    assert plan_infer.drop("plan:rules:2", day=DAY, now=NOW, path=world["plan"]).startswith("Dropped from your plan")
+    assert "no AI line" in plan_infer.drop("plan:rules:9", store=store, day=DAY, now=NOW, path=world["plan"])
+    assert plan_infer.drop("plan:rules:2", store=store, day=DAY, now=NOW,
+                           path=world["plan"]).startswith("Dropped from your plan")
     parsed = trading_plan.parse_plan(world["plan"].read_text(encoding="utf-8"))
     assert parsed["decisions"][-1] == {"day": DAY, "text": "dropped AI rule: No trades before 06:45.", "dated": True}
+
+
+def test_a_stale_drop_id_never_drops_a_different_ai_line(world):
+    store = world["store"]
+    for rule in ("First AI rule", "Second AI rule"):
+        plan_infer.apply(_checked(_add(rule)), store=store, day=DAY, now=NOW, path=world["plan"])
+    # Added lines showed plan:rules:3 = First, plan:rules:4 = Second; drop First, so Second becomes plan:rules:3
+    assert plan_infer.drop("plan:rules:3", store=store, day=DAY, now=NOW,
+                           path=world["plan"]).startswith("Dropped from your plan: First AI rule")
+    before = world["plan"].read_text(encoding="utf-8")
+    stale = plan_infer.drop("plan:rules:3", store=store, day=DAY, now=NOW, path=world["plan"])
+    assert stale == plan_infer.MOVED.format(plan_id="plan:rules:3")
+    assert world["plan"].read_text(encoding="utf-8") == before, "Second AI rule is still there"
+    assert plan_infer.drop("plan:rules:4", store=store, day=DAY, now=NOW, path=world["plan"]).startswith(
+        "There is no AI line")
+    # after /plan shows the new ids, the drop lands on the rule it showed
+    plan_infer.listing(store=store, path=world["plan"])
+    assert plan_infer.drop("plan:rules:3", store=store, day=DAY, now=NOW,
+                           path=world["plan"]).startswith("Dropped from your plan: Second AI rule")
+
+
+def test_remember_rule_after_the_cap_says_it_is_a_note_only(world):
+    store = world["store"]
+    plan_infer.apply(_checked(*(_add(f"rule {n}") for n in range(3))), store=store, day=DAY, now=NOW, path=world["plan"])
+    plan_infer.apply(_checked(*(_add(f"rule {n}") for n in range(3, 5))), store=store, day=DAY, now=NOW,
+                     path=world["plan"])
+    before = world["plan"].read_text(encoding="utf-8")
+    shown = plan_infer.remember_rule("rule: No new entries after 12:30", store=store, day=DAY, now=NOW,
+                                     path=world["plan"])
+    assert shown == [plan_infer.REMEMBER_CAPPED.format(cap=plan_infer.MAX_WRITES_PER_DAY)]
+    assert "kept as a note" in shown[0].lower() and "not added to your plan today" in shown[0]
+    assert world["plan"].read_text(encoding="utf-8") == before
 
 
 def test_remember_rule_flows_to_the_plan_with_the_same_dedupe(world):
@@ -343,6 +378,11 @@ def test_plan_drop_and_remember_rule_commands_in_the_window(window):
     window.send("/remember rule: No new entries after 12:30")
     assert _wait(window, lambda: "Added to your plan: No new entries after 12:30" in window.transcript.toPlainText())
     assert window.store.profile_notes()[0]["text"] == "rule: No new entries after 12:30", "the note is still kept"
+    window.send("/drop plan:rules:2")  # not shown by /plan yet: refused, nothing dropped
+    assert _wait(window, lambda: "That rule moved" in window.transcript.toPlainText())
+    window.send("/plan")
+    assert _wait(window, lambda: "**Your plan**" in window.transcript.toPlainText()
+                 or "Your plan (lines" in window.transcript.toPlainText())
     window.send("/drop plan:rules:1")
     assert _wait(window, lambda: "is your own line" in window.transcript.toPlainText())
     window.send("/drop plan:rules:2")
