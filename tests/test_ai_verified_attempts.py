@@ -107,3 +107,91 @@ def test_a_closed_gate_stops_the_retries_and_says_why():
         )
     assert len(request.seen) == 1
     assert "no attempt 2/3 (window closed)" in str(caught.value)
+
+
+# ---------------------------------------------------------------------------
+# econ brief wiring
+# ---------------------------------------------------------------------------
+def _econ():
+    import test_econ_brief_slot as econ_tests
+
+    return econ_tests
+
+
+def _sequence(*replies):
+    """A slot-style request (keyword call) answering each call with the next reply."""
+    calls = []
+
+    def _request(**kwargs):
+        calls.append(kwargs)
+        return {"summary": replies[min(len(calls), len(replies)) - 1], "model": "local-test"}
+
+    _request.calls = calls
+    return _request
+
+
+def _econ_bad_time(pack):
+    reply = _econ()._good_reply(pack)
+    reply["lines"][0]["text"] = "9:15 a.m.: durable goods orders."
+    return reply
+
+
+def _run_econ(tmp_path, request, brief_extra=""):
+    from ai_jobs import econ_brief_narration as job
+
+    econ = _econ()
+    return job.run_econ_brief(
+        session_date="2026-09-24",
+        out_dir=tmp_path,
+        forecasts=econ._forecasts(("2026-09-24", econ.BRIEF_0924 + brief_extra)),
+        request=request,
+        ledger_path=tmp_path / "ledger.jsonl",
+    )
+
+
+def test_econ_a_rejection_then_a_pass_is_ok_on_attempt_two(tmp_path):
+    pack = _econ()._pack()
+    request = _sequence(_econ_bad_time(pack), _econ()._good_reply(pack))
+    outcome = _run_econ(tmp_path, request)
+    assert outcome["status"] == "ok", outcome
+    assert "attempt 2/3" in outcome["reason"]
+    assert len(request.calls) == 2
+    assert (tmp_path / "2026-09-25.json").exists()
+
+
+def test_econ_the_second_attempt_quotes_the_first_rejected_sentence(tmp_path):
+    pack = _econ()._pack()
+    request = _sequence(_econ_bad_time(pack), _econ()._good_reply(pack))
+    _run_econ(tmp_path, request)
+    assert len(request.calls) == 2
+    first, second = (call["evidence"] for call in request.calls)
+    quoted = 'Do not write: "9:15 a.m.: durable goods orders."'
+    assert quoted not in first["instructions"]
+    assert quoted in second["instructions"]
+    # The evidence hash is the pack's: a retry never changes what the file records.
+    assert first["evidence_hash"] == second["evidence_hash"]
+
+
+def test_econ_three_rejections_keep_the_last_good_file_and_name_every_reason(tmp_path):
+    pack = _econ()._pack()
+    _run_econ(tmp_path, _sequence(_econ()._good_reply(pack)))
+    before = (tmp_path / "2026-09-25.json").read_text(encoding="utf-8")
+    bad = [_econ_bad_time(pack) for _ in range(3)]
+    bad[1]["lines"][1]["event_ids"] = ["x9"]
+    bad[2]["lines"] = bad[2]["lines"][:1]
+    request = _sequence(*bad)
+    outcome = _run_econ(tmp_path, request, brief_extra="\n\nExtra line.")
+    assert outcome["status"] == "degraded_no_narrative"
+    assert len(request.calls) == 3
+    assert "attempt 1/3: a time in" in outcome["reason"]
+    assert "attempt 2/3: " in outcome["reason"]
+    assert "attempt 3/3: expected 3-6 lines" in outcome["reason"]
+    assert (tmp_path / "2026-09-25.json").read_text(encoding="utf-8") == before
+
+
+def test_econ_a_first_time_pass_makes_exactly_one_call(tmp_path):
+    request = _sequence(_econ()._good_reply(_econ()._pack()))
+    outcome = _run_econ(tmp_path, request)
+    assert outcome["status"] == "ok"
+    assert len(request.calls) == 1
+    assert "attempt 1/3" in outcome["reason"]
