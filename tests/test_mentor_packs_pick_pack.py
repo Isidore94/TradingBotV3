@@ -39,7 +39,9 @@ NVDA_GOLDEN = """## pick_pack
 [pick:NVDA:cohort:d1:1] Cohort human_focus_swing_d1 LONG 1d: too few, n=11 (floor 30)
 [pick:NVDA:cohort:d1:3] Cohort human_focus_swing_d1 LONG 3d: too few, n=13 (floor 30)
 [pick:NVDA:cohort:d1:5] Cohort human_focus_swing_d1 LONG 5d: too few, n=15 (floor 30)
-[pick:NVDA:cohort:d1:10] Cohort human_focus_swing_d1 LONG 10d: too few, n=20 (floor 30)"""
+[pick:NVDA:cohort:d1:10] Cohort human_focus_swing_d1 LONG 10d: too few, n=20 (floor 30)
+[pick:NVDA:news:12] Headline "Broadcom reports tomorrow; chips mixed" (finance.yahoo.com, Tue 09-29 05:10 PT) https://finance.yahoo.com/news/avgo
+[pick:NVDA:news:11] Headline "Nvidia adds $150 billion buyback" (nytimes.com, Mon 09-28 06:49 PT) https://www.nytimes.com/nvda-buyback"""
 
 
 @pytest.fixture()
@@ -197,3 +199,48 @@ def test_the_pack_never_constructs_the_writing_stores():
     source = (SCRIPTS_DIR / "mentor_packs" / "pick_pack.py").read_text(encoding="utf-8")
     assert "FocusPickStore(" not in source and "JournalStore(" not in source
     assert "from ui" not in source and "import ui" not in source and "PySide6" not in source
+
+
+# ---------------------------------------------------------------- news (P7) and the plan hash
+def test_news_section_max_five_from_the_last_three_days_each_with_its_url(world):
+    from mentor_packs import news_pack
+
+    many = [{"id": 100 + i, "symbol": "NVDA", "title": f"Story {i}", "url": f"https://example.com/{i}",
+             "source": "example.com", "published_utc": f"2026-09-29T{6 + i:02d}:00:00+00:00",
+             "fetched_utc": "2026-09-29T13:00:00+00:00", "feed": "yahoo"} for i in range(7)]
+    old = {"id": 1, "symbol": "NVDA", "title": "Too old", "url": "https://example.com/old", "source": "x",
+           "published_utc": "2026-09-25T12:00:00+00:00", "fetched_utc": "2026-09-25T12:00:00+00:00", "feed": "yahoo"}
+    paths = replace(world, news=news_pack.list_reader(many + [old]))
+    news = [row for row in pick_pack.build("NVDA", now=NOW, paths=paths).rows if row["kind"] == "news"]
+    assert [row["id"] for row in news] == [f"pick:NVDA:news:{106 - i}" for i in range(5)], "newest first, max 5"
+    assert all(row["url"] in row["text"] and row["url"].startswith("https://") for row in news)
+    assert all(row["news_id"] == f"news:NVDA:{row['id'].rsplit(':', 1)[1]}" for row in news)
+
+
+def test_no_headline_is_a_row_that_says_so(world):
+    from mentor_packs import news_pack
+
+    rows = _rows(pick_pack.build("NVDA", now=NOW, paths=replace(world, news=news_pack.list_reader([]))))
+    assert rows["pick:NVDA:news"]["text"] == "News: no stored headlines in the last 3 days"
+    no_source = _rows(pick_pack.build("NVDA", now=NOW, paths=replace(world, news=None)))
+    assert "not read" in no_source["pick:NVDA:news"]["text"]
+
+
+def test_a_new_headline_changes_the_hash(world):
+    from mentor_packs import news_pack
+
+    a = pick_pack.build("NVDA", now=NOW, paths=world)
+    fresh = {"id": 20, "symbol": "NVDA", "title": "Fresh", "url": "https://x.com/f", "source": "x.com",
+             "published_utc": "2026-09-29T13:59:00+00:00", "fetched_utc": "2026-09-29T14:00:00+00:00", "feed": "google"}
+    b = pick_pack.build("NVDA", now=NOW, paths=replace(world, news=news_pack.list_reader(
+        news_pack.FIXTURE_HEADLINES + (fresh,))))
+    assert pick_pack.pack_hash(a) != pick_pack.pack_hash(b)
+
+
+def test_any_plan_edit_changes_the_hash_even_one_that_adds_no_line(world):
+    a = pick_pack.build("NVDA", now=NOW, paths=world)
+    text = world.plan.read_text(encoding="utf-8")
+    world.plan.write_text(text.replace("## Risk", "Rewritten on Sunday by the plan session.\n\n## Risk"), encoding="utf-8")
+    b = pick_pack.build("NVDA", now=NOW, paths=world)
+    assert a.ids == b.ids and a.as_text() == b.as_text(), "the edit adds no citable line"
+    assert pick_pack.pack_hash(a) != pick_pack.pack_hash(b), "a changed plan re-narrates the card"

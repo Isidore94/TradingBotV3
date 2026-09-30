@@ -240,10 +240,14 @@ def build(side: str = "", symbol: str = "", size: Any = None, stop: Any = None, 
     moment = pick_pack._now(now or src.now)
     prefix = f"gate:{sym}"
     size_v, stop_v, entry_v = _num(size), _num(stop), _num(entry)
+    try:
+        plan_sha = plan_lines.plan_digest(src.plan)
+    except Exception:  # noqa: BLE001 - an unreadable plan hashes as "unknown"
+        plan_sha = "unknown"
     rows: list[dict[str, Any]] = [{
         "id": f"{prefix}:req", "kind": "request", "side": chosen, "symbol": sym,
         "size": size_v, "stop": stop_v, "entry": entry_v, "key": request_key(chosen, sym, size, stop, entry),
-        "at_utc": moment.astimezone(timezone.utc).isoformat(timespec="seconds"),
+        "at_utc": moment.astimezone(timezone.utc).isoformat(timespec="seconds"), "plan_sha": plan_sha,
         "text": (f"Request: {chosen} {sym}, size {_fmt(size_v)}, stop {_fmt(stop_v)}, entry {_fmt(entry_v)}"),
     }]
     try:
@@ -275,12 +279,13 @@ def build(side: str = "", symbol: str = "", size: Any = None, stop: Any = None, 
 
 
 def pack_hash(pack: Pack) -> str:
-    """What the pack SAYS, the request row included (so two requests never share a card)."""
+    """What the pack SAYS, the request row included (so two requests never share a card), and the plan file hash."""
     import hashlib
     import json
 
     stable = [(row.get("id"), row.get("text")) for row in pack.rows if row.get("kind") not in _VOLATILE_KINDS]
-    body = json.dumps({"name": pack.name, "rows": stable, "empty": pack.empty_text}, sort_keys=True, default=str)
+    body = json.dumps({"name": pack.name, "rows": stable, "empty": pack.empty_text,
+                       "plan": pick_pack.plan_sha_of(pack)}, sort_keys=True, default=str)
     return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
 
 

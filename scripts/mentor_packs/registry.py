@@ -19,6 +19,7 @@ PACK_MODULES: tuple[str, ...] = (
     "mentor_packs.veto_pack",
     "mentor_packs.regime_pack",
     "mentor_packs.gate_pack",
+    "mentor_packs.news_pack",
 )
 
 

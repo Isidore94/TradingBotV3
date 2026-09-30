@@ -158,3 +158,20 @@ def test_registered_and_fixture_reads_no_live_source(monkeypatch):
     monkeypatch.setattr(regime_pack, "live_sources", boom)
     pack = gate_pack.fixture()
     assert not any(row["kind"] == "unknown" for row in pack.rows)
+
+
+def test_any_plan_edit_changes_the_hash_even_one_that_adds_no_line(tmp_path):
+    from mentor_packs.plan_lines import FIXTURE_PLAN
+
+    a = _build(tmp_path / "a", "SHORT", "NVDA", 400, 3.2, 3.05)
+    b = _build(tmp_path / "b", "SHORT", "NVDA", 400, 3.2, 3.05,
+               plan_text=FIXTURE_PLAN.replace("## Risk", "Rewritten on Sunday by the plan session.\n\n## Risk"))
+    assert a.ids == b.ids and [r["text"] for r in a.rows] == [r["text"] for r in b.rows]
+    assert gate_pack.pack_hash(a) != gate_pack.pack_hash(b), "a changed plan re-narrates the check"
+
+
+def test_the_gate_carries_the_pick_headlines_with_their_urls(tmp_path):
+    pack = _build(tmp_path, "SHORT", "NVDA", 400, 3.2, 3.05)
+    news = [row for row in pack.rows if row["kind"] == "news"]
+    assert [row["id"] for row in news] == ["gate:NVDA:pick:NVDA:news:12", "gate:NVDA:pick:NVDA:news:11"]
+    assert all(row["url"] in row["text"] for row in news)

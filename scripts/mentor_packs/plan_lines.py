@@ -37,6 +37,21 @@ def build(*, path: Path | str | None = None) -> Pack:
     return make_pack(NAME, rows, empty_text=EMPTY_TEXT)
 
 
+def plan_digest(path: Path | str | None = None) -> str:
+    """A short hash of the plan file's whole text ("none" when missing, "unknown" when unreadable).
+
+    Card caches key on it, so any edit to the plan (a comment or a heading too) re-narrates.
+    """
+    import trading_plan
+
+    result = trading_plan.read_plan(create=False, snapshot=False, path=Path(path) if path else None)
+    if result.get("error"):
+        return "unknown"
+    if not result.get("exists"):
+        return "none"
+    return trading_plan.content_hash(str(result.get("text") or ""))[:16]
+
+
 FIXTURE_PLAN = """# Trading plan
 
 ## Risk

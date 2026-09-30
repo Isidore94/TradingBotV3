@@ -63,9 +63,11 @@ TASK = (
 
 
 def pack_hash(pack: Pack) -> str:
-    """A stable hash of the pack's rows, without the as-of clock."""
+    """A stable hash of the pack's rows, without the as-of clock but with the plan file's hash."""
     rows = [row for row in pack.rows if str(row.get("id")) not in UNHASHED_IDS]
-    return hashlib.sha256(json.dumps(rows, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+    plan = next((str(row.get("plan_sha") or "") for row in pack.rows if "plan_sha" in row), "")
+    body = {"rows": rows, "plan": plan} if plan else rows
+    return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass

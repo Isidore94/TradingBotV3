@@ -77,6 +77,18 @@ CREATE TABLE IF NOT EXISTS embeddings (
     text TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (kind, ref_id, model)
 );
+CREATE TABLE IF NOT EXISTS news (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    published_utc TEXT NOT NULL DEFAULT '',
+    fetched_utc TEXT NOT NULL,
+    feed TEXT NOT NULL DEFAULT '',
+    UNIQUE (symbol, url)
+);
+CREATE INDEX IF NOT EXISTS news_by_symbol ON news(symbol, published_utc);
 """
 
 BUSY_TIMEOUT_MS = 5000
@@ -84,6 +96,8 @@ BUSY_TIMEOUT_MS = 5000
 NOTE_COLUMNS = ("retired_utc", "checked_utc", "asked_utc")
 #: app_state key for one PT day's service counters (uncited numbers, brain-offline minutes).
 DAY_STATS_KEY = "stats:{day}"
+#: app_state key for one symbol's last news fetch (UTC ISO), so a restart keeps the 30-min spacing.
+NEWS_FETCH_KEY = "news:last_fetch:{symbol}"
 _CHALLENGES_TABLE = SCHEMA[SCHEMA.index("CREATE TABLE IF NOT EXISTS challenges"):].split(";", 1)[0]
 
 
@@ -346,6 +360,52 @@ class MentorChatStore:
     def get_state(self, key: str) -> str | None:
         rows = self._read("SELECT value FROM app_state WHERE key = ?", (str(key),))
         return str(rows[0]["value"]) if rows else None
+
+    # ----------------------------------------------------------------- news (P7)
+    def put_headlines(self, headlines: Iterable[Any], fetched_utc: str = "") -> int | None:
+        """Insert new headlines (one per symbol + URL; a known one is left alone). Returns rows added.
+
+        A headline without an http(s) URL or a title is never stored.
+        """
+        fetched = fetched_utc or utc_now()
+        rows = []
+        for item in headlines:
+            data = item.as_dict() if hasattr(item, "as_dict") else dict(item)
+            symbol = str(data.get("symbol") or "").strip().upper()
+            title, url = str(data.get("title") or "").strip(), str(data.get("url") or "").strip()
+            if not symbol or not title or not url.startswith(("http://", "https://")):
+                continue
+            rows.append((symbol, title, url, str(data.get("source") or ""), str(data.get("published_utc") or ""),
+                         fetched, str(data.get("feed") or "")))
+        try:
+            with closing(self._connect()) as conn, conn:
+                before = conn.total_changes
+                conn.executemany(
+                    "INSERT OR IGNORE INTO news (symbol, title, url, source, published_utc, fetched_utc, feed) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)", rows,
+                )
+                return int(conn.total_changes - before)
+        except Exception:  # noqa: BLE001 - a lost headline is logged, never raised into the UI
+            logging.exception("Trade Mentor store: news write failed (%s)", self.path)
+            return None
+
+    def headlines(self, symbol: str, since: str = "", limit: int = 8) -> list[dict[str, Any]]:
+        """One symbol's headlines at or after ``since`` (UTC ISO), newest first."""
+        from mentor_packs.news_pack import NEWS_SELECT
+
+        return self._read(NEWS_SELECT, (str(symbol or "").strip().upper(), str(since or ""), int(limit)))
+
+    def set_news_fetched(self, symbol: str, when_utc: str) -> bool:
+        return self.set_state(NEWS_FETCH_KEY.format(symbol=str(symbol).strip().upper()), when_utc)
+
+    def news_fetched(self, symbol: str) -> str | None:
+        return self.get_state(NEWS_FETCH_KEY.format(symbol=str(symbol).strip().upper()))
+
+    def news_fetch_stamps(self) -> dict[str, str]:
+        """``{SYMBOL: last fetch UTC ISO}`` for every symbol ever fetched."""
+        prefix = NEWS_FETCH_KEY.format(symbol="")
+        rows = self._read("SELECT key, value FROM app_state WHERE key LIKE ?", (prefix + "%",))
+        return {str(row["key"])[len(prefix):]: str(row["value"]) for row in rows}
 
     # ----------------------------------------------------------------- caches
     def put_pack(self, name: str, args: dict[str, Any] | None, pack_json: str, built_utc: str = "") -> int | None:
