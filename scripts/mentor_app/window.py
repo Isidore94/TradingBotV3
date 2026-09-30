@@ -171,7 +171,8 @@ class MentorWindow(QMainWindow):
         self._veto_block: int | None = None
         self._veto_token: object | None = None
         self._veto_schedule = challenge.VetoSchedule()
-        self._veto_inbox_waiting: list[tuple[str, str]] = []
+        #: (session, PT day queued, inbox line, card markdown); held through quiet hours or a mute, never past the day.
+        self._veto_inbox_waiting: list[tuple[str, Any, str, str]] = []
         self._inbox_cards: dict[int, str] = {}
         self._graded_on: Any = None
         # P1: with `mentor_app_enabled` on, this process owns the Trade Mentor card.
@@ -1024,7 +1025,9 @@ class MentorWindow(QMainWindow):
                 card = challenge.word(pack, pack_hash=digest, model="", endpoint="", now=self._now)
                 self.store.put_pack(challenge.CACHE_NAME, key, card.to_json(), card.built_utc)
             events = sum(1 for r in pack.rows if r.get("kind") in ("veto", "pass"))
-            return {"pack": pack, "hash": digest, "session": session, "card": card, "events": events, "source": source}
+            posted = self.store.get_state(challenge.MORNING_POSTED_KEY) if source == "morning" else None
+            return {"pack": pack, "hash": digest, "session": session, "card": card, "events": events, "source": source,
+                    "posted": posted}
 
         return job
 
@@ -1144,6 +1147,8 @@ class MentorWindow(QMainWindow):
     def _on_veto_morning(self, built: dict) -> None:
         if not built.get("session") or not built.get("events"):
             return  # no vetoes or passes last session: nothing to say
+        if built.get("posted") == built["session"]:
+            return  # this session's card was posted before a restart
         card = built.get("card")
         if card is not None and card.done:
             self._queue_veto_inbox(card)
@@ -1153,13 +1158,19 @@ class MentorWindow(QMainWindow):
                           on_done=self._bridge.veto_card.emit)
 
     def _queue_veto_inbox(self, card: Any) -> None:
-        self._veto_inbox_waiting.append((challenge.inbox_line(card), challenge.card_markdown(card)))
+        day = self._now().astimezone(challenge.PT).date()
+        self._veto_inbox_waiting.append((card.session, day, challenge.inbox_line(card), challenge.card_markdown(card)))
         self._deliver_veto_inbox()
 
     def _deliver_veto_inbox(self) -> None:
-        """Post the waiting morning card once quiet hours or a mute end; a used daily cap drops it."""
+        """Post the waiting morning card once quiet hours or a mute end; a used daily cap or a new day drops it."""
+        today = self._now().astimezone(challenge.PT).date()
         while self._veto_inbox_waiting:
-            line, markdown = self._veto_inbox_waiting[0]
+            session, day, line, markdown = self._veto_inbox_waiting[0]
+            if day != today:
+                logging.info("Trade Mentor: the vetoes card for %s was dropped (held past its day)", session)
+                self._veto_inbox_waiting.pop(0)
+                continue
             item = self.inbox.add("vetoes", line)
             if item is None:
                 if "cap" in self.inbox.last_refusal:
@@ -1170,3 +1181,4 @@ class MentorWindow(QMainWindow):
             self._veto_inbox_waiting.pop(0)
             self._inbox_cards[item.id] = markdown
             self.refresh_inbox()
+            self._submit_io(lambda session=session: self.store.set_state(challenge.MORNING_POSTED_KEY, session))

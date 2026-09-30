@@ -34,6 +34,8 @@ MAX_OUTPUT_TOKENS = 600
 EFFORT = "high"
 TIMEOUT_SECONDS = 180
 MORNING_AT = time(6, 45)
+#: app_state key: the session whose morning card reached the Inbox (survives a restart).
+MORNING_POSTED_KEY = "veto_morning_posted"
 GRADE_HORIZONS = (1, 3, 5, 10)
 HIT_HORIZON = 5
 FOOTER = "*This is a note, not a rule: rules go through the plan.*"
@@ -175,7 +177,8 @@ def check_reply(reply: Any, pack: Pack) -> tuple[list[dict[str, Any]], list[dict
         seen.add(veto_id)
         kept.append({
             "veto_id": veto_id, "symbol": item["veto"]["symbol"], "side": item["veto"]["side"],
-            "session": item["veto"].get("session", ""), "claim": claim, "evidence_refs": refs,
+            "session": item["veto"].get("session", ""), "session_date": item["veto"].get("session_date", ""),
+            "claim": claim, "evidence_refs": refs,
             "n": int(cut["n"]), "lb": _lb(cut["lb"]),
         })
     return kept, drops
@@ -237,7 +240,8 @@ def record(store: Any, card: VetoCard) -> int:
     """One ``challenges`` row per worded challenge (a veto is challenged once). Returns rows written."""
     written = 0
     for item in card.challenges:
-        seed = {"status": "open", "session": item.get("session") or card.session, "side": item.get("side"),
+        seed = {"status": "open", "session": item.get("session") or card.session,
+                "session_date": item.get("session_date") or item.get("session") or card.session, "side": item.get("side"),
                 "n": item.get("n"), "lb": item.get("lb")}
         if store.add_challenge(
             item["veto_id"], kind=KIND, symbol=item.get("symbol", ""), claim=item["claim"],
@@ -353,7 +357,9 @@ def grade_open(store: Any, now: datetime, *, veto_outcomes: Path | str | None = 
         session = str(outcome.get("session") or (parts[1] if len(parts) > 2 else ""))
         side = str(outcome.get("side") or "")
         symbol = str(row.get("symbol") or (parts[2] if len(parts) > 2 else "")).upper()
-        found = returns.get((session, symbol, side))
+        # veto_cohort_outcomes keys trade_date = the annotation's session_date, not the judged session.
+        cohort_date = str(outcome.get("session_date") or session)
+        found = returns.get((cohort_date, symbol, side))
         if found is None:
             new = {**outcome, "status": "open", "reason": "no veto cohort row yet"}
         else:

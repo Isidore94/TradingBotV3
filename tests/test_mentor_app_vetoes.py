@@ -175,14 +175,14 @@ def test_a_challenge_is_one_open_row_never_two(pack, tmp_path):
     assert json.loads(rows[0]["outcome_json"])["session"] == "2026-09-29"
 
 
-def _outcomes(path, horizons):
+def _outcomes(path, horizons, trade_date="2026-09-29"):
     header = "trade_date,symbol,side,source,h1_date,h1_return,h3_date,h3_return,h5_date,h5_return,h10_date,h10_return"
     cells = []
     for horizon, date_text, value in (
         (1, "2026-09-30", "0.01"), (3, "2026-10-02", "0.02"), (5, "2026-10-06", "0.03"), (10, "2026-10-13", "-0.01"),
     ):
         cells += [date_text, value] if horizon in horizons else ["", ""]
-    path.write_text(header + "\n" + ",".join(["2026-09-29", "AAA", "LONG", "veto_v6_compressed", *cells]) + "\n",
+    path.write_text(header + "\n" + ",".join([trade_date, "AAA", "LONG", "veto_v6_compressed", *cells]) + "\n",
                     encoding="utf-8")
 
 
@@ -393,3 +393,90 @@ def test_scorecard_command_prints_counts_with_n(window, app):
     window.send("/scorecard")
     _drain(window, app)
     assert "issued 0, fully graded 0" in _text(window) and "too few (n=0, floor 30)" in _text(window)
+
+
+# ---------------------------------------------------------------- review fixes (87f06e34)
+def test_an_after_close_veto_grades_on_its_session_date_not_its_decision_session(world, tmp_path):
+    # HLIT repro: vetoed Friday 21:04 PT, so session_date is Saturday while the judged session is Friday.
+    # The veto cohort keys trade_date = session_date; grading must use it.
+    lines = world.annotations.read_text(encoding="utf-8").splitlines()
+    fixed = []
+    for line in lines:
+        if '"event_id": "aaa-click"' in line:
+            row = json.loads(line)
+            row["session_date"] = "2026-09-30"
+            line = json.dumps(row)
+        fixed.append(line)
+    world.annotations.write_text("\n".join(fixed) + "\n", encoding="utf-8")
+    pack = veto_pack.build(now=NOW, paths=world)
+    store = MentorChatStore(tmp_path / "chat.sqlite3")
+    challenge.record(store, _worded(pack))
+    seed = json.loads(store.challenges(kind="veto")[0]["outcome_json"])
+    assert seed["session"] == "2026-09-29" and seed["session_date"] == "2026-09-30"
+    outcomes = tmp_path / "veto_cohort_outcomes.csv"
+    _outcomes(outcomes, {1, 3, 5}, trade_date="2026-09-30")
+    challenge.grade_open(store, datetime(2026, 10, 7, 14, 0, tzinfo=timezone.utc), veto_outcomes=outcomes)
+    outcome = json.loads(store.challenges(kind="veto")[0]["outcome_json"])
+    assert outcome.get("reason") != "no veto cohort row yet" and outcome["returns"]["5"] == 0.03
+
+
+def test_an_old_challenge_without_session_date_falls_back_to_its_session(tmp_path):
+    store = MentorChatStore(tmp_path / "chat.sqlite3")
+    store.add_challenge(AAA, kind="veto", symbol="AAA", claim="c", outcome={"session": "2026-09-29", "side": "LONG"})
+    outcomes = tmp_path / "veto_cohort_outcomes.csv"
+    _outcomes(outcomes, {1})
+    challenge.grade_open(store, datetime(2026, 10, 7, 14, 0, tzinfo=timezone.utc), veto_outcomes=outcomes)
+    assert json.loads(store.challenges(kind="veto")[0]["outcome_json"])["returns"] == {"1": 0.01}
+
+
+def test_an_old_not_null_graded_column_with_rows_is_migrated_and_keeps_them(tmp_path):
+    path = tmp_path / "chat.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE challenges (id TEXT PRIMARY KEY, kind TEXT NOT NULL, symbol TEXT NOT NULL DEFAULT '', "
+                     "claim TEXT NOT NULL, evidence_ids_json TEXT NOT NULL DEFAULT '[]', issued_utc TEXT NOT NULL, "
+                     "graded_utc TEXT NOT NULL DEFAULT '', outcome_json TEXT NOT NULL DEFAULT '{}')")
+        conn.execute("INSERT INTO challenges (id, kind, symbol, claim, issued_utc) VALUES ('old:1', 'veto', 'A', 'c', 't')")
+        conn.execute("INSERT INTO challenges (id, kind, symbol, claim, issued_utc, graded_utc) "
+                     "VALUES ('old:2', 'veto', 'B', 'c', 't', '2026-10-01T00:00:00+00:00')")
+    store = MentorChatStore(path)
+    assert store.add_challenge("veto:x:C:1", kind="veto", symbol="C", claim="c"), "a new row writes after the migration"
+    rows = {row["id"]: row for row in store.challenges()}
+    assert set(rows) == {"old:1", "old:2", "veto:x:C:1"}
+    assert rows["old:1"]["graded_utc"] is None and rows["old:2"]["graded_utc"] == "2026-10-01T00:00:00+00:00"
+    assert {row["id"] for row in store.challenges(open_only=True)} == {"old:1", "veto:x:C:1"}
+
+
+def test_a_restart_after_the_morning_card_posted_never_posts_it_again(window, app, tmp_path):
+    window._brain_ok, window._endpoint, window._model = True, "http://h", "m"
+    window.clock["now"] = datetime(2026, 9, 30, 7, 5, tzinfo=PT)
+    window.maybe_veto_card()
+    _drain(window, app)
+    assert [item.text for item in window.inbox.items()] == ["Yesterday's vetoes: 1 challenge"]
+    assert window.store.get_state("veto_morning_posted") == "2026-09-29"
+    # A restarted app: fresh schedule and inbox, same chat store.
+    from mentor_app.challenge import VetoSchedule
+    from mentor_app.inbox import Inbox
+
+    window._veto_schedule = VetoSchedule()
+    window.inbox = Inbox(now=window._now)
+    window.clock["now"] = datetime(2026, 9, 30, 8, 0, tzinfo=PT)
+    window.maybe_veto_card()
+    _drain(window, app)
+    assert window.inbox.items() == [] and len(window.calls) == 1, "posted for that session already"
+
+
+def test_a_card_held_past_midnight_is_dropped_not_posted_the_next_day(window, app):
+    from datetime import timedelta as _td
+
+    window._brain_ok, window._endpoint, window._model = True, "http://h", "m"
+    window.inbox.mute(_td(hours=12))
+    window.clock["now"] = datetime(2026, 9, 30, 7, 5, tzinfo=PT)
+    window.maybe_veto_card()
+    _drain(window, app)
+    assert window.inbox.items() == [] and len(window._veto_inbox_waiting) == 1, "muted: held"
+    window.inbox.muted_until = None
+    window.clock["now"] = datetime(2026, 10, 1, 0, 5, tzinfo=PT)
+    window._deliver_veto_inbox()
+    assert window.inbox.items() == [] and window._veto_inbox_waiting == [], "yesterday's card is dropped"
+    assert window.store.get_state("veto_morning_posted") in (None, "")
+

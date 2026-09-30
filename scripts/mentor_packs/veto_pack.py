@@ -382,6 +382,8 @@ def build(date: str = "", *, now: datetime | None = None, paths: VetoPaths | Non
         rows.append({
             "id": row_id, "kind": kind, "symbol": symbol, "side": side, "setup": setup, "reason_code": reason_code,
             "reason": reason_text, "at": at, "session": through,
+            # The veto cohort keys trade_date on the row's own session_date (an after-close veto differs).
+            "session_date": str(row.get("session_date") or "").strip()[:10] or through,
             "text": (
                 f"{kind.upper()} {symbol} {side or 'side unknown'} {row.get('timeframe') or ''}: {reason_text}; "
                 f"setup {setup or 'unknown'}; at {at or 'unknown time'}" + (f"; note: {note[:160]}" if note else "")

@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS challenges (
     graded_utc TEXT,
     outcome_json TEXT NOT NULL DEFAULT '{}'
 );
+CREATE TABLE IF NOT EXISTS app_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_utc TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS profile_notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts_utc TEXT NOT NULL,
@@ -72,6 +77,7 @@ CREATE TABLE IF NOT EXISTS embeddings (
 """
 
 BUSY_TIMEOUT_MS = 5000
+_CHALLENGES_TABLE = SCHEMA[SCHEMA.index("CREATE TABLE IF NOT EXISTS challenges"):].split(";", 1)[0]
 
 
 def utc_now() -> str:
@@ -87,13 +93,20 @@ def _args_key(args: dict[str, Any] | None) -> str:
 
 
 def _open_graded_column(conn: sqlite3.Connection) -> None:
-    """Phase 0-2 created ``graded_utc`` NOT NULL; nothing wrote a challenge then, so an empty table is rebuilt."""
+    """Phase 0-2 created ``graded_utc`` NOT NULL: rebuild the table nullable, keeping every row ('' becomes NULL)."""
     columns = {row[1]: row for row in conn.execute("PRAGMA table_info(challenges)").fetchall()}
     graded = columns.get("graded_utc")
-    if graded is not None and graded[3]:
-        if conn.execute("SELECT COUNT(*) FROM challenges").fetchone()[0] == 0:
-            conn.execute("DROP TABLE challenges")
-            conn.executescript(SCHEMA)
+    if graded is None or not graded[3]:
+        return
+    with conn:
+        conn.execute("ALTER TABLE challenges RENAME TO challenges_old")
+        conn.execute(_CHALLENGES_TABLE)
+        conn.execute(
+            "INSERT INTO challenges (id, kind, symbol, claim, evidence_ids_json, issued_utc, graded_utc, outcome_json) "
+            "SELECT id, kind, symbol, claim, evidence_ids_json, issued_utc, NULLIF(graded_utc, ''), outcome_json "
+            "FROM challenges_old"
+        )
+        conn.execute("DROP TABLE challenges_old")
 
 
 class MentorChatStore:
@@ -226,6 +239,18 @@ class MentorChatStore:
             (json.dumps(dict(outcome), sort_keys=True, default=str), graded_utc, str(challenge_id)),
         )
         return written is not None
+
+    # ----------------------------------------------------------------- app state
+    def set_state(self, key: str, value: str) -> bool:
+        written = self._write(
+            "app state", "INSERT OR REPLACE INTO app_state (key, value, updated_utc) VALUES (?, ?, ?)",
+            (str(key), str(value), utc_now()),
+        )
+        return written is not None
+
+    def get_state(self, key: str) -> str | None:
+        rows = self._read("SELECT value FROM app_state WHERE key = ?", (str(key),))
+        return str(rows[0]["value"]) if rows else None
 
     # ----------------------------------------------------------------- caches
     def put_pack(self, name: str, args: dict[str, Any] | None, pack_json: str, built_utc: str = "") -> int | None:
