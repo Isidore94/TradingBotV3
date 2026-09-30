@@ -182,3 +182,62 @@ def test_live_readers_are_read_only(tmp_path):
     assert book_pack.read_accounts(tmp_path / "missing.sqlite3") == []
     source = (SCRIPTS_DIR / "mentor_packs" / "book_pack.py").read_text(encoding="utf-8")
     assert "JournalStore(" not in source and "FocusPickStore(" not in source and "mode=ro" in source
+
+
+# ---------------------------------------------------------------- P8 review follow-ups (P9 step A)
+@pytest.mark.parametrize("account,expected", [
+    ({"account_type": "TFSA", "tax_status": "TAXABLE"}, "taxable"),
+    ({"account_type": "RRSP", "account_label": "RRSP x", "tax_status": "TAXABLE"}, "taxable"),
+    ({"account_type": "Margin", "tax_status": "TAXABLE"}, "margin"),
+    ({"account_type": "TFSA", "tax_status": "TAX_DEFERRED"}, "tax_deferred"),
+    ({"account_type": "Margin", "account_label": "California Margin"}, "margin"),
+    ({"account_type": "Individual", "account_label": "Clifton"}, "unknown"),
+    ({"account_type": "Individual", "account_label": "My TFSA-2"}, "tax_free"),
+])
+def test_tax_status_wins_outright_and_words_are_whole_tokens(account, expected):
+    assert book_pack.tax_class(account) == expected
+
+
+def _stop_trade(trade_id, acct, sym, side, stop, qty=100, entry=150.0):
+    return {"trade_id": trade_id, "account_number": acct, "account_label": f"A{acct}", "symbol": sym,
+            "direction": side, "quantity_opened": qty, "quantity_closed": 0, "average_entry_price": entry,
+            "planned_stop": stop, "opened_at": "2026-09-28T07:00:00-07:00"}
+
+
+def _qt_pos(acct, sym="AMD", **extra):
+    return {"account_number": acct, "account_label": f"Acct {acct}", "symbol": sym, "open_qty": 10.0,
+            "side": "LONG", "avg_price": 150.0, "market_value": 1500.0, "security_type": "STK", **extra}
+
+
+def test_stop_matches_the_position_in_the_same_account():
+    trades = [_stop_trade("T1", "111", "AMD", "LONG", 140.0), _stop_trade("T2", "222", "AMD", "LONG", 145.0)]
+    rows = _rows(_build(snapshot=qp.fixture_snapshot(FRESH, [_qt_pos("111"), _qt_pos("222")]).as_dict(),
+                        trades=trades))
+    assert rows["book:pos:111:AMD"]["at_risk"] == 100.0
+    assert rows["book:pos:222:AMD"]["at_risk"] == 50.0
+
+
+def test_stop_without_an_account_matches_by_symbol_and_side():
+    trades = [_stop_trade("T1", "", "AMD", "LONG", 145.0)]
+    rows = _rows(_build(snapshot=qp.fixture_snapshot(FRESH, [_qt_pos("222")]).as_dict(), trades=trades))
+    assert rows["book:pos:222:AMD"]["at_risk"] == 50.0
+
+
+def test_a_stop_from_another_account_never_prices_this_one():
+    trades = [_stop_trade("T1", "111", "AMD", "LONG", 140.0)]
+    rows = _rows(_build(snapshot=qp.fixture_snapshot(FRESH, [_qt_pos("222")]).as_dict(), trades=trades))
+    assert rows["book:pos:222:AMD"]["at_risk"] is None
+
+
+@pytest.mark.parametrize("extra", [
+    {"symbol": "AMD18Oct26C150.00", "security_type": "Option"},
+    {"symbol": "AMD18Oct26C150.00", "security_type": ""},
+    {"symbol": "AMD", "security_type": "STK", "multiplier": 100},
+])
+def test_option_positions_say_not_computed_never_a_number(extra):
+    pos = _qt_pos("222", **{"open_qty": 2.0, "avg_price": 3.0, "market_value": 600.0, **extra})
+    trades = [_stop_trade("T1", "222", extra["symbol"], "LONG", 1.5, qty=2, entry=3.0)]
+    pack = _build(snapshot=qp.fixture_snapshot(FRESH, [pos]).as_dict(), trades=trades)
+    row = next(r for r in pack.rows if r["kind"] == "position")
+    assert row["at_risk"] is None
+    assert "$ at risk: not computed (option)" in row["text"]

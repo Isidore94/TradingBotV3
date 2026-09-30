@@ -174,21 +174,24 @@ def _now(now: datetime | None) -> datetime:
 def tax_class(account: Mapping[str, Any]) -> str:
     """``tax_free`` / ``tax_deferred`` / ``margin`` / ``cash`` / ``taxable`` / ``unknown``.
 
-    The trader's own tax status in the journal wins; then the account type words.
+    The trader's own tax status in the journal wins outright (TAXABLE beats a TFSA type word);
+    then the account type words, matched as whole tokens ("California" is not LIF).
     """
     status = str(account.get("tax_status") or "").strip().upper()
     words = f"{account.get('account_type') or ''} {account.get('account_label') or ''}".upper()
+    tokens = set(re.findall(r"[A-Z]+", words))
     if status == "TAX_FREE":
         return "tax_free"
     if status == "TAX_DEFERRED":
         return "tax_deferred"
-    if any(word in words for word in TAX_FREE_WORDS):
-        return "tax_free"
-    if any(word in words for word in TAX_DEFERRED_WORDS):
-        return "tax_deferred"
-    if "MARGIN" in words:
+    if status != "TAXABLE":
+        if tokens & set(TAX_FREE_WORDS):
+            return "tax_free"
+        if tokens & set(TAX_DEFERRED_WORDS):
+            return "tax_deferred"
+    if "MARGIN" in tokens:
         return "margin"
-    if re.search(r"\bCASH\b", words):
+    if "CASH" in tokens:
         return "cash"
     return "taxable" if status == "TAXABLE" else "unknown"
 
@@ -251,16 +254,46 @@ def _journal_book(trades: Iterable[Mapping[str, Any]], journal_accounts: list[Ma
     return accounts, positions
 
 
-def _stops(trades: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str], float]:
-    """(SYMBOL, SIDE) -> the planned stop of the latest open journal trade that has one."""
-    out: dict[tuple[str, str], float] = {}
+def _stops(trades: Iterable[Mapping[str, Any]]) -> dict[tuple[str, ...], float]:
+    """Planned stop of the latest open journal trade that has one.
+
+    Keyed (ACCOUNT, SYMBOL, SIDE) when the trade carries an account, else (SYMBOL, SIDE).
+    """
+    out: dict[tuple[str, ...], float] = {}
     for trade in trades:  # oldest first, so the latest wins
         stop = _num(trade.get("planned_stop"))
         side = {"BUY": "LONG", "SELL": "SHORT"}.get(str(trade.get("direction") or "").upper(),
                                                     str(trade.get("direction") or "").upper())
+        acct = str(trade.get("account_number") or "").strip()
         if stop is not None:
-            out[(_sym(trade.get("symbol")), side)] = stop
+            key = (acct, _sym(trade.get("symbol")), side) if acct else (_sym(trade.get("symbol")), side)
+            out[key] = stop
     return out
+
+
+def _stop_for(stops: Mapping[tuple[str, ...], float], pos: Mapping[str, Any]) -> float | None:
+    sym, side = _sym(pos.get("symbol")), str(pos.get("side") or "")
+    acct = str(pos.get("account_number") or "").strip()
+    found = stops.get((acct, sym, side)) if acct else None
+    return found if found is not None else stops.get((sym, side))
+
+
+#: Questrade's option spelling (``AAOI18Jun26P120.00``) and the OCC one (``AAPL  260918C00150000``).
+_OPTION_SYMBOL = re.compile(
+    r"^[A-Z][A-Z.]{0,5}?(0?[1-9]|[12][0-9]|3[01])(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)"
+    r"[0-9]{2}[CP][0-9]+(\.[0-9]+)?$|^[A-Z][A-Z.]{0,5}[0-9]{6}[CP][0-9]{8}$"
+)
+
+
+def is_option_position(pos: Mapping[str, Any]) -> bool:
+    """A contract, not shares: a multiplier other than 1, an option security type, or an option symbol."""
+    mult = _num(pos.get("multiplier"))
+    if mult is not None and mult != 1:
+        return True
+    kind = re.sub(r"[\s_\-]", "", str(pos.get("security_type") or "")).upper()
+    if kind in ("OPT", "OPTION", "OPTIONS", "EQUITYOPTION", "FOP"):
+        return True
+    return _OPTION_SYMBOL.fullmatch(re.sub(r"\s+", "", _sym(pos.get("symbol")))) is not None
 
 
 def _setting_int(value: Any) -> int | None:
@@ -311,10 +344,12 @@ def load_book(src: Sources, now: datetime | None = None) -> Book:
         text = f"Source: journal open trades (Questrade unavailable: {why})"
     stops = _stops(trades)
     for pos in positions:
-        stop = stops.get((_sym(pos.get("symbol")), str(pos.get("side") or "")))
+        stop = _stop_for(stops, pos)
         avg, qty = _num(pos.get("avg_price")), _num(pos.get("open_qty"))
         pos["stop"] = stop
-        pos["at_risk"] = round(abs(avg - stop) * qty, 2) if None not in (stop, avg, qty) else None
+        pos["option"] = is_option_position(pos)
+        computable = not pos["option"] and None not in (stop, avg, qty)
+        pos["at_risk"] = round(abs(avg - stop) * qty, 2) if computable else None
     try:
         imap = src.industry_map() or {}
     except Exception:  # noqa: BLE001 - industry is a label; unreadable = unknown
@@ -366,8 +401,12 @@ def position_rows(book: Book) -> list[dict[str, Any]]:
             row_id += f":{side}"
         seen.add(row_id)
         qty, avg, value = _num(pos.get("open_qty")) or 0.0, _num(pos.get("avg_price")), _num(pos.get("market_value"))
-        risk = (f"$ at risk {_money(pos['at_risk'])} (stop {pos['stop']:g})" if pos.get("at_risk") is not None
-                else "stop unknown")
+        if pos.get("option"):
+            risk = "$ at risk: not computed (option)"
+        elif pos.get("at_risk") is not None:
+            risk = f"$ at risk {_money(pos['at_risk'])} (stop {pos['stop']:g})"
+        else:
+            risk = "stop unknown"
         rows.append({"id": row_id, "kind": "position", "account_number": acct, "symbol": sym, "side": side,
                      "qty": qty, "avg_price": avg, "market_value": value, "at_risk": pos.get("at_risk"),
                      "industry": book.industries.get(sym, ""),
