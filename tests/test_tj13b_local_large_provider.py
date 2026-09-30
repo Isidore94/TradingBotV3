@@ -416,6 +416,8 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         # regime rows that read it.
         "lake_history_topup",
         "market_regime_daily",
+        # Nightly permutation report (trader 2026-09-30), deterministic, stage 1.
+        "permutation_report",
         "market_story_rollups",
         "measured_report",
         # AI-R3 refreshes the bounded facts before any story reads them.
@@ -460,6 +462,8 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         "review_policy_draft",
         # P1-7 7b (2026-09-25): plan challenges, a stage 3 model slot.
         "plan_review",
+        # Trader 2026-09-30: the setup-keys narration is nightly (the report is too).
+        "setup_keys_narration",
         # TJ-6 (2026-09-20) appended after `setup_research`, last of stage 3.
         "setup_research",
         "improvement_ideas",

@@ -675,6 +675,12 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
         "lake_history_topup",
         # P10 (2026-09-27): `market_regime_daily`, pinned directly after it and set aside here.
         "market_regime_daily",
+        # Nightly permutation report (2026-09-30): pinned by `EXPECTED_SLOT_ORDER`
+        # directly after `market_regime_daily` and set aside here.
+        "permutation_report",
+        # Trader 2026-09-30: `setup_keys_narration` joins the weeknight slate, pinned
+        # by `EXPECTED_SLOT_ORDER` directly before `setup_research`; set aside here.
+        "setup_keys_narration",
         "day_review_facts",
         # S12 (2026-09-26): `family_side_evidence`, pinned by
         # `EXPECTED_SLOT_ORDER` directly after the facts and set aside here.
