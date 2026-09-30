@@ -417,3 +417,33 @@ def test_a_slow_fetch_never_holds_up_a_pick_or_a_news_card(win):
 def test_news_jobs_never_touch_the_qt_thread_or_the_inbox_module():
     source = (SCRIPTS_DIR / "mentor_app" / "news_jobs.py").read_text(encoding="utf-8")
     assert "PySide6" not in source and "post_to_inbox" not in source and "inbox.add" not in source
+
+
+# ---------------------------------------------------------------- P7 follow-ups (P8 step A)
+def test_a_failed_fetch_means_no_first_fetch_inside_the_spacing_window(store):
+    fetcher = news_feed.NewsFetcher(get=_get_with(TimeoutError("down"), TimeoutError("down")))
+    assert news_jobs.refresh_symbol("NVDA", store=store, fetcher=fetcher, now=TUE_0700)["failed"]
+    assert not news_jobs.needs_first_fetch(store, "NVDA", TUE_0700 + timedelta(minutes=10)), \
+        "a /news right after a failed fetch would only answer 'too soon'"
+    assert news_jobs.needs_first_fetch(store, "NVDA", TUE_0700 + timedelta(minutes=30)), "the next window tries again"
+
+
+def test_news_after_a_failed_fetch_queues_no_redundant_first_fetch(win):
+    win._news_fetcher._get = _get_with(TimeoutError("down"), TimeoutError("down"))
+    win.send("/news NVDA")
+    _drain(win)
+    assert len(win.news_queue.ran) == 1
+    win.clock["now"] = TUE_0700 + timedelta(minutes=5)
+    win.send("/news NVDA")
+    _drain(win)
+    assert len(win.news_queue.ran) == 1, "no second first-fetch inside the 30-min spacing"
+    assert "News unknown: last fetch failed" in win.transcript.toPlainText()
+
+
+def test_the_two_queue_threads_have_distinct_names(win):
+    import threading
+
+    win.queue.start()
+    win.news_queue.start()
+    names = {thread.name for thread in threading.enumerate()}
+    assert {"mentor-prefetch", "mentor-news"} <= names

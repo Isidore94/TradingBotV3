@@ -408,6 +408,10 @@ class MentorChatStore:
     def set_news_attempt(self, symbol: str, when_utc: str) -> bool:
         return self.set_state(NEWS_ATTEMPT_KEY.format(symbol=str(symbol).strip().upper()), when_utc)
 
+    def news_attempt(self, symbol: str) -> str | None:
+        """UTC ISO of the last request for ``symbol`` (failed or not), or None."""
+        return self.get_state(NEWS_ATTEMPT_KEY.format(symbol=str(symbol).strip().upper()))
+
     def set_news_error(self, symbol: str, reason: str = "", when_utc: str = "", *, partial: bool = False) -> bool:
         """Keep the last feed failure for ``symbol``; a blank reason clears it."""
         value = {"reason": str(reason)[:300], "at_utc": when_utc or utc_now(), "partial": bool(partial)} if reason else {}

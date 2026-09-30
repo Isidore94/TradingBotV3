@@ -137,9 +137,29 @@ def refresh_symbol(symbol: str, *, store: Any, fetcher: Any, now: datetime) -> d
             "errors": dict(result.errors), "added": added}
 
 
-def needs_first_fetch(store: Any, symbol: str) -> bool:
-    """/news on a symbol with no good fetch yet fetches once (on the news thread) before its card."""
-    return store.news_fetched(str(symbol or "").strip().upper()) is None
+def needs_first_fetch(store: Any, symbol: str, now: datetime | None = None) -> bool:
+    """/news on a symbol with no good fetch yet fetches once (on the news thread) before its card.
+
+    A request inside the 30-min spacing (a failed one too) means no first fetch: the card already
+    says "unknown", and a fetch now would only answer "too soon".
+    """
+    from news_feed import MIN_INTERVAL
+
+    sym = str(symbol or "").strip().upper()
+    if store.news_fetched(sym) is not None:
+        return False
+    attempt = getattr(store, "news_attempt", None)
+    stamp = attempt(sym) if attempt is not None else None
+    if not stamp:
+        return True
+    try:
+        when = datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return True
+    when = when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+    moment = now if now is not None else datetime.now(timezone.utc)
+    moment = moment if moment.tzinfo else moment.astimezone()
+    return moment - when >= MIN_INTERVAL
 
 
 def fetch_note(out: Mapping[str, Any]) -> str:

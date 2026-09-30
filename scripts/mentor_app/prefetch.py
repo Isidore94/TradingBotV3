@@ -43,7 +43,9 @@ class PrefetchQueue:
         *,
         blocked: Callable[[], str] = lambda: "",
         model_ready: Callable[[], bool] = lambda: True,
+        thread_name: str = "mentor-prefetch",
     ) -> None:
+        self.thread_name = str(thread_name)
         self._blocked = blocked
         self._model_ready = model_ready
         self._jobs: list[Job] = []
@@ -160,7 +162,7 @@ class PrefetchQueue:
     def start(self) -> None:
         if self._thread is None or not self._thread.is_alive():
             self._stop.clear()
-            self._thread = threading.Thread(target=self._loop, name="mentor-prefetch", daemon=True)
+            self._thread = threading.Thread(target=self._loop, name=self.thread_name, daemon=True)
             self._thread.start()
 
     def stop(self, timeout: float = 2.0) -> None:

@@ -288,7 +288,7 @@ class MentorWindow(QMainWindow):
         self._news_open_symbols = news_open_symbols
         self._news_named = news_jobs.NamedSymbols()
         #: News fetches are network-bound: their own one-thread queue, so /pick, /check and /news never wait.
-        self.news_queue = news_queue or PrefetchQueue()
+        self.news_queue = news_queue or PrefetchQueue(thread_name="mentor-news")
         self._news_seeded = False
         self._news_schedule = news_jobs.NewsSchedule()
         self._news_blocks: dict[int, int] = {}
@@ -1637,7 +1637,7 @@ class MentorWindow(QMainWindow):
 
         def job() -> dict:
             card = news_jobs.news_card(symbol, days, store=store, now=now())
-            return {**card, "seq": seq, "days": days, "need_fetch": news_jobs.needs_first_fetch(store, symbol)}
+            return {**card, "seq": seq, "days": days, "need_fetch": news_jobs.needs_first_fetch(store, symbol, now())}
 
         self.queue.submit(f"news {symbol}", job, priority=PRIORITY_INTERACTIVE, key=f"news-live:{seq}",
                           on_done=self._bridge.news_card.emit, on_error=self._news_failed(seq, symbol))
