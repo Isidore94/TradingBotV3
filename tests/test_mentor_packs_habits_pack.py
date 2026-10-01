@@ -295,3 +295,25 @@ def test_the_window_posts_the_weeks_habit_item_once_and_habits_shows_the_card(wi
     assert len([item for item in window.inbox.items() if item.kind == "habits"]) == 1
     card = window._pack_card("habits_pack", {})
     assert card.startswith("**Habits**") and "[habit:tag_fomo]" in card
+
+
+def test_no_habits_call_without_time_left_in_the_reserve(chat, tmp_path, monkeypatch):
+    # The reviewer's probe: the brief answers, then the clock stands at 590 s of the 600 s reserve.
+    now = {"t": 0.0}
+    monkeypatch.setattr(mentor_review.clock, "monotonic", lambda: now["t"])
+    calls = []
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return {"model": "m", "summary": {"digest": [{"text": "x", "evidence_refs": ["turn:1"]}],
+                                              "open_questions": []}}
+        now["t"] = 590.0
+        return {"model": "m", "summary": {"watch": [], "missing": [], "issues": [],
+                                          "one_line": {"text": "", "evidence_refs": []}}}
+
+    out = _review(chat, tmp_path, request=request, post=lambda url, **kw: None)
+    assert out["status"] == "ok", out["reason"]
+    assert len(calls) == 2 and "habits: skipped (reserve)" in out["reason"]
+    brief = json.loads((tmp_path / "ai" / f"mentor_coach_brief_{SESSION}.json").read_text(encoding="utf-8"))
+    assert brief["habits"] and brief["habits"][0]["evidence_refs"][0].startswith("habit:")  # facts-only wording

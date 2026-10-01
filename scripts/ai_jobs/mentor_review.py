@@ -69,6 +69,8 @@ MAX_OUTPUT_TOKENS = 600
 #: P15a coach brief: a second call (<= 500 tokens) only after the digest call succeeded with time to spare.
 MAX_BRIEF_TOKENS = 500
 BRIEF_MIN_SECONDS_LEFT = 240.0
+#: P18: the habits call (after the brief) needs this much of the slot reserve left, like the brief.
+HABITS_MIN_SECONDS_LEFT = 240.0
 MAX_WATCH = 4
 MAX_MISSING = 3
 MAX_ISSUES = 5
@@ -1284,7 +1286,11 @@ def run_mentor_review(
             _log.debug("mentor_review could not ask for the coach brief.", exc_info=True)
             return f"coach brief: no local model answered, facts part kept: {exc}"
         worded_habits, habits_said = fact_habits, ""
-        if habits:
+        if habits and clock.monotonic() - started > RESERVE_MINUTES * 60 - HABITS_MIN_SECONDS_LEFT:
+            # Like the brief: the habits call only runs with time left in the slot's reserve.
+            habits_said = ", habits: skipped (reserve), code wording kept"
+            _log.info("mentor_review habits: skipped (reserve)")
+        elif habits:
             from ai_jobs import mentor_habits
 
             try:
