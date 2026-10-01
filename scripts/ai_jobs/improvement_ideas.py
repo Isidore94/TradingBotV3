@@ -141,6 +141,8 @@ DROP_NO_EVIDENCE = "no_evidence"
 DROP_NO_MEASURABLE = "no_measurable"
 DROP_UNKNOWN_MEASURABLE = "unknown_measurable"
 DROP_REPEATED_IN_ANSWER = "repeated_in_answer"
+#: Every id the idea cited is one tonight does not carry (P19).
+DROP_UNKNOWN_SOURCE = "unknown_source"
 
 DROP_CODES: tuple[str, ...] = (
     DROP_NOT_AN_OBJECT,
@@ -151,6 +153,7 @@ DROP_CODES: tuple[str, ...] = (
     DROP_NO_MEASURABLE,
     DROP_UNKNOWN_MEASURABLE,
     DROP_REPEATED_IN_ANSWER,
+    DROP_UNKNOWN_SOURCE,
 )
 
 #: The marker the night leaves when it ASKED and stored nothing.
@@ -1188,6 +1191,31 @@ def drop_reason(item: Any) -> str:
     return ""
 
 
+def drop_unknown_sources(reply_body: Any, inputs: Mapping[str, Any]) -> tuple[Any, int]:
+    """Keep only cited ids tonight carries; drop an idea left with none. Pure.
+
+    Returns ``(body, dropped)``. An idea that cited nothing, or more ids than the
+    cap, is left as it was so `drop_reason` and `check_ideas` still judge it.
+    """
+    if not isinstance(reply_body, Mapping) or not isinstance(reply_body.get("ideas"), (list, tuple)):
+        return reply_body, 0
+    allowed = {_text(item) for item in inputs.get("allowed_source_ids") or ()}
+    cap = min(MAX_EVIDENCE_PER_IDEA, len(allowed))
+    kept: list[Any] = []
+    dropped = 0
+    for row in reply_body["ideas"]:
+        cited = list(row.get("evidence") or ()) if isinstance(row, Mapping) else []
+        if not cited or len(cited) > cap:
+            kept.append(row)
+            continue
+        known = [item for item in cited if _text(item) in allowed]
+        if not known:
+            dropped += 1
+            continue
+        kept.append({**row, "evidence": known})
+    return {**reply_body, "ideas": kept}, dropped
+
+
 def check_ideas(reply_body: Any, inputs: Mapping[str, Any]) -> None:
     """Re-check every bound, against TONIGHT's input. Raises :class:`IdeasRejected`.
 
@@ -2030,6 +2058,8 @@ def run_improvement_ideas(
     answered = _text((result or {}).get("model")) or model
     try:
         body = _validate((result or {}).get("summary"), schema, name="ideas")
+        # An idea citing only ids tonight does not carry is dropped, not the night.
+        body, unknown = drop_unknown_sources(body, inputs)
         check_ideas(body, inputs)
     except Exception as exc:  # noqa: BLE001 - a breach rejects the answer WHOLE
         _log.debug("Tonight's ideas were rejected.", exc_info=True)
@@ -2055,9 +2085,17 @@ def run_improvement_ideas(
         model=answered,
         inputs_hash=digest,
     )
+    unknown_note = ""
+    if unknown:
+        counts["offered"] += unknown
+        counts["dropped"] += unknown
+        counts["drop_reasons"] = dict(
+            sorted({**counts["drop_reasons"], DROP_UNKNOWN_SOURCE: unknown}.items())
+        )
+        unknown_note = " (unknown source)" if unknown == counts["dropped"] else f" ({unknown} unknown source)"
     said = (
         f"{counts['offered']} idea(s) offered, {len(rows)} stored, "
-        f"{counts['dropped']} dropped, {counts['dismissed']} already dismissed, "
+        f"{counts['dropped']} dropped{unknown_note}, {counts['dismissed']} already dismissed, "
         f"{counts['repeats']} seen before"
     )
     if not rows:
@@ -2127,6 +2165,7 @@ __all__ = [
     "build_ideas_inputs",
     "check_ideas",
     "checked_ideas",
+    "drop_unknown_sources",
     "dismiss_idea",
     "ideas_for_session",
     "keep_idea",

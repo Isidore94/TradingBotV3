@@ -2,7 +2,7 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-09-30 night PT (Mentor P0-P17 merged; restart desk + app; first full night with the coach brief is 2026-10-01)
+**Updated:** 2026-10-01 00:45 PT (night fixes + P19 merged; restart desk + app; probe 2 at 02:05)
 
 - **Live on `main`:** rounds 1-2, p9 phases 1-4, p10 research lake + auto regimes (research only); rolling RRS, cutoff 1.0 (`TRADINGBOTV3_RRS_ENGINE=desk` =
   old); Movers tint + SMA gate (`13b2e2cb`), Yahoo guard (`56ce3965`), Movers boxes, Dip
@@ -12,10 +12,10 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   09-30 night, live at the next desk restart; gate #337 on the first session.
 - **Merged 2026-09-30, live at the next desk + app restart:** Trade Mentor app P0-P15 (`e9c77690`, `e864ddb9`, `b2402479`, `19b837d3`) + Pause AI (`8f7664fc`): chat on gemma4:12b with native tools, auto-attach from plain language, `/pick /vetoes /tape /check /news /book /mirror /tilt /debate /hypotheses /brief /issues /recaps /paste /feel /night /scorecard`; memory stands on the night; `mentor_app_enabled` on by default; frontier OFF (trader). Gates #311-#318, #321-#326, #329, #332-#334.
 - **Merged 2026-09-30 (P16 eval gaps):** live eval tool hit 100 %, checklist 100 %; gate #335 owed.
-- **Merged 2026-09-30 (P17 tape packs):** `/rs`, `/alerts`, M5 bars from the ~28-min spool tee (a desk-side 60 s M5 publisher is P18); live 108-question eval tool hit 100 %, 0 errors (gate #336). Next: P18 journal/habits/reads/routines + M5 publisher (02:10 PT start), the four night-rejection fixes.
+- **Merged 2026-09-30 (P17 tape packs):** `/rs`, `/alerts`, M5 bars from the ~28-min spool tee (a desk-side 60 s M5 publisher is P18); live 108-question eval tool hit 100 %, 0 errors (gate #336). In flight: P18 journal/habits/reads/routines + M5 publisher.
 - **Desk:** next launch uses main; live checks are in GATES.
-- **Night throughput (2026-09-30):** slot retries x3, budget 360, every care name briefed nightly and last on the slate (#331), nightly permutation report + per-setup sentences (#330, shadow only). Parked: Mentor recall index (worktree only). Next: morning pre-brief queue; rule audit once plan lines exist.
-- **gpt-oss:20b vs gemma4:12b:** effort `high`, 8k think tokens live. Probe 2 10-01 02:05 runs both, then flip `ai_local_model_medium`.
+- **Night (2026-09-30):** retries x3, budget 360, care names briefed nightly, last (#331), nightly permutation report (#330, shadow). Merged 10-01 (#338): P19 night rejections: econ time needs its id, regime read 1 retry, day show fits, idea with unknown ids dropped. Next: morning pre-brief queue; rule audit.
+- **gpt-oss:20b vs gemma4:12b:** effort `high`, 8k think tokens live. Probe 2 10-01 02:05 runs both on `claude/night-fixes-mentor-digest-2026-10-01` (P19 + digest cap + mentor retry + gemma4 thinking off + mentor caps, merged 10-01; gate #339); then flip `ai_local_model_medium` on the trader's word.
 - **Night window:** starts 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435). No local
   models on the mini-PC (trader 2026-09-30): host down = facts only; rerun a missed night with
   `--session <date> --force`. One pass + one recheck, then shut down; last firing 05:30. No

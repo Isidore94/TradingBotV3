@@ -20,7 +20,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-PROMPT_VERSION = "econ_brief_narration_v3"
+PROMPT_VERSION = "econ_brief_narration_v4"
 
 MIN_LINES = 3
 MAX_LINES = 6
@@ -43,6 +43,7 @@ NARRATION_JSON_SCHEMA: dict[str, Any] = {
                     "text": {"type": "string", "maxLength": LINE_MAX_CHARS},
                     "event_ids": {
                         "type": "array",
+                        "minItems": 1,
                         "maxItems": 4,
                         "items": {"type": "string", "maxLength": 8},
                     },
@@ -190,7 +191,9 @@ def _evidence(pack: Mapping[str, Any], rejected: list[str] | None = None) -> dic
         "Write 3 to 6 short lines, plain simple words, telling a day trader what to "
         "watch today. Use only this pack. Name only events in `today` or `week`, and "
         "put the id of every event a line names in its event_ids. Write a clock time "
-        "only if it is that cited event's time_et (ET). Never add a time, number or "
+        "only if it is that cited event's time_et (ET): every clock time you write "
+        "must have its event id in that line's event_ids; if you cannot cite it, give "
+        "no time. Every line cites at least one event id. Never add a time, number or "
         "event the pack does not hold. Lead with today's timed events. "
         f"Today is {pack.get('target_session') or 'the target session'}. "
         f"`{YESTERDAY_KEY}` is the prose of the brief written for "
@@ -246,6 +249,14 @@ def run_econ_brief(
             "status": "skipped",
             "model": "",
             "reason": f"{econ_brief.NO_BRIEF_TEXT} Nothing to summarise for {target}.",
+            "outputs": [],
+        }
+    if not list(pack.get("today") or ()) and not list(pack.get("week") or ()):
+        # Every line must cite an event id; with none parsed there is nothing to cite.
+        return {
+            "status": "skipped",
+            "model": "",
+            "reason": f"no parsed events for {target}; nothing to narrate",
             "outputs": [],
         }
     # A retry quotes what the earlier attempts were rejected for, so the model does not repeat it.

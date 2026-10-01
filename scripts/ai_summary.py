@@ -129,6 +129,14 @@ DEFAULT_LOCAL_CONTEXT_TOKENS = 12_288
 #: against `max_tokens`, so these tags get an effort level and an output
 #: allowance a plain-answer model such as gemma3 never receives.
 THINKING_MODEL_PREFIXES = ("gpt-oss",)
+#: Model families that think unless told not to, and are told not to (gemma4 on
+#: Ollama, `reasoning_effort: none`). Measured on the 5080, 2026-10-01: at a
+#: night-sized prompt gemma4:12b spent the whole 11.5k-token ceiling reasoning
+#: and answered nothing in 8 of 8 night calls, even at effort high; with the
+#: thinking off it answered the same prompt in 360 tokens and 5 s. The night's
+#: verifiers and retries do the checking a plain answer needs.
+THINKING_OFF_MODEL_PREFIXES = ("gemma4",)
+THINKING_OFF_EFFORT = "none"
 LOCAL_REASONING_EFFORT_SETTING_KEY = "ai_local_reasoning_effort"
 LOCAL_REASONING_EFFORTS = ("low", "medium", "high")
 DEFAULT_LOCAL_REASONING_EFFORT = "low"
@@ -920,6 +928,13 @@ def model_thinks(model: str) -> bool:
     tag = str(model or "").strip().lower()
     tag = tag.split("/")[-1]
     return tag.startswith(THINKING_MODEL_PREFIXES)
+
+
+def model_thinking_off(model: str) -> bool:
+    """True for a model tag that would think unless asked not to; every local call asks."""
+    tag = str(model or "").strip().lower()
+    tag = tag.split("/")[-1]
+    return tag.startswith(THINKING_OFF_MODEL_PREFIXES)
 
 
 def local_reasoning_effort() -> str:
@@ -4112,6 +4127,8 @@ def _request_local_summary(
         # allowance rather than losing the answer to the thinking.
         payload["reasoning_effort"] = local_reasoning_effort()
         payload["max_tokens"] = int(payload["max_tokens"]) + local_reasoning_tokens()
+    elif model_thinking_off(model):
+        payload["reasoning_effort"] = THINKING_OFF_EFFORT
     last_error: Exception | None = None
     #: What to send next when the backend cannot compile the grammar: the same
     #: contract without repetition bounds, then plain JSON-object mode. These

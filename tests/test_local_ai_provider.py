@@ -529,6 +529,10 @@ class ThinkingModelRequestTests(unittest.TestCase):
         self.assertTrue(ai_summary.model_thinks("gpt-oss:20b"))
         self.assertTrue(ai_summary.model_thinks("GPT-OSS:120b"))
         self.assertTrue(ai_summary.model_thinks("hf.co/x/gpt-oss-20b-GGUF:Q8"))
+        self.assertFalse(ai_summary.model_thinks("gemma4:12b"))
+        self.assertTrue(ai_summary.model_thinking_off("gemma4:12b"))
+        self.assertFalse(ai_summary.model_thinking_off("gpt-oss:20b"))
+        self.assertFalse(ai_summary.model_thinking_off("gemma3:12b-tbv3ctx-64k"))
         self.assertFalse(ai_summary.model_thinks("gemma3:12b-tbv3ctx-64k"))
         self.assertFalse(ai_summary.model_thinks(""))
 
@@ -548,6 +552,14 @@ class ThinkingModelRequestTests(unittest.TestCase):
 
         sent = self._send("gemma3:12b-tbv3ctx-64k", ai_local_reasoning_effort="high")
         self.assertNotIn("reasoning_effort", sent)
+        self.assertEqual(sent["max_tokens"], ai_summary.LOCAL_MAP_GENERATION_TOKENS)
+
+    def test_gemma4_request_switches_the_thinking_off_and_gets_no_allowance(self):
+        """2026-10-01: left to think, gemma4:12b spent the whole ceiling reasoning and answered nothing."""
+        import ai_summary
+
+        sent = self._send("gemma4:12b", ai_local_reasoning_effort="high", ai_local_reasoning_tokens="8000")
+        self.assertEqual(sent["reasoning_effort"], "none")
         self.assertEqual(sent["max_tokens"], ai_summary.LOCAL_MAP_GENERATION_TOKENS)
 
     def test_effort_and_allowance_come_from_settings(self):

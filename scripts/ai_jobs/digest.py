@@ -1607,6 +1607,9 @@ def run_daily_digest(
         published[NIGHT_TELEMETRY_KEY] = {"lines": lines}
     except Exception as exc:  # noqa: BLE001 - telemetry never costs the digest
         _log.info("Daily digest: night telemetry not built (%s).", exc)
+    # The telemetry block shares the cap, so the names are fitted again against
+    # the published size; `names` is one dict, so the narrator's pack trims too.
+    _fit_names(published)
 
     size = fact_pack_bytes(published)
     if size > FACT_PACK_HARD_CAP_BYTES:

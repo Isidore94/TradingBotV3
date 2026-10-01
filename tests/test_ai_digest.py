@@ -539,3 +539,24 @@ def test_the_schema_name_changed_with_the_shape():
     # v3 (trader 2026-09-23) added the per-name `names` block.
     assert digest.FACTS_SCHEMA == "daily_digest_facts_v3"
     assert _pack()["schema"] == "daily_digest_facts_v3"
+
+
+def test_the_night_telemetry_block_counts_toward_the_cap_when_named_rows_are_trimmed(tmp_path, monkeypatch):
+    """The telemetry lines are added after the fit, so a pack trimmed to the cap still went over (3 nights)."""
+    finals = [_final(f"M{index:02d}", close_r=(index - 6) / 4) for index in range(12)]
+    monkeypatch.setattr(digest, "night_telemetry_lines", lambda *a, **k: [])
+    base = digest.run_daily_digest(session_date="2026-08-24", now=NOW, root=tmp_path / "a",
+                                   finals=finals, narrate=False)
+    assert base["status"] == "ok", base["reason"]
+    size = len(Path(base["outputs"][0]).read_bytes())
+    lines = [f"slots per goal 2026-08-23: line {index} " + "x" * 50 for index in range(4)]
+    monkeypatch.setattr(digest, "night_telemetry_lines", lambda *a, **k: list(lines))
+    monkeypatch.setattr(digest, "FACT_PACK_HARD_CAP_BYTES", size + 64)
+    out = digest.run_daily_digest(session_date="2026-08-24", now=NOW, root=tmp_path / "b",
+                                  finals=finals, narrate=False)
+    assert out["status"] == "ok", out["reason"]
+    published = json.loads(Path(out["outputs"][0]).read_text(encoding="utf-8"))
+    assert published[digest.NIGHT_TELEMETRY_KEY]["lines"][: len(lines)] == lines
+    assert len(Path(out["outputs"][0]).read_bytes()) <= digest.FACT_PACK_HARD_CAP_BYTES
+    trimmed = sum(section.get("trimmed", 0) for section in published["names"].values() if isinstance(section, dict))
+    assert trimmed > 0

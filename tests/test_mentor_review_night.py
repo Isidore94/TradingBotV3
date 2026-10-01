@@ -204,13 +204,24 @@ def test_a_model_that_fails_leaves_the_facts_and_is_degraded(chat, tmp_path):
     assert (tmp_path / "ai" / f"mentor_day_facts_{SESSION}.json").exists()
 
 
-def test_the_model_call_is_capped_at_600_output_tokens():
+def test_the_model_call_is_capped_at_2500_output_tokens(monkeypatch):
+    import ai_summary
+
+    monkeypatch.setattr(ai_summary, "local_reasoning_tokens", lambda: 8000)
     sent = {}
     wrapped = mentor_review.capped_post(lambda url, **kw: sent.update(kw["json"]), model="gpt-oss:20b")
     wrapped("http://h/v1/chat/completions", json={"max_tokens": 4000})
-    assert sent == {"max_tokens": 600, "reasoning_effort": "high"}
+    # A thinking tag: the 2500-token answer cap plus the reasoning allowance, since its reasoning
+    # counts against max_tokens (gemma4:12b under a bare 600 cap answered nothing, 2026-09-30).
+    assert sent == {"max_tokens": 10500, "reasoning_effort": "high"}
+    sent.clear()
+    # gemma4 thinks unless told not to; the night tells it not to (it spent 11.5k tokens reasoning
+    # and answered nothing in 8 of 8 night calls, 2026-10-01).
+    mentor_review.capped_post(lambda url, **kw: sent.update(kw["json"]), model="gemma4:12b")("u", json={})
+    assert sent == {"max_tokens": 2500, "reasoning_effort": "none"}
+    sent.clear()
     mentor_review.capped_post(lambda url, **kw: sent.update(kw["json"]), model="gemma3:12b")("u", json={})
-    assert sent["max_tokens"] == 600
+    assert sent == {"max_tokens": 2500}
 
 
 def test_no_chat_store_is_a_skip(tmp_path):
@@ -477,7 +488,9 @@ def test_no_brief_call_when_the_digest_fails(rich, tmp_path):
                                           "open_questions": []}}
 
     out = _rich_run(rich, tmp_path, request=request)
-    assert out["status"] == "failed" and len(calls) == 1
+    assert out["status"] == "failed"
+    # The digest call and its one retry; never the brief call.
+    assert [call["schema"] for call in calls] == [mentor_review.DIGEST_JSON_SCHEMA] * 2
     assert _brief(tmp_path)["worded"] is False, "the facts part is published regardless"
 
 
@@ -495,7 +508,7 @@ def test_a_later_facts_only_run_never_overwrites_a_worded_brief(rich, tmp_path):
     assert _brief(tmp_path)["one_line"]["text"] == "Worded."
 
 
-def test_the_brief_call_is_capped_at_500_output_tokens(rich, tmp_path):
+def test_the_brief_call_is_capped_at_1500_output_tokens(rich, tmp_path):
     sent = []
 
     def post(url, **kwargs):
@@ -506,7 +519,7 @@ def test_the_brief_call_is_capped_at_500_output_tokens(rich, tmp_path):
         return {"model": "m", "summary": GOOD_DIGEST if len(sent) == 1 else EMPTY_BRIEF}
 
     _rich_run(rich, tmp_path, request=request, post=post)
-    assert sent == [mentor_review.MAX_OUTPUT_TOKENS, mentor_review.MAX_BRIEF_TOKENS] == [600, 500]
+    assert sent == [mentor_review.MAX_OUTPUT_TOKENS, mentor_review.MAX_BRIEF_TOKENS] == [2500, 1500]
 
 
 def test_the_brief_writes_nothing_to_the_chat_db(rich, tmp_path):
@@ -589,3 +602,39 @@ def test_an_uncited_one_line_is_dropped_and_a_foreign_one_rejects_the_brief(rich
     request, _calls = _two_calls({**EMPTY_BRIEF, "one_line": "a plain string"})
     out = _rich_run(rich, tmp_path, request=request, force=True)
     assert "coach brief rejected" in out["reason"]
+
+
+def test_a_foreign_id_is_retried_once_with_the_rejection_quoted_and_the_second_reply_kept(chat, tmp_path):
+    """2026-09-30: the digest cited 'assess:ALL' once and the whole slot failed; one fed-back retry fixes that."""
+    calls = []
+    bad = {"digest": [{"text": "Invented.", "evidence_refs": ["assess:ALL"]}], "open_questions": []}
+    good = {"digest": [{"text": "Kept.", "evidence_refs": ["fact:turns"]}], "open_questions": []}
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        digest_calls = [call for call in calls if call["schema"] is mentor_review.DIGEST_JSON_SCHEMA]
+        return {"model": "m", "summary": bad if len(digest_calls) == 1 else good}
+
+    out = _run(chat, tmp_path, request=request)
+    assert out["status"] == "ok", out["reason"]
+    digest_calls = [call for call in calls if call["schema"] is mentor_review.DIGEST_JSON_SCHEMA]
+    assert len(digest_calls) == 2
+    assert "assess:ALL" not in digest_calls[0]["evidence"]["instructions"]
+    assert "assess:ALL" in digest_calls[1]["evidence"]["instructions"]
+    assert "retried after" in out["reason"] and "assess:ALL" in out["reason"]
+    digest = json.loads((tmp_path / "ai" / f"mentor_day_digest_{SESSION}.json").read_text(encoding="utf-8"))
+    assert [item["text"] for item in digest["digest"]] == ["Kept."]
+
+
+def test_a_foreign_id_on_both_attempts_still_fails_after_the_one_retry(chat, tmp_path):
+    calls = []
+    bad = {"digest": [{"text": "Invented.", "evidence_refs": ["assess:ALL"]}], "open_questions": []}
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        return {"model": "m", "summary": bad}
+
+    out = _run(chat, tmp_path, request=request)
+    assert out["status"] == "failed" and "rejected" in out["reason"] and "assess:ALL" in out["reason"]
+    assert len(calls) == 2  # one retry, never more; no brief call after a failed digest
+    assert not (tmp_path / "ai" / f"mentor_day_digest_{SESSION}.json").exists()
