@@ -420,6 +420,7 @@ class MentorWindow(QMainWindow):
         #: P15b: closed trades waiting for their one "how did it feel?" item, and the posted items' trades.
         self._feel_waiting: list[tuple[Any, dict]] = []
         self._inbox_feel: dict[int, dict] = {}
+        self._feel_asked: set[str] = set()
         self._bridge.tilt_ready.connect(self._on_tilt_ready)
         self._bridge.tilt_card.connect(self._on_tilt_card)
         self._tilt_timer = QTimer(self)
@@ -2877,7 +2878,10 @@ class MentorWindow(QMainWindow):
             self._tilt_last_post = stored
         day = self._now().astimezone(challenge.PT).date()
         self._tilt_waiting.extend((day, row) for row in result.get("new") or [])
-        self._feel_waiting.extend((day, row) for row in result.get("closed") or [])
+        # The watch returns every close still owed its question (held ones persist in app_state).
+        held = {row["trade_id"] for _d, row in self._feel_waiting}
+        self._feel_waiting.extend((day, row) for row in result.get("closed") or []
+                                  if row.get("trade_id") not in held and row.get("trade_id") not in self._feel_asked)
         self._deliver_tilt()
 
     def _deliver_tilt(self) -> None:
@@ -2902,6 +2906,7 @@ class MentorWindow(QMainWindow):
             if "cap" in self.inbox.last_refusal:
                 logging.info("Trade Mentor: tilt observations stayed out of the Inbox (%s)", self.inbox.last_refusal)
                 self._tilt_waiting = []
+                self._mark_feel_asked([row for _d, row in self._feel_waiting])
                 self._feel_waiting = []
             return  # quiet hours or muted: try again at the next watch
         self._tilt_waiting = []
@@ -2916,11 +2921,25 @@ class MentorWindow(QMainWindow):
         if item is None:
             if "cap" in self.inbox.last_refusal:
                 logging.info("Trade Mentor: feelings questions stayed out of the Inbox (%s)", self.inbox.last_refusal)
+                self._mark_feel_asked([row for _d, row in self._feel_waiting])
                 self._feel_waiting = []
-            return
+            return  # quiet hours or muted: still held (in app_state too), asked at the next pass
         self._feel_waiting.pop(0)
         self._inbox_feel[item.id] = dict(trade)
+        self._mark_feel_asked([trade])
         self._stamp_tilt_post()
+
+    def _mark_feel_asked(self, trades: list[dict]) -> None:
+        """Only an accepted (or cap-dropped) question is marked asked; IO thread writes app_state."""
+        from mentor_app import tilt_watch
+
+        self._feel_asked.update(str(row.get("trade_id")) for row in trades)
+        by_day: dict[str, list[str]] = {}
+        for row in trades:
+            by_day.setdefault(str(row.get("day") or ""), []).append(str(row.get("trade_id")))
+        for day, ids in by_day.items():
+            if day:
+                self._submit_io(lambda day=day, ids=ids: tilt_watch.mark_asked(self.store, day, ids))
 
     def record_feeling(self, ref: str, words: str) -> None:
         """``/feel <SYM|trade id> <words>``: one feelings note kept with its trade (IO thread; journal read-only)."""

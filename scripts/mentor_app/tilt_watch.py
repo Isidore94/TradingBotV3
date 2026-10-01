@@ -21,7 +21,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from mentor_packs.registry import Pack
@@ -41,6 +41,8 @@ SEEN_KEY = "tilt:seen:{day}"
 LAST_POST_KEY = "tilt:last_post_utc"
 #: P15b: the trades already asked "how did it feel" (one question per closed trade, ever).
 FEEL_SEEN_KEY = "feel:seen:{day}"
+#: P15b: closes held for their question until the Inbox accepts it (survives a restart).
+FEEL_WAIT_KEY = "feel:waiting:{day}"
 
 
 def _aware(now: datetime) -> datetime:
@@ -84,13 +86,31 @@ def closed_today(journal: Path | str, day: str) -> list[dict[str, Any]]:
     return sorted((row for row in out if row["trade_id"]), key=lambda row: (row["closed_at"], row["trade_id"]))
 
 
-def new_closes(store: Any, day: str, closed: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The closes not asked about yet today; marked seen at once, so a restart never asks twice."""
+def waiting_closes(store: Any, day: str) -> list[dict[str, Any]]:
+    """The closes held for their question (quiet hours, a mute, the spacing), kept in ``app_state``."""
+    return [dict(row) for row in _json(store.get_state(FEEL_WAIT_KEY.format(day=day)), []) if isinstance(row, dict)]
+
+
+def pending_closes(store: Any, day: str, closed: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every close still owed its question today: the held ones plus the new ones, persisted so a restart keeps
+    them. A trade is marked asked only when its Inbox item is accepted (:func:`mark_asked`)."""
     seen = set(_json(store.get_state(FEEL_SEEN_KEY.format(day=day)), []))
-    new = [row for row in closed if row["trade_id"] not in seen]
-    if new:
-        store.set_state(FEEL_SEEN_KEY.format(day=day), json.dumps(sorted(seen | {row["trade_id"] for row in new})))
-    return new
+    waiting = [row for row in waiting_closes(store, day) if row.get("trade_id") not in seen]
+    held = {row["trade_id"] for row in waiting}
+    added = [{**row, "day": day} for row in closed if row["trade_id"] not in seen and row["trade_id"] not in held]
+    if added:
+        waiting += added
+        store.set_state(FEEL_WAIT_KEY.format(day=day), json.dumps(waiting, sort_keys=True))
+    return waiting
+
+
+def mark_asked(store: Any, day: str, trade_ids: Iterable[str]) -> None:
+    """The Inbox took the question (or the cap dropped it): never asked again, no longer held."""
+    ids = {str(item) for item in trade_ids}
+    seen = set(_json(store.get_state(FEEL_SEEN_KEY.format(day=day)), [])) | ids
+    store.set_state(FEEL_SEEN_KEY.format(day=day), json.dumps(sorted(seen)))
+    left = [row for row in waiting_closes(store, day) if row.get("trade_id") not in seen]
+    store.set_state(FEEL_WAIT_KEY.format(day=day), json.dumps(left, sort_keys=True))
 
 
 FEEL_LOOKBACK_DAYS = 30
@@ -142,8 +162,10 @@ def run_watch(store: Any, now: datetime, *, build: Callable[[], Pack],
     sig = signature() if signature is not None else None
     marker = {"day": day, "signature": list(sig)} if sig is not None else None
     if marker is not None and _json(store.get_state(LAST_LEG_KEY), {}) == marker:
-        return {"skipped": True, "new": [], "closed": [], "last_post": store.get_state(LAST_POST_KEY)}
-    closes = new_closes(store, day, closed(day)) if closed is not None else []
+        # Nothing new in the journal; the held questions still come back (a restart keeps them).
+        held = waiting_closes(store, day) if closed is not None else []
+        return {"skipped": True, "new": [], "closed": held, "last_post": store.get_state(LAST_POST_KEY)}
+    closes = pending_closes(store, day, closed(day)) if closed is not None else []
     pack = build()
     if not pack.rows:
         return {"skipped": False, "new": [], "closed": closes, "last_post": store.get_state(LAST_POST_KEY),

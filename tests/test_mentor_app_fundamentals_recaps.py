@@ -383,8 +383,12 @@ def test_closed_trades_are_found_once_and_never_asked_twice(tmp_path, journal):
     assert [(row["trade_id"], row["symbol"], row["side"]) for row in closed] == [
         ("W2", "AMD", "SHORT"), ("W1", "NVDA", "LONG"), ("W3", "ALL", "LONG"), ("W4", "ALL", "SHORT")]
     store = MentorChatStore(tmp_path / "c.sqlite3")
-    assert [row["trade_id"] for row in tilt_watch.new_closes(store, "2026-09-30", closed)] == ["W2", "W1", "W3", "W4"]
-    assert tilt_watch.new_closes(store, "2026-09-30", closed) == [], "a restart never asks again"
+    owed = tilt_watch.pending_closes(store, "2026-09-30", closed)
+    assert [row["trade_id"] for row in owed] == ["W2", "W1", "W3", "W4"]
+    assert tilt_watch.pending_closes(store, "2026-09-30", closed) == owed, "held, not lost, until the Inbox takes it"
+    tilt_watch.mark_asked(store, "2026-09-30", ["W2"])
+    assert [row["trade_id"] for row in tilt_watch.pending_closes(store, "2026-09-30", closed)] == ["W1", "W3", "W4"]
+    assert tilt_watch.waiting_closes(store, "2026-09-30")[0]["trade_id"] == "W1", "a restart reads the held ones"
     assert tilt_watch.feel_text(closed[1]) == "How did the NVDA long feel? One word or a sentence."
 
 
@@ -408,6 +412,52 @@ def feel_window(app, tmp_path, monkeypatch, journal):
     yield win
     win.shutdown()
     win.deleteLater()
+
+
+def test_a_restart_during_quiet_hours_still_asks_once(app, tmp_path, monkeypatch, journal):
+    """Review advisory 1: a close is marked asked only when the Inbox takes its item; a held one survives a restart."""
+    from mentor_app import settings, tilt_watch
+    from mentor_app.inbox import Inbox
+    from mentor_app.prefetch import PrefetchQueue
+    from mentor_app.window import MentorWindow
+    from mentor_packs.registry import make_pack
+
+    monkeypatch.setattr(settings, "gpu_block_reason", lambda now=None: "")
+    clock = {"now": datetime(2026, 9, 30, 6, 40, tzinfo=PT)}  # inside the open's quiet hours
+
+    def open_window():
+        return MentorWindow(
+            store=MentorChatStore(tmp_path / "mentor_chat.sqlite3"), queue=PrefetchQueue(), news_queue=PrefetchQueue(),
+            inbox=Inbox(per_day_cap=6, now=lambda: clock["now"]), stream_post=lambda *a, **k: [],
+            post=lambda *a, **k: {}, now=lambda: clock["now"], mentor_enabled=False,
+            # A pack with no observation: the watch stores its signature, so the next pass after a restart skips.
+            tilt_builder=lambda: make_pack("tilt_pack", [{"id": "tilt:base:x", "kind": "base", "text": "b"}]),
+            tilt_journal=journal)
+
+    first = open_window()
+    first.maybe_watch_tilt()
+    _drain_all(first, app)
+    assert first.inbox.items() == [], "quiet hours: held"
+    store = first.store
+    assert [row["trade_id"] for row in tilt_watch.waiting_closes(store, "2026-09-30")] == ["W2", "W1", "W3", "W4"]
+    first.shutdown()
+    first.deleteLater()
+    clock["now"] = datetime(2026, 9, 30, 7, 5, tzinfo=PT)
+    second = open_window()
+    second.maybe_watch_tilt()
+    _drain_all(second, app)
+    assert [item.text for item in second.inbox.items()] == ["How did the AMD short feel? One word or a sentence."]
+    assert [row["trade_id"] for row in tilt_watch.waiting_closes(second.store, "2026-09-30")] == ["W1", "W3", "W4"]
+    second.shutdown()
+    second.deleteLater()
+    clock["now"] = datetime(2026, 9, 30, 7, 40, tzinfo=PT)
+    third = open_window()
+    third.maybe_watch_tilt()
+    _drain_all(third, app)
+    assert [item.text for item in third.inbox.items()] == ["How did the NVDA long feel? One word or a sentence."], \
+        "AMD was asked once; the next held close is next"
+    third.shutdown()
+    third.deleteLater()
 
 
 def _drain_all(win, app):
