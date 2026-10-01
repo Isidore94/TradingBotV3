@@ -90,6 +90,7 @@ in the same commit.
 - The app auto-attaches packs from plain language and guarantees the pre-trade checklist; the model words, never decides what exists (trader 2026-09-30). Native tool calling follows the model's probed capabilities, never its tag; attachments go after the system prefix, never into it.
 - The coach answers first and short; context only when it changes the answer; the app strips headers and closing offers, never the substance (trader 2026-09-30).
 - Book questions scope to the book; every comparison row carries its own verdict; the model never announces a fetch it does not make (P16, 2026-09-30).
+- Tape packs read the bot's cache and board files only; completed bars; never IB (P17, 2026-09-30).
 - `mentor_review` is the only night writer of the chat DB, and only for grading (`challenges.outcome_json`/`graded_utc`) and its own `hypothesis` challenge rows, 22:00-06:00 PT (the app grades outside those hours); digests are published to the ai_store, never written back into the app's tables.
 - The coach's memory stands on the night: coach brief, today's pasted brief (P15b), mentor digest, ideas, day review, week review, in that order, ≤ 3000 tokens (trader 2026-09-30); the trader's notes follow and the budget drops the lowest tier first.
 - Fundamentals and recaps are packs with ids; issues are a computed recurrence table (>= 2 sessions), the model ranks and words them, never invents one (P15b). The pasted brief is the trader's outside commentary, never his view; memory holds today's only (<= 8 lines).
