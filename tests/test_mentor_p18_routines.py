@@ -26,9 +26,14 @@ PT = ZoneInfo("America/Los_Angeles")
 SESSION = "2026-09-29"
 
 
-def _days(n, last="2026-09-29"):
-    end = datetime.fromisoformat(last).date()
-    return [(end - timedelta(days=i)).isoformat() for i in range(n)][::-1]
+def _days(n, last="2026-09-29", *, weekend=False):
+    """The last ``n`` weekdays (or weekend days) up to ``last``, oldest first."""
+    day, out = datetime.fromisoformat(last).date(), []
+    while len(out) < n:
+        if (day.weekday() >= 5) == weekend:
+            out.append(day.isoformat())
+        day -= timedelta(days=1)
+    return out[::-1]
 
 
 def _chat(tmp_path, plan):
@@ -66,8 +71,9 @@ def test_a_routine_is_a_pack_asked_on_five_of_the_last_ten_session_days():
     asks += [{"day_pt": day, "bucket_pt": "09:00", "packs": ["journal_pack"], "turn_id": 50} for day in _days(12)]
     table = routines.find_routines(asks, SESSION)
     assert table["session_days"] == _days(10)
-    assert table["routines"] == [{"bucket": "06:30", "packs": [{"name": "regime_pack", "days": 5}]},
-                                 {"bucket": "09:00", "packs": [{"name": "journal_pack", "days": 10}]}]
+    assert table["routines"] == [
+        {"bucket": "06:30", "day_type": "weekday", "packs": [{"name": "regime_pack", "days": 5}]},
+        {"bucket": "09:00", "day_type": "weekday", "packs": [{"name": "journal_pack", "days": 10}]}]
     old = routines.find_routines(asks[:5], "2026-09-29")
     assert routines.routine_line(table, old) == "You usually ask regime_pack at 06:30 PT; journal_pack at 09:00 PT"
     assert routines.routine_line(table, table) == ""
@@ -85,7 +91,8 @@ def test_the_night_writes_the_routine_file_and_the_brief_line_only_when_it_chang
 
     assert review()["status"] == "ok"
     table = json.loads((tmp_path / "ai" / "mentor_routines.json").read_text(encoding="utf-8"))
-    assert table["routines"] == [{"bucket": "06:30", "packs": [{"name": "regime_pack", "days": 5}]}]
+    assert table["routines"] == [{"bucket": "06:30", "day_type": "weekday",
+                                  "packs": [{"name": "regime_pack", "days": 5}]}]
     brief_file = tmp_path / "ai" / f"mentor_coach_brief_{SESSION}.json"
     brief = json.loads(brief_file.read_text(encoding="utf-8"))
     assert brief["routine"] == "You usually ask regime_pack at 06:30 PT"
@@ -103,6 +110,25 @@ def test_the_night_writes_the_routine_file_and_the_brief_line_only_when_it_chang
     later = tmp_path / "ai" / "mentor_coach_brief_2026-09-30.json"
     if later.exists():
         assert json.loads(later.read_text(encoding="utf-8"))["routine"] == ""
+
+
+def test_weekday_and_weekend_routines_are_counted_apart():
+    asks = [{"day_pt": day, "bucket_pt": "06:30", "packs": ["regime_pack"], "turn_id": 1} for day in _days(5)]
+    asks += [{"day_pt": day, "bucket_pt": "08:00", "packs": ["mirror_pack"], "turn_id": 2}
+             for day in _days(5, weekend=True)]
+    # Weekend asks never count toward a weekday routine (3 weekday + 2 weekend days at 07:00 = no routine).
+    asks += [{"day_pt": day, "bucket_pt": "07:00", "packs": ["tilt_pack"], "turn_id": 3}
+             for day in _days(3) + _days(2, weekend=True)]
+    table = routines.find_routines(asks, SESSION)
+    assert [(r["bucket"], r["day_type"]) for r in table["routines"]] == [("06:30", "weekday"), ("08:00", "weekend")]
+    assert table["weekend_days"] == _days(5, weekend=True)
+    saturday_0630 = datetime(2026, 10, 3, 6, 31, tzinfo=PT)
+    assert routines.due(table, [], saturday_0630) is None  # no weekday prefetch on a Saturday
+    assert routines.due(table, [], datetime(2026, 10, 3, 8, 5, tzinfo=PT))["day_type"] == "weekend"
+    assert routines.due(table, [], datetime(2026, 10, 1, 6, 40, tzinfo=PT))["bucket"] == "06:30"
+    assert routines.routine_id(table["routines"][1]) == "routine:we:0800"
+    line = routines.routine_line(table, {})
+    assert line == "You usually ask regime_pack at 06:30 PT; mirror_pack at 08:00 PT on weekends"
 
 
 def test_routine_commands_parse():

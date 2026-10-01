@@ -67,9 +67,11 @@ def routine_rows(path: Path | None) -> list[dict[str, Any]]:
         if not isinstance(row, Mapping) or not row.get("bucket"):
             continue
         packs = ", ".join(f"{p['name']} on {p['days']} days" for p in row.get("packs") or ())
-        rows.append({"id": f"routine:{str(row['bucket']).replace(':', '')}", "kind": "routine",
-                     "text": (f"Usual ask at {row['bucket']} PT (last {len(payload.get('session_days') or ())} "
-                              f"session days): {packs}")})
+        weekend = row.get("day_type") == routines.WEEKEND
+        span = (f"last {len(payload.get('weekend_days') or ())} weekend days" if weekend
+                else f"last {len(payload.get('session_days') or ())} session days")
+        rows.append({"id": routines.routine_id(row), "kind": "routine",
+                     "text": f"Usual ask at {row['bucket']} PT{' on weekends' if weekend else ''} ({span}): {packs}"})
     return rows
 
 

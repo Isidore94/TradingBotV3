@@ -768,11 +768,11 @@ class MentorWindow(QMainWindow):
         """Every minute: when a half hour with a routine starts, build its packs once at refresh priority."""
         from mentor_app import routines
 
-        bucket = routines.bucket_of(self._now())
+        now = self._now()
+        bucket = routines.bucket_of(now)
         if bucket == self._routine_bucket_done:
             return
-        row = next((r for r in routines.visible(self._routine_payload, self._routine_forgotten)
-                    if r.get("bucket") == bucket), None)
+        row = routines.due(self._routine_payload, self._routine_forgotten, now)
         if row is None:
             return
         self._routine_bucket_done = bucket

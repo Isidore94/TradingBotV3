@@ -152,12 +152,22 @@ def _floor_text(cell: Mapping[str, Any]) -> str:
     import evidence_stats
 
     n = int(cell.get("n") or 0)
-    rate = f"{100 * cell['rate']:.0f}% right" if cell.get("rate") is not None else "no rate"
-    floor = "" if cell.get("meets_floor") else f"; too few to call (n={n}, floor {evidence_stats.MIN_REPORTABLE_N})"
     extra = (f"; {cell['pending']} pending" if cell.get("pending") else "") + (
         f"; {cell['unmeasured']} unmeasured" if cell.get("unmeasured") else "")
+    if not cell.get("meets_floor"):
+        # Under the floor no rate and no split is shown: a 1-of-2 is not a hit rate (review 2026-09-30).
+        return f"too few, n={n} (floor {evidence_stats.MIN_REPORTABLE_N}){extra}"
+    rate = f"{100 * cell['rate']:.0f}% right" if cell.get("rate") is not None else "no rate"
     return (f"{cell.get('right', 0)} right / {cell.get('wrong', 0)} wrong / {cell.get('flat', 0)} flat "
-            f"(n={n}, {rate}){floor}{extra}")
+            f"(n={n}, {rate}){extra}")
+
+
+def _cell(cell: Mapping[str, Any]) -> dict[str, Any]:
+    """The accuracy fields a row carries; the rate and its bound are withheld under the floor."""
+    out = dict(cell)
+    if not out.get("meets_floor"):
+        out["rate"] = out["rate_lb"] = None
+    return out
 
 
 def _regime_on(rows: list[Mapping[str, Any]], day: str) -> str:
@@ -220,7 +230,7 @@ def build(n: Any = DEFAULT_N, *, now: datetime | None = None, sources: Sources |
         for horizon in sorted({str(g.get("horizon") or "unknown") for g in pool}):
             cell = grader.accuracy([g for g in pool if str(g.get("horizon") or "unknown") == horizon])
             label = "your clicked calls" if not suffix else "stances read from your words (never pooled with clicks)"
-            rows.append({"id": f"read:acc:{horizon}{suffix}", "kind": "accuracy", "horizon": horizon, **cell,
+            rows.append({"id": f"read:acc:{horizon}{suffix}", "kind": "accuracy", "horizon": horizon, **_cell(cell),
                          "text": f"Accuracy, {HORIZON_WORDS.get(horizon, horizon)}, {label}: {_floor_text(cell)}"})
     try:
         regime_rows = list(src.regime_rows())
@@ -231,7 +241,7 @@ def build(n: Any = DEFAULT_N, *, now: datetime | None = None, sources: Sources |
         by_regime.setdefault(_regime_on(regime_rows, str(grade.get("session") or "")), []).append(grade)
     for regime in sorted(by_regime):
         cell = grader.accuracy(by_regime[regime])
-        rows.append({"id": f"read:acc:regime:{_slug(regime)}", "kind": "accuracy_regime", "regime": regime, **cell,
+        rows.append({"id": f"read:acc:regime:{_slug(regime)}", "kind": "accuracy_regime", "regime": regime, **_cell(cell),
                      "text": f"Accuracy in regime {regime} (your typed regime on the read's day), clicked calls: "
                              f"{_floor_text(cell)}"})
     waiting = 0

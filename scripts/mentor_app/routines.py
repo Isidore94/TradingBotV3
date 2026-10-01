@@ -2,8 +2,8 @@
 
 An *ask* is one user turn: its PT 30-minute bucket, weekday, the pack set its answer used (the reply turn's
 ``tool_calls_json``, dropped attachments excluded) and a question kind. The night's deterministic half writes
-``mentor_routines.json``: per bucket, the packs asked on ``MIN_DAYS`` or more of the last ``SESSION_DAYS`` session
-days (days with any ask), with the count. The app prefetches a bucket's packs when it starts and shows a quiet chip;
+``mentor_routines.json``: per bucket and day type (weekday and weekend counted apart), the packs asked on
+``MIN_DAYS`` or more of the last ``SESSION_DAYS`` days of that type with any ask, with the count. The app prefetches a bucket's packs when it starts and shows a quiet chip;
 ``/routine`` prints the table and ``/forget routine <bucket>`` hides a line (persisted in ``app_state``).
 """
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
@@ -80,24 +80,49 @@ def asks_from_turns(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+WEEKDAY, WEEKEND = "weekday", "weekend"
+
+
+def day_type(day: Any) -> str:
+    """``weekday`` or ``weekend`` for an ISO date or a datetime (PT)."""
+    if isinstance(day, datetime):
+        return WEEKEND if day.astimezone(PT).weekday() >= 5 else WEEKDAY
+    return WEEKEND if date.fromisoformat(str(day)[:10]).weekday() >= 5 else WEEKDAY
+
+
 def find_routines(asks: Sequence[Mapping[str, Any]], session: str, *, days: int = SESSION_DAYS,
                   min_days: int = MIN_DAYS) -> dict[str, Any]:
-    """Per bucket, the packs asked on ``min_days``+ of the last ``days`` session days up to ``session``."""
-    session_days = sorted({ask["day_pt"] for ask in asks if ask["day_pt"] <= session})[-days:]
-    seen: dict[tuple[str, str], set[str]] = {}
+    """Per bucket and day type, the packs asked on ``min_days``+ of the last ``days`` days of that type."""
+    window = {kind: sorted({ask["day_pt"] for ask in asks if ask["day_pt"] <= session
+                            and day_type(ask["day_pt"]) == kind})[-days:] for kind in (WEEKDAY, WEEKEND)}
+    seen: dict[tuple[str, str, str], set[str]] = {}
     for ask in asks:
-        if ask["day_pt"] not in session_days:
+        kind = day_type(ask["day_pt"])
+        if ask["day_pt"] not in window[kind]:
             continue
         for name in ask["packs"]:
-            seen.setdefault((ask["bucket_pt"], name), set()).add(ask["day_pt"])
-    buckets: dict[str, list[dict[str, Any]]] = {}
-    for (bucket, name), on in seen.items():
+            seen.setdefault((kind, ask["bucket_pt"], name), set()).add(ask["day_pt"])
+    buckets: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for (kind, bucket, name), on in seen.items():
         if len(on) >= min_days:
-            buckets.setdefault(bucket, []).append({"name": name, "days": len(on)})
-    routines = [{"bucket": bucket, "packs": sorted(packs, key=lambda p: (-p["days"], p["name"]))}
-                for bucket, packs in sorted(buckets.items())]
-    return {"schema": ROUTINES_SCHEMA, "session_date": session, "session_days": session_days,
-            "min_days": min_days, "routines": routines}
+            buckets.setdefault((kind, bucket), []).append({"name": name, "days": len(on)})
+    routines = [{"bucket": bucket, "day_type": kind, "packs": sorted(packs, key=lambda p: (-p["days"], p["name"]))}
+                for (kind, bucket), packs in sorted(buckets.items(), key=lambda kv: (kv[0][0] != WEEKDAY, kv[0][1]))]
+    return {"schema": ROUTINES_SCHEMA, "session_date": session, "session_days": window[WEEKDAY],
+            "weekend_days": window[WEEKEND], "min_days": min_days, "routines": routines}
+
+
+def routine_id(row: Mapping[str, Any]) -> str:
+    """``routine:0630`` on weekdays, ``routine:we:0630`` on weekends."""
+    prefix = "we:" if row.get("day_type") == WEEKEND else ""
+    return f"routine:{prefix}{str(row.get('bucket') or '').replace(':', '')}"
+
+
+def due(payload: Mapping[str, Any], forgotten: Iterable[str], now: datetime) -> dict[str, Any] | None:
+    """The routine row for ``now``'s half hour and day type (a weekday routine never fires on a Saturday)."""
+    bucket, kind = bucket_of(now), day_type(now)
+    return next((r for r in visible(payload, forgotten)
+                 if r.get("bucket") == bucket and r.get("day_type", WEEKDAY) == kind), None)
 
 
 def read_routines(path: Path | str | None) -> dict[str, Any]:
@@ -119,14 +144,15 @@ def live_path() -> Path | None:
 
 def routine_line(new: Mapping[str, Any], old: Mapping[str, Any]) -> str:
     """The coach brief's one line, only when the routine table changed: "You usually ask X at 06:30 PT"."""
-    def table(payload: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...]]]:
-        return [(str(r.get("bucket")), tuple(p["name"] for p in r.get("packs") or ())) for r in
-                payload.get("routines") or () if isinstance(r, Mapping)]
+    def table(payload: Mapping[str, Any]) -> list[tuple[str, str, tuple[str, ...]]]:
+        return [(str(r.get("bucket")), str(r.get("day_type") or WEEKDAY), tuple(p["name"] for p in r.get("packs") or ()))
+                for r in payload.get("routines") or () if isinstance(r, Mapping)]
 
     rows = table(new)
     if not rows or rows == table(old):
         return ""
-    parts = [f"{', '.join(names)} at {bucket} PT" for bucket, names in rows[:3]]
+    parts = [f"{', '.join(names)} at {bucket} PT" + (" on weekends" if kind == WEEKEND else "")
+             for bucket, kind, names in rows[:3]]
     return "You usually ask " + "; ".join(parts)
 
 
@@ -145,7 +171,8 @@ def table_text(payload: Mapping[str, Any], forgotten: Iterable[str]) -> str:
              f"a pack asked on {payload.get('min_days', MIN_DAYS)}+ of them)", ""]
     for row in rows:
         packs = ", ".join(f"{p['name']} ({p['days']} days)" for p in row.get("packs") or ())
-        lines.append(f"- [routine:{row['bucket'].replace(':', '')}] {row['bucket']} PT: {packs}")
+        when = " (weekends)" if row.get("day_type") == WEEKEND else ""
+        lines.append(f"- [{routine_id(row)}] {row['bucket']} PT{when}: {packs}")
     if not rows:
         lines.append("- none (or all forgotten)")
     lines.append("")

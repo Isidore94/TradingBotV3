@@ -55,11 +55,24 @@ def test_accuracy_by_horizon_and_regime_with_n_and_the_floor():
     rows = {row["id"]: row for row in reads_pack.fixture().rows}
     rod = rows["read:acc:rest_of_day"]
     assert (rod["right"], rod["wrong"], rod["n"], rod["meets_floor"]) == (1, 1, 2, False)
-    assert "n=2, 50% right" in rod["text"] and "too few to call (n=2, floor 30)" in rod["text"]
+    # Under the floor: "too few, n=2" only, never a rate or a right/wrong split (review 2026-09-30).
+    assert rod["text"] == "Accuracy, rest of day, your clicked calls: too few, n=2 (floor 30)"
+    assert rod["rate"] is None and rod["rate_lb"] is None
+    assert not any("% right" in row["text"] or " right / " in row["text"] for row in rows.values()
+                   if row["kind"].startswith("accuracy"))
     assert rows["read:acc:next_5_sessions"]["pending"] == 1 and rows["read:acc:next_5_sessions"]["n"] == 0
     # The trader's typed regime on the read's day: chop from 09-29; nothing typed before -> unknown.
     assert rows["read:acc:regime:chop"]["wrong"] == 1 and rows["read:acc:regime:chop"]["pending"] == 1
     assert rows["read:acc:regime:unknown"]["right"] == 1
+
+
+def test_a_cell_at_the_floor_shows_its_rate():
+    grades = [{"grade_id": f"g{n}", "entry_id": f"e{n}", "session": "2026-09-01", "horizon": "rest_of_day",
+               "direction": "up", "source": "click", "verdict": "right" if n < 18 else "wrong", "supersedes": ""}
+              for n in range(30)]
+    pack = reads_pack.build(now=NOW, sources=reads_pack.Sources(entries=lambda: [], grades=lambda: grades))
+    row = next(r for r in pack.rows if r["id"] == "read:acc:rest_of_day")
+    assert "18 right / 12 wrong / 0 flat (n=30, 60% right)" in row["text"] and row["rate"] == 0.6
 
 
 def test_a_clicked_call_is_never_pooled_with_an_extracted_stance():
