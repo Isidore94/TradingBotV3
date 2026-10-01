@@ -2,32 +2,37 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-09-30 night PT (P18 in flight)
+**Updated:** 2026-10-01 06:45 PT (P18 merged; restart desk + app)
 
-- **Live on `main`:** rounds 1-2 (`81272d42`, `2d59aace`, `3802c0d7`), p9 phases 1-4
-  (`849390a2`, `55bbeb26`, `d382986e`, `79e8d658`), p10 research lake + auto regimes
-  (`1b56f34f`, research only); rolling RRS, cutoff 1.0 (`TRADINGBOTV3_RRS_ENGINE=desk` =
-  old); Movers tint + SMA gate (`13b2e2cb`), Yahoo guard (`56ce3965`), Movers boxes, Dip
-  anchors, focus preview, idle-probe skip (`1751c338`); gates #257-#306.
-- **GUI:** 4K design live; selftests 105/105; long Qt runs still crash workers.
-- **Merged 2026-09-30, live at the next desk + app restart:** Trade Mentor app P0-P15 (`e9c77690`, `e864ddb9`, `b2402479`, `19b837d3`) + Pause AI (`8f7664fc`): chat on gemma4:12b with native tools, auto-attach from plain language, `/pick /vetoes /tape /check /news /book /mirror /tilt /debate /hypotheses /brief /issues /recaps /paste /feel /night /scorecard`; memory stands on the night; `mentor_app_enabled` on by default; frontier OFF (trader). Gates #311-#318, #321-#326, #329, #332-#334.
-- **Merged 2026-09-30:** P16 eval gaps (#335), P17 `/rs`, `/alerts`, spool M5 bars (#336).
-- **In flight:** P18 (`claude/mentor-app-p18-journal-reads-routines-2026-10-01`): journal, habits, reads, routines, M5 publisher; gates #341-#344; review, live eval, trader's word. Next: the four night-rejection fixes.
-- **Desk:** next launch uses main; live checks are in GATES.
-- **Night throughput (2026-09-30):** slot retries x3, budget 360, every care name briefed nightly and last on the slate (#331), nightly permutation report + per-setup sentences (#330, shadow only). Parked: Mentor recall index (worktree only). Next: morning pre-brief queue; rule audit once plan lines exist.
-- **gpt-oss:20b vs gemma4:12b:** effort `high`, 8k think tokens live. Probe 2 10-01 02:05 runs both, then flip `ai_local_model_medium`.
-- **Night window:** starts 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435). No local
-  models on the mini-PC (trader 2026-09-30): host down = facts only; rerun a missed night with
-  `--session <date> --force`. One pass + one recheck, then shut down; last firing 05:30. No
-  builders, merges or test runs 22:00-02:00 PT.
-- **Owed:** trial ledger index (nightly permutation search adds ~370 grids/3 MB a night, +8 s search per night of history); rolling-RRS leftovers on % (industry board, open-scan RS, setup_group_context,
-  D1 group strength; bounce CSV lacks `rrs_engine`, ask first); TLT/USO/HYG bars (ask
-  first); halted-name refetch; movers into the night AI; phone-brief rule line; pre-Aug
-  entry_at (ask first); review of the Mentor Save (`182f3e08`); theta store.
-- **Next action:** Tue 07:30 gate #305; gates #300-#301, #297-#298; `desk_perf_report.py
-  --day 2026-09-28 --compare 2026-09-24`, gates #258-#287. Left: B10, B2, C4a, Phase C.
-- **Trader actions owed:** Risk per trade ($) in Settings > General; confirm setup tags
-  (P2); night task "run whether logged on or not"; `map_freshness.py --apply`; desk down +
-  market closed: `journal_pnl_repair.py` (#205),
-  options-journal repair (#162), `journal_questrade_gaps.py --statement`; Saturday
-  large-model probe; live click checks; consider rotating the market-prep OpenAI key.
+- **Live on `main`:** rounds 1-2, p9 phases 1-4, p10 research lake + auto regimes (research
+  only); rolling RRS, cutoff 1.0 (`TRADINGBOTV3_RRS_ENGINE=desk` = old); Movers tint + SMA
+  gate, Yahoo guard, Movers boxes, Dip anchors, focus preview, idle-probe skip; gates #257-#306.
+- **GUI:** 4K design live; selftests 105/105; long Qt runs still crash workers. Desk hitch
+  fixes merged 09-30 night (GIL waits under the Setup Tracker paint); gate #337 on the first session.
+- **Trade Mentor app (merged 09-30, P0-P17 + Pause AI):** chat on gemma4:12b with native
+  tools, auto-attach from plain language, `/pick /vetoes /tape /check /news /book /mirror
+  /tilt /debate /hypotheses /brief /issues /recaps /paste /feel /night /scorecard /rs /alerts`;
+  memory stands on the night; `mentor_app_enabled` on by default; frontier OFF (trader).
+  Gates #311-#318, #321-#326, #329, #332-#336.
+- **Merged 2026-10-01 (P18, live at the next desk + app restart):** journal mode (self talk
+  kept with mood tags, one-line reply), habits + routines counted by the night, `reads_pack`
+  (your reads and grades), desk-side 60 s M5 publisher, one table-driven trade-intent gate (a
+  wrong gate is a blocker); live 125-question eval on gemma4: tool hit 99 %, 0 errors, first
+  token p50 1.4 s; gates #341-#344. Next: cap brief-summary answers (6 of 40 ran long).
+- **Night (2026-09-30):** retries x3, budget 360, care names briefed nightly (#331), nightly
+  permutation report (#330, shadow). Merged 10-01 (#338): P19 night rejections (econ time
+  needs its id, regime read 1 retry, day show fits, idea with unknown ids dropped), digest
+  cap, mentor digest retry. Next: morning pre-brief queue; rule audit once plan lines exist.
+- **gemma4:12b is the night model** (live since 10-01, thinking OFF on main). Probe 2:
+  gemma4 fast, 2 grounding rejections; gpt-oss:20b at high cut at the 23k ceiling every slot.
+  In flight, not merged: `claude/gemma4-thinking-high-2026-10-01`; measure after a live night.
+- **Night window:** 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435; the app uses
+  11436). No local models on the mini-PC: host down = facts only; rerun a missed night with
+  `--session <date> --force`. No builders, merges or test runs 22:00-02:00 PT.
+- **Owed:** trial ledger index; rolling-RRS leftovers on % (ask first); TLT/USO/HYG bars
+  (ask first); halted-name refetch; movers into the night AI; phone-brief rule line; theta store.
+- **Next action:** gates #305, #300-#301, #297-#298, #258-#287. Left: B10, B2, C4a, Phase C.
+- **Trader actions owed:** Risk per trade ($) in Settings > General; confirm setup tags (P2);
+  night task "run whether logged on or not"; `map_freshness.py --apply`; desk down + market
+  closed: `journal_pnl_repair.py` (#205), options-journal repair (#162),
+  `journal_questrade_gaps.py --statement`; live click checks; rotate the market-prep OpenAI key.

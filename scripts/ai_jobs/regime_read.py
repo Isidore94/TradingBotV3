@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 _log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "regime_read_v2"
+PROMPT_VERSION = "regime_read_v3"
 SCHEMA = "regime_read_v1"
 #: Sessions of the table the model reads.
 WINDOW_SESSIONS = 20
@@ -35,6 +35,10 @@ MAX_PARAGRAPH = 900
 MAX_SENTENCES = 6
 MAX_SOURCES = 24
 RESERVE_MINUTES = 15.0
+#: Model calls per night: the first and one retry with the rejection fed back.
+READ_ATTEMPTS = 2
+#: The sentence cap a retry after a too-long read asks for (one under the checker's).
+RETRY_SENTENCES = MAX_SENTENCES - 1
 
 READ_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -55,7 +59,10 @@ INSTRUCTIONS = (
     "across timeframes from these rows: the trader's own regime first, then the weekly and "
     "daily structure, then the intraday timeframes. Name a timeframe only as M5, M30, H1, "
     "H4, D1 or W (or daily / weekly), and call it bullish, bearish or neutral only when a "
-    "row you cite says so for that timeframe. Copy every date from the rows (YYYY-MM-DD or "
+    "row you cite says so for that timeframe. A direction word is read against the "
+    "timeframe and symbol named in its own clause (the words between two stops), so name "
+    "them in that clause; each row's allowed_claims lists the only claims it supports "
+    "(\"SPY W: bullish_weak\" lets you call SPY's W bullish on that row's date). Copy every date from the rows (YYYY-MM-DD or "
     "MM-DD) and every number exactly; never write a number or a date that is not in the "
     "rows and never spell a number out. Use the trader's regime words exactly as the "
     "journal has them. You read; you do not predict or advise. Cite the ids you used, "
@@ -245,6 +252,34 @@ def allowed_source_ids(inputs: Mapping[str, Any]) -> list[str]:
             if source_id and source_id not in ids:
                 ids.append(source_id)
     return ids
+
+
+def allowed_claims(row: Mapping[str, Any]) -> list[str]:
+    """`"SPY W: bullish_weak"` for every timeframe the table row reads (unknown is no claim)."""
+    symbol = str(row.get("symbol") or "")
+    timeframes = row.get("timeframes") if isinstance(row.get("timeframes"), Mapping) else {}
+    return [
+        f"{symbol} {tf}: {timeframes[tf]}"
+        for tf in TIMEFRAME_CODES
+        if str(timeframes.get(tf) or "unknown") not in ("", "unknown")
+    ]
+
+
+def _model_view(inputs: Mapping[str, Any]) -> dict[str, Any]:
+    """The inputs as the model sees them: each table row carries its allowed claims."""
+    view = dict(inputs)
+    view["table"] = [dict(row, allowed_claims=allowed_claims(row)) for row in inputs.get("table") or ()]
+    return view
+
+
+def _retry_feedback(evidence: Mapping[str, Any], reasons) -> dict[str, Any]:
+    """The evidence with each rejection quoted; a too-long read is asked for fewer sentences."""
+    from ai_jobs import attempts
+
+    out = attempts.instructions_feedback(evidence, reasons)
+    if any("sentences; at most" in str(reason) for reason in reasons):
+        out["instructions"] += f" The last reply ran too long: write at most {RETRY_SENTENCES} sentences this time."
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -575,18 +610,33 @@ def run_regime_read(
         "evidence_hash": digest,
         "instructions": INSTRUCTIONS,
         "allowed_source_ids": allowed_source_ids(inputs),
-        **inputs,
+        **_model_view(inputs),
     }
-    try:
-        result = story._call(
+    from ai_jobs import attempts
+
+    def _ask(seen: Mapping[str, Any]) -> Mapping[str, Any]:
+        return story._call(
             caller,
-            evidence=evidence,
+            evidence=seen,
             schema=READ_JSON_SCHEMA,
             prompt_version=PROMPT_VERSION,
             schema_name="tradingbot_regime_read",
         )
-        reply = result.get("summary") if isinstance(result, Mapping) else None
-        read = verify_read(reply, inputs)
+
+    def _check(answer: Mapping[str, Any]) -> dict[str, Any]:
+        return verify_read(answer.get("summary") if isinstance(answer, Mapping) else None, inputs)
+
+    try:
+        # One retry, only while the night window still holds the slot's reserve.
+        verified = attempts.verified_attempts(
+            _ask,
+            _check,
+            evidence=evidence,
+            with_feedback=_retry_feedback,
+            attempts=READ_ATTEMPTS,
+            may_retry=attempts.night_window_gate(now, reserve_minutes=RESERVE_MINUTES),
+        )
+        result, read = verified.result, verified.value
         model = str(result.get("model") or "")
         story._atomic_write(destination, {
             "schema": SCHEMA,
@@ -603,7 +653,10 @@ def run_regime_read(
     except Exception as exc:  # noqa: BLE001 - the last verified read is the fallback
         _log.debug("The regime read was not written.", exc_info=True)
         return _result(STATUS_DEGRADED, f"the regime read was rejected; the last verified read was kept: {exc}")
-    return _result("ok", f"verified regime read written for {session}", model=model, outputs=[str(destination)])
+    reason = f"verified regime read written for {session} ({verified.label})"
+    if verified.rejections:
+        reason += "; retried after " + attempts.describe_rejections(verified.rejections, verified.attempts)
+    return _result("ok", reason, model=model, outputs=[str(destination)])
 
 
 __all__ = [

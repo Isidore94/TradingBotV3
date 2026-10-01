@@ -14,6 +14,7 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot
 from m5_shadow_setups import ShadowSetupsCapture
 from market_environment_annotations import record_market_environment_annotation
 import rrs_config
+import project_paths
 from project_paths import MARKET_ENVIRONMENT_ANNOTATIONS_FILE
 from technical_integrity import load_technical_integrity_snapshot
 from ui.models.bounce import BounceAlert
@@ -173,6 +174,18 @@ def with_internals_axis(reading: Any, bot: Any) -> Any:
     if axis is None:
         return reading
     return {**reading, "internals_axis": axis}
+
+
+#: Local setting; False keeps the S7 shadow-setups worker from starting this session.
+SETTING_SHADOW_SETUPS = "m5_shadow_setups_enabled"
+
+
+def shadow_setups_enabled() -> bool:
+    """The per-machine switch for the shadow-setups worker (default on)."""
+    try:
+        return bool(project_paths.get_local_setting(SETTING_SHADOW_SETUPS, True))
+    except Exception:  # noqa: BLE001 - a settings read never costs the desk
+        return True
 
 
 class BounceService(QObject):
@@ -859,6 +872,11 @@ class BounceService(QObject):
     def capture_shadow_setups(self) -> None:
         """Hand the bot's bar cache to the S7 shadow-setups worker (memory only here)."""
         if not self._is_live():
+            return
+        # Shadow only, so it can be switched off per machine for a session:
+        # the worker's pure-Python passes compete with the Qt thread for the
+        # interpreter lock (2026-09-30: up to 20 CPU-s in one minute).
+        if not shadow_setups_enabled():
             return
         bot = self._current_bot()
         if bot is None:

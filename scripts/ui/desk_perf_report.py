@@ -287,7 +287,12 @@ def build_report(
         "gauge_records": len(gauge_records),
         **stall_stats(stall_records),
         **gauge_stats(gauge_records),
+        # The two halves of "GUI blocked s". The event-loop half is the main
+        # thread inside Qt with no Python frame: C++ paint/layout or a wait for
+        # the interpreter lock behind a worker. It was two thirds of the day on
+        # 2026-09-30 and used to be printed only as an excluded footnote.
         "event_loop_s": event_loop,
+        "python_s": sum(seconds.values()),
         "event_loop_lines": sorted(lines),
         "culprits": [
             {"culprit": frame, "seconds": value, "stalls": stalls.get(frame, 0)}
@@ -304,6 +309,8 @@ def build_report(
 METRICS: tuple[tuple[str, str, int], ...] = (
     ("stalls", "stalls", 0),
     ("GUI blocked s", "blocked_s", 1),
+    ("  event loop s (Qt/GIL)", "event_loop_s", 1),
+    ("  python frames s", "python_s", 1),
     ("stall p50 ms", "p50_ms", 0),
     ("stall p90 ms", "p90_ms", 0),
     ("stall max ms", "max_ms", 0),
@@ -346,7 +353,7 @@ def format_report(report: dict[str, Any], *, top: int = TOP_CULPRITS) -> str:
         lines.append(f"{row['seconds']:>9,.1f}  {row['stalls']:>6}  {row['culprit']}")
     exec_text = ",".join(str(n) for n in report.get("event_loop_lines", ())) or "-"
     lines.append(
-        f"event loop frames (excluded): {report['event_loop_s']:,.1f} s "
+        f"event loop frames (counted above, not ranked): {report['event_loop_s']:,.1f} s "
         f"(launch_gui.py, ui/app.py:{exec_text})"
     )
     return "\n".join(lines)
@@ -374,7 +381,8 @@ def format_compare(first: dict[str, Any], second: dict[str, Any], *, top: int = 
             f"{now.get(frame, 0.0) - was.get(frame, 0.0):>+9,.1f}  {frame}"
         )
     lines.append(
-        f"event loop frames (excluded): {first['event_loop_s']:,.1f} s vs {second['event_loop_s']:,.1f} s "
+        f"event loop frames (counted above, not ranked): "
+        f"{first['event_loop_s']:,.1f} s vs {second['event_loop_s']:,.1f} s "
         f"(ui/app.py lines {first.get('event_loop_lines')} / {second.get('event_loop_lines')})"
     )
     return "\n".join(lines)

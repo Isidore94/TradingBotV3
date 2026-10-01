@@ -345,3 +345,82 @@ def test_the_research_pack_carries_the_table_the_journal_and_names_missing_grade
     early = rp.export_pack(sources, tmp_path / "out3", as_of=datetime(2026, 8, 15, tzinfo=timezone.utc))
     assert early["market_regimes"]["table"]["rows"] == 0
     assert early["market_regimes"]["journal"]["rows"] == 0
+
+
+# -- P19: allowed claims per row and one bounded retry (2026-09 rejections) ----------
+# The verifier counts GOOD as two sentences (a stop after a digit does not split).
+FIVE = GOOD + " SPY W is bullish. IWM D1 is bearish. SPY W stayed bullish."
+SEVEN = FIVE + " IWM D1 stayed bearish. SPY W is still bullish."
+
+
+class _Replies:
+    """A fake model that answers each call with the next paragraph."""
+
+    def __init__(self, *paragraphs):
+        self.paragraphs = list(paragraphs)
+        self.evidence = []
+
+    def __call__(self, **kwargs):
+        self.evidence.append(kwargs["evidence"])
+        paragraph = self.paragraphs[min(len(self.evidence), len(self.paragraphs)) - 1]
+        return {"model": "local-test", "summary": _reply(paragraph, sources=("table:2026-09-25:SPY",))}
+
+
+def _table_path(tmp_path):
+    import market_regimes
+
+    table_path = tmp_path / "market_regime_table.jsonl"
+    market_regimes.append_rows(table_path, _table())
+    return table_path
+
+
+def test_the_evidence_gives_each_row_its_allowed_claims_exactly(tmp_path):
+    from ai_jobs import regime_read
+
+    model = _Replies(GOOD)
+    out = _run(tmp_path, _table_path(tmp_path), _journal(tmp_path).list_structural_regime(), model)
+    assert out["status"] == "ok"
+    evidence = model.evidence[0]
+    raw = {(row["session_date"], row["symbol"]): row["timeframes"] for row in _table()}
+    assert evidence["table"]
+    for row in evidence["table"]:
+        frames = raw[(row["session_date"], row["symbol"])]
+        expected = [
+            f"{row['symbol']} {tf}: {frames[tf]}"
+            for tf in regime_read.TIMEFRAME_CODES
+            if frames.get(tf) not in (None, "", "unknown")
+        ]
+        assert row["allowed_claims"] == expected
+    assert any(claim.startswith("SPY W: bullish") for row in evidence["table"] for claim in row["allowed_claims"])
+    assert "read against the timeframe and symbol named in its own clause" in evidence["instructions"]
+
+
+def test_a_seven_sentence_read_is_retried_once_and_the_five_sentence_reply_kept(tmp_path):
+    from ai_jobs import day_review_narration, regime_read
+
+    inputs = _inputs(tmp_path / "direct")
+    with pytest.raises(day_review_narration.NarrationRejected, match="7 sentences"):
+        regime_read.verify_read(_reply(SEVEN), inputs)
+    assert regime_read.verify_read(_reply(FIVE), inputs)["paragraph"] == FIVE
+    model = _Replies(SEVEN, FIVE)
+    out = _run(tmp_path, _table_path(tmp_path), _journal(tmp_path).list_structural_regime(), model)
+    assert out["status"] == "ok", out
+    assert len(model.evidence) == 2
+    assert "write at most 5 sentences this time" in model.evidence[1]["instructions"]
+    assert "write at most 5 sentences this time" not in model.evidence[0]["instructions"]
+    assert "attempt 2/2" in out["reason"] and "7 sentences" in out["reason"]
+    saved = json.loads((tmp_path / "reads" / f"{SESSION}.json").read_text(encoding="utf-8"))
+    assert saved["read"]["paragraph"] == FIVE
+
+
+def test_an_unsupported_w_bearish_still_rejects_after_the_one_retry(tmp_path):
+    from ai_jobs import ledger
+
+    bad = GOOD + " SPY W was bearish on 09-25."
+    model = _Replies(bad, bad, bad)
+    out = _run(tmp_path, _table_path(tmp_path), _journal(tmp_path).list_structural_regime(), model)
+    assert out["status"] == ledger.STATUS_DEGRADED
+    assert "calls W bearish" in out["reason"]
+    assert len(model.evidence) == 2  # one retry, never more
+    assert "calls W bearish" in model.evidence[1]["instructions"]
+    assert not (tmp_path / "reads" / f"{SESSION}.json").exists()

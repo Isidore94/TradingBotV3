@@ -20,7 +20,7 @@ from typing import Any, Callable, Mapping
 
 _log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "day_review_show_v1"
+PROMPT_VERSION = "day_review_show_v2"
 MODEL_TIER = "medium"
 #: The slot reserves five minutes; one call ends inside them.
 TIMEOUT_SECONDS = 290
@@ -45,11 +45,88 @@ def _narration_for(session: str, pack: Mapping[str, Any], root: Path) -> dict[st
     return {key: body.get(key) for key in NARRATION_FIELDS if key in body}
 
 
+#: Keys the show never needs: bookkeeping, or a read's words that its `trader_said`
+#: rows (same entry_id) already carry. No source id lives in them.
+_BOOKKEEPING_KEYS: dict[str, tuple[str, ...]] = {
+    "environment": ("schema", "writer_host", "writer_pid", "session_date", "source"),
+    "measured": ("rule_versions", "completed_only", "bars_used", "bars_through"),
+    "reads": (
+        "schema", "flat_band_rule", "grader_gap", "span", "checkpoints", "stamp",
+        "observation", "because",
+    ),
+}
+#: First lines / rows kept when a section is capped before it is dropped whole.
+REPORT_CARD_LINE_CAP = 3
+TRADE_ROW_CAP = 4
+FORECAST_TEXT_LINE_CAP = 25
+#: Section caps first, then whole sections in the day story's order, with the show-only
+#: drops (internals, environment) ahead of trades: a show without its trades is no show.
+SHOW_TRIM_ORDER: tuple[str, ...] = (
+    "report_card_lines",
+    "trades_rows",
+    "forecast_text_lines",
+    "report_card",
+    "congruence",
+    "skill",
+    "walkaway",
+    "forecast_text",
+    "internals",
+    "environment",
+    "trades",
+)
+
+
+def _show_view(pack: Mapping[str, Any]) -> dict[str, Any]:
+    """The day story's model view without bookkeeping keys; every source id stays."""
+    from ai_jobs import day_review_narration as story
+
+    view = story._model_pack(pack)
+    for section, keys in _BOOKKEEPING_KEYS.items():
+        rows = view.get(section)
+        if isinstance(rows, list):
+            view[section] = [
+                {key: value for key, value in row.items() if key not in keys} if isinstance(row, Mapping) else row
+                for row in rows
+            ]
+    return view
+
+
+def _cap(view: dict[str, Any], section: str, key: str, cap: int) -> bool:
+    """Keep the first `cap` items of `view[section][key]`; False if already that short."""
+    body = view.get(section)
+    items = body.get(key) if isinstance(body, Mapping) else None
+    if not isinstance(items, list) or len(items) <= cap:
+        return False
+    view[section] = {**body, key: items[:cap], f"{key}_cut": f"first {cap} of {len(items)} {key}"}
+    return True
+
+
+def _trim_show_part(view: dict[str, Any], part: str) -> bool:
+    """Apply one `SHOW_TRIM_ORDER` step to the view; False if it changed nothing."""
+    from ai_jobs import day_review_narration as story
+
+    if part == "report_card_lines":
+        return _cap(view, "report_card", "lines", REPORT_CARD_LINE_CAP)
+    if part == "trades_rows":
+        return _cap(view, "trades", "rows", TRADE_ROW_CAP)
+    if part == "forecast_text_lines":
+        forecast = view.get("forecast")
+        lines = str(forecast.get("text") or "").splitlines() if isinstance(forecast, Mapping) else []
+        if len(lines) <= FORECAST_TEXT_LINE_CAP:
+            return False
+        view["forecast"] = {
+            **forecast,
+            "text": "\n".join(lines[:FORECAST_TEXT_LINE_CAP]),
+            "text_truncated": f"first {FORECAST_TEXT_LINE_CAP} of {len(lines)} lines",
+        }
+        return True
+    return story._trim_part(view, part)
+
+
 def _evidence(pack: Mapping[str, Any], narration: Mapping[str, Any] | None, digest: str):
     """The model's view of the pack, trimmed to fit; returns (evidence, dropped ids)."""
     import day_review_pack
     import day_review_show
-    from ai_jobs import day_review_narration as story
 
     allowed = list(day_review_pack.allowed_source_ids(pack))
     evidence: dict[str, Any] = {
@@ -57,26 +134,41 @@ def _evidence(pack: Mapping[str, Any], narration: Mapping[str, Any] | None, dige
         "evidence_hash": digest,
         "instructions": day_review_show.INSTRUCTIONS,
         "allowed_source_ids": allowed,
+        # The only tickers the verifier accepts; a symbol in free text is not one.
+        "pack_tickers": sorted(day_review_show.pack_tickers(pack)),
         "session_date": str(pack.get("session_date") or ""),
-        "pack": story._model_pack(pack),
+        "pack": _show_view(pack),
         "previous_story": dict(narration or {}),
     }
     trimmed: list[str] = []
-    for part in story.DAY_TRIM_ORDER:
+    dropped: dict[str, str] = {}
+    for part in SHOW_TRIM_ORDER:
         if _chars(evidence) <= MAX_EVIDENCE_CHARS:
             break
-        if story._trim_part(evidence["pack"], part):
+        if _trim_show_part(evidence["pack"], part):
             trimmed.append(part)
-    dropped = story._dropped_source_ids(pack, trimmed)
-    if trimmed:
-        evidence["pack_trimmed"] = trimmed
-        evidence["allowed_source_ids"] = [item for item in allowed if item not in dropped]
+            # An id the model can no longer see leaves allowed_source_ids.
+            visible = set(day_review_pack.allowed_source_ids(evidence["pack"]))
+            for item in allowed:
+                if item not in visible:
+                    dropped.setdefault(item, part)
+            evidence["pack_trimmed"] = list(trimmed)
+            evidence["allowed_source_ids"] = [item for item in allowed if item not in dropped]
+            if part == "trades":
+                # Said plainly, so a show with no trade slide is never read as "no trades".
+                evidence["trades_omitted"] = day_review_show.trades_omitted_line(_trade_count(pack))
     if _chars(evidence) > MAX_EVIDENCE_CHARS:
         raise ValueError(
             f"the show evidence is {_chars(evidence)} characters after trimming; "
             f"at most {MAX_EVIDENCE_CHARS} fit the {TIMEOUT_SECONDS}s call"
         )
     return evidence, dropped
+
+
+def _trade_count(pack: Mapping[str, Any]) -> int:
+    trades = pack.get("trades")
+    rows = trades.get("rows") if isinstance(trades, Mapping) else None
+    return len([row for row in rows or () if isinstance(row, Mapping)])
 
 
 def _chars(evidence: Mapping[str, Any]) -> int:
@@ -140,7 +232,7 @@ def run_day_review_show(
                 f"the show cited id(s) dropped to fit the call: {', '.join(hidden)}"
             )
         model = str(result.get("model") or "")
-        story._atomic_write(destination, {
+        record = {
             "schema": day_review_show.SCHEMA,
             "session_date": session,
             "generated_at": story._moment(now),
@@ -150,7 +242,11 @@ def run_day_review_show(
             "model": model,
             "narration_read": narration is not None,
             "show": deck,
-        })
+        }
+        if "trades" in (evidence.get("pack_trimmed") or ()):
+            record["trades_omitted"] = _trade_count(pack)
+            record["show"] = day_review_show.with_trades_omitted(deck, record["trades_omitted"])
+        story._atomic_write(destination, record)
     except Exception as exc:  # noqa: BLE001 - the last good show is the fallback
         _log.debug("The day show was not written.", exc_info=True)
         return _result(STATUS_DEGRADED, f"the show was rejected; the prior show was kept: {exc}")
