@@ -1,4 +1,4 @@
-"""P2 pick assessment: the structured call, the citation drops, /pick and the Focus chips,
+"""P2 pick assessment: the structured call, the citation drops, /pick and the liked names,
 the 06:15 / hourly prefetch, and guardrail 2's grey numbers."""
 
 from __future__ import annotations
@@ -363,21 +363,27 @@ def test_a_changed_pack_is_renarrated(window, app, world):
     assert len(window.requests_made) == 2 and "evidence changed" in _text(window)
 
 
-def test_chips_follow_the_liked_picks_not_all_of_focus(window, app):
+def test_liked_picks_are_kept_without_ticker_chips(window, app):
+    from PySide6.QtWidgets import QPushButton
+
+    # Trader 2026-10-01: the ticker chips gave way to quick buttons; the liked list still feeds
+    # auto-attach and the prefetch, and `/pick SYM` still opens a card.
     window.refresh_liked()
     _drain(window, app)
-    assert list(window.pick_chips) == ["NVDA", "TSLA"], "AMD is on Focus but not liked: no chip"
-    assert window.pick_chips["TSLA"].text() == "TSLA S"
-    window.pick_chips["NVDA"].click()
+    assert [sym for sym, _side in window._liked_names] == ["NVDA", "TSLA"], "AMD is on Focus but not liked"
+    assert not window.findChildren(QPushButton, "MentorPickChip"), "no ticker chips"
+    window.send("/pick NVDA")
     assert "Pick NVDA" in _text(window)
 
 
-def test_chips_are_capped_at_24_newest_first_with_a_pick_hint(window, app):
-    window.liked[:] = [(f"S{i:02d}", "LONG") for i in range(30)]
-    window.refresh_liked()
-    _drain(window, app)
-    assert list(window.pick_chips) == [f"S{i:02d}" for i in range(24)]
-    assert window.pick_more.text() == "+6 more: /pick SYM" and not window.pick_more.isHidden()
+def test_the_quick_buttons_run_tape_tilt_mirror_and_scorecard(window, monkeypatch):
+    sent: list[str] = []
+    monkeypatch.setattr(window, "send", lambda text: sent.append(text))
+    assert [b.text() for b in window.quick_buttons.values()] == ["Tape", "Tilt", "Mirror", "Scorecard"]
+    for button in window.quick_buttons.values():
+        assert button.toolTip()
+        button.click()
+    assert sent == ["/tape", "/tilt", "/mirror", "/scorecard"]
 
 
 def test_the_0615_prefetch_assesses_the_liked_picks_quietly(window, app):

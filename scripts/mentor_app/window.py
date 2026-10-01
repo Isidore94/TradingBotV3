@@ -25,7 +25,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPlainTextEdit,
     QPushButton,
-    QScrollArea,
     QSplitter,
     QTextBrowser,
     QVBoxLayout,
@@ -65,6 +64,13 @@ RECONNECT_BACKOFF_SECONDS = 10 * 60
 #: On close the app waits at most this long for each model unload.
 SHUTDOWN_UNLOAD_SECONDS = 4
 CHIP_KINDS = ("auto_mode", "d1_env", "regime")
+#: (label, command, tooltip): the quick-button row above the input box.
+QUICK_BUTTONS = (
+    ("Tape", "/tape", "The tape now: Auto mode, D1, last night's read, econ, sectors"),
+    ("Tilt", "/tilt", "Today's patterns after a loss, and how often they led to a red rest of day"),
+    ("Mirror", "/mirror", "Your own record over 6 weeks: likes, vetoes, journal, regime"),
+    ("Scorecard", "/scorecard", "How the challenges have done, and how the app itself is doing"),
+)
 #: A background tape narration that fails is tried once more for the same pack hash, then not again.
 TAPE_MAX_FAILURES_PER_HASH = 2
 
@@ -296,7 +302,7 @@ class MentorWindow(QMainWindow):
         self._bridge.pick_built.connect(self._on_pick_built)
         self._bridge.pick_card.connect(self._on_pick_card)
         self._bridge.pick_failed.connect(self._on_pick_failed)
-        self._bridge.liked_ready.connect(self._sync_pick_chips)
+        self._bridge.liked_ready.connect(self._on_liked)
         self._bridge.veto_built.connect(self._on_veto_built)
         self._bridge.veto_card.connect(self._on_veto_card)
         self._bridge.veto_failed.connect(self._on_veto_failed)
@@ -502,23 +508,18 @@ class MentorWindow(QMainWindow):
         self.routine_chip.clicked.connect(self._show_routine)
         self.chip_row.addWidget(self.routine_chip)
         self.chip_row.addStretch(1)
-        # One chip per Focus name: its pick card (P2).
-        self.pick_chips: dict[str, QPushButton] = {}
-        pick_strip = QWidget()
-        self.pick_chip_row = QHBoxLayout(pick_strip)
-        self.pick_chip_row.setContentsMargins(0, 0, 0, 0)
-        self.pick_chip_row.setSpacing(4)
-        self.pick_more = QLabel("")
-        self.pick_more.setObjectName("MutedLabel")
-        self.pick_more.setVisible(False)
-        self.pick_chip_row.addWidget(self.pick_more)
-        self.pick_chip_row.addStretch(1)
-        self.pick_scroll = QScrollArea()
-        self.pick_scroll.setWidget(pick_strip)
-        self.pick_scroll.setWidgetResizable(True)
-        self.pick_scroll.setFixedHeight(38)
-        self.pick_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.pick_scroll.setVisible(False)
+        # Quick buttons: one click runs the read (the liked picks are a `/pick SYM` away).
+        self.quick_buttons: dict[str, QPushButton] = {}
+        self.quick_row = QHBoxLayout()
+        self.quick_row.setSpacing(6)
+        for label, command, tip in QUICK_BUTTONS:
+            button = QPushButton(label)
+            button.setObjectName("MentorQuickButton")
+            button.setToolTip(tip)
+            button.clicked.connect(lambda _=False, cmd=command: self.send(cmd))
+            self.quick_buttons[command] = button
+            self.quick_row.addWidget(button)
+        self.quick_row.addStretch(1)
         self.input = InputBox()
         self.input.setPlaceholderText("Ask the mentor... (Enter sends, Shift+Enter new line, Win+H to dictate)")
         self.input.setFixedHeight(84)
@@ -571,7 +572,7 @@ class MentorWindow(QMainWindow):
             self.card_host.cardShown.connect(self._on_card_shown)
             self.card_host.dock.mentor_card.set_ai_request_provider(self._brain_fill_request)
         left_layout.addLayout(self.chip_row)
-        left_layout.addWidget(self.pick_scroll)
+        left_layout.addLayout(self.quick_row)
         left_layout.addLayout(input_row)
 
         self.inbox_header = QLabel("Inbox")
@@ -1734,30 +1735,9 @@ class MentorWindow(QMainWindow):
 
         return narrate
 
-    def _sync_pick_chips(self, liked: Any) -> None:
-        """One chip per liked pick, newest first, at most MAX_CHIPS; the rest are a `/pick` away."""
-        everything = [(str(sym).upper(), str(side or "").upper()) for sym, side in liked or ()]
-        self._liked_names = list(everything)
-        wanted = everything[: pick_jobs.MAX_CHIPS]
-        extra = len(everything) - len(wanted)
-        self.pick_more.setText(f"+{extra} more: /pick SYM" if extra > 0 else "")
-        self.pick_more.setVisible(extra > 0)
-        if [(sym, chip.property("side")) for sym, chip in self.pick_chips.items()] == wanted:
-            return
-        for chip in self.pick_chips.values():
-            self.pick_chip_row.removeWidget(chip)
-            chip.deleteLater()
-        self.pick_chips = {}
-        for index, (symbol, side) in enumerate(wanted):
-            chip = QPushButton(f"{symbol} {side[:1]}".strip())
-            chip.setObjectName("MentorPickChip")
-            chip.setFlat(True)
-            chip.setProperty("side", side)
-            chip.setToolTip(f"{symbol} {side.lower()}: what the desk knows, narrated")
-            chip.clicked.connect(lambda _=False, sym=symbol, sd=side: self.show_pick(sym, sd))
-            self.pick_chip_row.insertWidget(index, chip)
-            self.pick_chips[symbol] = chip
-        self.pick_scroll.setVisible(bool(wanted))
+    def _on_liked(self, liked: Any) -> None:
+        """Keep the liked picks (newest first) for auto-attach and the prefetch; no chips are drawn."""
+        self._liked_names = [(str(sym).upper(), str(side or "").upper()) for sym, side in liked or ()]
 
     def show_pick(self, symbol: str, side: str = "") -> None:
         """The pick's card: the cached one at once, then a rebuild off-thread; narrate if the pack changed."""
