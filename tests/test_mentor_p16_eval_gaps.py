@@ -85,3 +85,52 @@ def test_a_pick_pack_for_a_focus_name_says_it_is_not_a_position():
 
 def test_do_i_have_any_shorts_on_reads_the_book():
     assert "book_pack" in [r.name for r in _plan("do I have any shorts on")]
+
+
+# ---------------------------------------------------------------- step 2: hold time by outcome, best / worst
+def _journal_pack(day="today"):
+    from mentor_packs import journal_pack
+
+    tmp = Path(tempfile.mkdtemp())
+    return journal_pack.build(day, now=journal_pack.FIXTURE_NOW,
+                              journal=journal_pack.write_fixture_journal(tmp / "trade_journal.sqlite3"),
+                              chat_db=tmp / "none.sqlite3")
+
+
+def test_the_journal_says_hold_time_on_winners_and_losers():
+    rows = {row["id"]: row for row in _journal_pack("today").rows}
+    # Fixture: winners NVDA 45 min and the ALL spread 40 min; loser AMD 15 min.
+    win, lose = rows["jrn:2026-09-30:hold:winners"], rows["jrn:2026-09-30:hold:losers"]
+    assert (win["n"], win["median_min"], win["mean_min"]) == (2, 42.5, 42.5)
+    assert win["text"] == "Winners held a median 42 min, mean 42 min (n=2)"
+    assert (lose["n"], lose["median_min"]) == (1, 15.0) and "median 15 min" in lose["text"]
+
+
+def test_best_and_worst_rank_by_r_when_a_stop_exists_and_say_why():
+    rows = {row["id"]: row for row in _journal_pack("today").rows}
+    best, worst = rows["jrn:2026-09-30:best"], rows["jrn:2026-09-30:worst"]
+    assert best["by"] == "R" and best["symbol"] == "NVDA" and "+1.00R" in best["text"]
+    assert "ranked by R (1 of 3 trade(s) have a planned stop" in best["text"]
+    assert worst["symbol"] == "NVDA", "only stopped trades are ranked by R"
+    week = {row["id"]: row for row in _journal_pack("week").rows}
+    assert week["jrn:wk2026-09-28:best"]["symbol"] == "NVDA"
+    assert week["jrn:wk2026-09-28:worst"]["symbol"] == "TSLA" and "-0.50R" in week["jrn:wk2026-09-28:worst"]["text"]
+
+
+def test_best_by_dollars_when_no_trade_has_a_stop():
+    from mentor_packs import journal_pack
+    from mentor_packs.journal_read import Unit
+
+    t = datetime(2026, 9, 30, 10, 0, tzinfo=timezone.utc)
+    units = [Unit([{"direction": "LONG"}], "day", t, t, 50.0, None, symbol="AAA", ids=["A"]),
+             Unit([{"direction": "SHORT"}], "day", t, t, -80.0, None, symbol="BBB", ids=["B"])]
+    rows = {row["id"]: row for row in journal_pack.outcome_rows("d", units)}
+    assert rows["jrn:d:best"]["symbol"] == "AAA" and rows["jrn:d:worst"]["symbol"] == "BBB"
+    assert "ranked by $ (no trade here has a planned stop" in rows["jrn:d:best"]["text"]
+
+
+def test_hold_and_best_questions_route_to_the_journal_month_and_the_mirror():
+    for question in ("whats my average hold time on winners vs losers", "what's the best setup I've had this month and why",
+                     "best trade this month?"):
+        got = [(r.name, r.args) for r in attach.plan_attachments(question, {}, NOW)]
+        assert ("journal_pack", {"day": "month"}) in got and ("mirror_pack", {}) in got, (question, got)

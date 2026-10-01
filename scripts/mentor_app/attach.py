@@ -99,6 +99,9 @@ _STOP_DAY = re.compile(r"\bstop trading\b|\bcall it a day\b|\bwalk away\b|\bover
                        r"|\bdone for (?:the|to)day\b")
 _MIRROR = re.compile(r"\bmy record\b|\blately\b|\bmy stats\b|\bmy edge\b|\bhit rate\b|\bwin rate\b|\bpattern in my\b"
                      r"|\btrade best\b|\bbest time\b|\btime of day\b|\bwhen during the day\b")
+#: P16: hold time by outcome and the best / worst trade or setup: the journal's outcome rows plus the mirror.
+_OUTCOME = re.compile(r"\bhold(?:ing)? times?\b|\bhow long (?:do|did) i hold\b|\b(?:best|worst) (?:trades?|setups?)\b"
+                      r"|\bwinners (?:vs\.?|versus|and) losers\b")
 _PLAN = re.compile(r"\bmy plan\b|\bmy rules?\b|\btrading plan\b|\bbreak(?:ing)? (?:a|my) rule\b")
 #: P15a: the night's reads (day review verdicts, ideas, contrasts, week review, story, digest).
 _NIGHT = re.compile(r"\bwhat did the night say\b|\bovernight\b|\blast night\b|\bnight(?:'s)? read\b|\bideas?\b"
@@ -300,6 +303,9 @@ def plan_attachments(
     if journal_words or stop_day or (journal_day and not vetoes and not earnings_group and not earnings_alone):
         add("journal_pack", "journal words" if journal_words else "time words" if day else "stop words",
             day=day or today)
+    if _OUTCOME.search(lowered):
+        add("journal_pack", "outcome words", day=day if day else "month")
+        add("mirror_pack", "outcome words")
     if vetoes:
         add("veto_pack", "veto words", date=day if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else "")
     # P14: the tape only on market words, session prep, or trade intent the gate does not already carry.
