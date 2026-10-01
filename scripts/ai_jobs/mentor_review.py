@@ -89,6 +89,8 @@ MAX_TURN_CHARS = 300
 MAX_LATENCY_VALUES = 500
 TIMEOUT_SECONDS = 600
 RESERVE_MINUTES = 10.0
+#: Digest calls one night may spend: the first, then one retry with the rejection quoted.
+DIGEST_ATTEMPTS = 2
 BUSY_TIMEOUT_MS = 5000
 EFFORT = "high"
 
@@ -1158,23 +1160,35 @@ def run_mentor_review(
             return {"status": ledger.STATUS_OK, "model": "", "outputs": [*outputs, str(digest_path)], "extra": summary,
                     "reason": f"the mentor day {session} is unchanged; no digest model was asked; {note}"}
 
-    try:
-        result = request(
-            provider="local", model=model, api_key="", evidence=build_evidence(inputs),
+    from ai_jobs import attempts
+
+    def _ask(seen: Mapping[str, Any]) -> Mapping[str, Any]:
+        return request(
+            provider="local", model=model, api_key="", evidence=seen,
             timeout_seconds=TIMEOUT_SECONDS,
             post=capped_post(post, model=model),
             schema=DIGEST_JSON_SCHEMA, schema_name=SCHEMA_NAME, prompt_version=PROMPT_VERSION,
+        ) or {}
+
+    def _check(answer: Mapping[str, Any]) -> tuple[dict[str, list[dict[str, Any]]], int]:
+        return check_reply(answer.get("summary") if isinstance(answer, Mapping) else None, inputs)
+
+    try:
+        # One retry with the rejection quoted, only while the night still holds the slot's reserve.
+        verified = attempts.verified_attempts(
+            _ask, _check, evidence=build_evidence(inputs), attempts=DIGEST_ATTEMPTS,
+            may_retry=attempts.night_window_gate(moment, reserve_minutes=RESERVE_MINUTES),
         )
+    except attempts.AttemptsRejected as exc:
+        return {"status": ledger.STATUS_FAILED, "model": model, "outputs": outputs, "extra": summary,
+                "reason": f"the mentor digest was rejected and nothing was published: {exc}"}
     except Exception as exc:  # noqa: BLE001 - the last digest stays
         _log.debug("mentor_review could not ask its model.", exc_info=True)
         return {"status": ledger.STATUS_DEGRADED, "model": "", "outputs": outputs, "extra": summary,
                 "reason": f"facts published; no local model answered the mentor digest: {exc}"}
-    answered = _text((result or {}).get("model")) or model
-    try:
-        kept, dropped = check_reply((result or {}).get("summary"), inputs)
-    except MentorReviewRejected as exc:
-        return {"status": ledger.STATUS_FAILED, "model": answered, "outputs": outputs, "extra": summary,
-                "reason": f"the mentor digest was rejected and nothing was published: {exc}"}
+    result = verified.result
+    answered = _text(result.get("model")) or model
+    kept, dropped = verified.value
     payload = {
         "schema": DIGEST_SCHEMA,
         "session_date": session,
@@ -1206,6 +1220,8 @@ def run_mentor_review(
                     "hypotheses": len(looked), "hypotheses_recorded": sum(1 for item in looked if item["recorded"]),
                     "dropped": dropped})
     note = brief_step()
+    if verified.rejections:
+        note += "; retried after " + attempts.describe_rejections(verified.rejections, verified.attempts)
     return {
         "status": ledger.STATUS_OK, "model": answered, "outputs": [*outputs, str(digest_path)], "extra": summary,
         "reason": (f"{len(kept['digest'])} digest item(s), {len(kept['open_questions'])} open question(s), "

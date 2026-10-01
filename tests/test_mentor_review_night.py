@@ -477,7 +477,9 @@ def test_no_brief_call_when_the_digest_fails(rich, tmp_path):
                                           "open_questions": []}}
 
     out = _rich_run(rich, tmp_path, request=request)
-    assert out["status"] == "failed" and len(calls) == 1
+    assert out["status"] == "failed"
+    # The digest call and its one retry; never the brief call.
+    assert [call["schema"] for call in calls] == [mentor_review.DIGEST_JSON_SCHEMA] * 2
     assert _brief(tmp_path)["worded"] is False, "the facts part is published regardless"
 
 
