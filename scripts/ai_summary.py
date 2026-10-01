@@ -124,21 +124,18 @@ LOCAL_EVIDENCE_BUDGET_SETTING_KEY = "ai_local_evidence_budget_chars"
 #: own model to 65536 on 2026-08-28 and set this to match.
 LOCAL_CONTEXT_SETTING_KEY = "ai_local_context_tokens"
 DEFAULT_LOCAL_CONTEXT_TOKENS = 12_288
-#: Model families that reason before they answer (gpt-oss on Ollama). The
-#: reasoning comes back apart from `message.content`, but its tokens count
+#: Model families that reason before they answer (gpt-oss and gemma4 on Ollama).
+#: The reasoning comes back apart from `message.content`, but its tokens count
 #: against `max_tokens`, so these tags get an effort level and an output
-#: allowance a plain-answer model such as gemma3 never receives.
-THINKING_MODEL_PREFIXES = ("gpt-oss",)
-#: Model families that think unless told not to, and are told not to (gemma4 on
-#: Ollama, `reasoning_effort: none`). Measured on the 5080, 2026-10-01: at a
-#: night-sized prompt gemma4:12b spent the whole 11.5k-token ceiling reasoning
-#: and answered nothing in 8 of 8 night calls, even at effort high; with the
-#: thinking off it answered the same prompt in 360 tokens and 5 s. The night's
-#: verifiers and retries do the checking a plain answer needs.
-THINKING_OFF_MODEL_PREFIXES = ("gemma4",)
-THINKING_OFF_EFFORT = "none"
+#: allowance a plain-answer model such as gemma3 never receives. Effort `none`
+#: switches the thinking off (gemma4 honours it; gpt-oss knows low/medium/high)
+#: and then no allowance is added. Measured on the 5080, 2026-10-01: gemma4:12b
+#: at a night-sized prompt reasons for well over 8k tokens at effort high, so
+#: the allowance (`ai_local_reasoning_tokens`) must be sized for that.
+THINKING_MODEL_PREFIXES = ("gpt-oss", "gemma4")
 LOCAL_REASONING_EFFORT_SETTING_KEY = "ai_local_reasoning_effort"
-LOCAL_REASONING_EFFORTS = ("low", "medium", "high")
+LOCAL_REASONING_EFFORTS = ("none", "low", "medium", "high")
+THINKING_OFF_EFFORT = "none"
 DEFAULT_LOCAL_REASONING_EFFORT = "low"
 LOCAL_REASONING_TOKENS_SETTING_KEY = "ai_local_reasoning_tokens"
 DEFAULT_LOCAL_REASONING_TOKENS = 2_000
@@ -930,17 +927,15 @@ def model_thinks(model: str) -> bool:
     return tag.startswith(THINKING_MODEL_PREFIXES)
 
 
-def model_thinking_off(model: str) -> bool:
-    """True for a model tag that would think unless asked not to; every local call asks."""
-    tag = str(model or "").strip().lower()
-    tag = tag.split("/")[-1]
-    return tag.startswith(THINKING_OFF_MODEL_PREFIXES)
-
-
 def local_reasoning_effort() -> str:
-    """The reasoning level a thinking model is asked for (settings; low by default)."""
+    """The reasoning level a thinking model is asked for (settings; low by default; `none` = off)."""
     raw = str(get_local_setting(LOCAL_REASONING_EFFORT_SETTING_KEY, "") or "").strip().lower()
     return raw if raw in LOCAL_REASONING_EFFORTS else DEFAULT_LOCAL_REASONING_EFFORT
+
+
+def model_reasons(model: str) -> bool:
+    """True when this tag thinks AND the effort setting leaves the thinking on."""
+    return model_thinks(model) and local_reasoning_effort() != THINKING_OFF_EFFORT
 
 
 def local_reasoning_tokens() -> int:
@@ -1007,7 +1002,7 @@ def local_evidence_budget_ceiling_chars() -> int:
     which is the failure this budget exists to make visible.
     """
     usable = local_context_tokens() - LOCAL_GENERATION_TOKENS
-    if model_thinks(local_model("medium")):
+    if model_reasons(local_model("medium")):
         # The reasoning allowance shares the window too.
         usable -= local_reasoning_tokens()
     if usable <= 0:
@@ -4124,11 +4119,11 @@ def _request_local_summary(
     if model_thinks(model):
         # Ollama's OpenAI shim reads `reasoning_effort`; the reasoning tokens
         # it spends come out of `max_tokens`, so the answer cap grows by the
-        # allowance rather than losing the answer to the thinking.
+        # allowance rather than losing the answer to the thinking. Effort
+        # `none` switches the thinking off and needs no allowance.
         payload["reasoning_effort"] = local_reasoning_effort()
-        payload["max_tokens"] = int(payload["max_tokens"]) + local_reasoning_tokens()
-    elif model_thinking_off(model):
-        payload["reasoning_effort"] = THINKING_OFF_EFFORT
+        if model_reasons(model):
+            payload["max_tokens"] = int(payload["max_tokens"]) + local_reasoning_tokens()
     last_error: Exception | None = None
     #: What to send next when the backend cannot compile the grammar: the same
     #: contract without repetition bounds, then plain JSON-object mode. These

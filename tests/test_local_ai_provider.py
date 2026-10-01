@@ -529,10 +529,7 @@ class ThinkingModelRequestTests(unittest.TestCase):
         self.assertTrue(ai_summary.model_thinks("gpt-oss:20b"))
         self.assertTrue(ai_summary.model_thinks("GPT-OSS:120b"))
         self.assertTrue(ai_summary.model_thinks("hf.co/x/gpt-oss-20b-GGUF:Q8"))
-        self.assertFalse(ai_summary.model_thinks("gemma4:12b"))
-        self.assertTrue(ai_summary.model_thinking_off("gemma4:12b"))
-        self.assertFalse(ai_summary.model_thinking_off("gpt-oss:20b"))
-        self.assertFalse(ai_summary.model_thinking_off("gemma3:12b-tbv3ctx-64k"))
+        self.assertTrue(ai_summary.model_thinks("gemma4:12b"))
         self.assertFalse(ai_summary.model_thinks("gemma3:12b-tbv3ctx-64k"))
         self.assertFalse(ai_summary.model_thinks(""))
 
@@ -554,11 +551,19 @@ class ThinkingModelRequestTests(unittest.TestCase):
         self.assertNotIn("reasoning_effort", sent)
         self.assertEqual(sent["max_tokens"], ai_summary.LOCAL_MAP_GENERATION_TOKENS)
 
-    def test_gemma4_request_switches_the_thinking_off_and_gets_no_allowance(self):
-        """2026-10-01: left to think, gemma4:12b spent the whole ceiling reasoning and answered nothing."""
+    def test_gemma4_thinks_at_the_set_effort_with_the_allowance(self):
+        """Trader 2026-10-01: thinking on, high. The allowance must be sized for gemma4's long reasoning."""
         import ai_summary
 
-        sent = self._send("gemma4:12b", ai_local_reasoning_effort="high", ai_local_reasoning_tokens="8000")
+        sent = self._send("gemma4:12b", ai_local_reasoning_effort="high", ai_local_reasoning_tokens="30000")
+        self.assertEqual(sent["reasoning_effort"], "high")
+        self.assertEqual(sent["max_tokens"], ai_summary.LOCAL_MAP_GENERATION_TOKENS + 30000)
+
+    def test_effort_none_switches_the_thinking_off_and_adds_no_allowance(self):
+        """Left to think under a bare cap, gemma4:12b answered nothing (2026-10-01); `none` is the off switch."""
+        import ai_summary
+
+        sent = self._send("gemma4:12b", ai_local_reasoning_effort="none", ai_local_reasoning_tokens="30000")
         self.assertEqual(sent["reasoning_effort"], "none")
         self.assertEqual(sent["max_tokens"], ai_summary.LOCAL_MAP_GENERATION_TOKENS)
 

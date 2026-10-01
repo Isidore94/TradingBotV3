@@ -215,10 +215,14 @@ def test_the_model_call_is_capped_at_2500_output_tokens(monkeypatch):
     # counts against max_tokens (gemma4:12b under a bare 600 cap answered nothing, 2026-09-30).
     assert sent == {"max_tokens": 10500, "reasoning_effort": "high"}
     sent.clear()
-    # gemma4 thinks unless told not to; the night tells it not to (it spent 11.5k tokens reasoning
-    # and answered nothing in 8 of 8 night calls, 2026-10-01).
+    mentor_review.capped_post(lambda url, **kw: sent.update(kw["json"]), model="gemma4:12b")("u", json={})
+    assert sent == {"max_tokens": 10500, "reasoning_effort": "high"}
+    sent.clear()
+    # The effort setting `none` is the off switch: no reasoning, no allowance.
+    monkeypatch.setattr(ai_summary, "local_reasoning_effort", lambda: "none")
     mentor_review.capped_post(lambda url, **kw: sent.update(kw["json"]), model="gemma4:12b")("u", json={})
     assert sent == {"max_tokens": 2500, "reasoning_effort": "none"}
+    monkeypatch.setattr(ai_summary, "local_reasoning_effort", lambda: "high")
     sent.clear()
     mentor_review.capped_post(lambda url, **kw: sent.update(kw["json"]), model="gemma3:12b")("u", json={})
     assert sent == {"max_tokens": 2500}
