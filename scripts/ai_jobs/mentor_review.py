@@ -868,9 +868,12 @@ def look_up_hypotheses(
     for index, item in enumerate(hypotheses, start=1):
         hyp_id = f"hyp:{session}:{index}"
         raw, normalised = split_family_side(item.get("query"))
+        raw, facet_notes = hypothesis_pack.resolve_bare_facets(raw, report)
         clean, _why = hypothesis_pack.normalise(raw)
         query = clean or dict(raw or {})
         record = hypothesis_pack.lookup_record(query, report)
+        if facet_notes:
+            record["facet_notes"] = facet_notes
         recorded = False
         if night_store is not None:
             recorded = night_store.add_challenge(
