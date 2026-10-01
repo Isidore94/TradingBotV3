@@ -85,7 +85,14 @@ _PREP = re.compile(r"\bwhat should i (?:look at|watch|focus on)\b|\bgame ?plan\b
                    r"|\btomorrow\b.*\b(?:look at|watch|expect|prep)\b|\b(?:look at|watch|expect|prep)\b.*\btomorrow\b")
 _NEWS = re.compile(r"\bnews\b|\bearnings\b|\breporting\b|\breports?\b|\bheadlines?\b|\bcatalysts?\b")
 _BOOK = re.compile(r"\bmy book\b|\bpositions?\b|\bexposure\b|\b(?:am i|i'm|im|i am) holding\b|\bholdings\b"
-                   r"|\bwhat am i in\b|\bopen trades?\b")
+                   r"|\bwhat am i in\b|\bopen trades?\b|\b(?:any|my) (?:open )?(?:shorts|longs) on\b"
+                   r"|\bdo i have any (?:open )?(?:shorts|longs|positions)\b|\bmy open (?:shorts|longs)\b")
+#: P16: a group the trader HOLDS ("my shorts", "my open longs", "my book", "what I'm holding") is the open book only.
+_BOOK_SCOPE = re.compile(r"\bmy (?:open )?(?:shorts|longs|positions|book|holdings)\b|\bopen (?:shorts|longs|positions)\b"
+                         r"|\b(?:am i|i'm|im|i am) holding\b|\bwhat i'm holding\b")
+#: P16: a group he WATCHES ("my focus longs", "watchlist", "my lists", "my picks/likes/names") is Focus and likes.
+_FOCUS_SCOPE = re.compile(r"\bmy focus\b|\bfocus (?:longs|shorts|names|list)\b|\bwatch ?lists?\b|\bmy lists?\b"
+                          r"|\bmy (?:picks|names|likes|liked)\b")
 _TILT = re.compile(r"\btilt(?:ed|ing)?\b|\brevenge\b|\bovertrad")
 #: Walking away for the day: the tilt read plus today's journal.
 _STOP_DAY = re.compile(r"\bstop trading\b|\bcall it a day\b|\bwalk away\b|\bovertrad|\bquit for (?:the|to)day\b"
@@ -302,31 +309,28 @@ def plan_attachments(
             symbols and not gated and _INTENT.search(lowered) and not past):
         add("regime_pack", "market words" if tape_words else "trade intent")
     held, likes = _names(book), _names(liked)
+    scope = group_scope(lowered) if group or earnings_alone else ""
+    if scope == "book":
+        # P16: a question about what he holds reads the book itself too ("my open shorts into earnings").
+        add("book_pack", "book scope")
     if (group and earnings_group) or earnings_alone:
         which = next(g for g in group.groups() if g) if group else "book and likes"
-        side = "LONG" if which.startswith("long") else "SHORT" if which.startswith("short") else ""
-        sided = [sym for sym, s in known.items() if s]
-        if earnings_alone:
-            pool = held + likes or sided
-        elif which in ("book", "positions", "holdings", "holding"):
-            pool = held or sided
-        else:
-            # Open book, then liked chips, then Focus (the order of ``known``); journal-only names carry no side.
-            pool = held + likes + sided
-        names: list[str] = []
-        for sym in pool:
-            if sym not in names and sym not in INDEX_SYMBOLS and (not side or known.get(sym, side) == side):
-                names.append(sym)
+        side = _group_side(lowered, which)
+        names = [sym for sym in _scope_pool(scope, held, likes, known, earnings_alone=earnings_alone)
+                 if sym not in INDEX_SYMBOLS and (not side or known.get(sym, side) == side)]
         if names:
-            # The full list: the pack caps it, keeps every book name, and lists the rest by name.
+            # The full list: the pack caps it, keeps every book name, and lists the rest by name. Each name
+            # carries where it came from, so a Focus name is never read as a position.
             add("earnings_pack", f"earnings across {which}", symbols=names,
-                book=[sym for sym in held if sym in names])
+                book=[sym for sym in held if sym in names],
+                **_origin_args(names, held, likes, side))
     elif group and _NEWS.search(lowered):
         which = next(g for g in group.groups() if g)
-        side = "LONG" if which.startswith("long") else "SHORT" if which.startswith("short") else ""
-        names = [sym for sym, s in known.items() if sym not in INDEX_SYMBOLS and (not side or s == side)]
+        side = _group_side(lowered, which)
+        names = [sym for sym in _scope_pool(scope, held, likes, known)
+                 if sym not in INDEX_SYMBOLS and (not side or known.get(sym, "") == side)]
         for sym in names[:MAX_SYMBOLS]:
-            add("pick_pack", f"news across {which}", symbol=sym)
+            add("pick_pack", f"news across {which}", symbol=sym, origin=origin_of(sym, held, likes))
     if _BOOK.search(lowered):
         add("book_pack", "book words")
     if _TILT.search(lowered) or stop_day:
@@ -350,6 +354,52 @@ def plan_attachments(
     if _RECALL.search(lowered):
         add("recall", "memory words", query=raw[:200])
     return sorted(wanted, key=lambda request: request.priority)
+
+
+def _group_side(lowered: str, which: str) -> str:
+    """The side a group names: its own word ("shorts"), else the one side word in the question ("my focus longs")."""
+    if which.startswith("long") or which.startswith("short"):
+        return "LONG" if which.startswith("long") else "SHORT"
+    longs, shorts = bool(re.search(r"\blongs\b", lowered)), bool(re.search(r"\bshorts\b", lowered))
+    return "LONG" if longs and not shorts else "SHORT" if shorts and not longs else ""
+
+
+def group_scope(lowered: str) -> str:
+    """P16: "book" for a group he holds, "focus" for a group he watches, "both" when he names both, else ""."""
+    book, focus = bool(_BOOK_SCOPE.search(lowered)), bool(_FOCUS_SCOPE.search(lowered))
+    return "both" if book and focus else "book" if book else "focus" if focus else ""
+
+
+def _scope_pool(scope: str, held: list[str], likes: list[str], known: Mapping[str, str], *,
+                earnings_alone: bool = False) -> list[str]:
+    """The names a group question covers, in order: the book only for a book group (never Focus), the likes then
+    the sided Focus names (not held) for a Focus group, everything for both or no scope word."""
+    sided = [sym for sym, side in known.items() if side]
+    if scope == "book":
+        pool = list(held)
+    elif scope == "focus":
+        pool = likes + [sym for sym in sided if sym not in held]
+    elif earnings_alone:
+        pool = held + likes or sided
+    else:
+        # Open book, then liked chips, then Focus (the order of ``known``); journal-only names carry no side.
+        pool = held + likes + sided
+    out: list[str] = []
+    for sym in pool:
+        if sym not in out:
+            out.append(sym)
+    return out
+
+
+def origin_of(sym: str, held: Iterable[str], likes: Iterable[str]) -> str:
+    """Where a group name came from: ``book`` (an open position), ``liked`` or ``focus`` (watch names only)."""
+    return "book" if sym in set(held) else "liked" if sym in set(likes) else "focus"
+
+
+def _origin_args(names: list[str], held: list[str], likes: list[str], side: str) -> dict[str, Any]:
+    liked = [sym for sym in names if origin_of(sym, held, likes) == "liked"]
+    focus = [sym for sym in names if origin_of(sym, held, likes) == "focus"]
+    return {"liked": liked, "focus": focus, **({"side": side} if side else {})}
 
 
 def book_symbols(context_rows: Iterable[Mapping[str, Any]] = ()) -> list[str]:

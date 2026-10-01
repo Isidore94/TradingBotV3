@@ -1,78 +1,660 @@
 {
   "schema": "mentor_eval_questions_v1",
   "feature_version": "mentor_attach_v2",
-  "raw_input_keys": ["known_symbols", "questions"],
-  "raw_input_sha256": "4b1d89cbb710bfafeabb6aace4b1a85c0cddda7ea28534c795f73461cfaec57d",
+  "raw_input_keys": [
+    "known_symbols",
+    "questions",
+    "book"
+  ],
+  "raw_input_sha256": "6ae63a13b734e180e15a97fb227ff08776e93ed5abc446d0bca35edc0081f8e2",
   "acquired_at": "2026-09-30T08:00:00-07:00",
   "as_of": "2026-09-30T08:00:00-07:00",
   "universe_version": "trader_plain_questions_v3",
   "provider_assumptions": "Hand-written questions in the trader's own style (2026-09-30), not a desk capture: 40 from P13, 10 from the P14 live eval and 10 for P15b (fundamentals x4, recaps/issues x5, feelings x1). known_symbols stands in for his universe (Focus, likes, book, journal). expected_packs are what the app should fetch (P14: no regime without a market or pre-trade cue; earnings over the book via earnings_pack; a concept question needs none); must_mention are checklist sections (gate questions) or words the live reply should carry; simple marks the questions the style score holds to 600 characters.",
-  "expected_keys": ["checklist"],
+  "expected_keys": [
+    "checklist"
+  ],
   "numeric_tolerance": 0.0,
   "intentional_difference": "",
   "now": "2026-09-30T15:00:00+00:00",
-  "known_symbols": {"ALL": "SHORT", "NVDA": "LONG", "AMD": "SHORT", "TSLA": "SHORT", "V": "LONG", "MSFT": ""},
-  "checklist": ["earnings", "plan", "tape", "cell", "book", "news"],
+  "known_symbols": {
+    "ALL": "SHORT",
+    "NVDA": "LONG",
+    "AMD": "SHORT",
+    "TSLA": "SHORT",
+    "V": "LONG",
+    "MSFT": ""
+  },
+  "checklist": [
+    "earnings",
+    "plan",
+    "tape",
+    "cell",
+    "book",
+    "news"
+  ],
   "questions": [
-    {"q": "how did today go", "expected_packs": ["journal_pack"], "must_mention": ["today"], "simple": true},
-    {"q": "what trades did I take today", "expected_packs": ["journal_pack"], "must_mention": ["trade"], "simple": true},
-    {"q": "what did SPY do", "expected_packs": ["regime_pack"], "must_mention": ["SPY"], "simple": true},
-    {"q": "im thinking of shorting ALL thoughts?", "expected_packs": ["gate_pack", "news_pack"], "must_mention": ["earnings", "plan", "tape", "cell", "book", "news"]},
-    {"q": "anything reporting this week in my longs?", "expected_packs": ["earnings_pack"], "must_mention": ["earnings"]},
-    {"q": "why did I lose money tuesday", "expected_packs": ["journal_pack"], "must_mention": ["loss"], "simple": true},
-    {"q": "is NVDA still worth it with AMD reporting", "expected_packs": ["pick_pack", "news_pack"], "must_mention": ["earnings"]},
-    {"q": "what's the tape doing", "expected_packs": ["regime_pack"], "must_mention": ["tape"], "simple": true},
-    {"q": "what did I veto yesterday and was I right", "expected_packs": ["veto_pack"], "must_mention": ["veto"]},
-    {"q": "thinking of taking a short like ALL, thoughts?", "expected_packs": ["gate_pack"], "must_mention": ["earnings", "plan", "tape", "cell", "book", "news"]},
-    {"q": "how am i doing today", "expected_packs": ["journal_pack"], "must_mention": ["today"], "simple": true},
-    {"q": "should I add to NVDA here", "expected_packs": ["gate_pack"], "must_mention": ["earnings", "plan", "tape", "cell", "book", "news"]},
-    {"q": "whats the market like this morning", "expected_packs": ["regime_pack"], "must_mention": ["market"], "simple": true},
-    {"q": "any news on TSLA", "expected_packs": ["news_pack"], "must_mention": ["news"], "simple": true},
-    {"q": "did I do ok yesterday", "expected_packs": ["journal_pack"], "must_mention": ["yesterday"], "simple": true},
-    {"q": "how was my week", "expected_packs": ["journal_pack"], "must_mention": ["week"], "simple": true},
-    {"q": "what am I holding", "expected_packs": ["book_pack"], "must_mention": ["open"]},
-    {"q": "go long MSFT or wait?", "expected_packs": ["gate_pack"], "must_mention": ["earnings", "plan", "tape", "cell", "book", "news"]},
-    {"q": "is the regime still weak", "expected_packs": ["regime_pack"], "must_mention": ["regime"], "simple": true},
-    {"q": "what happened with AMD friday", "expected_packs": ["journal_pack", "pick_pack"], "must_mention": ["AMD"]},
-    {"q": "earnings on $PLTR?", "expected_packs": ["pick_pack", "news_pack"], "must_mention": ["earnings"], "simple": true},
-    {"q": "am I tilting", "expected_packs": ["tilt_pack"], "must_mention": ["loss"], "simple": true},
-    {"q": "what are my rules on shorts", "expected_packs": ["plan_lines"], "must_mention": ["plan"], "simple": true},
-    {"q": "how has my record been lately", "expected_packs": ["mirror_pack"], "must_mention": ["n="]},
-    {"q": "what did you say about NVDA last time we talked", "expected_packs": ["recall", "pick_pack"], "must_mention": ["NVDA"]},
-    {"q": "should I size up TSLA short", "expected_packs": ["gate_pack"], "must_mention": ["earnings", "plan", "tape", "cell", "book", "news"]},
-    {"q": "passed on AMD this morning, mistake?", "expected_packs": ["veto_pack", "pick_pack"], "must_mention": ["AMD"]},
-    {"q": "entering V long now, anything im missing?", "expected_packs": ["gate_pack"], "must_mention": ["earnings", "plan", "tape", "cell", "book", "news"]},
-    {"q": "how did I do last week", "expected_packs": ["journal_pack"], "must_mention": ["week"], "simple": true},
-    {"q": "is QQQ holding up", "expected_packs": ["regime_pack"], "must_mention": ["QQQ"], "simple": true},
-    {"q": "whats my exposure right now", "expected_packs": ["book_pack"], "must_mention": ["open"]},
-    {"q": "why did NVDA stop me out", "expected_packs": ["journal_pack", "pick_pack"], "must_mention": ["stop"]},
-    {"q": "cpi tomorrow, should I be careful", "expected_packs": ["regime_pack"], "must_mention": ["CPI"]},
-    {"q": "thinking about getting into ALL on the open", "expected_packs": ["gate_pack"], "must_mention": ["earnings", "plan", "tape", "cell", "book", "news"]},
-    {"q": "any headlines on MSFT today", "expected_packs": ["news_pack"], "must_mention": ["MSFT"], "simple": true},
-    {"q": "how's the day going", "expected_packs": ["journal_pack"], "must_mention": ["today"], "simple": true},
-    {"q": "what did I skip monday", "expected_packs": ["veto_pack"], "must_mention": ["veto"]},
-    {"q": "breadth any good?", "expected_packs": ["regime_pack"], "must_mention": ["breadth"], "simple": true},
-    {"q": "should I take TSLA or AMD", "expected_packs": ["gate_pack"], "must_mention": ["earnings", "plan", "tape", "cell", "book", "news"]},
-    {"q": "green or red so far?", "expected_packs": ["journal_pack"], "must_mention": ["net"], "simple": true},
-    {"q": "what's my win rate this month", "expected_packs": ["journal_pack"], "must_mention": ["win"], "simple": true},
-    {"q": "when during the day do I trade best", "expected_packs": ["mirror_pack"], "must_mention": ["n="], "simple": true},
-    {"q": "am I overtrading", "expected_packs": ["tilt_pack", "journal_pack"], "must_mention": ["today"], "simple": true},
-    {"q": "what's the biggest risk in my book right now", "expected_packs": ["book_pack"], "must_mention": ["risk"]},
-    {"q": "compare NVDA and AMD for a long", "expected_packs": ["pick_pack"], "must_mention": ["NVDA"]},
-    {"q": "what does my plan say about shorting into earnings", "expected_packs": ["plan_lines"], "must_mention": ["plan"], "simple": true},
-    {"q": "should I stop trading for today", "expected_packs": ["tilt_pack", "journal_pack"], "must_mention": ["today"], "simple": true},
-    {"q": "what should I look at tomorrow morning", "expected_packs": ["regime_pack"], "must_mention": ["tomorrow"]},
-    {"q": "explain what an anchored vwap band bounce is in one paragraph", "expected_packs": [], "must_mention": ["VWAP"], "concept": true},
-    {"q": "which of my vetoes this month would have worked", "expected_packs": ["veto_pack"], "must_mention": ["veto"]},
-    {"q": "what's the macro brief say today", "expected_packs": ["fundamentals_pack"], "must_mention": ["brief"], "simple": true},
-    {"q": "what did claude flag as the catalyst", "expected_packs": ["fundamentals_pack"], "must_mention": ["catalyst"]},
-    {"q": "is the playbook bullish or bearish", "expected_packs": ["fundamentals_pack"], "must_mention": ["playbook"], "simple": true},
-    {"q": "anything about yields in the brief", "expected_packs": ["fundamentals_pack"], "must_mention": ["yield"], "simple": true},
-    {"q": "what are my most pertinent issues", "expected_packs": ["recaps_pack"], "must_mention": ["sessions"]},
-    {"q": "what have I been doing wrong lately", "expected_packs": ["recaps_pack"], "must_mention": ["sessions"]},
-    {"q": "what did yesterday's recap say", "expected_packs": ["recaps_pack"], "must_mention": ["recap"]},
-    {"q": "what am I missing", "expected_packs": ["recaps_pack", "night_pack"], "must_mention": ["miss"]},
-    {"q": "am I making the same mistake", "expected_packs": ["recaps_pack"], "must_mention": ["sessions"]},
-    {"q": "how did I feel about the SHOP trade", "expected_packs": ["journal_pack"], "must_mention": ["SHOP"], "simple": true}
+    {
+      "q": "how did today go",
+      "expected_packs": [
+        "journal_pack"
+      ],
+      "must_mention": [
+        "today"
+      ],
+      "simple": true
+    },
+    {
+      "q": "what trades did I take today",
+      "expected_packs": [
+        "journal_pack"
+      ],
+      "must_mention": [
+        "trade"
+      ],
+      "simple": true
+    },
+    {
+      "q": "what did SPY do",
+      "expected_packs": [
+        "regime_pack"
+      ],
+      "must_mention": [
+        "SPY"
+      ],
+      "simple": true
+    },
+    {
+      "q": "im thinking of shorting ALL thoughts?",
+      "expected_packs": [
+        "gate_pack",
+        "news_pack"
+      ],
+      "must_mention": [
+        "earnings",
+        "plan",
+        "tape",
+        "cell",
+        "book",
+        "news"
+      ]
+    },
+    {
+      "q": "anything reporting this week in my longs?",
+      "expected_packs": [
+        "earnings_pack"
+      ],
+      "must_mention": [
+        "earnings"
+      ]
+    },
+    {
+      "q": "why did I lose money tuesday",
+      "expected_packs": [
+        "journal_pack"
+      ],
+      "must_mention": [
+        "loss"
+      ],
+      "simple": true
+    },
+    {
+      "q": "is NVDA still worth it with AMD reporting",
+      "expected_packs": [
+        "pick_pack",
+        "news_pack"
+      ],
+      "must_mention": [
+        "earnings"
+      ]
+    },
+    {
+      "q": "what's the tape doing",
+      "expected_packs": [
+        "regime_pack"
+      ],
+      "must_mention": [
+        "tape"
+      ],
+      "simple": true
+    },
+    {
+      "q": "what did I veto yesterday and was I right",
+      "expected_packs": [
+        "veto_pack"
+      ],
+      "must_mention": [
+        "veto"
+      ]
+    },
+    {
+      "q": "thinking of taking a short like ALL, thoughts?",
+      "expected_packs": [
+        "gate_pack"
+      ],
+      "must_mention": [
+        "earnings",
+        "plan",
+        "tape",
+        "cell",
+        "book",
+        "news"
+      ]
+    },
+    {
+      "q": "how am i doing today",
+      "expected_packs": [
+        "journal_pack"
+      ],
+      "must_mention": [
+        "today"
+      ],
+      "simple": true
+    },
+    {
+      "q": "should I add to NVDA here",
+      "expected_packs": [
+        "gate_pack"
+      ],
+      "must_mention": [
+        "earnings",
+        "plan",
+        "tape",
+        "cell",
+        "book",
+        "news"
+      ]
+    },
+    {
+      "q": "whats the market like this morning",
+      "expected_packs": [
+        "regime_pack"
+      ],
+      "must_mention": [
+        "market"
+      ],
+      "simple": true
+    },
+    {
+      "q": "any news on TSLA",
+      "expected_packs": [
+        "news_pack"
+      ],
+      "must_mention": [
+        "news"
+      ],
+      "simple": true
+    },
+    {
+      "q": "did I do ok yesterday",
+      "expected_packs": [
+        "journal_pack"
+      ],
+      "must_mention": [
+        "yesterday"
+      ],
+      "simple": true
+    },
+    {
+      "q": "how was my week",
+      "expected_packs": [
+        "journal_pack"
+      ],
+      "must_mention": [
+        "week"
+      ],
+      "simple": true
+    },
+    {
+      "q": "what am I holding",
+      "expected_packs": [
+        "book_pack"
+      ],
+      "must_mention": [
+        "open"
+      ]
+    },
+    {
+      "q": "go long MSFT or wait?",
+      "expected_packs": [
+        "gate_pack"
+      ],
+      "must_mention": [
+        "earnings",
+        "plan",
+        "tape",
+        "cell",
+        "book",
+        "news"
+      ]
+    },
+    {
+      "q": "is the regime still weak",
+      "expected_packs": [
+        "regime_pack"
+      ],
+      "must_mention": [
+        "regime"
+      ],
+      "simple": true
+    },
+    {
+      "q": "what happened with AMD friday",
+      "expected_packs": [
+        "journal_pack",
+        "pick_pack"
+      ],
+      "must_mention": [
+        "AMD"
+      ]
+    },
+    {
+      "q": "earnings on $PLTR?",
+      "expected_packs": [
+        "pick_pack",
+        "news_pack"
+      ],
+      "must_mention": [
+        "earnings"
+      ],
+      "simple": true
+    },
+    {
+      "q": "am I tilting",
+      "expected_packs": [
+        "tilt_pack"
+      ],
+      "must_mention": [
+        "loss"
+      ],
+      "simple": true
+    },
+    {
+      "q": "what are my rules on shorts",
+      "expected_packs": [
+        "plan_lines"
+      ],
+      "must_mention": [
+        "plan"
+      ],
+      "simple": true
+    },
+    {
+      "q": "how has my record been lately",
+      "expected_packs": [
+        "mirror_pack"
+      ],
+      "must_mention": [
+        "n="
+      ]
+    },
+    {
+      "q": "what did you say about NVDA last time we talked",
+      "expected_packs": [
+        "recall",
+        "pick_pack"
+      ],
+      "must_mention": [
+        "NVDA"
+      ]
+    },
+    {
+      "q": "should I size up TSLA short",
+      "expected_packs": [
+        "gate_pack"
+      ],
+      "must_mention": [
+        "earnings",
+        "plan",
+        "tape",
+        "cell",
+        "book",
+        "news"
+      ]
+    },
+    {
+      "q": "passed on AMD this morning, mistake?",
+      "expected_packs": [
+        "veto_pack",
+        "pick_pack"
+      ],
+      "must_mention": [
+        "AMD"
+      ]
+    },
+    {
+      "q": "entering V long now, anything im missing?",
+      "expected_packs": [
+        "gate_pack"
+      ],
+      "must_mention": [
+        "earnings",
+        "plan",
+        "tape",
+        "cell",
+        "book",
+        "news"
+      ]
+    },
+    {
+      "q": "how did I do last week",
+      "expected_packs": [
+        "journal_pack"
+      ],
+      "must_mention": [
+        "week"
+      ],
+      "simple": true
+    },
+    {
+      "q": "is QQQ holding up",
+      "expected_packs": [
+        "regime_pack"
+      ],
+      "must_mention": [
+        "QQQ"
+      ],
+      "simple": true
+    },
+    {
+      "q": "whats my exposure right now",
+      "expected_packs": [
+        "book_pack"
+      ],
+      "must_mention": [
+        "open"
+      ]
+    },
+    {
+      "q": "why did NVDA stop me out",
+      "expected_packs": [
+        "journal_pack",
+        "pick_pack"
+      ],
+      "must_mention": [
+        "stop"
+      ]
+    },
+    {
+      "q": "cpi tomorrow, should I be careful",
+      "expected_packs": [
+        "regime_pack"
+      ],
+      "must_mention": [
+        "CPI"
+      ]
+    },
+    {
+      "q": "thinking about getting into ALL on the open",
+      "expected_packs": [
+        "gate_pack"
+      ],
+      "must_mention": [
+        "earnings",
+        "plan",
+        "tape",
+        "cell",
+        "book",
+        "news"
+      ]
+    },
+    {
+      "q": "any headlines on MSFT today",
+      "expected_packs": [
+        "news_pack"
+      ],
+      "must_mention": [
+        "MSFT"
+      ],
+      "simple": true
+    },
+    {
+      "q": "how's the day going",
+      "expected_packs": [
+        "journal_pack"
+      ],
+      "must_mention": [
+        "today"
+      ],
+      "simple": true
+    },
+    {
+      "q": "what did I skip monday",
+      "expected_packs": [
+        "veto_pack"
+      ],
+      "must_mention": [
+        "veto"
+      ]
+    },
+    {
+      "q": "breadth any good?",
+      "expected_packs": [
+        "regime_pack"
+      ],
+      "must_mention": [
+        "breadth"
+      ],
+      "simple": true
+    },
+    {
+      "q": "should I take TSLA or AMD",
+      "expected_packs": [
+        "gate_pack"
+      ],
+      "must_mention": [
+        "earnings",
+        "plan",
+        "tape",
+        "cell",
+        "book",
+        "news"
+      ]
+    },
+    {
+      "q": "green or red so far?",
+      "expected_packs": [
+        "journal_pack"
+      ],
+      "must_mention": [
+        "net"
+      ],
+      "simple": true
+    },
+    {
+      "q": "what's my win rate this month",
+      "expected_packs": [
+        "journal_pack"
+      ],
+      "must_mention": [
+        "win"
+      ],
+      "simple": true
+    },
+    {
+      "q": "when during the day do I trade best",
+      "expected_packs": [
+        "mirror_pack"
+      ],
+      "must_mention": [
+        "n="
+      ],
+      "simple": true
+    },
+    {
+      "q": "am I overtrading",
+      "expected_packs": [
+        "tilt_pack",
+        "journal_pack"
+      ],
+      "must_mention": [
+        "today"
+      ],
+      "simple": true
+    },
+    {
+      "q": "what's the biggest risk in my book right now",
+      "expected_packs": [
+        "book_pack"
+      ],
+      "must_mention": [
+        "risk"
+      ]
+    },
+    {
+      "q": "compare NVDA and AMD for a long",
+      "expected_packs": [
+        "pick_pack"
+      ],
+      "must_mention": [
+        "NVDA"
+      ]
+    },
+    {
+      "q": "what does my plan say about shorting into earnings",
+      "expected_packs": [
+        "plan_lines"
+      ],
+      "must_mention": [
+        "plan"
+      ],
+      "simple": true
+    },
+    {
+      "q": "should I stop trading for today",
+      "expected_packs": [
+        "tilt_pack",
+        "journal_pack"
+      ],
+      "must_mention": [
+        "today"
+      ],
+      "simple": true
+    },
+    {
+      "q": "what should I look at tomorrow morning",
+      "expected_packs": [
+        "regime_pack"
+      ],
+      "must_mention": [
+        "tomorrow"
+      ]
+    },
+    {
+      "q": "explain what an anchored vwap band bounce is in one paragraph",
+      "expected_packs": [],
+      "must_mention": [
+        "VWAP"
+      ],
+      "concept": true
+    },
+    {
+      "q": "which of my vetoes this month would have worked",
+      "expected_packs": [
+        "veto_pack"
+      ],
+      "must_mention": [
+        "veto"
+      ]
+    },
+    {
+      "q": "what's the macro brief say today",
+      "expected_packs": [
+        "fundamentals_pack"
+      ],
+      "must_mention": [
+        "brief"
+      ],
+      "simple": true
+    },
+    {
+      "q": "what did claude flag as the catalyst",
+      "expected_packs": [
+        "fundamentals_pack"
+      ],
+      "must_mention": [
+        "catalyst"
+      ]
+    },
+    {
+      "q": "is the playbook bullish or bearish",
+      "expected_packs": [
+        "fundamentals_pack"
+      ],
+      "must_mention": [
+        "playbook"
+      ],
+      "simple": true
+    },
+    {
+      "q": "anything about yields in the brief",
+      "expected_packs": [
+        "fundamentals_pack"
+      ],
+      "must_mention": [
+        "yield"
+      ],
+      "simple": true
+    },
+    {
+      "q": "what are my most pertinent issues",
+      "expected_packs": [
+        "recaps_pack"
+      ],
+      "must_mention": [
+        "sessions"
+      ]
+    },
+    {
+      "q": "what have I been doing wrong lately",
+      "expected_packs": [
+        "recaps_pack"
+      ],
+      "must_mention": [
+        "sessions"
+      ]
+    },
+    {
+      "q": "what did yesterday's recap say",
+      "expected_packs": [
+        "recaps_pack"
+      ],
+      "must_mention": [
+        "recap"
+      ]
+    },
+    {
+      "q": "what am I missing",
+      "expected_packs": [
+        "recaps_pack",
+        "night_pack"
+      ],
+      "must_mention": [
+        "miss"
+      ]
+    },
+    {
+      "q": "am I making the same mistake",
+      "expected_packs": [
+        "recaps_pack"
+      ],
+      "must_mention": [
+        "sessions"
+      ]
+    },
+    {
+      "q": "how did I feel about the SHOP trade",
+      "expected_packs": [
+        "journal_pack"
+      ],
+      "must_mention": [
+        "SHOP"
+      ],
+      "simple": true
+    }
+  ],
+  "book": [
+    "NVDA",
+    "AMD"
   ]
 }
