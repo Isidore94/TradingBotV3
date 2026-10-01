@@ -7,6 +7,8 @@ evidence:
 - ``tilt:reentry:<SYM>:<HHMMSS>``: the same symbol and side re-opened within REENTRY_WINDOW of a loss on it;
 - ``tilt:size:<SYM>:<HHMMSS>``: an open at SIZE_MULTIPLE x the median of the day's earlier opens, after a loss;
 - ``tilt:streak:<HHMMSS>``: STREAK_LOSSES losing closes in a row today;
+- ``tilt:chase:<SYM>:<HHMMSS>`` (P18): after a loss, an open into CHASE_BARS completed M5 bars all moving its way,
+  from the desk's M5 publisher files (no bars = no row, never a guess);
 - ``tilt:base:<kind>``: over the last BASE_SESSIONS sessions with trades, how often the pattern
   was followed by a red rest of day (n, Wilson LB, "too few" under the floor).
 
@@ -23,7 +25,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from mentor_packs import journal_read
 from mentor_packs.journal_read import ET
@@ -58,6 +60,11 @@ BASE_SESSIONS = 60
 #: Partial fills of one order land as separate legs a few seconds apart: one open.
 FILL_MERGE = timedelta(seconds=60)
 KINDS = ("burst", "reentry", "size", "streak")
+#: P18: an open after CHASE_BARS completed M5 bars all moving its way (green for a long, red for a short).
+CHASE_BARS = 3
+BAR = timedelta(minutes=5)
+#: Kinds shown today; ``chase`` needs the desk's M5 bar files, so it has no base rate yet.
+OBSERVATION_KINDS = (*KINDS, "chase")
 KIND_TEXT = {"burst": "a burst of opens after a loss", "reentry": "a re-entry on the same name after a loss",
              "size": "a bigger open after a loss", "streak": f"{STREAK_LOSSES} losing closes in a row"}
 FOOTER = "Observation, not a rule."
@@ -192,6 +199,53 @@ def detect(opens: list[Event], closes: list[Event]) -> list[dict[str, Any]]:
     return found
 
 
+def detect_chase(opens: list[Event], closes: list[Event],
+                 bars_for: Callable[[str], list[Mapping[str, Any]]]) -> list[dict[str, Any]]:
+    """P18: opens after the first losing close that came after CHASE_BARS completed bars all moving their way."""
+    losses = [c for c in closes if c.pnl is not None and c.pnl < 0]
+    if not losses:
+        return []
+    found = []
+    for event in opens:
+        if event.at <= losses[0].at or event.side not in ("LONG", "SHORT"):
+            continue
+        done = []
+        for bar in bars_for(event.symbol) or ():
+            start = journal_read.parse_time(bar.get("start"))
+            o, c = journal_read.num(bar.get("open")), journal_read.num(bar.get("close"))
+            if start is not None and o is not None and c is not None and start + BAR <= event.at:
+                done.append((start, o, c))
+        done.sort()
+        last = done[-CHASE_BARS:]
+        if len(last) < CHASE_BARS or any(b[0] - a[0] != BAR for a, b in zip(last, last[1:], strict=False)):
+            continue
+        green = all(c > o for _s, o, c in last)
+        red = all(c < o for _s, o, c in last)
+        if not ((event.side == "LONG" and green) or (event.side == "SHORT" and red)):
+            continue
+        loss = [c for c in losses if c.at < event.at][-1]
+        legs = loss.legs + event.legs
+        colour = "green" if green else "red"
+        found.append({"kind": "chase", "id": f"tilt:chase:{event.symbol}:{_stamp(event.at)}", "at": event.at,
+                      "symbol": event.symbol, "legs": legs,
+                      "text": (f"Opened {event.symbol} {event.side} after {CHASE_BARS} {colour} M5 bars in a row "
+                               f"({last[0][0].astimezone(ET):%H:%M}-{(last[-1][0] + BAR).astimezone(ET):%H:%M} ET), "
+                               f"after a losing close on {loss.symbol} ({_legs_text(legs)}). {FOOTER}")})
+    return found
+
+
+def publisher_bars(day: date, directory: Path | None = None) -> Callable[[str], list[dict[str, Any]]]:
+    """Bars for one symbol from the desk's M5 publisher file for ``day`` (read-only; none = [])."""
+    from mentor_packs import bars_pack
+
+    if directory is None:
+        from project_paths import M5_BARS_DIR
+
+        directory = Path(M5_BARS_DIR)
+    files = [Path(directory) / f"{day.isoformat()}.jsonl"]
+    return lambda symbol: bars_pack.read_publisher_bars(symbol, [f for f in files if f.exists()])
+
+
 def realized(closes: list[Event], *, before: datetime | None = None, after: datetime | None = None) -> float:
     return float(sum(c.pnl or 0.0 for c in closes
                      if (before is None or c.at <= before) and (after is None or c.at > after)))
@@ -246,7 +300,9 @@ def live_journal() -> Path:
     return Path(JOURNAL_DB_FILE)
 
 
-def today_observations(journal: Path | str, now: datetime) -> tuple[list[dict[str, Any]], list[Event], list[Event]]:
+def today_observations(journal: Path | str, now: datetime, *,
+                       bars_for: Callable[[str], list[Mapping[str, Any]]] | None = None,
+                       ) -> tuple[list[dict[str, Any]], list[Event], list[Event]]:
     """(observations, opens, closes) for today (New York) up to ``now``."""
     day = now.astimezone(ET).date()
     since = day.isoformat()
@@ -254,19 +310,25 @@ def today_observations(journal: Path | str, now: datetime) -> tuple[list[dict[st
     trades = journal_read.read_trades(journal, since=since)
     opens, closes = day_events(legs, trades, day, until=now)
     rows = detect(opens, closes)
+    try:
+        rows += detect_chase(opens, closes, bars_for or publisher_bars(day))
+    except Exception:  # noqa: BLE001 - unreadable bar files cost the chase row only
+        pass
+    rows.sort(key=lambda r: (r["at"], r["id"]))
     for row in rows:
         row["before_pnl"] = round(realized(closes, before=row["at"]), 2)
     return rows, opens, closes
 
 
-def build(*, now: datetime | None = None, journal: Path | str | None = None) -> Pack:
+def build(*, now: datetime | None = None, journal: Path | str | None = None,
+          bars_for: Callable[[str], list[Mapping[str, Any]]] | None = None) -> Pack:
     """Build the tilt pack. Journal reads (``mode=ro``): call it on a worker."""
     moment = _now(now)
     path = Path(journal) if journal is not None else live_journal()
     day = moment.astimezone(ET).date()
     floor = min_reportable_n()
     try:
-        observed, opens, closes = today_observations(path, moment)
+        observed, opens, closes = today_observations(path, moment, bars_for=bars_for)
     except sqlite3.Error as exc:
         return make_pack(NAME, (), empty_text=f"the journal could not be read ({type(exc).__name__}); unknown")
     rows: list[dict[str, Any]] = [{
@@ -292,7 +354,7 @@ def build(*, now: datetime | None = None, journal: Path | str | None = None) -> 
 
 
 def observations(pack: Pack) -> list[dict[str, Any]]:
-    return [row for row in pack.rows if str(row.get("kind")) in KINDS]
+    return [row for row in pack.rows if str(row.get("kind")) in OBSERVATION_KINDS]
 
 
 # ---------------------------------------------------------------- fixture
