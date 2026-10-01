@@ -108,6 +108,14 @@ def bar_start(raw: Mapping[str, Any], market_tz: Any) -> datetime | None:
     return moment if moment.tzinfo else moment.replace(tzinfo=market_tz)
 
 
+def age_text(minutes: float) -> str:
+    """Minutes under 120, hours under 48, else days."""
+    if minutes < 120:
+        return f"{minutes:.0f} min"
+    hours = minutes / 60.0
+    return f"{hours:.1f} h" if hours < 48 else f"{hours / 24:.1f} days"
+
+
 def _clean(symbol: Any) -> str:
     return str(symbol or "").strip().upper().lstrip("$")
 
@@ -147,7 +155,7 @@ def build(symbol: str = "", n: int = 12, *, now: datetime | None = None, sources
         "id": f"bars:{sym}:asof", "kind": "asof", "symbol": sym, "stale": stale,
         "at_utc": last_end.astimezone(timezone.utc).isoformat(timespec="seconds"),
         "text": (f"{sym} cached M5 bars: last completed bar closed {last_end.astimezone(ET):%Y-%m-%d %H:%M} ET, "
-                 f"{age_min:.0f} min ago" + (f" (STALE > {STALE_MINUTES} min)" if stale else "")),
+                 f"{age_text(age_min)} ago" + (f" (STALE > {STALE_MINUTES} min)" if stale else "")),
     }]
     shown = ordered[-n:]
     for i, bar in enumerate(shown, 1):
@@ -179,7 +187,7 @@ def build(symbol: str = "", n: int = 12, *, now: datetime | None = None, sources
     rows.append({
         "id": f"bars:{sym}:last", "kind": "last", "symbol": sym, "price": last["close"],
         "text": (f"{sym} last {last['close']:.2f} at {last_end.astimezone(ET):%H:%M} ET (close of the last completed "
-                 f"bar)" + (f"; stale, {age_min:.0f} min old" if stale else "")),
+                 f"bar)" + (f"; stale, {age_text(age_min)} old" if stale else "")),
     })
     return make_pack(NAME, rows)
 

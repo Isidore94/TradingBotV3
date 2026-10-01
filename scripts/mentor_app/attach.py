@@ -434,7 +434,7 @@ def plan_attachments(
     if _ALERTS.search(lowered):
         iso_day = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", day))
         alert_day = ("yesterday" if day == previous_weekday(_market_day(now)).isoformat()
-                     else day if iso_day and day != today else "today")
+                     else day if (iso_day and day != today) or day == "week" else "today")
         add("alerts_pack", "alert words", day=alert_day, **({"symbol": symbols[0]} if symbols else {}))
     if _RECALL.search(lowered):
         add("recall", "memory words", query=raw[:200])

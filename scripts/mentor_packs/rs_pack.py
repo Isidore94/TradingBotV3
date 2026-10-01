@@ -234,7 +234,9 @@ def build(level: str = "industry", top: int = 5, liked: Any = (), *, now: dateti
     book = {str(k).upper(): str(v).upper() for k, v in (src.book() or {}).items()}
     likes = {str(item[0] if isinstance(item, (list, tuple)) else item).strip().upper() for item in liked or () if item}
     focus = {str(sym).strip().upper() for sym in src.focus() or () if sym}
-    leaders, laggards = board[:top], list(reversed(board[-top:])) if len(board) > top else []
+    # Leaders and laggards never share a group: at most half the board on each side.
+    top = max(1, min(top, len(board) // 2))
+    leaders, laggards = board[:top],list(reversed(board[-top:])) if len(board) > top else []
     for n, row in enumerate(leaders, 1):
         rows.append(_group_row(f"rs:lead:{n}", "lead", row, level, _names_in(row[level], level, symbol_map, book, likes, focus)))
     for n, row in enumerate(laggards, 1):

@@ -46,6 +46,17 @@ def test_sector_level_maps_yahoo_sector_names():
     assert by_id["rs:lag:1"].startswith("lag sector #3: Financials") and "ALL (book SHORT)" in by_id["rs:lag:1"]
 
 
+def test_leaders_and_laggards_are_disjoint():
+    sectors = [{"etf": f"X{i}", "sector": f"S{i}", "pct_change_1d": "0", "return_5d_pct": "0", "rs_rank": str(i)}
+               for i in range(1, 12)]
+    src = replace(rs_pack.fixture_sources(), sector_rows=lambda: [dict(row) for row in sectors])
+    pack = rs_pack.build(level="sector", top=6, now=rs_pack.FIXTURE_NOW, sources=src)
+    lead = [row["group"] for row in pack.rows if row["kind"] == "rs_lead"]
+    lag = [row["group"] for row in pack.rows if row["kind"] == "rs_lag"]
+    assert lead == ["S1", "S2", "S3", "S4", "S5"] and lag == ["S11", "S10", "S9", "S8", "S7"]
+    assert not set(lead) & set(lag)
+
+
 def test_stale_board_says_its_age():
     src = rs_pack.fixture_sources(built="2026-09-25T13:00:00")
     pack = rs_pack.build(now=rs_pack.FIXTURE_NOW, sources=src)

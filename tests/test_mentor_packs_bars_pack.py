@@ -39,6 +39,14 @@ def test_stale_cache_is_flagged():
     assert "stale" in pack.rows[-1]["text"]
 
 
+def test_long_ages_read_in_hours_then_days():
+    assert bars_pack.age_text(119) == "119 min" and bars_pack.age_text(458) == "7.6 h"
+    later = bars_pack.FIXTURE_NOW + timedelta(days=5, hours=14)
+    pack = bars_pack.build("ALL", now=later, sources=bars_pack.fixture_sources())
+    assert "5.6 days ago (STALE" in pack.rows[0]["text"] and " min ago" not in pack.rows[0]["text"]
+    assert pack.rows[-1]["text"].endswith("stale, 5.6 days old")
+
+
 def test_naive_bar_times_are_market_local_and_shown_in_et():
     # The desk machine runs Pacific: a naive 06:30 bar is 09:30 ET.
     rows = [{"symbol": "NVDA", "dt": "2026-09-30T06:30:00", "open": 1, "high": 2, "low": 0.5, "close": 1.5,

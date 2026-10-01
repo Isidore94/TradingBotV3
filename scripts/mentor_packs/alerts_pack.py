@@ -141,6 +141,8 @@ def resolve_day(day: str, moment: datetime) -> str:
         return today.isoformat()
     if text == "yesterday":
         return _previous_weekday(today).isoformat()
+    if text in ("week", "this_week", "this week"):
+        return "week"
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
         return text
     raise ValueError(f"day must be today, yesterday or YYYY-MM-DD, not {day!r}")
@@ -173,20 +175,8 @@ def _yours(sym: str, book: Mapping[str, str], likes: set[str]) -> str:
     return " [liked]" if sym in likes else ""
 
 
-def build(symbol: str = "", day: str = "today", kind: str = "all", liked: Any = (), *,
-          now: datetime | None = None, sources: Sources | None = None) -> Pack:
-    """Build the alerts pack. File reads only: call it on a worker."""
-    moment = now or datetime.now(timezone.utc)
-    if moment.tzinfo is None:
-        moment = moment.astimezone()
-    session = resolve_day(day, moment)
-    kind = str(kind or "all").strip().lower()
-    kind = kind if kind in ("d1", "m5") else "all"
-    sym_filter = _clean(symbol)
-    src = sources or live_sources()
-    local_tz = src.local_tz()
-    book = {_clean(k): _side(v) for k, v in (src.book() or {}).items()}
-    likes = {_clean(item[0] if isinstance(item, (list, tuple)) else item) for item in liked or () if item}
+def _gather(src: Sources, session: str, kind: str, sym_filter: str, local_tz: Any) -> dict[str, list[dict[str, Any]]]:
+    """One day's alerts by kind (``m5`` / ``d1``), filtered to a symbol when one is given."""
     found: dict[str, list[dict[str, Any]]] = {"m5": [], "d1": []}
     if kind in ("all", "m5"):
         for row in src.m5_rows(session) or ():
@@ -227,6 +217,59 @@ def build(symbol: str = "", day: str = "today", kind: str = "all", liked: Any = 
                              + (f" ({label})" if label else "")),
                     "price": f" @ {float(level):.2f}" if isinstance(level, (int, float)) else "",
                 })
+    return found
+
+
+def _counts(items: list[dict[str, Any]]) -> str:
+    longs = sum(1 for item in items if item["side"] == "LONG")
+    shorts = sum(1 for item in items if item["side"] == "SHORT")
+    return f"{len(items)} ({longs} long, {shorts} short)"
+
+
+def _week_pack(src: Sources, moment: datetime, kind: str, sym_filter: str, local_tz: Any,
+               book: Mapping[str, str], likes: set[str]) -> Pack:
+    """Monday to today (ET): one summary row per weekday and the week's totals."""
+    today = moment.astimezone(ET).date()
+    days = [today - timedelta(days=back) for back in range(today.weekday(), -1, -1)]
+    days = [day for day in days if day.weekday() < 5]
+    kinds = ("m5", "d1") if kind == "all" else (kind,)
+    scope = f" for {sym_filter}" if sym_filter else ""
+    totals: dict[str, list[dict[str, Any]]] = {which: [] for which in kinds}
+    rows: list[dict[str, Any]] = []
+    for day in days:
+        found = _gather(src, day.isoformat(), kind, sym_filter, local_tz)
+        for which in kinds:
+            totals[which].extend(found[which])
+        parts = "; ".join(f"{which.upper()} {_counts(found[which])}" for which in kinds)
+        rows.append({"id": f"alert:week:{day.isoformat()}", "kind": "day_summary",
+                     "text": f"Alerts{scope} on {day:%a} {day.isoformat()}: {parts}"})
+    alerted = {item["symbol"] for items in totals.values() for item in items}
+    in_book = sorted(alerted & set(book))
+    in_likes = sorted((alerted & likes) - set(book))
+    parts = "; ".join(f"{which.upper()} {_counts(totals[which])}" for which in kinds)
+    head = {"id": "alert:week:summary", "kind": "summary",
+            "text": (f"Alerts{scope} this week ({days[0].isoformat()} to {days[-1].isoformat() if days else '?'}): "
+                     f"{parts}; in your book: {', '.join(in_book) or 'none'}; liked: {', '.join(in_likes) or 'none'}")}
+    return make_pack(NAME, [head, *rows])
+
+
+def build(symbol: str = "", day: str = "today", kind: str = "all", liked: Any = (), *,
+          now: datetime | None = None, sources: Sources | None = None) -> Pack:
+    """Build the alerts pack. File reads only: call it on a worker."""
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.astimezone()
+    session = resolve_day(day, moment)
+    kind = str(kind or "all").strip().lower()
+    kind = kind if kind in ("d1", "m5") else "all"
+    sym_filter = _clean(symbol)
+    src = sources or live_sources()
+    local_tz = src.local_tz()
+    book = {_clean(k): _side(v) for k, v in (src.book() or {}).items()}
+    likes = {_clean(item[0] if isinstance(item, (list, tuple)) else item) for item in liked or () if item}
+    if session == "week":
+        return _week_pack(src, moment, kind, sym_filter, local_tz, book, likes)
+    found = _gather(src, session, kind, sym_filter, local_tz)
     total = len(found["m5"]) + len(found["d1"])
     scope = f" for {sym_filter}" if sym_filter else ""
     if not total:
@@ -253,9 +296,11 @@ def build(symbol: str = "", day: str = "today", kind: str = "all", liked: Any = 
     for which in ("m5", "d1"):
         items = sorted(found[which], key=lambda item: item["et"], reverse=True)
         for n, item in enumerate(items[:MAX_PER_KIND], 1):
+            # The stamp is when the desk detected it; the bar it fired on closed earlier.
+            when = "D1 scan" if item["et"] == "scan" else f"detected {item['et']} ET (bar time earlier)"
             rows.append({
                 "id": f"alert:{session}:{which}:{n}", "kind": f"alert_{which}", "symbol": item["symbol"],
-                "text": (f"{item['et']} ET {item['symbol']} {item['side'] or '?'} {item['what']}{item['price']}"
+                "text": (f"{when} {item['symbol']} {item['side'] or '?'} {item['what']}{item['price']}"
                          f"{_yours(item['symbol'], book, likes)}"),
             })
         if len(items) > MAX_PER_KIND:

@@ -28,11 +28,11 @@ def test_golden_pack_both_kinds():
                            "alert:2026-09-30:d1:1", "alert:2026-09-30:d1:2"]
     assert by_id["alert:2026-09-30:summary"] == ("Alerts on 2026-09-30: M5 2 (1 long, 1 short); D1 2 (0 long, 2 short); "
                                                  "in your book: ALL; liked: CE")
-    assert by_id["alert:2026-09-30:m5:1"] == "12:02 ET NVDA LONG M5 bounce eod_vwap"
-    assert by_id["alert:2026-09-30:m5:2"] == "10:15 ET ALL SHORT M5 bounce ema_21, tier B (0.129R) [book SHORT]"
-    assert by_id["alert:2026-09-30:d1:1"] == ("scan ET CE SHORT D1 bucket upgrade to near_favorite_zone "
+    assert by_id["alert:2026-09-30:m5:1"] == "detected 12:02 ET (bar time earlier) NVDA LONG M5 bounce eod_vwap"
+    assert by_id["alert:2026-09-30:m5:2"] == "detected 10:15 ET (bar time earlier) ALL SHORT M5 bounce ema_21, tier B (0.129R) [book SHORT]"
+    assert by_id["alert:2026-09-30:d1:1"] == ("D1 scan CE SHORT D1 bucket upgrade to near_favorite_zone "
                                               "(Trendline break) @ 45.12 [liked]")
-    assert by_id["alert:2026-09-30:d1:2"] == "09:31 ET CL SHORT d1 event fired: D1 15EMA rejection (short)"
+    assert by_id["alert:2026-09-30:d1:2"] == "detected 09:31 ET (bar time earlier) CL SHORT d1 event fired: D1 15EMA rejection (short)"
     assert len(pack.ids) == len(set(pack.ids))
 
 
@@ -131,6 +131,20 @@ def test_registered_and_attached():
 def test_alert_words(question):
     now = datetime(2026, 9, 30, 15, 0, tzinfo=timezone.utc)
     assert "alerts_pack" in [r.name for r in attach.plan_attachments(question, {"NVDA": "LONG"}, now)]
+
+
+def test_this_week_is_per_day_summaries_and_totals_never_today():
+    now = datetime(2026, 9, 30, 15, 0, tzinfo=timezone.utc)  # a Wednesday
+    found = [r for r in attach.plan_attachments("any alerts this week", {}, now) if r.name == "alerts_pack"]
+    assert found[0].args == {"day": "week"}
+    pack = alerts_pack.build(day="week", now=NOW, sources=alerts_pack.fixture_sources())
+    assert pack.ids == ("alert:week:summary", "alert:week:2026-09-28", "alert:week:2026-09-29",
+                        "alert:week:2026-09-30")
+    texts = {row["id"]: row["text"] for row in pack.rows}
+    assert texts["alert:week:summary"] == ("Alerts this week (2026-09-28 to 2026-09-30): M5 2 (1 long, 1 short); "
+                                           "D1 2 (0 long, 2 short); in your book: ALL; liked: none")
+    assert texts["alert:week:2026-09-28"] == ("Alerts on Mon 2026-09-28: M5 0 (0 long, 0 short); "
+                                              "D1 0 (0 long, 0 short)")
 
 
 def test_a_named_weekday_is_its_date():
