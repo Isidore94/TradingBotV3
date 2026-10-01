@@ -463,7 +463,8 @@ def _night_row(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def night_inputs(path: Path, session: str, moment: datetime, *, night_paths: Any = None,
-                 mirror_builder: Callable[[], Any] | None = None) -> dict[str, list[dict[str, Any]]]:
+                 mirror_builder: Callable[[], Any] | None = None,
+                 recap_paths: Any = None) -> dict[str, list[dict[str, Any]]]:
     """P15a: what the night and the app already know about the day, each row with its id.
 
     A section that cannot be read is left empty and named in ``unread``; it never costs the review.
@@ -495,6 +496,8 @@ def night_inputs(path: Path, session: str, moment: datetime, *, night_paths: Any
                                                           *night_pack.prediction_rows(paths, day)[0])])
     section("day_review", lambda: [_night_row(r) for r in night_pack.day_review_rows(paths, day, 1)[0]])
     section("ideas", lambda: [_night_row(r) for r in night_pack.idea_rows(paths, day, limit=MAX_IDEAS)[0]])
+    # P15b: the day recaps' recurrence table, so an issue's own row can be cited.
+    section("recap_issues", lambda: [_night_row(r) for r in recap_issue_rows(session, recap_paths)])
     out["unread"] = [{"id": "", "text": name} for name in unread]
     return out
 
@@ -503,15 +506,25 @@ def _strip_src(text: str) -> str:
     return re.sub(r"\s*\(src: [^)]*\)$", "", _text(text))
 
 
+def recap_issue_rows(session: str, recap_paths: Any = None) -> list[dict[str, Any]]:
+    """P15b: the day recaps' recurrence table (``recap:issues:<key>``) over the last REVIEW_SESSIONS sessions."""
+    from mentor_packs import recaps_pack
+
+    day = datetime.fromisoformat(session).date()
+    return recaps_pack.issue_rows(recap_paths, today=day, days=REVIEW_SESSIONS)
+
+
 def issue_candidates(path: Path, session: str, *, night_paths: Any = None,
                      earlier: Sequence[Mapping[str, Any]] = (),
-                     registry: Mapping[str, Mapping[str, Any]] | None = None) -> list[dict[str, Any]]:
+                     registry: Mapping[str, Mapping[str, Any]] | None = None,
+                     recap_paths: Any = None) -> list[dict[str, Any]]:
     """Recurring problems over the last REVIEW_SESSIONS sessions, found by code (the model only words and ranks).
 
     Each has a stable ``key`` (so ``first_seen`` carries over from ``earlier`` coach briefs), an
     ``issue:<key>`` id, a count and the ids it rests on. Sources: the miss contrast's leader groups,
     vetoes graded as the name winning, repeated tilt patterns, plan lines flagged broken on pick
-    assessments, and reads the day reviews graded wrong.
+    assessments, reads the day reviews graded wrong, and (P15b) the day recaps' recurrence table
+    (``recap:<key>``, count = sessions; its wrong-reads row is the one above, so it is not repeated).
     """
     from mentor_packs import night_pack
 
@@ -581,7 +594,13 @@ def issue_candidates(path: Path, session: str, *, night_paths: Any = None,
             add("wrong_reads", f"{len(wrong)} of your reads were graded wrong by the day reviews of the last "
                 f"{REVIEW_SESSIONS} sessions", len(wrong), [row["id"] for row in wrong])
 
-    for read in (misses, vetoes, tilts, rules, wrong_reads):
+    def recaps() -> None:
+        for row in recap_issue_rows(session, recap_paths):
+            if row["key"] != "wrong_reads":
+                add(f"recap:{row['key']}", row["text"], row["count"], [row["id"]])
+                found[-1]["first"] = row["first"]  # the recap's own first session dates the issue
+
+    for read in (misses, vetoes, tilts, rules, wrong_reads, recaps):
         guarded(read)
     seen: dict[str, str] = {}
     for payload in earlier:
@@ -594,7 +613,7 @@ def issue_candidates(path: Path, session: str, *, night_paths: Any = None,
         if isinstance(entry, Mapping) and _text(entry.get("first_seen")):
             seen[key] = min(seen.get(key, entry["first_seen"]), _text(entry["first_seen"]))
     for item in found:
-        item["first_seen"] = min(seen.get(item["key"], session), session)
+        item["first_seen"] = min(seen.get(item["key"], session), session, item.pop("first", "") or session)
     found.sort(key=lambda item: (-item["count"], item["first_seen"], item["key"]))
     return found
 
@@ -1007,6 +1026,7 @@ def run_mentor_review(
     force: bool = False,
     night_paths: Any = None,
     mirror_builder: Callable[[], Any] | None = None,
+    recap_paths: Any = None,
     **_ignored: Any,
 ) -> dict[str, Any]:
     """One night's review of the Trade Mentor app's day. Never raises."""
@@ -1048,11 +1068,13 @@ def run_mentor_review(
 
     # P15a: what the night and the app know about the day, the recurring-issue candidates and the
     # facts part of the coach brief - all deterministic, so they run with the model cut or down too.
-    night = night_inputs(path, session, moment, night_paths=night_paths, mirror_builder=mirror_builder)
+    night = night_inputs(path, session, moment, night_paths=night_paths, mirror_builder=mirror_builder,
+                         recap_paths=recap_paths)
     earlier = [payload for payload in read_published(root, COACH_STEM, limit=15)
                if _text(payload.get("session_date"))[:10] < session]
     registry = read_issue_registry(root)
-    candidates = issue_candidates(path, session, night_paths=night_paths, earlier=earlier, registry=registry)
+    candidates = issue_candidates(path, session, night_paths=night_paths, earlier=earlier, registry=registry,
+                                  recap_paths=recap_paths)
     night["issues"] = candidate_rows(candidates)
     registry_note = ""
     try:

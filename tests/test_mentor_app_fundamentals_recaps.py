@@ -217,3 +217,102 @@ def test_the_tape_build_carries_the_compact_brief(window):
     window._fund_builder = lambda section: fundamentals_pack.build("today", section, now=NOW, paths=window.fund_paths)
     ids = window._build_tape().ids
     assert ids[0] == "tape:regime" and "fund:2026-09-30:bottom:1" in ids and len(ids) <= 1 + 8
+
+
+# ---------------------------------------------------------------- step 2: recaps and issues
+@pytest.fixture()
+def recaps(tmp_path):
+    from mentor_packs import recaps_pack
+
+    return recaps_pack.write_fixture_world(tmp_path / "recaps")
+
+
+def test_recap_words_attach_the_recaps_pack_and_night_words_keep_the_night():
+    from mentor_app import attach
+
+    known = {"ALL": "SHORT", "NVDA": "LONG"}
+    for question in ("what are my most pertinent issues", "what have I been doing wrong lately",
+                     "what did yesterday's recap say", "what am I missing", "am I making the same mistake",
+                     "what should I keep doing", "any pattern in what I miss lately", "review my last week"):
+        names = [r.name for r in attach.plan_attachments(question, known, NOW)]
+        assert "recaps_pack" in names, question
+    assert "night_pack" in [r.name for r in attach.plan_attachments("what did the night say overnight", known, NOW)]
+    assert [r.name for r in attach.plan_attachments("how has my record been lately", known, NOW)] == ["mirror_pack"]
+    request = next(r for r in attach.plan_attachments("what are my issues", known, NOW) if r.name == "recaps_pack")
+    assert request.args == {"days": 10, "section": "all"}
+
+
+def test_the_coach_is_told_to_rank_the_table_and_never_invent_an_issue():
+    from mentor_app.chat_model import SYSTEM_PROMPT
+
+    assert ("When asked about issues, rank the recurrence table by sessions count, cite each row, and say in one "
+            "sentence what to watch for today; never invent an issue not in a row.") in SYSTEM_PROMPT
+
+
+def test_the_recap_rows_are_embedded_as_kind_recap(recaps):
+    from mentor_packs import night_pack
+
+    rows = [row for row in memory.embed_candidates(memory.Memory(), night_pack.NightPaths(), NOW,
+                                                   fund_paths=fundamentals_pack.FundPaths(), recap_paths=recaps)
+            if row[0] == "recap"]
+    assert rows and all(text.startswith("[recap:2026-") for _k, _r, text in rows)
+    assert "recap" in memory.EMBED_KINDS
+
+
+def _chat_db(tmp_path):
+    path = tmp_path / "mentor_chat.sqlite3"
+    store = MentorChatStore(path)
+    store.add_turn(store.start_session("m"), "user", "what are my issues")
+    return path
+
+
+def test_the_night_issue_candidates_carry_the_recap_recurrence_rows(tmp_path, recaps):
+    from ai_jobs import mentor_review
+    from mentor_packs import night_pack
+
+    found = mentor_review.issue_candidates(_chat_db(tmp_path), "2026-09-29", night_paths=night_pack.NightPaths(),
+                                           recap_paths=recaps)
+    by_key = {item["key"]: item for item in found}
+    item = by_key["recap:missed:compressed"]
+    assert item["id"] == "issue:recap:missed:compressed" and item["count"] == 2
+    assert item["refs"] == ["recap:issues:missed:compressed"] and item["first_seen"] == "2026-09-25"
+    assert "recap:wrong_reads" not in by_key, "the night already has its own wrong-reads issue"
+    night = mentor_review.night_inputs(_chat_db(tmp_path / "b"), "2026-09-29", datetime(2026, 9, 29, 23, 0, tzinfo=PT),
+                                       night_paths=night_pack.NightPaths(), mirror_builder=lambda: _empty_pack(),
+                                       recap_paths=recaps)
+    assert "recap:issues:missed:compressed" in [row["id"] for row in night["recap_issues"]]
+
+
+def _empty_pack():
+    from mentor_packs.registry import make_pack
+
+    return make_pack("mirror_pack", ())
+
+
+def test_the_facts_brief_and_the_registry_name_the_recap_issues(tmp_path, recaps):
+    from ai_jobs import mentor_review
+    from mentor_packs import night_pack
+
+    out = mentor_review.run_mentor_review(
+        session_date="2026-09-29", now=datetime(2026, 9, 29, 23, 0, tzinfo=PT), chat_db=_chat_db(tmp_path),
+        ai_root=tmp_path / "ai", veto_outcomes=tmp_path / "none.csv", ask=False, night_paths=night_pack.NightPaths(),
+        mirror_builder=_empty_pack, recap_paths=recaps)
+    assert out["status"] == "ok", out["reason"]
+    brief = json.loads((tmp_path / "ai" / "mentor_coach_brief_2026-09-29.json").read_text(encoding="utf-8"))
+    keys = [item["key"] for item in brief["issues"]]
+    assert "recap:missed:compressed" in keys and "recap:clue:volume_dry_up" in keys
+    registry = mentor_review.read_issue_registry(tmp_path / "ai")
+    assert registry["recap:rule_broken:wait_for_confirmation"]["first_seen"] == "2026-09-28"
+
+
+def test_recaps_and_issues_commands(window, app, recaps):
+    window.recap_paths = recaps
+    window.send("/recaps 2")
+    window.send("/issues")
+    _drain(window, app)
+    text = _text(window)
+    assert "[recap:2026-09-29:card:missed]" in text and "[recap:2026-09-25:" not in text.split("Recurring")[0]
+    assert "No recurring issues in the last night's brief." in text
+    assert "Recurring in your day recaps" in text and "[recap:issues:missed:compressed]" in text
+    assert commands.handle("/recaps all").arg == "all" and commands.handle("/recaps").arg == 10
+    assert commands.handle("/recaps 99").action == "error"

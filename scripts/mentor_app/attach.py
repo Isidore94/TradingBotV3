@@ -101,6 +101,16 @@ _NIGHT = re.compile(r"\bwhat did the night say\b|\bovernight\b|\blast night\b|\b
 _FUND = re.compile(r"\bfundamentals?\b|\bbrief\b|\bmacro\b|\bthe paste\b|\bwhat did claude (?:say|flag|write)\b"
                    r"|\bclaude\b|\bcatalysts?\b|\bfed\b|\byields?\b|\boil\b|\bcrude\b|\bdollar\b|\bdxy\b"
                    r"|\bcpi\b|\bnfp\b|\bpce\b|\bfomc\b|\bpayrolls\b|\bbottom line\b|\bplaybook\b|\bscenarios?\b")
+#: P15b: his day recaps and the recurring issues computed from them. "lately" / "pattern" alone go to the
+#: mirror when the question is about his record or stats ("how has my record been lately").
+_RECAP = re.compile(r"\brecaps?\b|\breviews?\b|\b(?:doing|done|did) wrong\b|\bmy issues\b|\bissues\b"
+                    r"|\bwhat (?:am|are) (?:i|we) missing\b|\bkeep doing\b|\bsame mistakes?\b|\bmistakes?\b"
+                    r"|\bwhat should i (?:stop|keep)\b")
+_RECAP_SOFT = re.compile(r"\blately\b|\bpatterns?\b|\brecently\b")
+_RECORD = re.compile(r"\bmy record\b|\bmy stats\b|\bmy edge\b|\bhit rate\b|\bwin rate\b|\btrade best\b"
+                     r"|\bbest time\b|\btime of day\b")
+#: P15b: how a trade felt (a feelings note rides on its journal row).
+_FEEL = re.compile(r"\bfeel(?:ing|ings|s)?\b|\bfelt\b")
 _RECALL = re.compile(r"\byou said\b|\bwe (?:said|talked|discussed)\b|\bremember when\b|\blast time we\b")
 _GROUP = re.compile(r"\bmy (longs|shorts|focus|names|picks|watchlist|likes|liked|book|positions|holdings)\b"
                     r"|\bfocus (longs|shorts|names)\b|\bopen (longs|shorts|positions)\b|\b(?:i'm|im|i am) (holding)\b")
@@ -328,6 +338,10 @@ def plan_attachments(
         add("plan_lines", "plan words")
     if _NIGHT.search(lowered):
         add("night_pack", "night words")
+    if _RECAP.search(lowered) or (_RECAP_SOFT.search(lowered) and not _RECORD.search(lowered)):
+        add("recaps_pack", "recap words", days=10, section="all")
+    if _FEEL.search(lowered) and not any(request.name == "journal_pack" for request in wanted):
+        add("journal_pack", "feelings words", day=day or "week")
     if _FUND.search(lowered):
         add("fundamentals_pack", "fundamentals words", section="all")
     elif any(request.name == "gate_pack" for request in wanted):

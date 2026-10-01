@@ -18,6 +18,8 @@ HELP_TEXT = (
     "- `/brief` the night's coach brief for today: what to watch, what you may be missing, recurring issues\n"
     "- `/issues` the recurring issues the night sees, with the date each was first seen\n"
     "- `/paste` paste today's morning brief (or `/paste <text>`); it is saved to the Market Journal for today\n"
+    "- `/recaps [n]` your last n day recaps (10 unless you say; `all`) and the issues that keep coming back\n"
+    "- `/feel <SYM|trade id> <words>` how a trade felt, kept with that trade\n"
     "- `/recall <text>` search what we said before (plain text search when the brain is off)\n"
     "- `/forget <id>` retire a note (it is kept, never deleted); `/keep <id>` says it is still true\n"
     "- `/tape` the tape: Auto mode, D1, last night's read, econ, sectors (read aloud when the brain is up)\n"
@@ -110,6 +112,15 @@ def handle(text: str) -> CommandResult | None:
         if rest:
             return CommandResult("error", f"Try `/{name}` (no arguments).")
         return CommandResult(name)
+    if name in ("recaps", "recap"):
+        if rest and not (rest.isdigit() and 1 <= int(rest) <= 60) and rest.lower() != "all":
+            return CommandResult("error", "Try `/recaps`, `/recaps 5` (1 to 60 sessions) or `/recaps all`.")
+        return CommandResult("recaps", "", ("all" if rest.lower() == "all" else int(rest)) if rest else 10)
+    if name == "feel":
+        parts = rest.split(None, 1)
+        if len(parts) < 2:
+            return CommandResult("error", "Try `/feel SHOP rushed it` or `/feel <trade id> calm`.")
+        return CommandResult("feel", "", (parts[0], parts[1].strip()))
     if name == "plan":
         return CommandResult("plan")
     if name == "drop":

@@ -286,24 +286,32 @@ def load(store: Any, *, ai_root: Path | str | None = None, budget_tokens: int = 
 
 
 #: The embed kinds :func:`embed_candidates` yields (the window asks the store which refs each already has).
-EMBED_KINDS = ("night", "brief", "fund")
+EMBED_KINDS = ("night", "brief", "fund", "recap")
 
 
 def embed_candidates(memory: "Memory", paths: Any, now: datetime | None = None, *,
                      fund_paths: Any = None, recap_paths: Any = None) -> list[tuple[str, int, str]]:
     """``(kind, ref_id, text)`` the idle embed queue may add: every night row (``night``), every ticker
-    brief (``brief``) and (P15b) each paragraph of today's pasted brief (``fund``, once per paste). The text
+    brief (``brief``) and (P15b) each paragraph of today's pasted brief (``fund``, once per paste) and each
+    day-recap row (``recap``, once per text version). The text
     starts with the row's own id so a recall hit cites it; a changed artifact is a new ref (``stable_ref``
     of id and text), so each artifact version is embedded once."""
     from mentor_packs import fundamentals_pack, night_pack
 
     today = _today(now)
-    out_fund: list[tuple[str, int, str]] = []
+    extra_rows: list[tuple[str, int, str]] = []
     try:
         fund = fundamentals_pack.build("today", "text", now=now, paths=fund_paths)
-        out_fund = [("fund", ref, text) for ref, text in fundamentals_pack.embed_rows(fund)]
+        extra_rows = [("fund", ref, text) for ref, text in fundamentals_pack.embed_rows(fund)]
     except Exception:  # noqa: BLE001 - an unreadable brief is embedded next time
         logging.warning("Trade Mentor: the pasted brief could not be read for recall", exc_info=True)
+    try:
+        from mentor_packs import recaps_pack
+
+        recaps = recaps_pack.build("all", now=now, paths=recap_paths)
+        extra_rows += [("recap", ref, text) for ref, text in recaps_pack.embed_rows(recaps)]
+    except Exception:  # noqa: BLE001 - unreadable recaps are embedded next time
+        logging.warning("Trade Mentor: the day recaps could not be read for recall", exc_info=True)
     out: dict[tuple[str, int], str] = {}
     rows = [row for row in night_pack.build("all", now=now, paths=paths).rows if row.get("kind") == "night"]
     for row in rows:
@@ -314,7 +322,7 @@ def embed_candidates(memory: "Memory", paths: Any, now: datetime | None = None, 
             out[("night", item.ref_id)] = f"[{item.id}] {item.text}"
     for row in night_pack.brief_rows(paths.briefs, today):
         out[("brief", night_pack.stable_ref(row["id"], row["text"]))] = f"[{row['id']}] {row['text']}"
-    for kind, ref, text in out_fund:
+    for kind, ref, text in extra_rows:
         out[(kind, ref)] = text
     return [(kind, ref, text) for (kind, ref), text in sorted(out.items())]
 

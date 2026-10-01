@@ -1225,11 +1225,36 @@ class MentorWindow(QMainWindow):
                 self.paste_brief(str(result.arg))
             else:
                 self.open_paste_dialog()
-        elif result.action in ("brief", "issues"):
+        elif result.action == "brief":
             # P15a: the night's coach brief, read on the IO thread (a file on the ai_store).
-            render = memory.coach_brief_text if result.action == "brief" else memory.issues_text
             root, now = self._memory_root, self._now()
-            self._submit_io(lambda: self._bridge.note.emit(render(memory.read_coach_brief(root, now))))
+            self._submit_io(lambda: self._bridge.note.emit(memory.coach_brief_text(memory.read_coach_brief(root, now))))
+        elif result.action == "issues":
+            # P15b: the night's issues, then the ones computed from the day recaps (2+ sessions).
+            root, now, recap_paths = self._memory_root, self._now(), self.recap_paths
+
+            def issues() -> None:
+                from mentor_packs import recaps_pack
+
+                text = memory.issues_text(memory.read_coach_brief(root, now))
+                try:
+                    recap = recaps_pack.issues_markdown(recaps_pack.build(10, "issues", now=now, paths=recap_paths).rows)
+                except Exception:  # noqa: BLE001 - unreadable recaps read as "none computed", never a crash
+                    logging.warning("Trade Mentor: the recap issues could not be read", exc_info=True)
+                    recap = ""
+                self._bridge.note.emit(text + (f"\n\n{recap}" if recap else ""))
+
+            self._submit_io(issues)
+        elif result.action == "recaps":
+            days, now, recap_paths = result.arg, self._now(), self.recap_paths
+
+            def recaps() -> None:
+                from mentor_packs import recaps_pack
+
+                pack = recaps_pack.build(days, now=now, paths=recap_paths)
+                self._bridge.note.emit(recaps_pack.card_markdown(pack))
+
+            self._submit_io(recaps)
         elif result.action == "recall":
             from mentor_packs import recall
 
