@@ -47,6 +47,22 @@ def _win_set_owner(child_hwnd: int, owner_hwnd: int) -> bool:
         return False
 
 
+def _win_get_owner(child_hwnd: int) -> int | None:
+    """Windows: the window that owns ``child_hwnd`` now (0 = none). None elsewhere (unknown)."""
+    if sys.platform != "win32" or not child_hwnd:
+        return None
+    try:
+        import ctypes
+
+        get_window = ctypes.windll.user32.GetWindow
+        get_window.restype = ctypes.c_void_p
+        get_window.argtypes = (ctypes.c_void_p, ctypes.c_uint)
+        gw_owner = 4
+        return int(get_window(ctypes.c_void_p(child_hwnd), gw_owner) or 0)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _win_is_window(hwnd: int) -> bool:
     """Windows: is the desk's window still alive? Elsewhere: assume yes."""
     if sys.platform != "win32":
@@ -84,6 +100,7 @@ class DeskDock(QObject):
         path: Path | None = None,
         reader: Callable[[Path], Any] | None = None,
         set_owner: Callable[[int, int], Any] | None = None,
+        get_owner: Callable[[int], int | None] | None = None,
         desk_alive: Callable[[int], bool] | None = None,
         clock: Callable[[], float] | None = None,
         poll_ms: int = POLL_MS,
@@ -97,6 +114,7 @@ class DeskDock(QObject):
             reader = read_dock_file
         self._reader = reader
         self._set_owner = set_owner or _win_set_owner
+        self._get_owner = get_owner or (_win_get_owner if set_owner is None else (lambda _own: None))
         self._desk_alive = desk_alive or _win_is_window
         self._clock = clock or time.time
         self.docked = False
@@ -203,7 +221,16 @@ class DeskDock(QObject):
 
     def _apply_owner(self, hwnd: int) -> None:
         own = int(self._window.internalWinId() or 0)
-        if not own or (own, hwnd) == self._owned:
+        if not own:
+            return
+        # Qt resets a Tool window's owner on every show, so trust the real owner over the cache.
+        actual = self._get_owner(own)
+        if actual is not None:
+            if actual != hwnd:
+                self._set_owner(own, hwnd)
+            self._owned = (own, hwnd)
+            return
+        if (own, hwnd) == self._owned:
             return
         if self._owned[0] == own or hwnd:
             self._set_owner(own, hwnd)
