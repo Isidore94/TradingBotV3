@@ -7,6 +7,7 @@ write on one IO thread. Results come back through queued signals on ``_Bridge``.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -135,6 +136,8 @@ class _Bridge(QObject):
     frontier_card = Signal(object)
     frontier_state = Signal(object)
     journal_symbols = Signal(object)
+    habit_item = Signal(object)
+    routine_ready = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -197,6 +200,8 @@ class MentorWindow(QMainWindow):
         mirror_request: Callable[..., Any] | None = None,
         tilt_builder: Callable[[], Any] | None = None,
         tilt_journal: Any = None,
+        habits_sources: Any = None,
+        routines_path: Any = None,
         debate_request: Callable[..., Any] | None = None,
         frontier_request: Callable[..., Any] | None = None,
         frontier_post: Callable[..., Any] | None = None,
@@ -276,6 +281,16 @@ class MentorWindow(QMainWindow):
         self._bridge.journal_symbols.connect(self._on_journal_symbols)
         self._bridge.brain_state.connect(self._on_brain_state)
         self._bridge.memory_ready.connect(self._on_memory)
+        # P18: the night's habits; one Inbox item a week at most, only for a habit followed by red days.
+        self._habits_sources = habits_sources
+        self._bridge.habit_item.connect(self._on_habit_item)
+        # P18 D: the night's routine table; a bucket's packs are prefetched once when it starts.
+        self._routines_path = routines_path
+        self._routine_payload: dict = {}
+        self._routine_forgotten: list[str] = []
+        self._routine_bucket_done = ""
+        self._routine_ready: tuple[str, str] | None = None
+        self._bridge.routine_ready.connect(self._on_routine_ready)
         self._bridge.still_true.connect(self._on_still_true)
         self._bridge.note.connect(self._add_note)
         self._bridge.pick_built.connect(self._on_pick_built)
@@ -363,6 +378,7 @@ class MentorWindow(QMainWindow):
         self._pick_timer.timeout.connect(self.maybe_prefetch_picks)
         self._pick_timer.timeout.connect(self.maybe_veto_card)
         self._pick_timer.timeout.connect(self.maybe_prefetch_tape)
+        self._pick_timer.timeout.connect(self.maybe_prefetch_routine)
         self._pick_timer.timeout.connect(self.maybe_push_brief)
         # P7 news: the fetcher and the open-book reader are injectable; no model, never the Inbox.
         from mentor_app import news_jobs
@@ -421,6 +437,15 @@ class MentorWindow(QMainWindow):
         self._feel_waiting: list[tuple[Any, dict]] = []
         self._inbox_feel: dict[int, dict] = {}
         self._feel_asked: set[str] = set()
+        # P18 journal mode: `/journal on` (persisted) keeps every message as a journal line.
+        self._journal_on = False
+
+        def load_journal_mode() -> None:
+            from mentor_app import journal_mode
+
+            self._journal_on = self.store.get_state(journal_mode.MODE_KEY) == "on"
+
+        self._submit_io(load_journal_mode)
         self._bridge.tilt_ready.connect(self._on_tilt_ready)
         self._bridge.tilt_card.connect(self._on_tilt_card)
         self._tilt_timer = QTimer(self)
@@ -469,6 +494,13 @@ class MentorWindow(QMainWindow):
             chip.clicked.connect(lambda _=False, k=kind: self._show_chip(k))
             self.chips[kind] = chip
             self.chip_row.addWidget(chip)
+        # P18 D: a quiet chip when the usual read for this half hour is ready (no Inbox, no pop).
+        self.routine_chip = QPushButton("")
+        self.routine_chip.setObjectName("MentorChip")
+        self.routine_chip.setFlat(True)
+        self.routine_chip.setVisible(False)
+        self.routine_chip.clicked.connect(self._show_routine)
+        self.chip_row.addWidget(self.routine_chip)
         self.chip_row.addStretch(1)
         # One chip per Focus name: its pick card (P2).
         self.pick_chips: dict[str, QPushButton] = {}
@@ -718,6 +750,88 @@ class MentorWindow(QMainWindow):
         """IO thread: the night digests and live notes, rendered once into the byte-stable block."""
         self._bridge.memory_ready.emit(memory.load(self.store, ai_root=self._memory_root, night_paths=self.night_paths,
                                                    now=self._now(), fund_paths=self.fund_paths))
+        self._check_habit_inbox()
+        self._load_routines()
+
+    def _load_routines(self) -> None:
+        """IO thread: the night's routine table and the buckets the trader told to forget."""
+        from mentor_app import routines
+
+        try:
+            path = self._routines_path if self._routines_path is not None else routines.live_path()
+            self._routine_payload = routines.read_routines(path)
+            self._routine_forgotten = routines.forgotten_list(self.store.get_state(routines.FORGOTTEN_KEY))
+        except Exception:  # noqa: BLE001 - no routine file: nothing is prefetched
+            logging.warning("Trade Mentor: the routine table could not be read", exc_info=True)
+
+    def maybe_prefetch_routine(self) -> None:
+        """Every minute: when a half hour with a routine starts, build its packs once at refresh priority."""
+        from mentor_app import routines
+
+        now = self._now()
+        bucket = routines.bucket_of(now)
+        if bucket == self._routine_bucket_done:
+            return
+        row = routines.due(self._routine_payload, self._routine_forgotten, now)
+        if row is None:
+            return
+        self._routine_bucket_done = bucket
+        names = [str(p["name"]) for p in row.get("packs") or ()]
+        if "regime_pack" in names and self._brain_ok:
+            self._queue_tape_narration(PRIORITY_REFRESH, "prefetch")  # the tape card already prefetches its words
+
+        def job() -> tuple[str, str]:
+            cards = [self._pack_card(name, {}) for name in names]
+            return bucket, "\n\n".join(cards)
+
+        self.queue.submit("routine_prefetch", job, priority=PRIORITY_REFRESH, key=f"routine:{bucket}",
+                          on_done=self._bridge.routine_ready.emit)
+
+    def _on_routine_ready(self, ready: Any) -> None:
+        bucket, markdown = ready
+        self._routine_ready = (bucket, markdown)
+        self.routine_chip.setText(f"usual {bucket} read ready")
+        self.routine_chip.setVisible(True)
+
+    def _show_routine(self) -> None:
+        if self._routine_ready is not None:
+            self._add_block(self._routine_ready[1])
+        self.routine_chip.setVisible(False)
+
+    def _routine_command(self, action: str, bucket: str = "") -> None:
+        """``/routine`` prints the table; ``/forget routine <bucket>`` hides a line (persisted)."""
+        from mentor_app import routines
+
+        if action == "forget_routine":
+            if bucket not in self._routine_forgotten:
+                self._routine_forgotten = [*self._routine_forgotten, bucket]
+            forgotten = json.dumps(sorted(self._routine_forgotten))
+            self._submit_io(lambda: self.store.set_state(routines.FORGOTTEN_KEY, forgotten))
+            when = f"weekend {bucket[3:]}" if bucket.startswith("we:") else f"weekday {bucket}"
+            self._add_note(f"Forgot the {when} routine line; I will not get it ready any more.")
+            return
+        self._add_note(routines.table_text(self._routine_payload, self._routine_forgotten))
+
+    def _check_habit_inbox(self) -> None:
+        """IO thread: the week's one habit Inbox item, when the night marked a habit for it."""
+        from mentor_packs import habits_pack
+
+        try:
+            pack = habits_pack.build(sources=self._habits_sources)
+            found = habits_pack.inbox_line(pack, self.store.get_state(habits_pack.INBOX_WEEK_KEY), self._now())
+        except Exception:  # noqa: BLE001 - an unreadable habit file posts nothing
+            logging.warning("Trade Mentor: the habit Inbox check failed", exc_info=True)
+            return
+        if found is not None:
+            self._bridge.habit_item.emit(found)
+
+    def _on_habit_item(self, found: Any) -> None:
+        from mentor_packs import habits_pack
+
+        week, line = found
+        if self.inbox.add("habits", line) is not None:
+            self._submit_io(lambda: self.store.set_state(habits_pack.INBOX_WEEK_KEY, week))
+            self.refresh_inbox()
 
     def _on_memory(self, loaded: Any) -> None:
         self._memory = loaded
@@ -1121,6 +1235,19 @@ class MentorWindow(QMainWindow):
             self._run_command(result)
             return
         self._add_block(f"**You:** {text}")
+        # P18: self talk is kept as a journal line with a one-line "Noted"; a question inside it is answered too.
+        from mentor_app import journal_mode
+
+        # The planner decides: any pack it would attach makes this an ask (answered; stored too if it has a mood).
+        rows = self._context_pack.rows if self._context_pack is not None else ()
+        planned = bool(attach.plan_attachments(
+            text, attach.known_symbols(rows, self._liked_names, self._journal_symbols), self._now(),
+            book=attach.book_symbols(rows), liked=self._liked_names))
+        kind = journal_mode.classify(text, forced=self._journal_on, planned=planned)
+        if kind.statement:
+            self.record_journal(text, asks=kind.asks)
+            if not kind.asks:
+                return
         self._store_turn("user", text)
         paused = self._ai_paused_until()
         if paused is not None:
@@ -1191,6 +1318,10 @@ class MentorWindow(QMainWindow):
         if name == "journal_pack":
             # P15b: the feelings this app stored ride on their trades (its own chat store, read-only).
             return brain._default_build(name, {**dict(args or {}), "chat_db": self.store.path})
+        if name == "habits_pack":
+            from mentor_packs import habits_pack
+
+            return habits_pack.build(sources=self._habits_sources)
         if name == "regime_pack":
             # P16: the diff reads earlier snapshots from this app's store; the day's first tape is snapshotted.
             pack = brain._default_build(name, {**dict(args or {}), "chat_db": self.store.path})
@@ -1254,6 +1385,10 @@ class MentorWindow(QMainWindow):
             self._add_note(memory.as_listing(self._memory))
         elif result.action == "feel":
             self.record_feeling(*result.arg)
+        elif result.action in ("routine", "forget_routine"):
+            self._routine_command(result.action, str(result.arg or ""))
+        elif result.action == "journal":
+            self._journal_command(str(result.arg or ""))
         elif result.action == "paste":
             text, session = result.arg
             if text:
@@ -1561,6 +1696,15 @@ class MentorWindow(QMainWindow):
                 vectors = brain.embed(endpoint, [row["text"]], model=settings.EMBED_MODEL, post=self._post)
                 if vectors:
                     self.store.put_embedding("turn", row["id"], settings.EMBED_MODEL, vectors[0], text=row["text"][:2000])
+                    done += 1
+            # P18: journal lines are recalled too (kind "journal").
+            for row in self.store.unembedded_journal(settings.EMBED_MODEL, limit=20):
+                if self.queue.should_yield():
+                    break
+                vectors = brain.embed(endpoint, [row["text"]], model=settings.EMBED_MODEL, post=self._post)
+                if vectors:
+                    self.store.put_embedding("journal", row["id"], settings.EMBED_MODEL, vectors[0],
+                                             text=row["text"][:2000])
                     done += 1
             return done
 
@@ -2712,13 +2856,20 @@ class MentorWindow(QMainWindow):
         """P17 /rs and /alerts: one pack as a card with its ids (queue thread; file reads only)."""
         from mentor_packs import registry
 
-        try:
-            args.setdefault("liked", [sym for sym, _side in self._liked()])
-        except Exception:  # noqa: BLE001 - no liked marks; the book still marks
-            pass
-        pack = registry.build(name, **args)
+        if name == "habits_pack":
+            # P18 /habits: the night's habit counts (its file; tests pass their own).
+            from mentor_packs import habits_pack
+
+            pack = habits_pack.build(sources=self._habits_sources)
+        else:
+            try:
+                if name in ("rs_pack", "alerts_pack"):
+                    args.setdefault("liked", [sym for sym, _side in self._liked()])
+            except Exception:  # noqa: BLE001 - no liked marks; the book still marks
+                pass
+            pack = registry.build(name, **args)
         lines = [f"- [{row['id']}] {row.get('text', '')}" for row in pack.rows]
-        title = {"rs_pack": "Relative strength", "alerts_pack": "Alerts"}.get(name, name)
+        title = {"rs_pack": "Relative strength", "alerts_pack": "Alerts", "habits_pack": "Habits"}.get(name, name)
         return f"**{title}**\n\n" + ("\n".join(lines) if lines else (pack.empty_text or "nothing"))
 
     # ------------------------------------------------------------------ /debate (P10)
@@ -2978,6 +3129,38 @@ class MentorWindow(QMainWindow):
         for day, ids in by_day.items():
             if day:
                 self._submit_io(lambda day=day, ids=ids: tilt_watch.mark_asked(self.store, day, ids))
+
+    def record_journal(self, text: str, *, asks: bool = False) -> None:
+        """P18: store one journal-mode statement with its tags and context (IO thread; journal read-only)."""
+        from mentor_app import journal_mode
+        from mentor_packs import tilt_pack
+
+        journal = self._tilt_journal if self._tilt_journal is not None else tilt_pack.live_journal()
+        rows = list(self._context_pack.rows) if self._context_pack is not None else []
+        now, forced = self._now(), self._journal_on
+
+        def job() -> None:
+            fields = journal_mode.entry_fields(text, now, context_rows=rows, journal=journal, forced=forced, asks=asks)
+            self._bridge.note.emit(journal_mode.noted_line(fields, self.store.add_journal_entry(fields)))
+
+        self._submit_io(job)
+        if self._brain_ok and not asks:
+            self._queue_embeddings()  # an answered statement embeds after its reply
+
+    def _journal_command(self, word: str) -> None:
+        """``/journal on|off`` sets the mode (persisted); ``/journal`` shows today's entries (IO thread)."""
+        from mentor_app import journal_mode
+
+        if word in ("on", "off"):
+            self._journal_on = word == "on"
+            self._submit_io(lambda: self.store.set_state(journal_mode.MODE_KEY, word))
+            self._add_note("Journal mode ON: every message is kept as a journal line (a question in it is still "
+                           "answered). `/journal off` to stop." if word == "on"
+                           else "Journal mode OFF: I keep self talk and answer questions.")
+            return
+        day = self._now().astimezone(journal_mode.ET).date().isoformat()
+        self._submit_io(lambda: self._bridge.note.emit(
+            journal_mode.entries_text(self.store.journal_entries(day, day), day)))
 
     def record_feeling(self, ref: str, words: str) -> None:
         """``/feel <SYM|trade id> <words>``: one feelings note kept with its trade (IO thread; journal read-only)."""

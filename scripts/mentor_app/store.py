@@ -103,6 +103,23 @@ CREATE TABLE IF NOT EXISTS frontier_usage (
     measured INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS frontier_usage_by_day ON frontier_usage(day_pt);
+CREATE TABLE IF NOT EXISTS journal_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_utc TEXT NOT NULL,
+    day_et TEXT NOT NULL,
+    text TEXT NOT NULL,
+    mood_tags_json TEXT NOT NULL DEFAULT '[]',
+    vocab_version INTEGER,
+    regime TEXT NOT NULL DEFAULT '',
+    tape TEXT NOT NULL DEFAULT '',
+    last_trade_id TEXT NOT NULL DEFAULT '',
+    last_trade_text TEXT NOT NULL DEFAULT '',
+    time_bucket_et TEXT NOT NULL DEFAULT '',
+    weekday TEXT NOT NULL DEFAULT '',
+    asks INTEGER NOT NULL DEFAULT 0,
+    forced INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS journal_entries_by_day ON journal_entries(day_et, id);
 """
 
 BUSY_TIMEOUT_MS = 5000
@@ -343,8 +360,10 @@ class MentorChatStore:
             "SELECT 'note' AS kind, id AS ref_id, text, ts_utc FROM profile_notes "
             "WHERE retired_utc IS NULL AND text LIKE ? "
             "UNION ALL SELECT 'turn' AS kind, id AS ref_id, text, ts_utc FROM turns "
-            "WHERE role IN ('user', 'assistant') AND text LIKE ? ORDER BY ts_utc DESC LIMIT ?",
-            (like, like, int(limit)),
+            "WHERE role IN ('user', 'assistant') AND text LIKE ? "
+            "UNION ALL SELECT 'journal' AS kind, id AS ref_id, text, ts_utc FROM journal_entries "
+            "WHERE text LIKE ? ORDER BY ts_utc DESC LIMIT ?",
+            (like, like, like, int(limit)),
         )
 
     # ----------------------------------------------------------------- day stats
@@ -566,5 +585,46 @@ class MentorChatStore:
             "ON e.kind = 'turn' AND e.ref_id = t.id AND e.model = ? "
             "WHERE e.ref_id IS NULL AND t.role IN ('user', 'assistant') AND length(t.text) > 0 "
             "ORDER BY t.id LIMIT ?",
+            (model, int(limit)),
+        )
+
+    # ----------------------------------------------------------------- journal entries (P18)
+    def add_journal_entry(self, fields: dict[str, Any]) -> int | None:
+        """One journal-mode statement with its tags and context (``journal_mode.entry_fields``)."""
+        return self._write(
+            "journal entry",
+            "INSERT INTO journal_entries (ts_utc, day_et, text, mood_tags_json, vocab_version, regime, tape, "
+            "last_trade_id, last_trade_text, time_bucket_et, weekday, asks, forced) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (fields.get("ts_utc") or utc_now(), fields["day_et"], fields["text"], _json(fields.get("mood_tags")),
+             fields.get("vocab_version"), fields.get("regime") or "", fields.get("tape") or "",
+             fields.get("last_trade_id") or "", fields.get("last_trade_text") or "",
+             fields.get("time_bucket_et") or "", fields.get("weekday") or "", int(bool(fields.get("asks"))),
+             int(bool(fields.get("forced")))),
+        )
+
+    def journal_entries(self, first_day: str = "", last_day: str = "") -> list[dict[str, Any]]:
+        """Entries with ``first_day <= day_et <= last_day`` (ET dates; "" = open), oldest first; tags decoded."""
+        rows = self._read(
+            "SELECT * FROM journal_entries WHERE (? = '' OR day_et >= ?) AND (? = '' OR day_et <= ?) ORDER BY id",
+            (first_day, first_day, last_day, last_day),
+        )
+        for row in rows:
+            row["mood_tags"] = json.loads(row.pop("mood_tags_json") or "[]")
+        return rows
+
+    def asks(self, since_utc: str = "") -> list[dict[str, Any]]:
+        """P18 D: the asks view (PT bucket, weekday, pack set, kind per user turn); ``mentor_app.routines``."""
+        from mentor_app import routines
+
+        rows = self._read("SELECT id, ts_utc, role, tool_calls_json FROM turns WHERE ts_utc >= ? ORDER BY id",
+                          (since_utc,))
+        return routines.asks_from_turns(rows)
+
+    def unembedded_journal(self, model: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        return self._read(
+            "SELECT j.id, j.text FROM journal_entries j LEFT JOIN embeddings e "
+            "ON e.kind = 'journal' AND e.ref_id = j.id AND e.model = ? "
+            "WHERE e.ref_id IS NULL ORDER BY j.id LIMIT ?",
             (model, int(limit)),
         )

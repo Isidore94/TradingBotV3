@@ -1,4 +1,4 @@
-"""P13-P17 mentor eval: the 108 plain questions, offline attach recall pinned at >= 97.5 %, and the style score.
+"""P13-P18 mentor eval: the 128 plain questions (P18: three journal statements), offline attach recall pinned at >= 97.5 %, and the style score.
 
 Never runs --live."""
 
@@ -16,15 +16,19 @@ import mentor_eval  # noqa: E402
 from mentor_packs import registry  # noqa: E402
 
 
-def test_the_fixture_has_the_108_eval_questions_with_real_pack_names():
+def test_the_fixture_has_the_128_eval_questions_with_real_pack_names():
     fixture = mentor_eval.load_fixture()
     questions = fixture["questions"]
-    assert len(questions) == 108 and len({q["q"] for q in questions}) == 108
+    assert len(questions) == 128 and len({q["q"] for q in questions}) == 128
     assert sum(1 for q in questions if q.get("concept")) == 2
+    journal = [q for q in questions if q.get("journal")]
+    # P18: a journal statement expects no pack: it is kept as a journal line and answered "Noted".
+    assert len(journal) == 3 and all(q["expected_packs"] == [] and q["must_mention"] == ["Noted"] for q in journal)
     names = set(registry.names())
     for item in questions:
-        # Only a concept question ("explain ... in one paragraph") needs no desk data, and it says so.
-        assert (item["expected_packs"] or item.get("concept") is True) and set(item["expected_packs"]) <= names, item["q"]
+        # Only a concept question ("explain ... in one paragraph") or a journal statement needs no desk data.
+        assert (item["expected_packs"] or item.get("concept") is True or item.get("journal") is True) and set(
+            item["expected_packs"]) <= names, item["q"]
         assert item["must_mention"], item["q"]
         assert not item["q"].startswith("/"), "plain words, never commands"
     gates = [q for q in questions if "gate_pack" in q["expected_packs"]]
@@ -33,7 +37,7 @@ def test_the_fixture_has_the_108_eval_questions_with_real_pack_names():
 
 def test_offline_attach_recall_is_at_least_ninety_seven_and_a_half_percent():
     report = mentor_eval.offline_report(mentor_eval.load_fixture())
-    assert report["questions"] == 108
+    assert report["questions"] == 128
     assert report["attach_recall"] >= 0.975, [row for row in report["rows"] if row["missed"]]
     assert report["attach_recall"] == 1.0, [row for row in report["rows"] if row["missed"]]
 
@@ -110,3 +114,13 @@ def test_the_book_is_part_of_the_fixture_and_a_book_question_never_reads_focus()
     assert "book" in fixture["raw_input_keys"] and set(fixture["book"]) <= set(fixture["known_symbols"])
     rows = {row["q"]: row for row in mentor_eval.offline_report(fixture)["rows"]}
     assert rows["which of my open shorts is most at risk into earnings"]["attached"][:2] == ["earnings_pack", "book_pack"]
+
+
+def test_journal_statements_are_kept_and_a_question_taken_for_self_talk_scores_zero():
+    rows = {row["q"]: row for row in mentor_eval.offline_report(mentor_eval.load_fixture())["rows"]}
+    noted = [row for row in rows.values() if row.get("journal")]
+    assert len(noted) == 3 and all(row["attached"] == [mentor_eval.JOURNAL] and row["recall"] == 1.0 for row in noted)
+    fixture = {"now": "2026-09-30T15:00:00+00:00", "questions": [
+        {"q": "I'm annoyed, I chased TWLO", "expected_packs": ["journal_pack"], "must_mention": ["x"]}]}
+    report = mentor_eval.offline_report(fixture)
+    assert report["rows"][0]["recall"] == 0.0 and report["rows"][0]["attached"] == []

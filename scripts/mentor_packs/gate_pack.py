@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from mentor_packs import bars_pack, book_pack, pick_pack, plan_lines, regime_pack
+from mentor_packs import bars_pack, book_pack, pick_pack, plan_lines, reads_pack, regime_pack
 from mentor_packs.registry import Pack, make_pack
 
 NAME = "gate_pack"
@@ -43,6 +43,15 @@ SCHEMA: dict[str, Any] = {
                 "size": {"type": "number", "description": "Shares, if typed."},
                 "stop": {"type": "number", "description": "Stop price, if typed."},
                 "entry": {"type": "number", "description": "Entry price, if typed."},
+                "trim": {"type": "boolean", "description": (
+                    "True when the exit only trims the held position (sell more of a long).")},
+                "flip": {"type": "boolean", "description": (
+                    "True for either half of a side flip: closing the held side and opening the other.")},
+                "add": {"type": "boolean", "description": (
+                    "True when he is adding to a position he already holds on this side.")},
+                "exit": {"type": "boolean", "description": (
+                    "True when he is closing or trimming a position he holds on this side (sell a long, cover a "
+                    "short), not opening a new trade.")},
             },
             "required": ["side", "symbol"],
         },
@@ -79,6 +88,8 @@ class Sources:
     ibkr_book_status: Callable[[], Mapping[str, Any] | None] = field(default=lambda: None, compare=False)
     #: P17: the bot's cached M5 bars (``bars_pack.Sources``) for where price is now; None = not read.
     bars_sources: Any = field(default=None, compare=False)
+    #: P18: the trader's Market Journal reads (``reads_pack.Sources``); None = not read.
+    reads_sources: Any = field(default=None, compare=False)
 
 
 def _live_risk() -> Any:
@@ -129,7 +140,8 @@ def live_sources() -> Sources:
     return Sources(risk_setting=_live_risk, open_trades=_live_open_trades, industry_map=_live_industry_map,
                    book_snapshot=live_book.snapshot, book_status=live_book.status, accounts=live_book.accounts,
                    max_positions=live_book.max_positions, ibkr_book_snapshot=live_book.ibkr_snapshot,
-                   ibkr_book_status=live_book.ibkr_status, bars_sources=bars_pack.live_sources())
+                   ibkr_book_status=live_book.ibkr_status, bars_sources=bars_pack.live_sources(),
+                   reads_sources=reads_pack.live_sources())
 
 
 def book_sources(src: Sources) -> book_pack.Sources:
@@ -283,14 +295,85 @@ def _plan_rows(prefix: str, src: Sources) -> list[dict[str, Any]]:
              "text": f"Plan [{line['id']}]: {line.get('text', '')}"} for line in plan.rows]
 
 
+def _read_rows(prefix: str, side: str, moment: datetime, sources: Any) -> list[dict[str, Any]]:
+    """P18: today's read (``reads_pack(n=1)``) and, when its call opposes the side, one conflict line."""
+    pack = reads_pack.build(n=1, now=moment, sources=sources)
+    current = [row for row in pack.rows if row.get("kind") == "current"]
+    if not current:
+        return [{"id": f"{prefix}:read:none", "kind": "read_none", "text": "Your read today: none written yet"}]
+    rows = _embed(prefix, current)
+    conflict = reads_pack.conflict_text(pack, side, moment)
+    if conflict:
+        rows.append({"id": f"{prefix}:read:conflict", "kind": "read_conflict", "text": conflict})
+    return rows
+
+
 def _embed(prefix: str, rows: Any) -> list[dict[str, Any]]:
     return [{**dict(row), "id": f"{prefix}:{row['id']}", "source_id": str(row["id"])} for row in rows]
 
 
 # ---------------------------------------------------------------- build
+def _flag(value: Any) -> bool:
+    """A strict boolean: True, 1 or "true"/"1"/"yes" only ("false", "0", "" and None are False)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    return str(value or "").strip().lower() in ("true", "1", "yes")
+
+
+def _price_age(rows: list[dict[str, Any]], moment: datetime) -> str:
+    """ "at last cached price HH:MM ET, N min old" from the embedded bars asof row; "" when none."""
+    asof = next((r for r in rows if r.get("kind") == "asof" and ":bars:" in str(r.get("id")) and r.get("at_utc")),
+                None)
+    if asof is None:
+        return ""
+    try:
+        at = datetime.fromisoformat(str(asof["at_utc"]))
+    except ValueError:
+        return ""
+    minutes = max(0, int((moment - at).total_seconds() // 60))
+    return f"at last cached price {at.astimezone(regime_pack.ET):%H:%M} ET, {minutes} min old"
+
+
+def _intent_row(prefix: str, sym: str, side: str, src: Sources, rows: list[dict[str, Any]],
+                moment: datetime) -> dict[str, Any]:
+    """P18: an exit of a held position - its size, average, stop and today's R from the last cached price."""
+    held = [t for t in src.open_trades() if _sym(t.get("symbol")) == sym and _side(t.get("direction")) == side]
+    head = f"Intent: EXIT of a held {side} {sym} (closing or trimming it), not a new trade"
+    if not held:
+        return {"id": f"{prefix}:intent", "kind": "intent", "exit": True,
+                "text": f"{head}; the position is not in the open book read here, size and average unknown"}
+    qty = sum((_num(t.get("quantity_opened")) or 0) - (_num(t.get("quantity_closed")) or 0) for t in held)
+    entries = [_num(t.get("average_entry_price")) for t in held]
+    stops = [_num(t.get("planned_stop")) for t in held if _num(t.get("planned_stop")) is not None]
+    avg = entries[0] if len(entries) == 1 else None
+    last = next((_num(r.get("price")) for r in rows if r.get("kind") == "last" and r.get("price") is not None), None)
+    if avg is None or not stops or last is None or avg == stops[0]:
+        why = ("no planned stop" if not stops else "no cached price" if last is None
+               else "more than one lot" if avg is None else "stop at entry")
+        r_text = f"today's R unknown ({why})"
+    else:
+        risk = (avg - stops[0]) if side == "LONG" else (stops[0] - avg)
+        move = (last - avg) if side == "LONG" else (avg - last)
+        age = _price_age(rows, moment)
+        r_text = f"{move / risk:+.2f}R at {last:.2f}" + (f" ({age})" if age else " (price time unknown)")
+    return {"id": f"{prefix}:intent", "kind": "intent", "exit": True,
+            "text": (f"{head}: {qty:g} sh, avg {'unknown' if avg is None else f'{avg:.2f}'}, stop "
+                     f"{f'{stops[0]:.2f}' if stops else 'none'}; {r_text}")}
+
+
 def build(side: str = "", symbol: str = "", size: Any = None, stop: Any = None, entry: Any = None, *,
-          now: datetime | None = None, sources: Sources | None = None) -> Pack:
-    """Build the gate pack for one request. File and DB reads: call it on a worker."""
+          now: datetime | None = None, sources: Sources | None = None, exit: Any = False,
+          add: Any = False, flip: Any = False, trim: Any = False) -> Pack:
+    """Build the gate pack for one request. File and DB reads: call it on a worker.
+
+    P18: ``flip`` marks one half of a side flip (exit the held side, then a new trade on the other)."""
+    exit = _flag(exit)
+    add = _flag(add) and not exit
+    flip = _flag(flip) and not add
+    trim = _flag(trim) and exit
+    other = {"LONG": "SHORT", "SHORT": "LONG"}.get(_side(side), "")
     sym, chosen = _sym(symbol), _side(side)
     if not sym or not sym.replace(".", "").replace("-", "").isalnum():
         return make_pack(NAME, (), empty_text="gate_pack needs a ticker, e.g. /check short NVDA")
@@ -308,7 +391,15 @@ def build(side: str = "", symbol: str = "", size: Any = None, stop: Any = None, 
         "id": f"{prefix}:req", "kind": "request", "side": chosen, "symbol": sym,
         "size": size_v, "stop": stop_v, "entry": entry_v, "key": request_key(chosen, sym, size, stop, entry),
         "at_utc": moment.astimezone(timezone.utc).isoformat(timespec="seconds"), "plan_sha": plan_sha,
-        "text": (f"Request: {chosen} {sym}, size {_fmt(size_v)}, stop {_fmt(stop_v)}, entry {_fmt(entry_v)}"),
+        "exit": bool(exit), "add": bool(add), "flip": bool(flip),
+        "trim": bool(trim),
+        "text": ((f"Request: TRIM (a partial exit) of a held {chosen} {sym}, not a new trade" if trim else
+                  f"Request: EXIT of a held {chosen} {sym} (sell/cover/trim), not a new trade" if exit else
+                  f"Request: ADD to a held {chosen} {sym}, size {_fmt(size_v)}, stop {_fmt(stop_v)}, entry "
+                  f"{_fmt(entry_v)}" if add else
+                  f"Request: new {chosen} {sym}, size {_fmt(size_v)}, stop {_fmt(stop_v)}, entry {_fmt(entry_v)}")
+                 + ((f"; a FLIP: then a new {other} {sym}" if exit else f"; a FLIP from a held {other} {sym}")
+                    if flip else "")),
     }]
     try:
         rows.append(_risk_row(prefix, chosen, size_v, stop_v, entry_v, src))
@@ -333,6 +424,11 @@ def build(side: str = "", symbol: str = "", size: Any = None, stop: Any = None, 
             rows.extend(_embed(prefix, bars_pack.build(sym, n=6, now=moment, sources=src.bars_sources).rows))
         except Exception as exc:  # noqa: BLE001
             rows.append(_unknown(f"{prefix}:bars:{sym}:none", "Cached M5 bars", exc))
+    if src.reads_sources is not None:
+        try:
+            rows.extend(_read_rows(prefix, chosen, moment, src.reads_sources))
+        except Exception as exc:  # noqa: BLE001
+            rows.append(_unknown(f"{prefix}:read:none", "Your read", exc))
     try:
         rows.extend(_book_rows(prefix, sym, chosen, src, moment))
     except Exception as exc:  # noqa: BLE001
@@ -341,6 +437,12 @@ def build(side: str = "", symbol: str = "", size: Any = None, stop: Any = None, 
         rows.extend(_plan_rows(prefix, src))
     except Exception as exc:  # noqa: BLE001
         rows.append(_unknown(f"{prefix}:plan:none", "Plan", exc))
+    if exit:
+        # P18 review: an exit question (sell a held long, cover a held short) leads with its intent row.
+        try:
+            rows.insert(1, _intent_row(prefix, sym, chosen, src, rows, moment))
+        except Exception as exc:  # noqa: BLE001
+            rows.insert(1, _unknown(f"{prefix}:intent", "Exit intent", exc))
     return make_pack(NAME, rows)
 
 

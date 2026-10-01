@@ -641,11 +641,12 @@ def _now(now: datetime | None) -> datetime:
 
 
 def build(symbol: str = "", side: str = "", origin: str = "", *, now: datetime | None = None,
-          paths: PickPaths | None = None) -> Pack:
+          paths: PickPaths | None = None, note: str = "") -> Pack:
     """Build the pick pack for ``symbol``. File reads: call it on a worker.
 
     P16: ``origin`` (``book`` | ``liked`` | ``focus``) is stamped on every row and said in the as-of row, so a
-    Focus name read for a group question is never called a position."""
+    Focus name read for a group question is never called a position. P18: ``note`` (the app's own line, e.g.
+    "No position in X to exit") rides first as ``pick:<SYM>:note``."""
     sym = _sym(symbol)
     where = str(origin or "").strip().lower()
     if not sym or not sym.replace(".", "").replace("-", "").isalnum():
@@ -736,6 +737,8 @@ def build(symbol: str = "", side: str = "", origin: str = "", *, now: datetime |
         rows[0]["text"] += f"; {sym} is {said}"
         for row in rows:
             row["origin"] = where
+    if note:
+        rows.insert(0, {"id": f"pick:{sym}:note", "kind": "note", "symbol": sym, "text": str(note)})
     return make_pack(NAME, rows)
 
 

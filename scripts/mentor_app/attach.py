@@ -37,6 +37,8 @@ PRIORITY = {
     "rs_pack": 4,
     "bars_pack": 3,
     "alerts_pack": 4,
+    "reads_pack": 3,
+    "habits_pack": 6,
     "plan_lines": 9,
     "hypothesis_pack": 9,
     "recall": 10,
@@ -53,6 +55,8 @@ COMMON_WORDS = frozenset({
     "if", "in", "is", "it", "me", "my", "no", "not", "now", "of", "on", "or", "out", "so", "the", "to", "up", "us",
     "was", "we", "you", "big", "low", "high", "run", "see", "new", "key", "real", "fast", "good", "well", "one",
     "open", "next", "life", "love", "fun", "cash", "free", "any", "few", "true", "ever", "safe", "else",
+    # P18: words a trade verb takes that are also tickers ("buy the dip", "sell puts on AMD").
+    "dip", "dips", "puts", "put", "calls", "call", "cat", "food", "top", "bottom", "rip", "pop", "gap", "news",
 })
 _DOLLAR = re.compile(r"\$([A-Za-z]{1,5}(?:[.\-][A-Za-z]{1,2})?)(?![A-Za-z])")
 _PLAIN = re.compile(r"(?<![A-Za-z$.\-])([A-Z]{1,5}(?:[.\-][A-Z]{1,2})?)(?![A-Za-z])")
@@ -71,6 +75,8 @@ _INTENT = re.compile(
     r"\bthinking (?:of|about)\b|\bshould i\b|\btake\b|\btaking\b|\bgo(?:ing)? (?:long|short)\b|\benter(?:ing)?\b"
     r"|\badd(?:ing)? (?:to )?\b|\bsize\b|\bsizing\b|\bget(?:ting)? (?:in|into)\b|\bworth (?:a|the) (?:trade|shot)\b"
     r"|\bplanning (?:to|on)\b|\bwant to (?:short|buy|long)\b"
+    # P18 review: "about to buy NVDA", "selling AMD here" are pre-trade intents too ("sell-off" is not).
+    r"|\babout to\b|\bbuy(?:ing)?\b|\bsell(?:ing)?\b(?!-)"
     r"|\bpre-?trade\b|\bchecklist for\b|\bmy stop (?:be|go)\b|\bstop be on\b"
     r"|\bwhere (?:do|should) i (?:put|place) (?:my|the) stop\b"
 )
@@ -137,9 +143,18 @@ _RS = re.compile(r"\brelative strength\b|\brr?s\b|\bleading\b|\blagging\b|\brota
                  r"|\bstrong groups\b|\bweak groups\b")
 #: P17: a ticker and "where is it now": the bot's cached M5 bars.
 _NOW = re.compile(r"\bnow\b|\bright now\b|\bcurrently\b|\bintraday\b|\btoday'?s action\b|\bwhere is \w+\b"
-                  r"|\bprice\b|\btrading at\b|\bwhere(?:'s| is) \w+ trading\b|\bacting\b|\bvwap\b")
+                  r"|\bprice\b|\btrading at\b|\bwhere(?:'s| is) \w+ trading\b|\bacting\b|\bvwap\b"
+                  r"|\bclose today\b|\bclosing (?:strong|weak)\b")
 #: P17: what the bot alerted (D1 wick, M5 bounce).
 _ALERTS = re.compile(r"\balerts?\b|\balerted\b|\bwhat fired\b|\bfired today\b|\bwhat(?:'s| is) the bot flagging\b")
+#: P18: the trader's own Market Journal reads and how they graded.
+_READS = re.compile(r"\bmy (?:market )?reads?\b|\bwhat did i say the market would do\b|\bwas i right about\b"
+                    r"|\bmy call on\b|\bmy market calls?\b|\bmy predictions?\b|\bdid i (?:call|read) it\b")
+#: P18: what the trader keeps saying and feeling (the night's habit counts).
+_HABITS = re.compile(r"\bbad habits?\b|\bmy habits?\b|\bwhat do i keep\b|\bpattern in what i (?:say|said)\b"
+                     r"|\bwhen do i (?:get|feel) (?:frustrated|tilted|angry|annoyed|bored)\b"
+                     r"|\bwhat have i been feeling\b|\bhow have i been feeling\b|\bwhat do i keep saying\b"
+                     r"|\bwhat do i usually (?:ask|look at|check)\b|\bmy (?:usual|morning) routine\b|\bmy routines?\b")
 _PLAN = re.compile(r"\bmy plan\b|\bmy rules?\b|\btrading plan\b|\bbreak(?:ing)? (?:a|my) rule\b")
 #: P15a: the night's reads (day review verdicts, ideas, contrasts, week review, story, digest).
 _NIGHT = re.compile(r"\bwhat did the night say\b|\bovernight\b|\blast night\b|\bnight(?:'s)? read\b|\bideas?\b"
@@ -168,8 +183,6 @@ _EARNINGS_ALONE = re.compile(
     r"^\W*(?:any\s+)?earnings\b|\b(?:earnings|reports?|reporting)\s+(?:this|next)\s+week\b"
     r"|\b(?:earnings|reports?|reporting)\s+(?:today|tomorrow)\b|\b(?:anything|anyone|who|who's|whos)\s+(?:is\s+)?"
     r"report(?:s|ing)?\b")
-_SHORT_WORD = re.compile(r"\bshort(?:ing|s|ed)?\b|\bsell(?:ing)? short\b|\bput(?:s)?\b")
-_LONG_WORD = re.compile(r"\blong\b|\bbuy(?:ing)?\b|\bgo long\b|\bcalls?\b")
 
 
 @dataclass(frozen=True)
@@ -261,22 +274,18 @@ def find_symbols(text: str, known_symbols: Mapping[str, Any] | Iterable[str]) ->
         token = match.group(1)
         if token in known and token not in NOT_TICKERS:
             hits.append((match.start(), token))
+    # P18: a lowercase word right after a trade verb is a ticker when it is in the universe ("sell amd").
+    from mentor_app.intent import lower_ticker_hits
+
+    for offset, sym in lower_ticker_hits(text, known):
+        if sym not in NOT_TICKERS and sym.lower() not in COMMON_WORDS:
+            hits.append((offset, sym))
     ordered: list[str] = []
     for _, sym in sorted(hits):
         if sym not in ordered:
             ordered.append(sym)
     return ordered
 
-
-def _side_words(lowered: str) -> str:
-    short, long_ = _SHORT_WORD.search(lowered), _LONG_WORD.search(lowered)
-    if short and not long_:
-        return "SHORT"
-    if long_ and not short:
-        return "LONG"
-    if short and long_:
-        return "SHORT" if short.start() < long_.start() else "LONG"
-    return ""
 
 
 def market_cue(text: str) -> bool:
@@ -316,15 +325,51 @@ def plan_attachments(
             wanted.append(request)
 
     gated: set[str] = set()
-    if symbols and _INTENT.search(lowered) and not past:
-        side = _side_words(lowered)
-        for sym in symbols:
-            chosen = side or known.get(sym, "")
-            if chosen:
-                add("gate_pack", f"trade intent on {sym}", side=chosen, symbol=sym)
-                gated.add(sym)
+    noted: set[str] = set()
+    held_names = {str(sym or "").strip().upper() for sym in book or ()}
+    if symbols and not past:
+        from mentor_app import intent as intent_mod
+
+        # P18 review: one table-driven resolver (mentor_app/intent.py) - each verb binds to its ticker by clause
+        # and is read against the book first (exit / add of a held position, or a new trade).
+        held = {sym: known.get(sym, "") for sym in symbols if sym in held_names and known.get(sym, "")}
+        resolved = intent_mod.resolve(raw, symbols, held, known)
+        for item in resolved:
+            if item.kind == "none_to_exit":
+                add("pick_pack", f"no position in {item.symbol} to exit", symbol=item.symbol,
+                    note=f"No position in {item.symbol} to exit: it is not in the open book")
+                noted.add(item.symbol)
+                continue
+            if item.kind == "ask_side":
+                # "sell TSLA" on a held short: more short or a cover? No gate until he says which.
+                add("pick_pack", f"which side on a held short {item.symbol}", symbol=item.symbol,
+                    note=(f"You are short {item.symbol}: 'sell more' means add, 'cover' means exit - say which"))
+                add("book_pack", f"held short {item.symbol}")
+                noted.add(item.symbol)
+                continue
+            if item.kind == "status":
+                # "I'm long AMD, how does it look?": his own position, not a trade - the pick and the book.
+                add("pick_pack", f"status of a held {item.symbol}", symbol=item.symbol)
+                add("book_pack", f"status of a held {item.symbol}")
+                noted.add(item.symbol)
+                continue
+            if item.kind == "history":
+                # Past tense ("sold AMD at 150") is what he did: the journal and the pick, never a gate.
+                add("journal_pack", f"{item.symbol}: what he already did", day="today")
+                add("pick_pack", f"history on {item.symbol}", symbol=item.symbol)
+                noted.add(item.symbol)
+                continue
+            flags = {"exit": True} if item.kind == "exit" else {"add": True} if item.kind == "add" else {}
+            if item.trim:
+                flags["trim"] = True
+            add("gate_pack", f"{item.kind} {item.side} {item.symbol}", side=item.side, symbol=item.symbol,
+                **flags, **({"flip": True} if item.flip else {}))
+            if item.kind == "exit":
+                add("journal_pack", f"exit of a held {item.symbol}: today's trades", day="today")
+                add("pick_pack", f"exit of a held {item.symbol}", symbol=item.symbol)
+            gated.add(item.symbol)
     for sym in symbols:
-        if sym not in gated:
+        if sym not in gated and sym not in noted:
             add("pick_pack", f"ticker {sym}", symbol=sym)
         add("news_pack", f"ticker {sym}", symbol=sym)
     vetoes = bool(_VETO.search(lowered))
@@ -436,6 +481,10 @@ def plan_attachments(
         alert_day = ("yesterday" if day == previous_weekday(_market_day(now)).isoformat()
                      else day if (iso_day and day != today) or day == "week" else "today")
         add("alerts_pack", "alert words", day=alert_day, **({"symbol": symbols[0]} if symbols else {}))
+    if _READS.search(lowered):
+        add("reads_pack", "read words", n=10)
+    if _HABITS.search(lowered):
+        add("habits_pack", "habit words")
     if _RECALL.search(lowered):
         add("recall", "memory words", query=raw[:200])
     return sorted(wanted, key=lambda request: request.priority)

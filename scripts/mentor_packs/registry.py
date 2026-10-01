@@ -32,6 +32,8 @@ PACK_MODULES: tuple[str, ...] = (
     "mentor_packs.rs_pack",
     "mentor_packs.bars_pack",
     "mentor_packs.alerts_pack",
+    "mentor_packs.reads_pack",
+    "mentor_packs.habits_pack",
 )
 
 

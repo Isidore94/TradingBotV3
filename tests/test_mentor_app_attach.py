@@ -426,3 +426,83 @@ def test_a_pre_trade_question_carries_the_compact_brief_and_a_plain_one_does_not
     assert got[0][0] == "gate_pack" and ("fundamentals_pack", {"section": "compact"}) in got
     for question in ("how did today go", "what's the tape doing", "what am I holding", "any news on TSLA"):
         assert "fundamentals_pack" not in _only(question), question
+
+
+# ---------------------------------------------------------------- P18 review: pre-trade intents by verb
+def _gate_sides(text, known=KNOWN, book=()):
+    return [(r.args["side"], r.args["symbol"]) for r in attach.plan_attachments(text, known, NOW, book=book)
+            if r.name == "gate_pack"]
+
+
+def test_pre_trade_verbs_route_to_the_gate_with_the_side_from_the_verb():
+    # MSFT has no known side: the verb alone sets it.
+    assert _gate_sides("I'm about to buy MSFT") == [("LONG", "MSFT")]
+    assert _gate_sides("about to sell MSFT") == [("SHORT", "MSFT")]
+    assert _gate_sides("going long MSFT here") == [("LONG", "MSFT")]
+    assert _gate_sides("going short MSFT here") == [("SHORT", "MSFT")]
+    # No side in the verb: the known side; an add takes the held side; an add on a name not held is nothing
+    # (round 5 rule, the table in test_mentor_app_intent.py).
+    assert _gate_sides("entering TSLA") == [("SHORT", "TSLA")]
+    assert _gate_sides("adding to AMD", book=["AMD"]) == [("SHORT", "AMD")]
+    assert _gate_sides("adding to NVDA") == []
+
+
+def test_a_sell_off_is_not_a_sell():
+    assert _gate_sides("NVDA sell-off today, what happened") == []
+
+
+#: P18 re-review: the verb is read against the book first.
+HELD = {"AMD": "LONG", "NVDA": "LONG", "TSLA": "SHORT"}
+
+
+def _gate_args(text, book):
+    return [dict(r.args) for r in attach.plan_attachments(text, HELD, NOW, book=book) if r.name == "gate_pack"]
+
+
+def test_selling_a_held_long_is_an_exit_of_that_long_never_a_new_short():
+    for text, sym in (("should I sell AMD here?", "AMD"), ("selling AMD, taking profit", "AMD"),
+                      ("about to sell half my NVDA", "NVDA")):
+        assert _gate_args(text, [sym]) == [{"side": "LONG", "symbol": sym, "exit": True}], text
+        names = [r.name for r in attach.plan_attachments(text, HELD, NOW, book=[sym])]
+        assert "journal_pack" in names and "pick_pack" in names, text
+
+
+def test_covering_a_held_short_is_an_exit_of_that_short():
+    assert _gate_args("cover TSLA", ["TSLA"]) == [{"side": "SHORT", "symbol": "TSLA", "exit": True}]
+
+
+def test_selling_a_name_not_held_is_a_new_short():
+    assert _gate_args("about to sell AMD", []) == [{"side": "SHORT", "symbol": "AMD"}]
+    assert _gate_args("adding to AMD", ["AMD"]) == [{"side": "LONG", "symbol": "AMD", "add": True}]  # not an exit
+
+
+#: P18 re-review 2: "close" is a price word unless it is an action on the name; each verb binds to its ticker.
+BOOK = ["AMD", "NVDA", "TSLA"]
+
+
+def _packs(text):
+    return [(r.name, dict(r.args)) for r in attach.plan_attachments(text, HELD, NOW, book=BOOK)]
+
+
+def test_close_as_a_price_word_is_never_an_exit():
+    assert [a for n, a in _packs("AMD closing strong, add more?") if n == "gate_pack"] == [
+        {"side": "LONG", "symbol": "AMD", "add": True}]  # an add, never an exit
+    for text in ("did AMD close above vwap", "what is the AMD close today", "where did AMD close yesterday?"):
+        packs = _packs(text)
+        assert not [a for n, a in packs if n == "gate_pack"], text
+        assert {"bars_pack", "journal_pack"} & {n for n, _a in packs}, text
+
+
+def test_close_out_and_close_my_are_exits():
+    assert [a for n, a in _packs("close out AMD") if n == "gate_pack"] == [
+        {"side": "LONG", "symbol": "AMD", "exit": True}]
+    assert [a for n, a in _packs("close my NVDA") if n == "gate_pack"] == [
+        {"side": "LONG", "symbol": "NVDA", "exit": True}]
+
+
+def test_each_verb_binds_to_its_own_ticker():
+    gates = [a for n, a in _packs("sell AMD and buy NVDA") if n == "gate_pack"]
+    assert gates == [{"side": "LONG", "symbol": "AMD", "exit": True}, {"side": "LONG", "symbol": "NVDA", "add": True}]
+    from mentor_app import intent
+
+    assert intent.bind("sell AMD and buy NVDA", ["AMD", "NVDA"]) == {"AMD": {"sell"}, "NVDA": {"buy"}}

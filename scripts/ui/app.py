@@ -616,6 +616,18 @@ class MainWindow(MentorHostMixin, QMainWindow):
             self._mentor_badge_timer.setInterval(MENTOR_BADGE_POLL_MS)
             self._mentor_badge_timer.timeout.connect(self._refresh_mentor_badge)
             self._mentor_badge_timer.start()
+        # P18: the desk is the one writer of M5 bars on disk for the Trade Mentor app (60 s, session hours,
+        # the pass on the publisher's own thread; the bot's cache only, never IB).
+        self._m5_publisher = None
+        self._m5_publisher_timer = None
+        if self.mentor_app_enabled:
+            try:
+                from ui.services.m5_bar_publisher import M5BarPublisher, start_desk_timer
+
+                self._m5_publisher = M5BarPublisher(self._bot_for_m5_publisher)
+                self._m5_publisher_timer = start_desk_timer(self, self._m5_publisher)
+            except Exception:  # noqa: BLE001 - the publisher is optional; the desk runs without it
+                logging.warning("M5 bar publisher not started.", exc_info=True)
         self.ib_status = QLabel("IB/TWS: unknown")
         self.scan_status = QLabel("Scan: idle")
         self.setup_status = QLabel("Setups: 0")
@@ -1486,6 +1498,13 @@ class MainWindow(MentorHostMixin, QMainWindow):
             self.econ_toasts.show_reminder(payload)
         except Exception:  # noqa: BLE001
             logging.debug("Econ toast could not be shown.", exc_info=True)
+
+    def _bot_for_m5_publisher(self):
+        """The live bot for the M5 publisher's worker (None when the scanner is not running)."""
+        try:
+            return self.trading_panel.bounce_panel.service.current_bot()
+        except Exception:  # noqa: BLE001
+            return None
 
     def _trade_mentor_cached_bars(self, timeframe, symbols, *, now, timeout_seconds):
         """Read existing desk caches only; a miss is left for the service batch.

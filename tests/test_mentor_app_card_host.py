@@ -231,6 +231,10 @@ def app_window(tmp_path, monkeypatch):
         post=lambda url, payload, timeout: posted.append((url, payload)) or {},
         card_host=host,
     )
+    # A fixed 10:00 PT clock: the Inbox refuses items in its quiet hours (06:30-07:00 PT).
+    from datetime import datetime, timezone
+
+    win.inbox.now = lambda: datetime(2026, 9, 30, 17, 0, tzinfo=timezone.utc)
     yield win
     win.shutdown()
     win.deleteLater()

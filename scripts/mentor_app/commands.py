@@ -21,6 +21,11 @@ HELP_TEXT = (
     " closed session, like the desk; `/paste for 2026-09-30 ...` picks the session\n"
     "- `/recaps [n]` your last n day recaps (10 unless you say; `all`) and the issues that keep coming back\n"
     "- `/feel <SYM|trade id> <words>` how a trade felt, kept with that trade\n"
+    "- `/journal` today's journal lines with their mood tags; `/journal on` keeps every message as a journal line"
+    " (long dictation), `/journal off` goes back to telling self talk from questions\n"
+    "- `/habits` what you keep saying and feeling, counted by the night over 30 days (observations, never rules)\n"
+    "- `/routine` what you usually ask at each half hour (I get it ready when that half hour starts);"
+    " `/forget routine 06:30` hides a weekday line, `/forget routine we 09:00` a weekend one\n"
     "- `/recall <text>` search what we said before (plain text search when the brain is off)\n"
     "- `/forget <id>` retire a note (it is kept, never deleted); `/keep <id>` says it is still true\n"
     "- `/tape` the tape: Auto mode, D1, last night's read, econ, sectors (read aloud when the brain is up)\n"
@@ -105,6 +110,18 @@ def handle(text: str) -> CommandResult | None:
         if not rest:
             return CommandResult("error", "Try `/remember I stop after two losses`.")
         return CommandResult("remember", "", rest)
+    if name == "forget" and rest.lower().split()[:1] == ["routine"]:
+        words = rest.split()[1:]
+        weekend = bool(words) and words[0].lower() in ("we", "weekend")
+        bucket = (words[1] if weekend and len(words) > 1 else words[0] if words and not weekend else "").strip()
+        if len(words) != (2 if weekend else 1) or not re.fullmatch(r"\d{1,2}:(?:00|30)", bucket):
+            return CommandResult("error", "Try `/forget routine 06:30` (weekday) or `/forget routine we 09:00` "
+                                          "(weekend), the half hour `/routine` shows.")
+        return CommandResult("forget_routine", "", ("we:" if weekend else "") + bucket.zfill(5))
+    if name in ("routine", "routines"):
+        if rest:
+            return CommandResult("error", "Try `/routine` (no arguments).")
+        return CommandResult("routine")
     if name in ("forget", "keep"):
         from mentor_app.memory import parse_note_id
 
@@ -127,6 +144,15 @@ def handle(text: str) -> CommandResult | None:
         if len(parts) < 2:
             return CommandResult("error", "Try `/feel SHOP rushed it` or `/feel <trade id> calm`.")
         return CommandResult("feel", "", (parts[0], parts[1].strip()))
+    if name == "journal":
+        word = rest.lower()
+        if word not in ("", "on", "off"):
+            return CommandResult("error", "Try `/journal`, `/journal on` or `/journal off`.")
+        return CommandResult("journal", "", word)
+    if name in ("habits", "habit"):
+        if rest:
+            return CommandResult("error", "Try `/habits` (no arguments).")
+        return CommandResult("pack", "", ("habits_pack", {}))
     if name == "plan":
         return CommandResult("plan")
     if name == "drop":

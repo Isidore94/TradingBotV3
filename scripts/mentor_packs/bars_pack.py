@@ -84,8 +84,55 @@ def _live_market_tz() -> Any:
     return market_session.get_market_local_timezone()[0]
 
 
+#: P18: the desk publisher's day files read for a symbol (today's and the one before).
+PUBLISHER_DAYS = 2
+SOURCE_LABELS = {"desk_publisher": "the desk's M5 publisher", "spool": "the research spool tee"}
+
+
+def _publisher_files(directory: Path | None = None) -> list[Path]:
+    if directory is None:
+        from project_paths import M5_BARS_DIR
+
+        directory = Path(M5_BARS_DIR)
+    try:
+        return sorted(Path(directory).glob("????-??-??.jsonl"))[-PUBLISHER_DAYS:]
+    except OSError:
+        return []
+
+
+def read_publisher_bars(symbol: str, files: Iterable[Path]) -> list[dict[str, Any]]:
+    """One symbol's rows from the desk publisher's ``<date>.jsonl`` files (``source`` = desk_publisher)."""
+    needle = f'"symbol": "{symbol}"'
+    out: list[dict[str, Any]] = []
+    for path in files:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                for line in handle:
+                    if needle not in line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(row, dict) and row.get("symbol") == symbol:
+                        out.append({**row, "interval_start": row.get("start"), "source": "desk_publisher"})
+        except OSError:
+            continue
+    return out
+
+
+def preferred_bars(symbol: str, publisher_files: Iterable[Path], spool_files: Callable[[], Iterable[Path]]
+                   ) -> list[dict[str, Any]]:
+    """The publisher's bars when it has the name, else the spool tee's (each row labelled with its source)."""
+    rows = read_publisher_bars(symbol, publisher_files)
+    if rows:
+        return rows
+    return [{**row, "source": "spool"} for row in read_spool_bars(symbol, spool_files())]
+
+
 def live_sources() -> Sources:
-    return Sources(bars=lambda symbol: read_spool_bars(symbol, _spool_files()), market_tz=_live_market_tz)
+    return Sources(bars=lambda symbol: preferred_bars(symbol, _publisher_files(), _spool_files),
+                   market_tz=_live_market_tz)
 
 
 def _float(value: Any) -> float | None:
@@ -141,7 +188,8 @@ def build(symbol: str = "", n: int = 12, *, now: datetime | None = None, sources
         if start + BAR > moment:
             continue
         bars[start] = {"start": start, "open": values[0], "high": values[1], "low": values[2], "close": values[3],
-                       "volume": _float(raw.get("volume")) or 0.0, "vwap": _float(raw.get("vwap"))}
+                       "volume": _float(raw.get("volume")) or 0.0, "vwap": _float(raw.get("vwap")),
+                       "source": str(raw.get("source") or "")}
     if not bars:
         return make_pack(NAME, [{"id": f"bars:{sym}:none", "kind": "none",
                                  "text": (f"{sym}: no cached 5-minute bars. The bot only caches names it is "
@@ -155,8 +203,11 @@ def build(symbol: str = "", n: int = 12, *, now: datetime | None = None, sources
         "id": f"bars:{sym}:asof", "kind": "asof", "symbol": sym, "stale": stale,
         "at_utc": last_end.astimezone(timezone.utc).isoformat(timespec="seconds"),
         "text": (f"{sym} cached M5 bars: last completed bar closed {last_end.astimezone(ET):%Y-%m-%d %H:%M} ET, "
-                 f"{age_text(age_min)} ago" + (f" (STALE > {STALE_MINUTES} min)" if stale else "")),
+                 f"{age_text(age_min)} ago" + (f" (STALE > {STALE_MINUTES} min)" if stale else "")
+                 + (f"; from {SOURCE_LABELS.get(last['source'], last['source'])}" if last["source"] else "")),
     }]
+    if last["source"]:
+        rows[0]["source"] = last["source"]
     shown = ordered[-n:]
     for i, bar in enumerate(shown, 1):
         rows.append({

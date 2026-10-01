@@ -43,6 +43,10 @@ here.
   P17 tape packs built (lead 2026-09-30, `claude/mentor-app-p17-tape-packs-2026-09-30`, gate #336): `rs_pack` +
   `/rs`, `bars_pack` (research spool M5 tee; the gate carries it), `alerts_pack` + `/alerts`, `ctx:tape_now`,
   the 108-question fixture.
+  P18 built (lead 2026-10-01, `claude/mentor-app-p18-journal-reads-routines-2026-10-01`, gates #341-#344): journal
+  mode (`journal_entries`, mood tags, `/journal`), `reads_pack` (+ gate read line), the desk M5 publisher
+  (`m5_bar_publisher`, `tilt:chase`), habits (`mentor_habits.json`, `habits_pack`, `/habits`), routines
+  (`mentor_routines.json`, `/routine`), the 120-question fixture.
   Next only by the trader's word: an alerts pack, a movers pack, more recall sources.
 
 ## Plan to 8/10, round 2 (trader's brief, 2026-09-25 evening)
