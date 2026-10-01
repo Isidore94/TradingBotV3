@@ -242,3 +242,23 @@ def test_the_gate_carries_the_pick_headlines_with_their_urls(tmp_path):
     news = [row for row in pack.rows if row["kind"] == "news"]
     assert [row["id"] for row in news] == ["gate:NVDA:pick:NVDA:news:12", "gate:NVDA:pick:NVDA:news:11"]
     assert all(row["url"] in row["text"] for row in news)
+
+
+def test_an_exit_carries_the_intent_row_with_size_avg_and_today_s_r(tmp_path):
+    from mentor_packs import bars_pack
+
+    trades = [_trade("T1", "ALL", "LONG", 100, 100.0, 95.0)]
+    src = gate_pack.fixture_sources(tmp_path, trades=trades)
+    bars = bars_pack.Sources(bars=lambda sym: [{"interval_start": "2026-09-28T09:30:00-04:00", "open": 104.0,
+                                                "high": 106.0, "low": 103.0, "close": 105.0, "volume": 10}],
+                             market_tz=lambda: None)
+    src = gate_pack.Sources(**{**src.__dict__, "bars_sources": bars})
+    pack = gate_pack.build("LONG", "ALL", now=NOW, sources=src, exit=True)
+    assert pack.rows[0]["exit"] is True and "EXIT of a held LONG ALL" in pack.rows[0]["text"]
+    intent = _row(pack, "ALL:intent")
+    assert pack.rows[1] is intent and intent["exit"] is True
+    assert intent["text"] == ("Intent: EXIT of a held LONG ALL (closing or trimming it), not a new trade: 100 sh, "
+                              "avg 100.00, stop 95.00; +1.00R at the last cached price 105.00")
+    new = gate_pack.build("LONG", "ALL", now=NOW, sources=src)
+    assert not [r for r in new.rows if r["kind"] == "intent"] and new.rows[0]["exit"] is False
+    assert "exit" in gate_pack.SCHEMA["function"]["parameters"]["properties"]

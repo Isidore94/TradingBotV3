@@ -181,6 +181,11 @@ _EARNINGS_ALONE = re.compile(
     r"|\b(?:earnings|reports?|reporting)\s+(?:today|tomorrow)\b|\b(?:anything|anyone|who|who's|whos)\s+(?:is\s+)?"
     r"report(?:s|ing)?\b")
 _SHORT_WORD = re.compile(r"\bshort(?:ing|s|ed)?\b|\bsell(?:ing)?\b(?!-)|\bput(?:s)?\b")
+#: Closing a held long / a held short (P18 review: read against the book before the verb's own side).
+_EXIT_LONG = re.compile(r"\bsell(?:ing)?\b(?!-)|\btrim(?:ming)?\b|\btak(?:e|ing) (?:some )?profits?\b"
+                        r"|\bclos(?:e|ing)\b|\bexit(?:ing)?\b|\bscal(?:e|ing) out\b")
+_EXIT_SHORT = re.compile(r"\bbuy(?:ing)?\b|\bcover(?:ing)?\b|\bbuy(?:ing)? (?:it )?back\b|\bclos(?:e|ing)\b"
+                         r"|\bexit(?:ing)?\b|\btak(?:e|ing) (?:some )?profits?\b|\btrim(?:ming)?\b")
 _LONG_WORD = re.compile(r"\blong\b|\bbuy(?:ing)?\b|\bgo long\b|\bcalls?\b")
 
 
@@ -328,9 +333,21 @@ def plan_attachments(
             wanted.append(request)
 
     gated: set[str] = set()
-    if symbols and _INTENT.search(lowered) and not past:
+    held = {str(sym or "").strip().upper() for sym in book or ()}
+    if symbols and not past:
         side = _side_words(lowered)
         for sym in symbols:
+            # P18 review: the verb is read against the book first - selling a held long or covering a held
+            # short is an EXIT of that position, never a new trade on the other side.
+            held_side = known.get(sym, "") if sym in held else ""
+            if held_side and (_EXIT_LONG if held_side == "LONG" else _EXIT_SHORT).search(lowered):
+                add("gate_pack", f"exit of a held {held_side} {sym}", side=held_side, symbol=sym, exit=True)
+                add("journal_pack", f"exit of a held {sym}: today's trades", day="today")
+                add("pick_pack", f"exit of a held {sym}", symbol=sym)
+                gated.add(sym)
+                continue
+            if not _INTENT.search(lowered):
+                continue
             chosen = side or known.get(sym, "")
             if chosen:
                 add("gate_pack", f"trade intent on {sym}", side=chosen, symbol=sym)

@@ -43,6 +43,9 @@ SCHEMA: dict[str, Any] = {
                 "size": {"type": "number", "description": "Shares, if typed."},
                 "stop": {"type": "number", "description": "Stop price, if typed."},
                 "entry": {"type": "number", "description": "Entry price, if typed."},
+                "exit": {"type": "boolean", "description": (
+                    "True when he is closing or trimming a position he holds on this side (sell a long, cover a "
+                    "short), not opening a new trade.")},
             },
             "required": ["side", "symbol"],
         },
@@ -304,8 +307,33 @@ def _embed(prefix: str, rows: Any) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------- build
+def _intent_row(prefix: str, sym: str, side: str, src: Sources, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """P18: an exit of a held position - its size, average, stop and today's R from the last cached price."""
+    held = [t for t in src.open_trades() if _sym(t.get("symbol")) == sym and _side(t.get("direction")) == side]
+    head = f"Intent: EXIT of a held {side} {sym} (closing or trimming it), not a new trade"
+    if not held:
+        return {"id": f"{prefix}:intent", "kind": "intent", "exit": True,
+                "text": f"{head}; the position is not in the open book read here, size and average unknown"}
+    qty = sum((_num(t.get("quantity_opened")) or 0) - (_num(t.get("quantity_closed")) or 0) for t in held)
+    entries = [_num(t.get("average_entry_price")) for t in held]
+    stops = [_num(t.get("planned_stop")) for t in held if _num(t.get("planned_stop")) is not None]
+    avg = entries[0] if len(entries) == 1 else None
+    last = next((_num(r.get("price")) for r in rows if r.get("kind") == "last" and r.get("price") is not None), None)
+    if avg is None or not stops or last is None or avg == stops[0]:
+        why = ("no planned stop" if not stops else "no cached price" if last is None
+               else "more than one lot" if avg is None else "stop at entry")
+        r_text = f"today's R unknown ({why})"
+    else:
+        risk = (avg - stops[0]) if side == "LONG" else (stops[0] - avg)
+        move = (last - avg) if side == "LONG" else (avg - last)
+        r_text = f"{move / risk:+.2f}R at the last cached price {last:.2f}"
+    return {"id": f"{prefix}:intent", "kind": "intent", "exit": True,
+            "text": (f"{head}: {qty:g} sh, avg {'unknown' if avg is None else f'{avg:.2f}'}, stop "
+                     f"{f'{stops[0]:.2f}' if stops else 'none'}; {r_text}")}
+
+
 def build(side: str = "", symbol: str = "", size: Any = None, stop: Any = None, entry: Any = None, *,
-          now: datetime | None = None, sources: Sources | None = None) -> Pack:
+          now: datetime | None = None, sources: Sources | None = None, exit: bool = False) -> Pack:
     """Build the gate pack for one request. File and DB reads: call it on a worker."""
     sym, chosen = _sym(symbol), _side(side)
     if not sym or not sym.replace(".", "").replace("-", "").isalnum():
@@ -324,7 +352,9 @@ def build(side: str = "", symbol: str = "", size: Any = None, stop: Any = None, 
         "id": f"{prefix}:req", "kind": "request", "side": chosen, "symbol": sym,
         "size": size_v, "stop": stop_v, "entry": entry_v, "key": request_key(chosen, sym, size, stop, entry),
         "at_utc": moment.astimezone(timezone.utc).isoformat(timespec="seconds"), "plan_sha": plan_sha,
-        "text": (f"Request: {chosen} {sym}, size {_fmt(size_v)}, stop {_fmt(stop_v)}, entry {_fmt(entry_v)}"),
+        "exit": bool(exit),
+        "text": ((f"Request: EXIT of a held {chosen} {sym} (sell/cover/trim), not a new trade" if exit else
+                  f"Request: {chosen} {sym}, size {_fmt(size_v)}, stop {_fmt(stop_v)}, entry {_fmt(entry_v)}")),
     }]
     try:
         rows.append(_risk_row(prefix, chosen, size_v, stop_v, entry_v, src))
@@ -362,6 +392,12 @@ def build(side: str = "", symbol: str = "", size: Any = None, stop: Any = None, 
         rows.extend(_plan_rows(prefix, src))
     except Exception as exc:  # noqa: BLE001
         rows.append(_unknown(f"{prefix}:plan:none", "Plan", exc))
+    if exit:
+        # P18 review: an exit question (sell a held long, cover a held short) leads with its intent row.
+        try:
+            rows.insert(1, _intent_row(prefix, sym, chosen, src, rows))
+        except Exception as exc:  # noqa: BLE001
+            rows.insert(1, _unknown(f"{prefix}:intent", "Exit intent", exc))
     return make_pack(NAME, rows)
 
 

@@ -23,7 +23,8 @@ SESSION_DAYS = 10
 MIN_DAYS = 5
 #: app_state key: the buckets the trader told to forget (JSON list of "HH:MM").
 FORGOTTEN_KEY = "routines:forgotten"
-BUCKET_RE = re.compile(r"^\d{2}:(?:00|30)$")
+#: A forgotten line's key: "06:30" (weekday) or "we:09:00" (weekend).
+BUCKET_RE = re.compile(r"^(?:we:)?\d{2}:(?:00|30)$")
 KINDS = (
     ("pre_trade", ("gate_pack",)),
     ("tape", ("regime_pack", "bars_pack", "rs_pack", "alerts_pack")),
@@ -156,9 +157,14 @@ def routine_line(new: Mapping[str, Any], old: Mapping[str, Any]) -> str:
     return "You usually ask " + "; ".join(parts)
 
 
+def line_key(row: Mapping[str, Any]) -> str:
+    """``06:30`` for a weekday line, ``we:09:00`` for a weekend one (what ``/forget routine`` names)."""
+    return ("we:" if row.get("day_type") == WEEKEND else "") + str(row.get("bucket") or "")
+
+
 def visible(payload: Mapping[str, Any], forgotten: Iterable[str]) -> list[dict[str, Any]]:
     gone = set(forgotten)
-    return [dict(r) for r in payload.get("routines") or () if isinstance(r, Mapping) and r.get("bucket") not in gone]
+    return [dict(r) for r in payload.get("routines") or () if isinstance(r, Mapping) and line_key(r) not in gone]
 
 
 def table_text(payload: Mapping[str, Any], forgotten: Iterable[str]) -> str:
@@ -176,7 +182,7 @@ def table_text(payload: Mapping[str, Any], forgotten: Iterable[str]) -> str:
     if not rows:
         lines.append("- none (or all forgotten)")
     lines.append("")
-    lines.append("`/forget routine 06:30` hides a line.")
+    lines.append("`/forget routine 06:30` hides a weekday line; `/forget routine we 09:00` a weekend one.")
     return "\n".join(lines)
 
 

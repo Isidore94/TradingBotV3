@@ -807,7 +807,8 @@ class MentorWindow(QMainWindow):
                 self._routine_forgotten = [*self._routine_forgotten, bucket]
             forgotten = json.dumps(sorted(self._routine_forgotten))
             self._submit_io(lambda: self.store.set_state(routines.FORGOTTEN_KEY, forgotten))
-            self._add_note(f"Forgot the {bucket} routine line; I will not get it ready any more.")
+            when = f"weekend {bucket[3:]}" if bucket.startswith("we:") else f"weekday {bucket}"
+            self._add_note(f"Forgot the {when} routine line; I will not get it ready any more.")
             return
         self._add_note(routines.table_text(self._routine_payload, self._routine_forgotten))
 

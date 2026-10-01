@@ -448,3 +448,28 @@ def test_pre_trade_verbs_route_to_the_gate_with_the_side_from_the_verb():
 
 def test_a_sell_off_is_not_a_sell():
     assert _gate_sides("NVDA sell-off today, what happened") == []
+
+
+#: P18 re-review: the verb is read against the book first.
+HELD = {"AMD": "LONG", "NVDA": "LONG", "TSLA": "SHORT"}
+
+
+def _gate_args(text, book):
+    return [dict(r.args) for r in attach.plan_attachments(text, HELD, NOW, book=book) if r.name == "gate_pack"]
+
+
+def test_selling_a_held_long_is_an_exit_of_that_long_never_a_new_short():
+    for text, sym in (("should I sell AMD here?", "AMD"), ("selling AMD, taking profit", "AMD"),
+                      ("about to sell half my NVDA", "NVDA")):
+        assert _gate_args(text, [sym]) == [{"side": "LONG", "symbol": sym, "exit": True}], text
+        names = [r.name for r in attach.plan_attachments(text, HELD, NOW, book=[sym])]
+        assert "journal_pack" in names and "pick_pack" in names, text
+
+
+def test_covering_a_held_short_is_an_exit_of_that_short():
+    assert _gate_args("cover TSLA", ["TSLA"]) == [{"side": "SHORT", "symbol": "TSLA", "exit": True}]
+
+
+def test_selling_a_name_not_held_is_a_new_short():
+    assert _gate_args("about to sell AMD", []) == [{"side": "SHORT", "symbol": "AMD"}]
+    assert _gate_args("adding to AMD", ["AMD"]) == [{"side": "LONG", "symbol": "AMD"}]  # adding is not an exit

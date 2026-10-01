@@ -206,3 +206,15 @@ def test_forget_routine_persists_and_routine_prints_the_table(window):
     assert window._routine_bucket_done == ""  # forgotten: nothing prefetched
     window._io.submit(window._load_routines).result(5)
     assert window._routine_forgotten == ["06:30"]
+
+
+def test_forget_routine_names_the_weekday_or_the_weekend_line():
+    assert commands.handle("/forget routine 06:30") == commands.CommandResult("forget_routine", "", "06:30")
+    assert commands.handle("/forget routine we 9:00") == commands.CommandResult("forget_routine", "", "we:09:00")
+    assert commands.handle("/forget routine weekend 09:00").arg == "we:09:00"
+    assert commands.handle("/forget routine we").action == "error"
+    table = {"routines": [{"bucket": "09:00", "day_type": "weekday", "packs": []},
+                          {"bucket": "09:00", "day_type": "weekend", "packs": []}]}
+    assert [r["day_type"] for r in routines.visible(table, ["09:00"])] == ["weekend"]
+    assert [r["day_type"] for r in routines.visible(table, ["we:09:00"])] == ["weekday"]
+    assert routines.forgotten_list('["06:30", "we:09:00", "bad"]') == ["06:30", "we:09:00"]
