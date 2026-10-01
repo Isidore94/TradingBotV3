@@ -339,3 +339,51 @@ def test_the_morning_econ_block_shows_in_the_dock(tmp_path, monkeypatch):
         assert host.trade_mentor_service.econ_brief_shown(SESSION.isoformat())
     finally:
         host.shutdown()
+
+
+# --------------------------------------------------------------------------- the dock gives the space back
+def _due_card(app_window, tmp_path, monkeypatch):
+    import journal_store
+
+    store = new_store(tmp_path)
+    mark_covered(store, REVIEWED)
+    monkeypatch.setattr(journal_store, "JournalStore", lambda *a, **k: store)
+    host = app_window.card_host
+    card = host.dock.mentor_card
+    card._clock = lambda: pacific(SESSION, 9, 5)
+    card._journal = _Journal()
+    monkeypatch.setattr(card, "_missing_prediction_reason", lambda _h: "")
+    monkeypatch.setattr(card, "_start_ai_fill", lambda *args: None)
+    host.trade_mentor_service.promptDue.emit(slot_at(SESSION, 9))
+    assert host.dock.isVisibleTo(app_window) and card.isVisibleTo(app_window)
+    return host, card
+
+
+@pytest.mark.parametrize("act", ["submit", "skip", "hide_card"])
+def test_the_dock_hides_once_the_card_is_done(act, app_window, tmp_path, monkeypatch):
+    host, card = _due_card(app_window, tmp_path, monkeypatch)
+    if act == "submit":
+        assert card.submit()["ok"] is True
+    else:
+        getattr(card, act)()
+    assert not card.isVisibleTo(app_window)
+    assert not host.dock.isVisibleTo(app_window), "a finished card must not leave a blank box under the chat"
+    host.trade_mentor_service.promptDue.emit(slot_at(SESSION, 10))
+    assert host.dock.isVisibleTo(app_window), "the next card brings the dock back"
+
+
+def test_a_short_block_does_not_take_a_fixed_share_of_the_column(app_window, tmp_path, monkeypatch):
+    host, _card = _due_card(app_window, tmp_path, monkeypatch)
+    dock = host.dock
+    dock.hide_mentor_card()
+    dock.show_econ_brief({"session": SESSION.isoformat(), "today": [], "week": []})
+    app_window.resize(1100, 900)
+    app_window.show()
+    QApplication.processEvents()
+    try:
+        assert dock.isVisible()
+        body = dock.scroll.widget().sizeHint().height()
+        assert dock.height() <= body + 40, (dock.height(), body)
+        assert app_window.transcript.height() > dock.height()
+    finally:
+        app_window.hide()

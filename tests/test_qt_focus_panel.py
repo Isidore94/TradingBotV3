@@ -144,6 +144,7 @@ def test_master_workspace_no_longer_tabs_focus_picks(tmp_path):
         "Watchlist",
         "Theta Plays",
         "Manage lists",
+        "Mentor",  # trader 2026-10-01: the Trade Mentor app docks over this tab
     ]
     assert workspace.tabs.widget(1) is daily_watchlist
     assert workspace.tabs.widget(3) is manage_lists
