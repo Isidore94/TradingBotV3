@@ -444,7 +444,8 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         # and the briefs.
         "exit_note_fields",
         # Mentor app P4 (2026-09-30): `mentor_review`, directly after the
-        # exit-note reader since the briefs moved last.
+        # exit-note reader since the briefs moved last. P15a: order unchanged,
+        # budget priority changed (right after the day review, no longer cut first).
         "mentor_review",
         # Econ morning brief (2026-09-24): a stage 2 model slot directly after
         # `mentor_review`.

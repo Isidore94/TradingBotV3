@@ -37,6 +37,9 @@ def test_budget_priority_puts_plan_review_and_ideas_between_enrichment_and_tags(
         "day_review_narration",
         # R1 (2026-09-26): the show reads the story, so it is protected next.
         "day_review_show",
+        # P15a (trader 2026-09-30): the coach's night review ranks right after the day review.
+        # Priority changed only; the run order (EXPECTED_SLOT_ORDER) is unchanged.
+        "mentor_review",
         "market_story_narration",
         "setup_research",
         "journal_enrichment",

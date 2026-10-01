@@ -678,7 +678,8 @@ def test_the_scope_can_be_selected_on_demand():
         # and before the briefs.
         "exit_note_fields",
         # Mentor app P4 (2026-09-30): the app's day, graded and digested, directly
-        # after the exit-note reader since the briefs moved last.
+        # after the exit-note reader since the briefs moved last. P15a: order
+        # unchanged, budget priority changed (right after the day review).
         "mentor_review",
         # Econ morning brief (2026-09-24): "what to watch today" from the
         # pasted brief, a stage 2 model slot directly after `mentor_review`.

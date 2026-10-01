@@ -224,6 +224,9 @@ MODEL_SLOT_PRIORITY = (
     "day_review_narration",
     # R1 (2026-09-26): the show reads the story, so it is protected right after it.
     "day_review_show",
+    # P15a (trader 2026-09-30, "the night AI helps the day mentor succeed"): the coach's night
+    # review and coach brief rank right after the day review (story, then show); <= 600 + 500 tokens.
+    "mentor_review",
     "market_story_narration",
     "setup_research",
     "journal_enrichment",
@@ -232,8 +235,9 @@ MODEL_SLOT_PRIORITY = (
     "observation_tags",
 )
 LAST_PRIORITY_SLOT = "ticker_briefs"
-#: Ranked after `ticker_briefs`: the first model slot the budget cuts (its facts half still runs).
-CUT_FIRST_SLOTS = ("mentor_review",)
+#: Ranked after `ticker_briefs`: the first model slots the budget cuts (their facts half still runs).
+#: Empty since P15a: `mentor_review` moved up to rank right after the day review.
+CUT_FIRST_SLOTS: tuple[str, ...] = ()
 
 
 def model_slot_priority(name: str) -> int:
@@ -1747,8 +1751,9 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         ),
         # Trade Mentor app P4 (2026-09-30), after `exit_note_fields`. Deterministic half
         # (`ask=False`): grade open challenges 22:00-06:00 PT and publish the day's facts. Model
-        # half: one cited day digest to the ai_store. Cut first by the night budget
-        # (`CUT_FIRST_SLOTS`). Its only chat-DB write is the grading columns.
+        # half: one cited day digest, then the coach brief, to the ai_store. P15a: the budget ranks
+        # it right after the day review (`MODEL_SLOT_PRIORITY`); the run order is unchanged. Its
+        # only chat-DB writes are the grading columns and its own hypothesis rows.
         JobSlot(
             name="mentor_review",
             goal="journal",
@@ -1756,7 +1761,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             reserve_minutes=mentor_review.RESERVE_MINUTES,
             description=(
                 "Trade Mentor app's day: grade open challenges, publish the day's facts, "
-                "and a cited digest the app loads as memory"
+                "and a cited digest plus the coach brief the app loads as memory"
             ),
             max_attempts=2,
             uses_model=True,

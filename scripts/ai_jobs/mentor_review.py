@@ -7,10 +7,20 @@ owns grading), count the day's facts and publish them as ``mentor_day_facts`` to
 ai_store. The counts also ride on the ledger row.
 
 Model half: one call (<= 600 output tokens) over an inputs pack with ids - the facts,
-the day's profile notes, the day's challenges and up to 20 recent turns. The citation
+the day's profile notes, the day's challenges and up to 20 recent turns, plus (P15a) the
+night's reads: the day's pick assessments, gate verdicts of the last 10 sessions with their
+grades, the day's tilt observations, the mirror's top cuts, the daily digest's headline
+values, the contrasts, the day review's verdicts and the improvement ideas. The citation
 check is ``plan_review``'s rule: an id the pack does not carry rejects the reply whole;
 an uncited item is dropped. Publishes ``mentor_day_digest`` (<= 5 items, <= 3 open
 questions) by temp-and-rename, so a failed publish keeps the last good one.
+
+Coach brief (P15a): the night's product for the day coach, ``mentor_coach_brief_<session>``.
+The deterministic half finds recurring-issue candidates over the last 10 sessions (stable
+``key``, ``first_seen`` carried from earlier briefs) and publishes the facts part. Only after
+the digest succeeded and with time left in the slot's reserve, a second call (<= 500 tokens)
+words <= 4 things to watch, <= 3 he may be missing, ranks and words the issues and writes
+one line; ``check_brief`` rejects a foreign id and drops uncited items. Never a rule.
 
 Hypotheses (P11): the reply may carry <= 3 ``hypotheses``, each a query into the shadow
 permutation grid (the pack shows the newest report's vocabulary). The deterministic half
@@ -28,7 +38,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import sqlite3
+import time as clock
 from contextlib import closing
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
@@ -40,7 +52,7 @@ from ai_jobs import ledger
 _log = logging.getLogger(__name__)
 
 PT = ZoneInfo("America/Los_Angeles")
-PROMPT_VERSION = "mentor_review_v2"
+PROMPT_VERSION = "mentor_review_v3"
 SCHEMA_NAME = "tradingbot_mentor_review"
 FACTS_STEM = "mentor_day_facts"
 DIGEST_STEM = "mentor_day_digest"
@@ -50,6 +62,20 @@ DIGEST_SCHEMA = "mentor_day_digest_v1"
 COACH_STEM = "mentor_coach_brief"
 COACH_SCHEMA = "mentor_coach_brief_v1"
 MAX_OUTPUT_TOKENS = 600
+#: P15a coach brief: a second call (<= 500 tokens) only after the digest call succeeded with time to spare.
+MAX_BRIEF_TOKENS = 500
+BRIEF_MIN_SECONDS_LEFT = 240.0
+MAX_WATCH = 4
+MAX_MISSING = 3
+MAX_ISSUES = 5
+MAX_ONE_LINE = 200
+#: Sessions the recurring-issue candidates and the gate verdicts look back over.
+REVIEW_SESSIONS = 10
+#: An issue is recurring when it shows at least this often in the window.
+ISSUE_MIN_COUNT = 2
+MIRROR_WEEKS = 6
+MAX_MIRROR_CUTS = 5
+MAX_IDEAS = 5
 MAX_DIGEST_ITEMS = 5
 MAX_OPEN_QUESTIONS = 3
 MAX_HYPOTHESES = 3
@@ -67,7 +93,9 @@ INSTRUCTIONS = (
     "Write at most five short digest items worth remembering tomorrow, and at most three "
     "open questions to ask him. Every item cites one or more ids copied exactly from "
     "allowed_evidence_ids. Copy numbers from the evidence; never compute one. Never "
-    "suggest an order, a size, or a change to a detector, score or alert. Say nothing "
+    "suggest an order, a size, or a change to a detector, score or alert. night_reads carry what the "
+    "night and the desk already found about this day and recent sessions; use them to say what is worth "
+    "remembering. Say nothing "
     "rather than something the evidence does not carry. You may also propose at most three "
     "hypotheses: each is a query into the shadow permutation grid (population, horizon, family, "
     "side and one to three facets as 'name=value', using only names and values listed in "
@@ -357,16 +385,225 @@ def hypothesis_context(report: Any) -> tuple[list[dict[str, str]], dict[str, Any
     return [row], hypothesis_pack.vocabulary(report)
 
 
-def build_inputs(path: Path, session: str, facts: Mapping[str, Any], *, report: Any = None) -> dict[str, Any]:
+def _window_start(session: str, sessions: int = REVIEW_SESSIONS) -> str:
+    """The first weekday of the last ``sessions`` weekdays ending on ``session`` (holidays count as sessions)."""
+    day = datetime.fromisoformat(session).date()
+    left = sessions - 1
+    while left > 0:
+        day -= timedelta(days=1)
+        if day.weekday() < 5:
+            left -= 1
+    return day.isoformat()
+
+
+def _since_rows(path: Path, table: str, column: str, start: str, session: str) -> list[dict[str, Any]]:
+    """Rows whose ``column`` falls on a PT day from ``start`` through ``session``."""
+    lo = (datetime.fromisoformat(start) - timedelta(days=1)).date().isoformat()
+    hi = (datetime.fromisoformat(session) + timedelta(days=2)).date().isoformat()
+    rows = _rows(path, f"SELECT * FROM {table} WHERE {column} >= ? AND {column} < ?", (lo, hi))
+    return [row for row in rows if start <= _pt_day(row.get(column)) <= session]
+
+
+def _assessments(path: Path, session: str) -> list[dict[str, Any]]:
+    """The day's pick assessments (newest per symbol): verdict, first bullet and any plan line flagged broken."""
+    latest: dict[str, dict[str, Any]] = {}
+    for row in sorted(_day_rows(path, "pack_cache", "built_utc", session), key=lambda r: _text(r.get("built_utc"))):
+        if row.get("name") != "pick_assessment":
+            continue
+        try:
+            payload = json.loads(row.get("pack_json") or "{}")
+        except ValueError:
+            continue
+        symbol = _text(payload.get("symbol")).upper()
+        if symbol and _text(payload.get("verdict")):
+            latest[symbol] = payload
+    out = []
+    for symbol, payload in sorted(latest.items()):
+        bullets = [b for b in payload.get("bullets") or () if isinstance(b, Mapping)]
+        broken = [_text(f.get("plan_id")) for f in payload.get("rule_flags") or ()
+                  if isinstance(f, Mapping) and f.get("breaks")]
+        text = f"{symbol}: {_text(payload.get('verdict'))}" + (f"; {_text(bullets[0].get('text'))}" if bullets else "")
+        if broken:
+            text += f"; breaks {', '.join(broken)}"
+        out.append({"id": f"assess:{symbol}", "symbol": symbol, "text": text[:MAX_TURN_CHARS], "broken": broken})
+    return out
+
+
+def _challenge_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    outcome = _outcome(row)
+    graded = ""
+    if row.get("graded_utc"):
+        parts = [f"{key} {outcome[key]}" for key in ("result", "r", "hit", "rest_pnl") if key in outcome]
+        graded = "; graded: " + (", ".join(parts) or "done")
+    return {"id": f"challenge:{row['id']}", "kind": _text(row.get("kind")), "symbol": _text(row.get("symbol")),
+            "issued": _pt_day(row.get("issued_utc")),
+            "text": (_text(row.get("claim"))[:200] + graded)[:MAX_TURN_CHARS],
+            "status": _text(outcome.get("status")), "pattern": _text(outcome.get("pattern")),
+            "hit": outcome.get("hit")}
+
+
+def _mirror_rows(builder: Callable[[], Any] | None, moment: datetime) -> list[dict[str, Any]]:
+    """The mirror's top cuts (n at or over its floor, biggest n first); never its as-of rows."""
+    from mentor_packs import mirror_pack
+
+    pack = builder() if builder is not None else mirror_pack.build(weeks=MIRROR_WEEKS, now=moment)
+    floor = mirror_pack.min_reportable_n()
+    cuts = [row for row in pack.rows if row.get("kind") not in ("asof", "weeks", "caveats")
+            and isinstance(row.get("n"), int) and row["n"] >= floor]
+    cuts.sort(key=lambda row: (-int(row["n"]), str(row["id"])))
+    return [{"id": str(row["id"]), "text": _text(row.get("text"))[:MAX_TURN_CHARS]} for row in cuts[:MAX_MIRROR_CUTS]]
+
+
+def _night_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {"id": str(row["id"]), "text": _text(row.get("text"))[:MAX_TURN_CHARS]}
+
+
+def night_inputs(path: Path, session: str, moment: datetime, *, night_paths: Any = None,
+                 mirror_builder: Callable[[], Any] | None = None) -> dict[str, list[dict[str, Any]]]:
+    """P15a: what the night and the app already know about the day, each row with its id.
+
+    A section that cannot be read is left empty and named in ``unread``; it never costs the review.
+    """
+    from mentor_packs import night_pack
+
+    paths = night_paths if night_paths is not None else night_pack.live_paths()
+    day = datetime.fromisoformat(session).date()
+    start = _window_start(session)
+    out: dict[str, list[dict[str, Any]]] = {}
+    unread: list[str] = []
+
+    def section(name: str, read: Callable[[], list[dict[str, Any]]]) -> None:
+        try:
+            out[name] = read()
+        except Exception as exc:  # noqa: BLE001 - one unreadable input never costs the review
+            _log.debug("mentor_review: %s could not be read.", name, exc_info=True)
+            out[name] = []
+            unread.append(f"{name} ({type(exc).__name__})")
+
+    section("pick_assessments", lambda: _assessments(path, session))
+    section("gates", lambda: [_challenge_row(row) for row in _since_rows(path, "challenges", "issued_utc", start, session)
+                              if row.get("kind") == "gate"])
+    section("tilt", lambda: [_challenge_row(row) for row in _day_rows(path, "challenges", "issued_utc", session)
+                             if row.get("kind") == "tilt"])
+    section("mirror", lambda: _mirror_rows(mirror_builder, moment))
+    section("digest_facts", lambda: [_night_row(r) for r in night_pack.digest_fact_rows(paths, session)[0]])
+    section("contrasts", lambda: [_night_row(r) for r in (*night_pack.miss_rows(paths, day)[0],
+                                                          *night_pack.prediction_rows(paths, day)[0])])
+    section("day_review", lambda: [_night_row(r) for r in night_pack.day_review_rows(paths, day, 1)[0]])
+    section("ideas", lambda: [_night_row(r) for r in night_pack.idea_rows(paths, day, limit=MAX_IDEAS)[0]])
+    out["unread"] = [{"id": "", "text": name} for name in unread]
+    return out
+
+
+def _strip_src(text: str) -> str:
+    return re.sub(r"\s*\(src: [^)]*\)$", "", _text(text))
+
+
+def issue_candidates(path: Path, session: str, *, night_paths: Any = None,
+                     earlier: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
+    """Recurring problems over the last REVIEW_SESSIONS sessions, found by code (the model only words and ranks).
+
+    Each has a stable ``key`` (so ``first_seen`` carries over from ``earlier`` coach briefs), an
+    ``issue:<key>`` id, a count and the ids it rests on. Sources: the miss contrast's leader groups,
+    vetoes graded as the name winning, repeated tilt patterns, plan lines flagged broken on pick
+    assessments, and reads the day reviews graded wrong.
+    """
+    from mentor_packs import night_pack
+
+    paths = night_paths if night_paths is not None else night_pack.live_paths()
+    day = datetime.fromisoformat(session).date()
+    start = _window_start(session)
+    found: list[dict[str, Any]] = []
+
+    def add(key: str, text: str, count: int, refs: Sequence[str]) -> None:
+        found.append({"key": key, "id": f"issue:{key}", "text": text[:MAX_ITEM_CHARS], "count": int(count),
+                      "refs": [ref for ref in refs if ref][:5]})
+
+    def guarded(read: Callable[[], None]) -> None:
+        try:
+            read()
+        except Exception:  # noqa: BLE001 - one unreadable source never costs the others
+            _log.debug("mentor_review: an issue source could not be read.", exc_info=True)
+
+    def misses() -> None:
+        for row in night_pack.miss_rows(paths, day)[0]:
+            if row.get("group") and row["id"].split(":")[-1] in ("1", "2", "3"):
+                add(f"miss:{row['group']}", _strip_src(row["text"]), 1, [row["id"]])
+
+    def vetoes() -> None:
+        won = [row for row in _since_rows(path, "challenges", "graded_utc", start, session)
+               if row.get("kind") == "veto" and _outcome(row).get("hit") is True]
+        if len(won) >= ISSUE_MIN_COUNT:
+            names = sorted({_text(row.get("symbol")) for row in won if row.get("symbol")})
+            add("veto_won", f"{len(won)} vetoed names won anyway in the last {REVIEW_SESSIONS} sessions"
+                + (f" ({', '.join(names[:5])})" if names else ""), len(won), [f"challenge:{r['id']}" for r in won])
+
+    def tilts() -> None:
+        by_pattern: dict[str, list[dict[str, Any]]] = {}
+        for row in _since_rows(path, "challenges", "issued_utc", start, session):
+            if row.get("kind") == "tilt" and _text(_outcome(row).get("pattern")):
+                by_pattern.setdefault(_text(_outcome(row)["pattern"]), []).append(row)
+        for pattern, rows in sorted(by_pattern.items()):
+            days = sorted({_pt_day(row.get("issued_utc")) for row in rows})
+            if len(days) >= ISSUE_MIN_COUNT:
+                graded = [_outcome(row).get("hit") for row in rows if "hit" in _outcome(row)]
+                red = f"; rest of day red {sum(1 for hit in graded if hit)} of {len(graded)} graded" if graded else ""
+                add(f"tilt:{pattern}", f"Tilt pattern '{pattern}' on {len(days)} of the last {REVIEW_SESSIONS} sessions"
+                    + red, len(days), [f"challenge:{row['id']}" for row in rows])
+
+    def rules() -> None:
+        broken: dict[str, set[str]] = {}
+        for row in _since_rows(path, "pack_cache", "built_utc", start, session):
+            if row.get("name") != "pick_assessment":
+                continue
+            try:
+                payload = json.loads(row.get("pack_json") or "{}")
+            except ValueError:
+                continue
+            for flag in payload.get("rule_flags") or ():
+                if isinstance(flag, Mapping) and flag.get("breaks") and _text(flag.get("plan_id")):
+                    broken.setdefault(_text(flag["plan_id"]), set()).add(
+                        f"{_pt_day(row.get('built_utc'))}:{_text(payload.get('symbol')).upper()}")
+        for plan_id, picks in sorted(broken.items()):
+            if len(picks) >= ISSUE_MIN_COUNT:
+                add(f"rule:{plan_id}", f"Plan line {plan_id} flagged broken on {len(picks)} pick assessments in the "
+                    f"last {REVIEW_SESSIONS} sessions", len(picks), [plan_id])
+
+    def wrong_reads() -> None:
+        rows = night_pack.day_review_rows(paths, day, REVIEW_SESSIONS)[0]
+        wrong = [row for row in rows if row.get("verdict") == "wrong" and row.get("date", "") >= start]
+        if len(wrong) >= ISSUE_MIN_COUNT:
+            add("wrong_reads", f"{len(wrong)} of your reads were graded wrong by the day reviews of the last "
+                f"{REVIEW_SESSIONS} sessions", len(wrong), [row["id"] for row in wrong])
+
+    for read in (misses, vetoes, tilts, rules, wrong_reads):
+        guarded(read)
+    seen: dict[str, str] = {}
+    for payload in earlier:
+        for item in payload.get("issues") or ():
+            if isinstance(item, Mapping) and _text(item.get("key")) and _text(item.get("first_seen")):
+                key = _text(item["key"])
+                seen[key] = min(seen.get(key, item["first_seen"]), _text(item["first_seen"]))
+    for item in found:
+        item["first_seen"] = seen.get(item["key"], session)
+    found.sort(key=lambda item: (-item["count"], item["first_seen"], item["key"]))
+    return found
+
+
+def build_inputs(path: Path, session: str, facts: Mapping[str, Any], *, report: Any = None,
+                 night: Mapping[str, Sequence[Mapping[str, Any]]] | None = None) -> dict[str, Any]:
     """Everything the model may see, with ids; ``inputs_hash`` ignores the clock."""
     notes = [
         {"id": f"note:{row['id']}", "text": _text(row.get("text"))[:MAX_TURN_CHARS]}
         for row in _day_rows(path, "profile_notes", "ts_utc", session)
     ]
+    # The day's gate and tilt rows ride in their own sections (``night``), so each id appears once.
+    split = night is not None
     challenges = [
         {"id": f"challenge:{row['id']}", "kind": _text(row.get("kind")), "symbol": _text(row.get("symbol")),
          "text": _text(row.get("claim"))[:MAX_TURN_CHARS], "status": _text(_outcome(row).get("status"))}
         for row in _day_rows(path, "challenges", "issued_utc", session)
+        if not (split and row.get("kind") in ("gate", "tilt"))
     ]
     turns = [
         {"id": f"turn:{row['id']}", "role": _text(row.get("role")), "text": _text(row.get("text"))[:MAX_TURN_CHARS]}
@@ -375,7 +612,10 @@ def build_inputs(path: Path, session: str, facts: Mapping[str, Any], *, report: 
     ][-MAX_TURNS:]
     rows = fact_rows(facts)
     report_rows, vocab = hypothesis_context(report)
+    sections = {key: [dict(row) for row in value] for key, value in (night or {}).items() if key != "unread"}
     ids = [row["id"] for row in (*rows, *notes, *challenges, *turns, *report_rows)]
+    for value in sections.values():
+        ids += [row["id"] for row in value if row.get("id") and row["id"] not in ids]
     body: dict[str, Any] = {
         "session_date": session,
         "facts": rows,
@@ -384,6 +624,7 @@ def build_inputs(path: Path, session: str, facts: Mapping[str, Any], *, report: 
         "turns": turns,
         "permutation_report": report_rows,
         "hypothesis_vocabulary": vocab,
+        **({"night_reads": sections} if split else {}),
         "allowed_evidence_ids": ids,
     }
     body["inputs_hash"] = hashlib.sha256(
@@ -511,14 +752,150 @@ def read_published(root: Path, stem: str, *, limit: int = 5) -> list[dict[str, A
 
 
 # ---------------------------------------------------------------------------
+# P15a: the coach brief - the night's product for the day coach
+# ---------------------------------------------------------------------------
+BRIEF_PROMPT_VERSION = "mentor_coach_brief_v1"
+BRIEF_SCHEMA_NAME = "tradingbot_mentor_coach_brief"
+BRIEF_INSTRUCTIONS = (
+    "Write tomorrow morning's coach brief for the trader from the evidence below. watch: at most four "
+    "things to watch today. missing: at most three things he may be missing, from the contrasts, ideas and "
+    "day review. issues: rank and word the recurring issues listed in issue_candidates, each by its key; "
+    "never invent an issue. one_line: one short sentence for the top of his day. Every item cites ids copied "
+    "exactly from allowed_evidence_ids. Copy numbers; never compute one. Never suggest an order, a size, or a "
+    "change to a rule, detector, score or alert; these are observations, never rules."
+)
+_KEYED = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["key", "text", "evidence_refs"],
+    "properties": {
+        "key": {"type": "string"},
+        "text": {"type": "string", "maxLength": MAX_ITEM_CHARS},
+        "evidence_refs": {"type": "array", "items": {"type": "string"}},
+    },
+}
+#: Bounds are rechecked in ``check_brief`` (a schema is only a grammar hint, never a guard).
+BRIEF_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["watch", "missing", "issues", "one_line"],
+    "properties": {
+        "watch": {"type": "array", "items": _ITEM},
+        "missing": {"type": "array", "items": _ITEM},
+        "issues": {"type": "array", "items": _KEYED},
+        "one_line": {"type": "string", "maxLength": MAX_ONE_LINE},
+    },
+}
+
+
+def candidate_rows(candidates: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The issue candidates as citable input rows (``issue:<key>``)."""
+    return [{"id": item["id"], "key": item["key"],
+             "text": (f"{item['text']} (count {item['count']}, first seen {item['first_seen']}; rests on "
+                      f"{', '.join(item['refs']) or 'its own count'})")[:MAX_TURN_CHARS]}
+            for item in candidates]
+
+
+def check_brief(reply: Any, inputs: Mapping[str, Any],
+                candidates: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any], int]:
+    """(kept brief, dropped count). A foreign id rejects the whole reply; uncited items and unknown keys drop."""
+    if not isinstance(reply, Mapping):
+        raise MentorReviewRejected("the brief was not an object")
+    allowed = {_text(item) for item in inputs.get("allowed_evidence_ids") or ()}
+    by_key = {item["key"]: item for item in candidates}
+    kept: dict[str, Any] = {"watch": [], "missing": [], "issues": []}
+    dropped = 0
+    for key, cap in (("watch", MAX_WATCH), ("missing", MAX_MISSING), ("issues", MAX_ISSUES)):
+        rows = reply.get(key)
+        if rows is None or not isinstance(rows, (list, tuple)):
+            raise MentorReviewRejected(f"the brief carried no {key} array")
+        for index, row in enumerate(rows):
+            if not isinstance(row, Mapping):
+                raise MentorReviewRejected(f"{key} {index} was not an object")
+            refs = _refs(row)
+            for ref in refs:
+                if ref not in allowed:
+                    raise MentorReviewRejected(f"{key} {index} cited {ref!r}, which tonight does not carry")
+            text = _text(row.get("text"))
+            issue = by_key.get(_text(row.get("key"))) if key == "issues" else None
+            if (not refs or not text or len(text) > MAX_ITEM_CHARS or len(kept[key]) >= cap
+                    or (key == "issues" and (issue is None or any(i["key"] == issue["key"] for i in kept[key])))):
+                dropped += 1
+                continue
+            item: dict[str, Any] = {"text": text, "evidence_refs": refs}
+            if issue is not None:
+                item = {"key": issue["key"], **item, "first_seen": issue["first_seen"], "count": issue["count"]}
+            kept[key].append(item)
+    one_line = _text(reply.get("one_line"))
+    kept["one_line"] = one_line if len(one_line) <= MAX_ONE_LINE else ""
+    # The model ranks and words; an issue it left out still stands, worded by the code, after its ranking.
+    for issue in candidates:
+        if len(kept["issues"]) >= MAX_ISSUES:
+            break
+        if all(item["key"] != issue["key"] for item in kept["issues"]):
+            kept["issues"].append(_fact_issue(issue))
+    return kept, dropped
+
+
+def _fact_issue(issue: Mapping[str, Any]) -> dict[str, Any]:
+    return {"key": issue["key"], "text": issue["text"], "evidence_refs": [issue["id"]],
+            "first_seen": issue["first_seen"], "count": issue["count"]}
+
+
+def brief_payload(session: str, built_utc: str, inputs: Mapping[str, Any], candidates: Sequence[Mapping[str, Any]],
+                  *, kept: Mapping[str, Any] | None = None, model: str = "", dropped: int = 0) -> dict[str, Any]:
+    """The published coach brief; without ``kept`` it is the facts part only (issues worded by code)."""
+    body = kept or {"watch": [], "missing": [], "one_line": "",
+                    "issues": [_fact_issue(issue) for issue in candidates[:MAX_ISSUES]]}
+    return {
+        "schema": COACH_SCHEMA, "session_date": session, "built_utc": built_utc, "worded": kept is not None,
+        "model": model, "prompt_version": BRIEF_PROMPT_VERSION, "inputs_hash": _text(inputs.get("inputs_hash")),
+        "one_line": body.get("one_line", ""), "watch": list(body.get("watch") or ()),
+        "missing": list(body.get("missing") or ()), "issues": list(body.get("issues") or ()), "dropped": dropped,
+    }
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def publish_fact_brief(root: Path, session: str, built_utc: str, inputs: Mapping[str, Any],
+                       candidates: Sequence[Mapping[str, Any]]) -> Path | None:
+    """The deterministic half: publish the facts-only brief unless a worded one already stands for the session."""
+    path = published_path(root, COACH_STEM, session)
+    if _read_json(path).get("worded"):
+        return None
+    return _publish(path, brief_payload(session, built_utc, inputs, candidates))
+
+
+def ask_brief(request: Callable[..., Mapping[str, Any]], *, model: str, post: Callable[..., Any],
+              inputs: Mapping[str, Any], candidates: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any], str, int]:
+    """One brief call (<= MAX_BRIEF_TOKENS). Returns (kept, answered model, dropped); raises on a bad reply."""
+    evidence = build_evidence(inputs)
+    evidence["instructions"] = BRIEF_INSTRUCTIONS
+    evidence["package_id"] = f"mentor-coach-brief:{_text(inputs.get('inputs_hash'))[:16]}"
+    result = request(
+        provider="local", model=model, api_key="", evidence=evidence, timeout_seconds=TIMEOUT_SECONDS,
+        post=capped_post(post, model=model, cap=MAX_BRIEF_TOKENS),
+        schema=BRIEF_JSON_SCHEMA, schema_name=BRIEF_SCHEMA_NAME, prompt_version=BRIEF_PROMPT_VERSION,
+    )
+    kept, dropped = check_brief((result or {}).get("summary"), inputs, candidates)
+    return kept, _text((result or {}).get("model")) or model, dropped
+
+
+# ---------------------------------------------------------------------------
 # the slot
 # ---------------------------------------------------------------------------
-def capped_post(post: Callable[..., Any], *, model: str) -> Callable[..., Any]:
-    """Wrap ``post``: at most MAX_OUTPUT_TOKENS, and high reasoning effort for gpt-oss tags (Qt-free)."""
+def capped_post(post: Callable[..., Any], *, model: str, cap: int = MAX_OUTPUT_TOKENS) -> Callable[..., Any]:
+    """Wrap ``post``: at most ``cap`` output tokens, and high reasoning effort for gpt-oss tags (Qt-free)."""
 
     def wrapped(url: str, **kwargs: Any) -> Any:
         payload = dict(kwargs.get("json") or {})
-        payload["max_tokens"] = min(int(payload.get("max_tokens") or MAX_OUTPUT_TOKENS), MAX_OUTPUT_TOKENS)
+        payload["max_tokens"] = min(int(payload.get("max_tokens") or cap), cap)
         if str(model or "").strip().lower().startswith("gpt-oss"):
             payload["reasoning_effort"] = EFFORT
         kwargs["json"] = payload
@@ -570,9 +947,12 @@ def run_mentor_review(
     post: Callable[..., Any] | None = None,
     ask: bool = True,
     force: bool = False,
+    night_paths: Any = None,
+    mirror_builder: Callable[[], Any] | None = None,
     **_ignored: Any,
 ) -> dict[str, Any]:
     """One night's review of the Trade Mentor app's day. Never raises."""
+    started = clock.monotonic()
     moment = _moment(now)
     session = _text(session_date)[:10] or moment.astimezone(PT).date().isoformat()
     path = _chat_path(chat_db)
@@ -594,7 +974,7 @@ def run_mentor_review(
         return {"status": ledger.STATUS_FAILED, "model": "", "reason": f"the chat store could not be read: {exc}",
                 "outputs": [], "extra": {"grading": grading}}
     facts["built_utc"] = moment.astimezone(timezone.utc).isoformat(timespec="seconds")
-    summary = {
+    summary: dict[str, Any] = {
         "turns": facts["turns"], "challenges": facts["challenges"], "picks_assessed": facts["picks_assessed"],
         "remember_notes": facts["remember_notes"], "graded": grading.get("graded", 0),
         "updated": grading.get("updated", 0),
@@ -607,10 +987,18 @@ def run_mentor_review(
                 "reason": f"mentor_day_facts could not be published (the last good one is kept): {exc}",
                 "outputs": [], "extra": summary}
     outputs = [str(facts_path)]
-    if not ask:
-        return {"status": ledger.STATUS_OK, "model": "", "outputs": outputs, "extra": summary,
-                "reason": f"facts published for {session}; {graded_note}; no model asked"}
 
+    # P15a: what the night and the app know about the day, the recurring-issue candidates and the
+    # facts part of the coach brief - all deterministic, so they run with the model cut or down too.
+    night = night_inputs(path, session, moment, night_paths=night_paths, mirror_builder=mirror_builder)
+    earlier = [payload for payload in read_published(root, COACH_STEM, limit=15)
+               if _text(payload.get("session_date"))[:10] < session]
+    candidates = issue_candidates(path, session, night_paths=night_paths, earlier=earlier)
+    night["issues"] = candidate_rows(candidates)
+    counts = {key: len(value) for key, value in night.items() if key != "unread"}
+    summary.update({"night_inputs": counts, "inputs": sum(counts.values()), "issues": len(candidates)})
+    if night.get("unread"):
+        summary["unread"] = [row["text"] for row in night["unread"]]
     try:
         from mentor_packs import hypothesis_pack
 
@@ -618,19 +1006,20 @@ def run_mentor_review(
     except Exception:  # noqa: BLE001 - no report = no vocabulary, the digest still runs
         _log.debug("mentor_review could not read the permutation report.", exc_info=True)
         report = None
-    inputs = build_inputs(path, session, facts, report=report)
-    if not (inputs["turns"] or inputs["profile_notes"] or inputs["challenges"]):
+    inputs = build_inputs(path, session, facts, report=report, night=night)
+    inputs_note = f"{summary['inputs']} night input(s), {len(candidates)} issue candidate(s)"
+    brief_path = published_path(root, COACH_STEM, session)
+    try:
+        if publish_fact_brief(root, session, facts["built_utc"], inputs, candidates) is not None:
+            outputs.append(str(brief_path))
+    except OSError as exc:
+        inputs_note += f"; the facts-only coach brief could not be published ({exc})"
+    if not ask:
         return {"status": ledger.STATUS_OK, "model": "", "outputs": outputs, "extra": summary,
-                "reason": f"no mentor conversation on {session}, so no model was loaded"}
-    digest_path = published_path(root, DIGEST_STEM, session)
-    if not force and digest_path.exists():
-        try:
-            old = json.loads(digest_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            old = {}
-        if old.get("inputs_hash") == inputs["inputs_hash"] and old.get("prompt_version") == PROMPT_VERSION:
-            return {"status": ledger.STATUS_OK, "model": "", "outputs": [*outputs, str(digest_path)], "extra": summary,
-                    "reason": f"the mentor day {session} is unchanged; no model was asked"}
+                "reason": f"facts published for {session}; {graded_note}; {inputs_note}; no model asked"}
+    if not (inputs["turns"] or inputs["profile_notes"] or facts["challenges"]["issued"]):
+        return {"status": ledger.STATUS_OK, "model": "", "outputs": outputs, "extra": summary,
+                "reason": f"no mentor conversation on {session}, so no model was loaded; {inputs_note}"}
 
     import ai_summary
     import requests
@@ -641,11 +1030,49 @@ def run_mentor_review(
         model = ai_summary.local_model("medium")
     except Exception:  # noqa: BLE001 - a test's request needs no configured model
         model = ""
+    post = post or requests.post
+
+    def brief_step() -> str:
+        """The second call: the coach brief, only with time left in the slot's reserve."""
+        old = _read_json(brief_path)
+        if (not force and old.get("worded") and old.get("inputs_hash") == inputs["inputs_hash"]
+                and old.get("prompt_version") == BRIEF_PROMPT_VERSION):
+            return "coach brief unchanged"
+        if clock.monotonic() - started > RESERVE_MINUTES * 60 - BRIEF_MIN_SECONDS_LEFT:
+            return "coach brief: no time left in the slot's reserve, facts part kept"
+        try:
+            kept_brief, brief_model, brief_dropped = ask_brief(request, model=model, post=post, inputs=inputs,
+                                                                candidates=candidates)
+        except MentorReviewRejected as exc:
+            return f"coach brief rejected, facts part kept: {exc}"
+        except Exception as exc:  # noqa: BLE001 - the facts part stands
+            _log.debug("mentor_review could not ask for the coach brief.", exc_info=True)
+            return f"coach brief: no local model answered, facts part kept: {exc}"
+        try:
+            _publish(brief_path, brief_payload(session, facts["built_utc"], inputs, candidates, kept=kept_brief,
+                                               model=brief_model, dropped=brief_dropped))
+        except OSError as exc:
+            return f"coach brief could not be published (the last good one is kept): {exc}"
+        if str(brief_path) not in outputs:
+            outputs.append(str(brief_path))
+        summary.update({"brief_watch": len(kept_brief["watch"]), "brief_missing": len(kept_brief["missing"]),
+                        "brief_issues": len(kept_brief["issues"]), "brief_dropped": brief_dropped})
+        return (f"coach brief {len(kept_brief['watch'])} watch, {len(kept_brief['missing'])} missing, "
+                f"{len(kept_brief['issues'])} issue(s)")
+
+    digest_path = published_path(root, DIGEST_STEM, session)
+    if not force and digest_path.exists():
+        old = _read_json(digest_path)
+        if old.get("inputs_hash") == inputs["inputs_hash"] and old.get("prompt_version") == PROMPT_VERSION:
+            note = brief_step()
+            return {"status": ledger.STATUS_OK, "model": "", "outputs": [*outputs, str(digest_path)], "extra": summary,
+                    "reason": f"the mentor day {session} is unchanged; no digest model was asked; {note}"}
+
     try:
         result = request(
             provider="local", model=model, api_key="", evidence=build_evidence(inputs),
             timeout_seconds=TIMEOUT_SECONDS,
-            post=capped_post(post or requests.post, model=model),
+            post=capped_post(post, model=model),
             schema=DIGEST_JSON_SCHEMA, schema_name=SCHEMA_NAME, prompt_version=PROMPT_VERSION,
         )
     except Exception as exc:  # noqa: BLE001 - the last digest stays
@@ -688,14 +1115,18 @@ def run_mentor_review(
     summary.update({"digest_items": len(kept["digest"]), "open_questions": len(kept["open_questions"]),
                     "hypotheses": len(looked), "hypotheses_recorded": sum(1 for item in looked if item["recorded"]),
                     "dropped": dropped})
+    note = brief_step()
     return {
         "status": ledger.STATUS_OK, "model": answered, "outputs": [*outputs, str(digest_path)], "extra": summary,
         "reason": (f"{len(kept['digest'])} digest item(s), {len(kept['open_questions'])} open question(s), "
-                   f"{len(looked)} hypothesis lookup(s), {dropped} dropped for {session}; {graded_note}"),
+                   f"{len(looked)} hypothesis lookup(s), {dropped} dropped for {session}; {graded_note}; "
+                   f"{inputs_note}; {note}"),
     }
 
 
 __all__ = [
+    "BRIEF_JSON_SCHEMA",
+    "COACH_STEM",
     "DIGEST_JSON_SCHEMA",
     "DIGEST_STEM",
     "FACTS_STEM",
@@ -703,9 +1134,12 @@ __all__ = [
     "NightChallengeStore",
     "RESERVE_MINUTES",
     "build_inputs",
+    "check_brief",
     "check_reply",
     "day_facts",
+    "issue_candidates",
     "model_wanted",
+    "night_inputs",
     "read_published",
     "run_mentor_review",
 ]
