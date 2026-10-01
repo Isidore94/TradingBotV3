@@ -35,6 +35,7 @@ PRIORITY = {
     "night_pack": 8,
     "recaps_pack": 8,
     "plan_lines": 9,
+    "hypothesis_pack": 9,
     "recall": 10,
 }
 #: Index tickers are the tape, never a pick.
@@ -67,6 +68,8 @@ _INTENT = re.compile(
     r"\bthinking (?:of|about)\b|\bshould i\b|\btake\b|\btaking\b|\bgo(?:ing)? (?:long|short)\b|\benter(?:ing)?\b"
     r"|\badd(?:ing)? (?:to )?\b|\bsize\b|\bsizing\b|\bget(?:ting)? (?:in|into)\b|\bworth (?:a|the) (?:trade|shot)\b"
     r"|\bplanning (?:to|on)\b|\bwant to (?:short|buy|long)\b"
+    r"|\bpre-?trade\b|\bchecklist for\b|\bmy stop (?:be|go)\b|\bstop be on\b"
+    r"|\bwhere (?:do|should) i (?:put|place) (?:my|the) stop\b"
 )
 #: Past-tense trade talk is the journal, never a pre-trade check.
 _PAST = re.compile(r"\bdid i\b|\bi took\b|\btook\b|\bwhy did\b|\bhow did\b|\bwhat happened\b|\bwas i\b")
@@ -75,23 +78,56 @@ _JOURNAL = re.compile(
     r"|\bhow(?:'s| is| has) (?:today|the day|my day) (?:going|been)\b|\bmy trades\b|\btrades? did i\b"
     r"|\bdid i (?:take|trade|make|lose|win|do)\b|\bp&l\b|\bpnl\b|\blos[et] money\b|\bmade money\b"
     r"|\bmy (?:day|week|losses|wins|fills)\b|\bhow am i doing today\b|\bgreen or red\b|\bi took\b"
-    r"|\bstop(?:ped)? me out\b|\bmy (?:entry|exit|stop) on\b"
+    r"|\bstop(?:ped)? me out\b|\bmy (?:entry|exit|stop) on\b|\bhow many trades\b"
 )
 _VETO = re.compile(r"\bveto(?:ed|es|s)?\b|\bpassed on\b|\bi passed\b|\bskip(?:ped|ping|s)?\b")
+#: P16: the record of his vetoes, not one session's list.
+_VETO_AGG = re.compile(r"\bfollowed my vetoes\b|\bwork(?:ed)? out\b|\btrack record\b|\b(?:worst|best) record\b"
+                       r"|\bveto reasons?\b|\bwould have worked\b|\bhow would i have done\b")
+_WINDOWS = ("week", "month", "last_week", "last_month")
 _TAPE = re.compile(r"\btape\b|\bmarkets?\b|\bspy\b|\bqqq\b|\biwm\b|\bregime\b|\bsectors?\b|\bbreadth\b|\bmacro\b"
-                   r"|\bindex(?:es)?\b|\bfomc\b|\bcpi\b|\bjobs report\b|\bfed\b|\bfutures\b")
+                   r"|\bindex(?:es)?\b|\bfomc\b|\bcpi\b|\bjobs report\b|\bfed\b|\bfutures\b"
+                   r"|\becon(?:omic)? (?:calendar|data|events?|releases?)\b|\bnfp\b|\bpayrolls\b|\bpce\b")
 #: Getting ready for a session: the tape is the answer ("what should I look at tomorrow morning").
 _PREP = re.compile(r"\bwhat should i (?:look at|watch|focus on)\b|\bgame ?plan\b|\bpre-?market\b"
                    r"|\btomorrow\b.*\b(?:look at|watch|expect|prep)\b|\b(?:look at|watch|expect|prep)\b.*\btomorrow\b")
 _NEWS = re.compile(r"\bnews\b|\bearnings\b|\breporting\b|\breports?\b|\bheadlines?\b|\bcatalysts?\b")
 _BOOK = re.compile(r"\bmy book\b|\bpositions?\b|\bexposure\b|\b(?:am i|i'm|im|i am) holding\b|\bholdings\b"
-                   r"|\bwhat am i in\b|\bopen trades?\b")
+                   r"|\bwhat am i in\b|\bopen trades?\b|\bpositioned\b|\boverexposed\b|\b(?:any|my) (?:open )?(?:shorts|longs) on\b"
+                   r"|\bdo i have any (?:open )?(?:shorts|longs|positions)\b|\bmy open (?:shorts|longs)\b")
+#: P16: a group the trader HOLDS ("my shorts", "my open longs", "my book", "what I'm holding") is the open book only.
+_BOOK_SCOPE = re.compile(r"\bmy (?:open )?(?:shorts|longs|positions|book|holdings)\b|\bopen (?:shorts|longs|positions)\b"
+                         r"|\b(?:am i|i'm|im|i am) holding\b|\bwhat i'm holding\b")
+#: P16: a group he WATCHES ("my focus longs", "watchlist", "my lists", "my picks/likes/names") is Focus and likes.
+_FOCUS_SCOPE = re.compile(r"\bmy focus\b|\bfocus (?:longs|shorts|names|list)\b|\bwatch ?lists?\b|\bmy lists?\b"
+                          r"|\bmy (?:picks|names|likes|liked)\b")
 _TILT = re.compile(r"\btilt(?:ed|ing)?\b|\brevenge\b|\bovertrad")
 #: Walking away for the day: the tilt read plus today's journal.
 _STOP_DAY = re.compile(r"\bstop trading\b|\bcall it a day\b|\bwalk away\b|\bovertrad|\bquit for (?:the|to)day\b"
                        r"|\bdone for (?:the|to)day\b")
 _MIRROR = re.compile(r"\bmy record\b|\blately\b|\bmy stats\b|\bmy edge\b|\bhit rate\b|\bwin rate\b|\bpattern in my\b"
                      r"|\btrade best\b|\bbest time\b|\btime of day\b|\bwhen during the day\b")
+#: P16: hold time by outcome and the best / worst trade or setup: the journal's outcome rows plus the mirror.
+_OUTCOME = re.compile(r"\bhold(?:ing)? times?\b|\bhow long (?:do|did) i hold\b|\b(?:best|worst) (?:trades?|setups?)\b"
+                      r"|\bwinners (?:vs\.?|versus|and) losers\b")
+#: P16: "is it the regime or me": his month, his mirror (regime and kind cuts) and the tape.
+_REGIME_OR_ME = re.compile(r"\bregime or me\b|\bme or the (?:regime|market|tape)\b|\b(?:market|tape) or me\b"
+                           r"|\bam i the problem\b|\bmy fault\b|\bis it (?:just )?me\b")
+#: P16: this week against last week reads both weeks, never today.
+_WEEK_VS = re.compile(r"\b(?:this|my) week\b.*\blast week\b|\blast week\b.*\bthis week\b"
+                      r"|\bweek over week\b|\bweek on week\b")
+#: P16: what to watch for the next session: the brief's watch list, the next session's econ, the day review.
+_WATCH_NEXT = re.compile(r"\b(?:watch|look for|look at|focus on|important)\b.*\b(?:tomorrow|at the open|next session)\b"
+                         r"|\b(?:tomorrow|at the open)\b.*\b(?:watch|look for)\b")
+#: P16: "what should my stop be": the plan's stop lines ride with the gate.
+_STOP_Q = re.compile(r"\bmy stop (?:be|go)\b|\bstop be on\b|\bwhere (?:do|should) i (?:put|place) (?:my|the) stop\b")
+#: P16: "my history" is the mirror; being up/down on the day and tempted is today's journal and the tilt read.
+_HISTORY = re.compile(r"\bmy history\b|\bhistory says?\b")
+_TEMPTED = re.compile(r"\btempted\b|\b(?:up|down) on the day\b|\badd(?:ing)? risk\b")
+_HYPOTHESES = re.compile(r"\bhypothes[ie]s\b")
+#: P16: what changed in the tape since the last session: the tape diff and the night's read.
+_TAPE_DIFF = re.compile(r"\bwhat(?:'s| has)? changed\b|\bchanged since\b|\banything different\b"
+                        r"|\bdid the (?:tape|market|regime) change\b|\bwhat'?s different\b")
 _PLAN = re.compile(r"\bmy plan\b|\bmy rules?\b|\btrading plan\b|\bbreak(?:ing)? (?:a|my) rule\b")
 #: P15a: the night's reads (day review verdicts, ideas, contrasts, week review, story, digest).
 _NIGHT = re.compile(r"\bwhat did the night say\b|\bovernight\b|\blast night\b|\bnight(?:'s)? read\b|\bideas?\b"
@@ -111,7 +147,7 @@ _RECORD = re.compile(r"\bmy record\b|\bmy stats\b|\bmy edge\b|\bhit rate\b|\bwin
                      r"|\bbest time\b|\btime of day\b")
 #: P15b: how a trade felt (a feelings note rides on its journal row).
 _FEEL = re.compile(r"\bfeel(?:ing|ings|s)?\b|\bfelt\b")
-_RECALL = re.compile(r"\byou said\b|\bwe (?:said|talked|discussed)\b|\bremember when\b|\blast time we\b")
+_RECALL = re.compile(r"\byou said\b|\bwhat i said\b|\bremind me what\b|\bwe (?:said|talked|discussed)\b|\bremember when\b|\blast time we\b")
 _GROUP = re.compile(r"\bmy (longs|shorts|focus|names|picks|watchlist|likes|liked|book|positions|holdings)\b"
                     r"|\bfocus (longs|shorts|names)\b|\bopen (longs|shorts|positions)\b|\b(?:i'm|im|i am) (holding)\b")
 _EARNINGS = re.compile(r"\bearnings\b|\breporting\b|\breports?\b")
@@ -290,43 +326,65 @@ def plan_attachments(
     # yesterday, a weekday, a week or a month is; so is any first-person time question. A veto question
     # (or an earnings question over his book) reads its own pack, not the journal, unless it asks about trades.
     journal_day = bool(day) and (day != today or bool(_FIRST_PERSON.search(lowered)))
-    if journal_words or stop_day or (journal_day and not vetoes and not earnings_group and not earnings_alone):
+    week_vs = bool(_WEEK_VS.search(lowered))
+    tape_diff = bool(_TAPE_DIFF.search(lowered)) and not journal_words
+    if not week_vs and not tape_diff and (journal_words or stop_day or (journal_day and not vetoes and not earnings_group
+                                                      and not earnings_alone)):
         add("journal_pack", "journal words" if journal_words else "time words" if day else "stop words",
             day=day or today)
+    if _WEEK_VS.search(lowered):
+        add("journal_pack", "this week vs last week", day="week")
+        add("journal_pack", "this week vs last week", day="last_week")
+    if _REGIME_OR_ME.search(lowered):
+        add("journal_pack", "regime or me", day=day if day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else "month")
+        add("mirror_pack", "regime or me")
+        add("regime_pack", "regime or me")
+    if _WATCH_NEXT.search(lowered):
+        add("fundamentals_pack", "watch next session", section="watch")
+        add("regime_pack", "watch next session")
+        add("night_pack", "watch next session", section="day_review")
+    if _OUTCOME.search(lowered):
+        add("journal_pack", "outcome words", day=day if day else "month")
+        add("mirror_pack", "outcome words")
     if vetoes:
-        add("veto_pack", "veto words", date=day if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else "")
+        if day in _WINDOWS or (_VETO_AGG.search(lowered) and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day)):
+            # P16: a week's or month's vetoes, or their record, is the aggregate by reason; the mirror rides along.
+            add("veto_pack", "veto record words", scope=day if day in _WINDOWS else "month")
+            add("mirror_pack", "veto record words")
+        else:
+            add("veto_pack", "veto words", date=day if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else "")
     # P14: the tape only on market words, session prep, or trade intent the gate does not already carry.
     tape_words = bool(_TAPE.search(lowered) or _PREP.search(lowered)
                       or any(sym in INDEX_SYMBOLS for sym in find_symbols(raw, set(INDEX_SYMBOLS))))
-    if tape_words or (market_cue(raw) and not gated and not symbols) or (
+    if tape_diff:
+        add("regime_pack", "tape diff words", diff=True)
+        add("night_pack", "tape diff words")
+    elif tape_words or (market_cue(raw) and not gated and not symbols) or (
             symbols and not gated and _INTENT.search(lowered) and not past):
         add("regime_pack", "market words" if tape_words else "trade intent")
     held, likes = _names(book), _names(liked)
+    scope = group_scope(lowered) if group or earnings_alone else ""
+    if scope == "book":
+        # P16: a question about what he holds reads the book itself too ("my open shorts into earnings").
+        add("book_pack", "book scope")
     if (group and earnings_group) or earnings_alone:
         which = next(g for g in group.groups() if g) if group else "book and likes"
-        side = "LONG" if which.startswith("long") else "SHORT" if which.startswith("short") else ""
-        sided = [sym for sym, s in known.items() if s]
-        if earnings_alone:
-            pool = held + likes or sided
-        elif which in ("book", "positions", "holdings", "holding"):
-            pool = held or sided
-        else:
-            # Open book, then liked chips, then Focus (the order of ``known``); journal-only names carry no side.
-            pool = held + likes + sided
-        names: list[str] = []
-        for sym in pool:
-            if sym not in names and sym not in INDEX_SYMBOLS and (not side or known.get(sym, side) == side):
-                names.append(sym)
+        side = _group_side(lowered, which)
+        names = [sym for sym in _scope_pool(scope, held, likes, known, earnings_alone=earnings_alone)
+                 if sym not in INDEX_SYMBOLS and (not side or known.get(sym, side) == side)]
         if names:
-            # The full list: the pack caps it, keeps every book name, and lists the rest by name.
+            # The full list: the pack caps it, keeps every book name, and lists the rest by name. Each name
+            # carries where it came from, so a Focus name is never read as a position.
             add("earnings_pack", f"earnings across {which}", symbols=names,
-                book=[sym for sym in held if sym in names])
+                book=[sym for sym in held if sym in names],
+                **_origin_args(names, held, likes, side))
     elif group and _NEWS.search(lowered):
         which = next(g for g in group.groups() if g)
-        side = "LONG" if which.startswith("long") else "SHORT" if which.startswith("short") else ""
-        names = [sym for sym, s in known.items() if sym not in INDEX_SYMBOLS and (not side or s == side)]
+        side = _group_side(lowered, which)
+        names = [sym for sym in _scope_pool(scope, held, likes, known)
+                 if sym not in INDEX_SYMBOLS and (not side or known.get(sym, "") == side)]
         for sym in names[:MAX_SYMBOLS]:
-            add("pick_pack", f"news across {which}", symbol=sym)
+            add("pick_pack", f"news across {which}", symbol=sym, origin=origin_of(sym, held, likes))
     if _BOOK.search(lowered):
         add("book_pack", "book words")
     if _TILT.search(lowered) or stop_day:
@@ -334,15 +392,22 @@ def plan_attachments(
     # A windowed win rate ("this month") is the journal's count, not the likes-vs-scan mirror.
     if _MIRROR.search(lowered) and not (day and re.search(r"\b(?:win|hit) rate\b", lowered)):
         add("mirror_pack", "record words")
-    if _PLAN.search(lowered):
+    if _PLAN.search(lowered) or _STOP_Q.search(lowered):
         add("plan_lines", "plan words")
+    if _HISTORY.search(lowered):
+        add("mirror_pack", "history words")
+    if _TEMPTED.search(lowered):
+        add("journal_pack", "tempted words", day=today)
+        add("tilt_pack", "tempted words")
+    if _HYPOTHESES.search(lowered):
+        add("hypothesis_pack", "hypothesis words")
     if _NIGHT.search(lowered):
         add("night_pack", "night words")
     if _RECAP.search(lowered) or (_RECAP_SOFT.search(lowered) and not _RECORD.search(lowered)):
         add("recaps_pack", "recap words", days=10, section="all")
     if _FEEL.search(lowered) and not any(request.name == "journal_pack" for request in wanted):
         add("journal_pack", "feelings words", day=day or "week")
-    if _FUND.search(lowered):
+    if _FUND.search(lowered) and not _WATCH_NEXT.search(lowered):
         add("fundamentals_pack", "fundamentals words", section="all")
     elif any(request.name == "gate_pack" for request in wanted):
         # P15b: a pre-trade check sees today's brief: the bottom line and the playbook (at most 8 rows).
@@ -350,6 +415,52 @@ def plan_attachments(
     if _RECALL.search(lowered):
         add("recall", "memory words", query=raw[:200])
     return sorted(wanted, key=lambda request: request.priority)
+
+
+def _group_side(lowered: str, which: str) -> str:
+    """The side a group names: its own word ("shorts"), else the one side word in the question ("my focus longs")."""
+    if which.startswith("long") or which.startswith("short"):
+        return "LONG" if which.startswith("long") else "SHORT"
+    longs, shorts = bool(re.search(r"\blongs\b", lowered)), bool(re.search(r"\bshorts\b", lowered))
+    return "LONG" if longs and not shorts else "SHORT" if shorts and not longs else ""
+
+
+def group_scope(lowered: str) -> str:
+    """P16: "book" for a group he holds, "focus" for a group he watches, "both" when he names both, else ""."""
+    book, focus = bool(_BOOK_SCOPE.search(lowered)), bool(_FOCUS_SCOPE.search(lowered))
+    return "both" if book and focus else "book" if book else "focus" if focus else ""
+
+
+def _scope_pool(scope: str, held: list[str], likes: list[str], known: Mapping[str, str], *,
+                earnings_alone: bool = False) -> list[str]:
+    """The names a group question covers, in order: the book only for a book group (never Focus), the likes then
+    the sided Focus names (not held) for a Focus group, everything for both or no scope word."""
+    sided = [sym for sym, side in known.items() if side]
+    if scope == "book":
+        pool = list(held)
+    elif scope == "focus":
+        pool = likes + [sym for sym in sided if sym not in held]
+    elif earnings_alone:
+        pool = held + likes or sided
+    else:
+        # Open book, then liked chips, then Focus (the order of ``known``); journal-only names carry no side.
+        pool = held + likes + sided
+    out: list[str] = []
+    for sym in pool:
+        if sym not in out:
+            out.append(sym)
+    return out
+
+
+def origin_of(sym: str, held: Iterable[str], likes: Iterable[str]) -> str:
+    """Where a group name came from: ``book`` (an open position), ``liked`` or ``focus`` (watch names only)."""
+    return "book" if sym in set(held) else "liked" if sym in set(likes) else "focus"
+
+
+def _origin_args(names: list[str], held: list[str], likes: list[str], side: str) -> dict[str, Any]:
+    liked = [sym for sym in names if origin_of(sym, held, likes) == "liked"]
+    focus = [sym for sym in names if origin_of(sym, held, likes) == "focus"]
+    return {"liked": liked, "focus": focus, **({"side": side} if side else {})}
 
 
 def book_symbols(context_rows: Iterable[Mapping[str, Any]] = ()) -> list[str]:
@@ -381,11 +492,12 @@ def known_symbols(
     The order is what a capped group read (``earnings_pack``) keeps first: the book, never the Focus tail.
     """
     out: dict[str, str] = {}
+    held: set[str] = set()
 
     def put(sym: Any, side: Any = "") -> None:
         key = str(sym or "").strip().upper()
-        if not key:
-            return
+        if not key or key in held:
+            return  # a book name's side is the position's, never a Focus or liked side
         value = str(side or "").strip().upper()
         value = value if value in ("LONG", "SHORT") else ""
         if key not in out or (value and not out[key]):
@@ -394,7 +506,8 @@ def known_symbols(
     rows = list(context_rows or ())
     for row in rows:
         if row.get("kind") == "position":
-            put(row.get("symbol"), row.get("direction") or "")
+            put(row.get("symbol"), row.get("side") or row.get("direction") or "")
+            held.add(str(row.get("symbol") or "").strip().upper())
     for item in liked or ():
         if isinstance(item, (tuple, list)) and item:
             put(item[0], item[1] if len(item) > 1 else "")
@@ -422,7 +535,8 @@ def recent_cited_ids(turns: Iterable[Any], last: int = 6) -> set[str]:
     for turn in kept:
         role = getattr(turn, "role", None) or (turn.get("role") if isinstance(turn, Mapping) else "")
         text = getattr(turn, "text", None) or (turn.get("text") if isinstance(turn, Mapping) else "")
-        if role == "assistant":
+        # P16: an empty-reply data dump shows every row; the model cited none of them, so nothing is deduped.
+        if role == "assistant" and not str(text or "").startswith("(the model returned no text"):
             found.update(cited_ids(text))
     return found
 

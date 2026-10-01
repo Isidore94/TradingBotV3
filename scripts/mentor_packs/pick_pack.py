@@ -42,6 +42,7 @@ SCHEMA: dict[str, Any] = {
             "properties": {
                 "symbol": {"type": "string", "description": "Ticker, e.g. NVDA."},
                 "side": {"type": "string", "description": "LONG or SHORT; blank = the side on Focus."},
+                "origin": {"type": "string", "description": "book, liked or focus: where the app found the name."},
             },
             "required": ["symbol"],
         },
@@ -639,9 +640,14 @@ def _now(now: datetime | None) -> datetime:
     return moment
 
 
-def build(symbol: str = "", side: str = "", *, now: datetime | None = None, paths: PickPaths | None = None) -> Pack:
-    """Build the pick pack for ``symbol``. File reads: call it on a worker."""
+def build(symbol: str = "", side: str = "", origin: str = "", *, now: datetime | None = None,
+          paths: PickPaths | None = None) -> Pack:
+    """Build the pick pack for ``symbol``. File reads: call it on a worker.
+
+    P16: ``origin`` (``book`` | ``liked`` | ``focus``) is stamped on every row and said in the as-of row, so a
+    Focus name read for a group question is never called a position."""
     sym = _sym(symbol)
+    where = str(origin or "").strip().lower()
     if not sym or not sym.replace(".", "").replace("-", "").isalnum():
         return make_pack(NAME, (), empty_text="pick_pack needs a ticker, e.g. NVDA")
     moment = _now(now)
@@ -724,6 +730,12 @@ def build(symbol: str = "", side: str = "", *, now: datetime | None = None, path
         rows.extend(_brief_rows(sym, today, src))
     except Exception as exc:  # noqa: BLE001
         rows.append(_unknown(f"pick:{sym}:brief", "Night brief", exc))
+    if where in ("book", "liked", "focus"):
+        said = {"book": "an open position in your book", "liked": "a liked name, NOT a position",
+                "focus": "a Focus name, NOT a position"}[where]
+        rows[0]["text"] += f"; {sym} is {said}"
+        for row in rows:
+            row["origin"] = where
     return make_pack(NAME, rows)
 
 

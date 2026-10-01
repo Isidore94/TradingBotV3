@@ -196,6 +196,9 @@ def build(*, now: datetime | None = None, sources: Sources | None = None) -> Pac
                     "id": f"ctx:pos:{trade_id}",
                     "kind": "position",
                     "symbol": str(pos.get("symbol") or ""),
+                    # P16: the side the planner reads for "my shorts" (the text alone carried it before).
+                    "side": str(pos.get("direction") or "").strip().upper(),
+                    "direction": str(pos.get("direction") or "").strip().upper(),
                     "text": (
                         f"Open {pos.get('direction')} {pos.get('symbol')} {qty:g} @ "
                         f"{float(pos.get('average_entry_price') or 0):.2f} since {str(pos.get('opened_at'))[:16]}"

@@ -37,6 +37,9 @@ here.
   P15b fundamentals + recaps + flag built (trader 2026-09-30, `claude/mentor-app-p15b-fundamentals-recaps-2026-09-30`,
   gate #334): `fundamentals_pack` + `/paste`, `recaps_pack` + recurrence table + `/recaps`, app owns the Mentor by
   default, one feelings question per closed trade.
+  P16 eval gaps built (lead 2026-09-30, `claude/mentor-app-p16-eval-gaps-2026-09-30`, gate #335): book-only
+  scope with row origins, hold by outcome + best/worst, veto aggregates with verdicts and `clears_baseline`, no
+  announced fetch, tape diff, watch-tomorrow / regime-or-me / week-vs-week routes, the 100-question fixture.
   Next only by the trader's word: an alerts pack, a movers pack, more recall sources.
 
 ## Plan to 8/10, round 2 (trader's brief, 2026-09-25 evening)

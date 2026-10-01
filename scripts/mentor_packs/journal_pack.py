@@ -121,6 +121,69 @@ def _hold(opened: datetime | None, closed: datetime | None) -> str:
     return f"{minutes // (24 * 60)} d"
 
 
+def _minutes_text(minutes: float) -> str:
+    whole = int(round(minutes))
+    if whole < 60:
+        return f"{whole} min"
+    if whole < 24 * 60:
+        return f"{whole // 60} h {whole % 60} min"
+    return f"{whole / (24 * 60):.1f} d"
+
+
+def _hold_minutes(unit: journal_read.Unit) -> float | None:
+    if unit.opened is None or unit.closed is None:
+        return None
+    return (unit.closed - unit.opened).total_seconds() / 60
+
+
+def outcome_rows(label: str, units: list[journal_read.Unit]) -> list[dict[str, Any]]:
+    """P16: hold time by outcome (median, mean, n) and the best / worst trade, by R when a stop exists, else by $."""
+    import statistics
+
+    rows: list[dict[str, Any]] = []
+    for key, word, test in (("winners", "Winners", lambda v: v > 0), ("losers", "Losers", lambda v: v < 0)):
+        picked = [u for u in units if u.pnl is not None and test(u.pnl)]
+        holds = [m for m in (_hold_minutes(u) for u in picked) if m is not None]
+        if holds:
+            median, mean = statistics.median(holds), statistics.fmean(holds)
+            text = (f"{word} held a median {_minutes_text(median)}, mean {_minutes_text(mean)} "
+                    f"(n={len(holds)}" + (f" of {len(picked)}; {len(picked) - len(holds)} with no times" if
+                                         len(holds) != len(picked) else "") + ")")
+        else:
+            median = mean = None
+            text = f"{word}: no closed {key} with both times in this window (n=0); hold unknown"
+        rows.append({"id": f"jrn:{label}:hold:{key}", "kind": "hold", "outcome": key, "n": len(holds),
+                     "median_min": median, "mean_min": mean, "text": text})
+    priced = [u for u in units if u.pnl is not None]
+    with_r = [u for u in priced if u.r is not None]
+    if with_r:
+        pool, by = with_r, "R"
+        why = (f"ranked by R ({len(with_r)} of {len(priced)} trade(s) have a planned stop"
+               + ("; the rest have no R and are not ranked)" if len(with_r) != len(priced) else ")"))
+    elif priced:
+        pool, by, why = priced, "$", "ranked by $ (no trade here has a planned stop, so no R)"
+    else:
+        pool, by, why = [], "", ""
+    stopped_losers = [u for u in with_r if u.pnl is not None and u.pnl < 0]
+    for key, choose in (("best", max), ("worst", min)):
+        if not pool:
+            rows.append({"id": f"jrn:{label}:{key}", "kind": key, "text": f"{key.title()} trade: none closed with a PnL"})
+            continue
+        if key == "worst" and by == "R" and len(stopped_losers) < 2:
+            # Too few stopped losers to rank by R: a stopped winner could come out "worst". Rank by $.
+            pool, by = priced, "$"
+            why = (f"ranked by $ ({len(stopped_losers)} losing trade(s) with a planned stop, fewer than 2 to rank "
+                   "by R)")
+        unit = choose(pool, key=lambda u: (u.r if by == "R" else u.pnl))
+        side = str(unit.trades[0].get("direction") or "?").upper() if len(unit.trades) == 1 else "SPREAD"
+        result = f"{unit.r:+.2f}R ({_money(unit.pnl)} $)" if unit.r is not None else f"{_money(unit.pnl)} $"
+        rows.append({"id": f"jrn:{label}:{key}", "kind": key, "symbol": unit.symbol, "by": by,
+                     "trade": f"jrn:{label}:{'+'.join(unit.ids)}",
+                     "text": f"{key.title()} trade: {side} {unit.symbol} {result}, held "
+                             f"{_hold(unit.opened, unit.closed)}; {why}"})
+    return rows
+
+
 def _accounts(path: Path) -> dict[str, str]:
     """``{account_number: tax class text}`` from the journal's accounts (none = {})."""
     from mentor_packs import book_pack
@@ -241,7 +304,11 @@ def build(day: Any = "today", *, now: datetime | None = None, journal: Path | st
     total_row = {"id": f"jrn:{label}:totals", "kind": "totals", "count": len(closed_units), "wins": wins,
                  "net": sum(known_values) if known_values else None, "open": len(open_trades), "text": totals}
     # A day or a month answers from its totals first (a wrong premise shows at once; a tight budget keeps it).
-    rows.insert(len(rows) if label.startswith("wk") else 0, total_row)
+    at = len(rows) if label.startswith("wk") else 0
+    rows.insert(at, total_row)
+    if closed_units:
+        # P16: hold by outcome and best / worst right after the totals, so they survive a tight budget too.
+        rows[at + 1:at + 1] = outcome_rows(label, closed_units)
     for trade in open_trades:
         opened = journal_read.parse_time(trade.get("opened_at"))
         qty = (journal_read.num(trade.get("quantity_opened")) or 0) - (journal_read.num(trade.get("quantity_closed")) or 0)

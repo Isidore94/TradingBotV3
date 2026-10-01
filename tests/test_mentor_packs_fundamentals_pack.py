@@ -51,7 +51,7 @@ def test_registered_with_day_and_section():
     assert "fundamentals_pack" in registry.names()
     params = registry.modules()["fundamentals_pack"].SCHEMA["function"]["parameters"]["properties"]
     assert set(params) == {"day", "section"}
-    assert params["section"]["enum"] == ["all", "bottom_line", "signals", "playbook", "events", "text", "compact"]
+    assert params["section"]["enum"] == ["all", "bottom_line", "signals", "playbook", "events", "text", "compact", "watch"]
 
 
 def test_golden_the_latest_paste_wins_and_every_part_is_a_cited_row(world):

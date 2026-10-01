@@ -33,6 +33,11 @@ SCHEMA: dict[str, Any] = {
                             "description": "Tickers, e.g. ['NVDA', 'TSLA']; past 40 the rest are listed by name only."},
                 "book": {"type": "array", "items": {"type": "string"},
                          "description": "Open positions: always listed, whatever the count."},
+                "liked": {"type": "array", "items": {"type": "string"},
+                          "description": "Liked names among the symbols (watch names, not positions)."},
+                "focus": {"type": "array", "items": {"type": "string"},
+                          "description": "Focus names among the symbols (watch names, not positions)."},
+                "side": {"type": "string", "description": "LONG or SHORT when the group has one side."},
             },
             "required": ["symbols"],
         },
@@ -78,14 +83,36 @@ def _peer_text(sym: str, today: date, dates: Mapping[str, list[date]], industrie
     return f"nearest peer {peer} {when:%a %Y-%m-%d}, {pick_pack._day_word((when - today).days)}"
 
 
-def build(symbols: Any = (), book: Any = (), *, now: datetime | None = None,
-          paths: pick_pack.PickPaths | None = None) -> Pack:
+#: P16: how a row names where its symbol came from; only ``book`` is a position.
+ORIGIN_WORDS = {"book": "book", "liked": "liked", "focus": "Focus"}
+
+
+def origin_label(origin: str, side: str = "") -> str:
+    """``book short`` / ``Focus long`` / ``liked``: what the row is, so a watch name is never called a position."""
+    word = ORIGIN_WORDS.get(origin, "")
+    return " ".join(part for part in (word, side.lower() if word else "") if part)
+
+
+def build(symbols: Any = (), book: Any = (), liked: Any = (), focus: Any = (), side: str = "", *,
+          now: datetime | None = None, paths: pick_pack.PickPaths | None = None) -> Pack:
     """One row per name: every ``book`` name, then the others up to 40 in all; the rest listed by name.
 
     File reads: call it on a worker.
     """
     held = _symbols(book)
     names = held + [sym for sym in _symbols(symbols) if sym not in held]
+    likes, watched = set(_symbols(liked)), set(_symbols(focus))
+    side_word = pick_pack._side(side)
+    labelled = bool(held or likes or watched)
+
+    def origin(sym: str) -> str:
+        if not labelled:
+            return ""
+        return "book" if sym in held else "liked" if sym in likes else "focus" if sym in watched else "named"
+
+    def tag(sym: str) -> str:
+        label = origin_label(origin(sym), side_word)
+        return f"{sym} ({label})" if label else sym
     if not names:
         return make_pack(NAME, (), empty_text="earnings_pack needs tickers, e.g. ['NVDA', 'TSLA']")
     moment = pick_pack._now(now)
@@ -95,7 +122,9 @@ def build(symbols: Any = (), book: Any = (), *, now: datetime | None = None,
     shown = names[:max(MAX_NAMES, len(held))]
     rest = names[len(shown):]
     head = (f"Earnings for {len(shown)} name(s) as of market date {today.isoformat()}: own next report and nearest "
-            f"industry peer within {WINDOW_DAYS} days" + (f"; {len(rest)} more name(s) not listed" if rest else ""))
+            f"industry peer within {WINDOW_DAYS} days" + (f"; {len(rest)} more name(s) not listed" if rest else "")
+            + ("; only rows marked 'book' are open positions, 'Focus' and 'liked' rows are watch names, never "
+               "positions" if labelled else ""))
     rows: list[dict[str, Any]] = [{"id": "earn:asof", "kind": "asof", "text": head}]
     if rest:
         rows.append({"id": "earn:more", "kind": "more", "symbols": rest,
@@ -105,8 +134,8 @@ def build(symbols: Any = (), book: Any = (), *, now: datetime | None = None,
         dates = pick_pack._earnings_dates(src, today)
     except Exception as exc:  # noqa: BLE001 - an unreadable calendar is unknown for every name, never "none"
         why = type(exc).__name__
-        rows += [{"id": f"earn:{sym}", "kind": "earnings", "symbol": sym,
-                  "text": f"{sym}: earnings unknown (calendar unreadable: {why})"} for sym in shown]
+        rows += [{"id": f"earn:{sym}", "kind": "earnings", "symbol": sym, "origin": origin(sym),
+                  "text": f"{tag(sym)}: earnings unknown (calendar unreadable: {why})"} for sym in shown]
         return make_pack(NAME, rows)
     try:
         loader = src.industry_map
@@ -116,8 +145,8 @@ def build(symbols: Any = (), book: Any = (), *, now: datetime | None = None,
     except Exception:  # noqa: BLE001 - peers are a label; unreadable = unknown per name
         industries = {}
     for sym in shown:
-        rows.append({"id": f"earn:{sym}", "kind": "earnings", "symbol": sym,
-                     "text": f"{sym}: {_own_text(sym, today, dates)}; {_peer_text(sym, today, dates, industries)}"})
+        rows.append({"id": f"earn:{sym}", "kind": "earnings", "symbol": sym, "origin": origin(sym),
+                     "text": f"{tag(sym)}: {_own_text(sym, today, dates)}; {_peer_text(sym, today, dates, industries)}"})
     return make_pack(NAME, rows)
 
 

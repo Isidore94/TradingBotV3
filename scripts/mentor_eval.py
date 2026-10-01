@@ -55,10 +55,12 @@ def offline_report(fixture: Mapping[str, Any]) -> dict[str, Any]:
     from mentor_app.attach import plan_attachments
 
     now, known = _now(fixture), dict(fixture.get("known_symbols") or {})
+    # P16: the fixture's open book (a subset of the universe); a book question reads only these names.
+    book = [str(sym).upper() for sym in fixture.get("book") or ()]
     rows = []
     for item in fixture.get("questions") or ():
         expected = list(item.get("expected_packs") or ())
-        got = [request.name for request in plan_attachments(item["q"], known, now)]
+        got = [request.name for request in plan_attachments(item["q"], known, now, book=book)]
         hit = [name for name in expected if name in got]
         rows.append({"q": item["q"], "expected": expected, "attached": got, "missed": [n for n in expected if n not in got],
                      "recall": len(hit) / len(expected) if expected else 1.0})
@@ -142,7 +144,7 @@ def live_report(fixture: Mapping[str, Any], *, out_dir: Path) -> dict[str, Any]:
         chat = ChatModel()
         chat.add("user", item["q"])
         messages = chat.messages(context_text=context.as_text(), budget_tokens=settings.context_tokens())
-        requests = attach.plan_attachments(item["q"], known, now)
+        requests = attach.plan_attachments(item["q"], known, now, book=attach.book_symbols(context.rows))
         try:
             result = brain.run_turn(messages, model=model, endpoint=endpoint, keep_alive=settings.keep_alive(),
                                     num_ctx=settings.context_tokens(), tools=registry.tool_schemas(),

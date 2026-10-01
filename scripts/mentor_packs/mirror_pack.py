@@ -311,7 +311,7 @@ def veto_rows(annotations: list[dict[str, Any]], cohort: Mapping, start: date, a
         found = (cohort.get(key) or {}).get(VETO_HORIZON)
         if found is not None and found[0] <= through:
             cuts[(reason, side)].append((found[1] > 0, found[1] * 100.0))
-    rows = []
+    rows: list[dict[str, Any]] = []
     for reason, side in sorted(counted):
         stat = _stat(cuts.get((reason, side), []))
         pending = counted[(reason, side)] - stat["n"]
@@ -323,6 +323,20 @@ def veto_rows(annotations: list[dict[str, Any]], cohort: Mapping, start: date, a
                      f"{_stat_text(stat, floor, what='the name won')}"
                      + (f" ({pending} with no outcome yet)" if pending else "")),
         })
+    return rank_vetoes(rows, mean=lambda row: row.get("avg"), measured=lambda row: not row["too_few"])
+
+
+#: P16: rank 1 = the WORST veto record: the vetoed names' mean side return was highest, so the veto cost the
+#: most; the last rank avoided the most loss. Only rows with n at or above the floor are ranked.
+def rank_vetoes(rows: list[dict[str, Any]], *, mean: Any, measured: Any) -> list[dict[str, Any]]:
+    """Stamp ``rank`` on the measured veto rows (1 = worst record) and start their text with it."""
+    ranked = sorted((row for row in rows if measured(row) and mean(row) is not None), key=lambda row: -mean(row))
+    total = len(ranked)
+    for index, row in enumerate(ranked, start=1):
+        row["rank"] = index
+        word = ("worst #1" if index == 1 else f"#{index}") + f" of {total} veto records"
+        how = "cost the most" if index == 1 else "avoided the most loss" if index == total and total > 1 else ""
+        row["text"] = f"{word}{' (' + how + ')' if how else ''}: {row['text']}"
     return rows
 
 

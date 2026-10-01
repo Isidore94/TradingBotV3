@@ -1,4 +1,4 @@
-"""P13/P14/P15b mentor eval: the 60 plain questions, offline attach recall pinned at >= 97.5 %, and the style score.
+"""P13/P14/P15b/P16 mentor eval: the 100 plain questions, offline attach recall pinned at >= 97.5 %, and the style score.
 
 Never runs --live."""
 
@@ -16,10 +16,11 @@ import mentor_eval  # noqa: E402
 from mentor_packs import registry  # noqa: E402
 
 
-def test_the_fixture_has_sixty_plain_questions_with_real_pack_names():
+def test_the_fixture_has_the_hundred_live_eval_questions_with_real_pack_names():
     fixture = mentor_eval.load_fixture()
     questions = fixture["questions"]
-    assert len(questions) == 60 and len({q["q"] for q in questions}) == 60
+    assert len(questions) == 100 and len({q["q"] for q in questions}) == 100
+    assert sum(1 for q in questions if q.get("concept")) == 2
     names = set(registry.names())
     for item in questions:
         # Only a concept question ("explain ... in one paragraph") needs no desk data, and it says so.
@@ -32,7 +33,7 @@ def test_the_fixture_has_sixty_plain_questions_with_real_pack_names():
 
 def test_offline_attach_recall_is_at_least_ninety_seven_and_a_half_percent():
     report = mentor_eval.offline_report(mentor_eval.load_fixture())
-    assert report["questions"] == 60
+    assert report["questions"] == 100
     assert report["attach_recall"] >= 0.975, [row for row in report["rows"] if row["missed"]]
     assert report["attach_recall"] == 1.0, [row for row in report["rows"] if row["missed"]]
 
@@ -48,10 +49,10 @@ def test_offline_is_the_default_and_prints_the_recall(capsys):
     assert "attach recall" in capsys.readouterr().out
 
 
-def test_about_twenty_five_simple_questions_are_tagged_and_no_pre_trade_one_is():
+def test_forty_simple_questions_are_tagged_and_no_pre_trade_one_is():
     questions = mentor_eval.load_fixture()["questions"]
     simple = [q for q in questions if q.get("simple")]
-    assert 20 <= len(simple) <= 30
+    assert len(simple) == 40
     assert not any("gate_pack" in q["expected_packs"] for q in simple)
     assert {"green or red so far?", "how am i doing today", "should I stop trading for today"} <= {q["q"] for q in simple}
 
@@ -102,3 +103,10 @@ def test_rescore_reads_an_earlier_live_report(tmp_path, capsys):
     assert mentor_eval.main(["--rescore", str(path)]) == 0
     out = capsys.readouterr().out
     assert "ok " in out and "style: pass 1.0 on 1 simple" in out
+
+
+def test_the_book_is_part_of_the_fixture_and_a_book_question_never_reads_focus():
+    fixture = mentor_eval.load_fixture()
+    assert "book" in fixture["raw_input_keys"] and set(fixture["book"]) <= set(fixture["known_symbols"])
+    rows = {row["q"]: row for row in mentor_eval.offline_report(fixture)["rows"]}
+    assert rows["which of my open shorts is most at risk into earnings"]["attached"][:2] == ["earnings_pack", "book_pack"]

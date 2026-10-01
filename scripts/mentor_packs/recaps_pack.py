@@ -407,6 +407,10 @@ def build(days: Any = DEFAULT_DAYS, section: str = "all", *, now: datetime | Non
         return make_pack(NAME, [{"id": "recap:none", "kind": "none", "text": "No day recaps on file yet; unknown, "
                                                                             "not 'nothing to fix'."}])
     issues = [issue_row(item) for item in recurrence(src, window, events)]
+    for index, row in enumerate(issues, start=1):
+        # P16: the table is already ordered by sessions count; the rank says so in the data.
+        row["rank"] = index
+        row["text"] = f"#{index} of {len(issues)} by sessions: {row['text']}"
     asof = {"id": "recap:asof", "kind": "asof", "date": today.isoformat(),
             "text": f"Recaps for {len(window)} session(s), {window[-1]} to {window[0]}; {len(issues)} recurring "
                     f"issue(s) (a theme counts at {ISSUE_MIN_SESSIONS}+ sessions)."}

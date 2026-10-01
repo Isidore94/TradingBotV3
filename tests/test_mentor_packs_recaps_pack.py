@@ -20,11 +20,11 @@ NOW = recaps_pack.FIXTURE_NOW  # Wed 2026-09-30 07:00 PT
 
 GOLDEN = """## recaps_pack
 [recap:asof] Recaps for 3 session(s), 2026-09-25 to 2026-09-29; 5 recurring issue(s) (a theme counts at 2+ sessions).
-[recap:issues:missed:compressed] Vetoes sharing the reason 'compressed': 2 sessions (2026-09-28, 2026-09-25), first 2026-09-25
-[recap:issues:stop:chas_extend_name] The same 'stop' lesson: 2 sessions (2026-09-28, 2026-09-25), first 2026-09-25; e.g. Chasing extended names, chased an extended name
-[recap:issues:clue:volume_dry_up] Clue you marked 'volume dry up': 2 sessions (2026-09-29, 2026-09-28), first 2026-09-28; e.g. NVDA, AMD
-[recap:issues:rule_broken:wait_for_confirmation] Rule not kept 'wait for confirmation': 2 sessions (2026-09-29, 2026-09-28), first 2026-09-28; e.g. no, partly
-[recap:issues:wrong_reads] Reads graded wrong: 2 sessions (2026-09-29, 2026-09-28), first 2026-09-28
+[recap:issues:missed:compressed] #1 of 5 by sessions: Vetoes sharing the reason 'compressed': 2 sessions (2026-09-28, 2026-09-25), first 2026-09-25
+[recap:issues:stop:chas_extend_name] #2 of 5 by sessions: The same 'stop' lesson: 2 sessions (2026-09-28, 2026-09-25), first 2026-09-25; e.g. Chasing extended names, chased an extended name
+[recap:issues:clue:volume_dry_up] #3 of 5 by sessions: Clue you marked 'volume dry up': 2 sessions (2026-09-29, 2026-09-28), first 2026-09-28; e.g. NVDA, AMD
+[recap:issues:rule_broken:wait_for_confirmation] #4 of 5 by sessions: Rule not kept 'wait for confirmation': 2 sessions (2026-09-29, 2026-09-28), first 2026-09-28; e.g. no, partly
+[recap:issues:wrong_reads] #5 of 5 by sessions: Reads graded wrong: 2 sessions (2026-09-29, 2026-09-28), first 2026-09-28
 [recap:2026-09-29:card:did_well] 2026-09-29 report card did well: Did well: You liked 4 you did not trade (2026-09-29).
 [recap:2026-09-29:card:missed] 2026-09-29 report card missed: Missed: You vetoed 30. 2 were real misses; 12 share the reason overhead.
 [recap:2026-09-29:verdict:1] 2026-09-29 day review: you said "SPY tests the 50sma later this week" -> wrong

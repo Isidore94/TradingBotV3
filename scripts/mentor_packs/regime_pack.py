@@ -29,7 +29,11 @@ SCHEMA: dict[str, Any] = {
             "The tape right now: Auto mode, D1 market environment, the trader's regime, last night's "
             "regime read, econ events in the next 7 days, the sector board and SPY-pause observations."
         ),
-        "parameters": {"type": "object", "properties": {}, "required": []},
+        "parameters": {"type": "object", "properties": {
+            "diff": {"type": "boolean", "description": (
+                "true = also what changed since the previous session's snapshot (regime, D1 env, sector "
+                "leaders/laggards, night read date, new econ events today).")},
+        }, "required": []},
     },
 }
 
@@ -148,8 +152,114 @@ def _econ_key(event: Mapping[str, Any], index: int) -> str:
     return f"{event.get('date')}-{index}"
 
 
-def build(*, now: datetime | None = None, sources: Sources | None = None) -> Pack:
-    """Build the regime pack. File and DB reads: call it on a worker."""
+#: P16: the app's ``app_state`` key for one PT day's tape snapshot (rows only), written once at first build.
+SNAPSHOT_KEY = "tape:snapshot:{day}"
+
+
+def snapshot_key(day: date | str) -> str:
+    return SNAPSHOT_KEY.format(day=str(day)[:10])
+
+
+def snapshot_clean(pack: Pack) -> bool:
+    """A tape with every source read (no ``unknown`` row) is the only one worth keeping for tomorrow's diff."""
+    return bool(pack.rows) and not any(row.get("kind") == "unknown" for row in pack.rows)
+
+
+def snapshot_json(pack: Pack) -> str:
+    """The rows of a built tape, as stored for tomorrow's diff (no as-of stamp)."""
+    return json.dumps([row for row in pack.rows if row.get("kind") != "asof"], sort_keys=True, default=str)
+
+
+def read_previous_snapshot(chat_db: Path | str | None, today: date) -> tuple[str, list[dict[str, Any]]] | None:
+    """(day, rows) of the newest snapshot before ``today`` in the app's store (``mode=ro``); None when none."""
+    if chat_db is None:
+        return None
+    from mentor_packs.journal_read import connect_ro
+
+    try:
+        conn = connect_ro(chat_db)
+    except Exception:  # noqa: BLE001 - an unreadable store is no snapshot, never a guess
+        return None
+    if conn is None:
+        return None
+    try:
+        rows = conn.execute("SELECT key, value FROM app_state WHERE key LIKE 'tape:snapshot:%' AND key < ? "
+                            "ORDER BY key DESC LIMIT 1", (snapshot_key(today),)).fetchall()
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    try:
+        return str(rows[0]["key"]).rsplit(":", 1)[-1], list(json.loads(rows[0]["value"]))
+    except (ValueError, TypeError):
+        return None
+
+
+def _previous_weekday(day: date) -> date:
+    from datetime import timedelta
+
+    back = day - timedelta(days=1)
+    while back.weekday() >= 5:
+        back -= timedelta(days=1)
+    return back
+
+
+def _event_key(row: Mapping[str, Any]) -> tuple[str, str, str]:
+    """An econ event by (date, time ET, label in lower-case words): its row id is positional and renumbers daily."""
+    words = " ".join(re.findall(r"[a-z0-9]+", str(row.get("label") or "").lower()))
+    return str(row.get("date") or "")[:10], str(row.get("time_et") or ""), words
+
+
+def diff_rows(rows: list[dict[str, Any]], previous: tuple[str, list[dict[str, Any]]] | None,
+              today: date) -> list[dict[str, Any]]:
+    """P16: ``tape:diff:<k>`` rows, today's tape against the previous session's snapshot."""
+    if previous is None:
+        missing = _previous_weekday(today).isoformat()
+        return [{"id": "tape:diff:none", "kind": "diff",
+                 "text": f"Tape diff: no snapshot for {missing} (first day); what changed is unknown"}]
+    day, old = previous
+    now_by, old_by = {str(r.get("id")): r for r in rows}, {str(r.get("id")): r for r in old}
+    out: list[dict[str, Any]] = []
+    expected = _previous_weekday(today).isoformat()
+    if day < expected:
+        out.append({"id": "tape:diff:gap", "kind": "diff",
+                    "text": f"Tape diff: no clean snapshot for {expected}; comparing with {day} instead"})
+
+    def changed(key: str, what: str, before: str, after: str) -> None:
+        same = before == after
+        out.append({"id": f"tape:diff:{key}", "kind": "diff", "changed": not same, "before": before, "after": after,
+                    "text": (f"Since {day}: {what} unchanged ({after})" if same
+                             else f"Since {day}: {what} CHANGED from {before} to {after}")})
+
+    changed("regime", "the trader's regime", str((old_by.get("tape:regime") or {}).get("regime") or "unknown"),
+            str((now_by.get("tape:regime") or {}).get("regime") or "unknown"))
+    changed("d1env", "the D1 environment", str((old_by.get("tape:d1env") or {}).get("label") or "unknown"),
+            str((now_by.get("tape:d1env") or {}).get("label") or "unknown"))
+    for side in ("leaders", "laggards"):
+        before = ", ".join((old_by.get("tape:breadth") or {}).get(side) or ()) or "unknown"
+        after = ", ".join((now_by.get("tape:breadth") or {}).get(side) or ()) or "unknown"
+        changed(side, f"the sector {side}", before, after)
+
+    def night_date(by: Mapping[str, Any]) -> str:
+        return next((str(r.get("date")) for r in by.values() if r.get("kind") == "night" and r.get("date")), "none")
+
+    changed("night", "the night read's date", night_date(old_by), night_date(now_by))
+    old_econ = {_event_key(r) for r in old_by.values() if r.get("kind") == "econ" and r.get("label")}
+    new_today = [r for r in now_by.values() if r.get("kind") == "econ" and r.get("label")
+                 and _event_key(r) not in old_econ and str(r.get("date") or "") == today.isoformat()]
+    out.append({"id": "tape:diff:econ", "kind": "diff", "changed": bool(new_today),
+                "text": (f"Since {day}: new econ events today: " + "; ".join(str(r.get("text")) for r in new_today)
+                         if new_today else f"Since {day}: no new econ events listed for today")})
+    return out
+
+
+def build(diff: bool = False, *, now: datetime | None = None, sources: Sources | None = None,
+          chat_db: Path | str | None = None) -> Pack:
+    """Build the regime pack. File and DB reads: call it on a worker.
+
+    P16: ``diff`` adds ``tape:diff:<k>`` rows against the newest earlier snapshot in ``chat_db`` (``mode=ro``)."""
     moment = context_pack._now(now)
     src = sources or live_sources()
     local, market = moment.astimezone(PT), moment.astimezone(ET)
@@ -188,9 +298,11 @@ def build(*, now: datetime | None = None, sources: Sources | None = None) -> Pac
         if current:
             text = (f"Trader's regime: {current.get('label') or current.get('regime')} since "
                     f"{current.get('start_date')} (day {current.get('day_count')})")
+            # P16: the day count moves daily; the diff compares the regime and its start date only.
+            which = f"{current.get('label') or current.get('regime')} since {current.get('start_date')}"
         else:
-            text = "Trader's regime: none typed yet"
-        rows.append({"id": "tape:regime", "kind": "regime", "text": text})
+            text, which = "Trader's regime: none typed yet", "none typed"
+        rows.append({"id": "tape:regime", "kind": "regime", "regime": which, "text": text})
     except Exception as exc:  # noqa: BLE001
         rows.append(_unknown("tape:regime", "Trader's regime", exc))
     try:
@@ -249,6 +361,8 @@ def build(*, now: datetime | None = None, sources: Sources | None = None) -> Pac
 
             as_of = str(board.get("as_of") or "")[:16] or "unknown time"
             rows.append({"id": "tape:breadth", "kind": "breadth",
+                         "leaders": [str(row.get("sector")) for row in top],
+                         "laggards": [str(row.get("sector")) for row in bottom],
                          "text": f"Sector board ({as_of}): strongest {_names(top)}; weakest {_names(bottom)}"})
     except Exception as exc:  # noqa: BLE001
         rows.append(_unknown("tape:breadth", "Sector board", exc))
@@ -263,6 +377,8 @@ def build(*, now: datetime | None = None, sources: Sources | None = None) -> Pac
                                   f"{shorts} short names held up through a SPY pause")})
     except Exception as exc:  # noqa: BLE001
         rows.append(_unknown("tape:spy:pause", "SPY pause observations", exc))
+    if diff in (True, "true", "True", 1, "1", "yes"):
+        rows.extend(diff_rows(rows, read_previous_snapshot(chat_db, local.date()), local.date()))
     return make_pack(NAME, rows)
 
 

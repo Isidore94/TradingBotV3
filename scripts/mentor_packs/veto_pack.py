@@ -40,7 +40,14 @@ SCHEMA: dict[str, Any] = {
         ),
         "parameters": {
             "type": "object",
-            "properties": {"date": {"type": "string", "description": "Session date YYYY-MM-DD; blank = the last session."}},
+            "properties": {
+                "date": {"type": "string", "description": "Session date YYYY-MM-DD; blank = the last session."},
+                "scope": {"type": "string", "description": (
+                    "'week', 'month', 'last_week' or 'last_month': instead of one session, every veto in that window "
+                    "aggregated by reason and side (what the vetoed names did at 5 and 10 sessions, a verdict per "
+                    "reason, and the vetoed set as a whole). Use it for 'did my vetoes work out', 'if I had followed "
+                    "my vetoes', 'which veto reason has the worst record'.")},
+            },
             "required": [],
         },
     },
@@ -305,10 +312,171 @@ def target_session(date_arg: Any = "", *, now: datetime | None = None) -> date |
         return cursor
 
 
-def build(date: str = "", *, now: datetime | None = None, paths: VetoPaths | None = None) -> Pack:  # noqa: A002 - the tool's argument name
-    """Build the veto pack for one session. File reads: call it on a worker."""
+def compare_lb(lb: float | None, baseline_lb: float | None, side: str, base: Mapping[str, Any]) -> str:
+    """P16: both LBs and which is larger, in words ("LB=0.56 is BELOW the SHORT baseline LB=0.69"), so a
+    comparison can never be read backwards."""
+    if lb is None or baseline_lb is None:
+        return f"LB unknown vs the {side} baseline (n={base.get('n', 0)})"
+    word = "ABOVE" if lb > baseline_lb else "BELOW" if lb < baseline_lb else "EQUAL TO"
+    rate = f"baseline win rate {base['wins'] / base['n']:.0%}, " if base.get("n") else ""
+    return f"LB={lb:.2f} is {word} the {side} baseline LB={baseline_lb:.2f} ({rate}n={base.get('n', 0)})"
+
+
+#: P16: the aggregate's forward horizons (sessions) and the verdict's horizon.
+AGG_HORIZONS = (5, 10)
+VERDICT_HORIZON = 5
+VERDICT_WORDS = {
+    "avoided": "vetoing this reason: avoided a losing cohort",
+    "cost": "vetoing this reason: cost a winning cohort",
+    "flat": "vetoing this reason: the cohort went nowhere (mean 0)",
+    "too_few": "too few",
+}
+
+
+def _agg_verdict(values: list[float], floor: int) -> str:
+    if len(values) < floor:
+        return "too_few"
+    mean = sum(values) / len(values)
+    return "avoided" if mean < 0 else "cost" if mean > 0 else "flat"
+
+
+def _agg_row(row_id: str, label: str, members: list[dict[str, Any]], tier: dict[str, Any], cohort: Mapping,
+             through: str, floor: int, baselines: Mapping[str, dict[str, Any]], side: str) -> dict[str, Any]:
+    """One aggregate row: n, mean side return, win rate and Wilson LB at 5 and 10 sessions, the D1 outcome vs the
+    side baseline (``clears_baseline``) and a deterministic verdict on the 5-session cohort."""
+    parts: list[str] = []
+    out: dict[str, Any] = {"id": row_id, "kind": "aggregate", "vetoes": len(members)}
+    for horizon in AGG_HORIZONS:
+        values = [value for m in members
+                  for h, (when, value) in (cohort.get((m["cohort_date"], m["symbol"], m["side"])) or {}).items()
+                  if h == horizon and when <= through]
+        n, wins = len(values), sum(1 for v in values if v > 0)
+        lb = _wilson(wins, n) if n else None
+        mean = sum(values) / n if n else None
+        out[f"h{horizon}"] = {"n": n, "mean": mean, "win_rate": wins / n if n else None, "lb": lb,
+                              "pending": len(members) - n}
+        if n:
+            parts.append(f"{horizon}d: n={n} ({len(members) - n} pending), mean side return {_pct(mean)}, "
+                         f"win rate {wins / n:.0%}, LB={lb:.2f}")
+        else:
+            parts.append(f"{horizon}d: n=0 ({len(members)} pending)")
+        if horizon == VERDICT_HORIZON:
+            out["verdict"] = _agg_verdict(values, floor)
+    d1_n = d1_wins = 0
+    for m in members:
+        outcome = tier["outcomes"].get((m["symbol"], m["side"], m["scan"])) if m.get("scan") else None
+        if outcome is None:
+            outcome = tier["outcomes"].get((m["symbol"], m["side"], m["session"]))
+        if outcome is not None and outcome[1] <= through:
+            d1_n += 1
+            d1_wins += 1 if outcome[0] else 0
+    d1_lb = _wilson(d1_wins, d1_n) if d1_n else None
+    clears = "no"
+    if side in ("LONG", "SHORT") and d1_n >= floor and d1_lb is not None and baselines[side]["lb"] is not None:
+        clears = "yes" if d1_lb > baselines[side]["lb"] else "no"
+        d1_text = (f"D1 {SLICE_HORIZON_SESSIONS}-session outcome n={d1_n}, wins {d1_wins} ({d1_wins / d1_n:.0%}), "
+                   f"{compare_lb(d1_lb, baselines[side]['lb'], side, baselines[side])}")
+    else:
+        d1_text = f"D1 {SLICE_HORIZON_SESSIONS}-session outcome n={d1_n}" + (
+            f" (too few vs the floor {floor})" if d1_n < floor else " (mixed sides: no single baseline)")
+    verdict = VERDICT_WORDS[out["verdict"]]
+    h5 = out[f"h{VERDICT_HORIZON}"]
+    if h5["n"] and h5["mean"] is not None and out["verdict"] != "too_few":
+        # The basis sits next to the verdict, so the 10-session numbers are never read as its reason.
+        verdict = f"({VERDICT_HORIZON}d mean {_pct(h5['mean'])}, n={h5['n']}): {verdict}"
+    if row_id == "veto:agg:total":
+        verdict = verdict.replace("vetoing this reason", "vetoing these names as a whole")
+    out.update({"d1_n": d1_n, "d1_wins": d1_wins, "d1_lb": d1_lb, "clears_baseline": clears, "verdict_text": verdict})
+    if out["verdict"] == "too_few":
+        verdict = f"too few ({out['h5']['n']} measured at 5 sessions, floor {floor})"
+    out["text"] = (f"{label}: {len(members)} veto(es); " + "; ".join(parts) + f"; {d1_text}; clears_baseline: "
+                   f"{clears}; verdict {verdict}" if verdict.startswith("(") else
+                   f"{label}: {len(members)} veto(es); " + "; ".join(parts) + f"; {d1_text}; clears_baseline: "
+                   f"{clears}; verdict: {verdict}")
+    return out
+
+
+def build_window(scope: str, *, now: datetime | None = None, paths: VetoPaths | None = None) -> Pack:
+    """P16: every veto in a week or month, aggregated per (reason, side) and in total. File reads: on a worker."""
+    import annotations_reader
+    from mentor_packs import journal_pack
+
+    today = _now(now).astimezone(ET).date()
+    span = journal_pack.resolve(scope, today)
+    if span is None or not str(scope).strip().lower().replace(" ", "_").endswith(("week", "month")):
+        return make_pack(NAME, (), empty_text=f"veto_pack scope must be week, month, last_week or last_month, not {scope!r}")
+    label, first, last = span
+    src = paths or live_paths()
+    through = min(last, today).isoformat()
+    floor = min_reportable_n()
+    all_rows = annotations_reader.read_rows(src.annotations)
+    decisions = _events([dict(row) for row in all_rows if row.get("event_type") == KIND_VETO])
+    try:
+        tier = _cached("tier", src.tier_outcomes, _tier_index)
+    except OSError as exc:
+        tier = {"setups": {}, "outcomes": {}, "baseline": {"LONG": [], "SHORT": []}, "error": type(exc).__name__}
+    cohort = _cached("veto_outcomes", src.veto_outcomes, annotations_reader.veto_forward_returns)
+    members: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in decisions:
+        day = _session_of(row)
+        symbol, side = _sym(row.get("symbol")), _side(row.get("side"))
+        when = _day(day)
+        if not symbol or not side or when is None or not first <= when <= last:
+            continue
+        key = (day, symbol, side)
+        if key in seen:
+            continue  # first veto of a (session, name, side) wins, like the veto cohort
+        seen.add(key)
+        members.append({"session": day, "symbol": symbol, "side": side, "reason": _reason(row),
+                        "scan": str(row.get("scan_date") or "").strip()[:10],
+                        "cohort_date": str(row.get("session_date") or "").strip()[:10] or day})
+    baselines = {side: _baseline(tier, side, through) for side in ("LONG", "SHORT")}
+    window = f"{first.isoformat()} to {min(last, today).isoformat()}"
+    rows: list[dict[str, Any]] = [{
+        "id": f"veto:agg:{label}:asof", "kind": "asof", "window": label,
+        "text": (f"Vetoes {window} ({label}): {len(members)} veto(es) by reason and side; returns are SIDE returns of "
+                 f"the vetoed names (positive = the trade would have made money), measured only once known by "
+                 f"{through}; a verdict needs n>={floor} at {VERDICT_HORIZON} sessions; mean < 0 = the veto avoided a "
+                 f"losing cohort, mean > 0 = it cost a winning cohort"),
+    }]
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for m in members:
+        groups.setdefault((m["reason"], m["side"]), []).append(m)
+    agg: list[dict[str, Any]] = []
+    for (reason, side), group in groups.items():
+        label_text = annotations_reader.reason_label(reason, side=side, directory=src.vocabularies) if reason != UNCODED             else "no reason code"
+        row = _agg_row(f"veto:agg:{reason}:{side}", f"{label_text or reason} ({reason}) {side}", group, tier, cohort,
+                       through, floor, baselines, side)
+        row.update({"reason_code": reason, "side": side})
+        agg.append(row)
+
+    def order(row: Mapping[str, Any]) -> tuple[int, float]:
+        # Worst record first: a veto that cost a winning cohort, by its mean side return; too few last.
+        mean = row["h5"]["mean"]
+        return (0 if row["verdict"] != "too_few" else 1, -(mean if mean is not None else 0.0))
+
+    from mentor_packs.mirror_pack import rank_vetoes
+
+    rows.extend(rank_vetoes(sorted(agg, key=order), mean=lambda row: row["h5"]["mean"],
+                            measured=lambda row: row["verdict"] != "too_few"))
+    total_sides = {m["side"] for m in members}
+    total = _agg_row("veto:agg:total", "All vetoes together (what the vetoed set did as a whole)", members, tier,
+                     cohort, through, floor, baselines, next(iter(total_sides)) if len(total_sides) == 1 else "")
+    rows.append(total)
+    if tier.get("error"):
+        rows.append({"id": "veto:agg:tier_error", "kind": "error",
+                     "text": f"tier outcomes unknown ({tier['error']}): D1 outcomes are not measured"})
+    return make_pack(NAME, rows)
+
+
+def build(date: str = "", scope: str = "", *, now: datetime | None = None,  # noqa: A002 - the tool's argument name
+          paths: VetoPaths | None = None) -> Pack:
+    """Build the veto pack for one session, or (``scope``) a week's / month's aggregate. File reads: on a worker."""
     import annotations_reader
 
+    if str(scope or "").strip():
+        return build_window(scope, now=now, paths=paths)
     session = target_session(date, now=now)
     if session is None:
         return make_pack(NAME, (), empty_text=f"veto_pack needs a date like 2026-09-29, not {date!r}")
@@ -389,7 +557,8 @@ def build(date: str = "", *, now: datetime | None = None, paths: VetoPaths | Non
                 f"setup {setup or 'unknown'}; at {at or 'unknown time'}" + (f"; note: {note[:160]}" if note else "")
             ).replace("  ", " "),
         })
-        slice_row: dict[str, Any] = {"id": f"{row_id}:slice", "kind": KIND_SLICE, "challenge": False, "weeks": weeks}
+        slice_row: dict[str, Any] = {"id": f"{row_id}:slice", "kind": KIND_SLICE, "challenge": False, "weeks": weeks,
+                                     "clears_baseline": "no"}
         if kind == KIND_PASS:
             slice_row["text"] = "A pass (the trader liked the day trade and passed on one issue): no D1 slice, never a challenge"
         elif not side:
@@ -414,10 +583,11 @@ def build(date: str = "", *, now: datetime | None = None, paths: VetoPaths | Non
             else:  # the slice's rows are baseline rows too, so the baseline is never thinner
                 clears = cut["lb"] > base["lb"]
                 slice_row["challenge"] = clears
+                slice_row["clears_baseline"] = "yes" if clears else "no"
                 challenges += 1 if clears else 0
                 verdict = (
-                    f"n={cut['n']}, wins {cut['wins']} ({cut['wins'] / cut['n']:.0%}), LB={cut['lb']:.2f} vs the {side} "
-                    f"baseline LB={base['lb']:.2f} (n={base['n']}): "
+                    f"n={cut['n']}, wins {cut['wins']} ({cut['wins'] / cut['n']:.0%}), "
+                    f"{compare_lb(cut['lb'], base['lb'], side, base)}: "
                     + ("clears the baseline, candidate challenge" if clears else "does not clear the baseline, no challenge")
                 )
             slice_row["text"] = f"{head}: {verdict}; {_cohort_text(cut['returns'], floor)}; weeks={weeks}"
