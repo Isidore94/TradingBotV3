@@ -122,3 +122,91 @@ def test_the_live_today_row_reads_the_journal_pack(tmp_path, monkeypatch):
     monkeypatch.setattr(project_paths, "JOURNAL_DB_FILE", db)
     assert context_pack.live_sources().today(journal_pack.FIXTURE_NOW) == (
         "Today so far: 3 closed trade(s), 2 win(s), net +30.00 $, 1 open")
+
+
+# ---------------------------------------------------------------- 2026-10-01: stale journal opens (book ghosts)
+GHOST_REPORT = {
+    "checked_at": "2026-09-28T22:04:00",
+    "brokers": ["IBKR", "QUESTRADE"],
+    "agreed": [{"broker": "IBKR", "account_number": "U1", "symbol": "DRAM", "trade_ids": ["T-DRAM"]}],
+    "mismatched": [
+        {"kind": "JOURNAL_OPEN_BROKER_FLAT", "broker": "QUESTRADE", "account_number": "293", "symbol": "NVDA",
+         "journal_quantity": -100, "broker_quantity": 0, "trade_ids": ["T-NVDA-OLD"]},
+        {"kind": "JOURNAL_OPEN_BROKER_FLAT", "broker": "QUESTRADE", "account_number": "293", "symbol": "AAL",
+         "journal_quantity": 50, "broker_quantity": 0, "trade_ids": ["gone-after-rebuild"]},
+        {"kind": "BROKER_OPEN_JOURNAL_FLAT", "broker": "QUESTRADE", "account_number": "518", "symbol": "QTUM",
+         "journal_quantity": 0, "broker_quantity": 20, "trade_ids": []},
+    ],
+}
+GHOST_TRADES = [
+    {"trade_id": "T-NVDA-OLD", "broker": "QUESTRADE", "account_number": "293", "symbol": "NVDA", "direction": "SHORT",
+     "quantity_opened": 100, "quantity_closed": 0, "average_entry_price": 120.5, "opened_at": "2026-06-10T07:05:00-07:00"},
+    {"trade_id": "T-AAL", "broker": "QUESTRADE", "account_number": "293", "symbol": "AAL", "direction": "LONG",
+     "quantity_opened": 50, "quantity_closed": 0, "average_entry_price": 12.0, "opened_at": "2026-07-01T07:05:00-07:00"},
+    {"trade_id": "T-DRAM", "broker": "IBKR", "account_number": "U1", "symbol": "DRAM", "direction": "LONG",
+     "quantity_opened": 300, "quantity_closed": 0, "average_entry_price": 30.0, "opened_at": "2026-09-20T07:05:00-07:00"},
+    # Opened after the check: never hidden by an older "broker flat" for the same name.
+    {"trade_id": "T-NVDA-NEW", "broker": "QUESTRADE", "account_number": "293", "symbol": "NVDA", "direction": "LONG",
+     "quantity_opened": 10, "quantity_closed": 0, "average_entry_price": 180.0, "opened_at": "2026-09-29T06:40:00-07:00"},
+]
+
+
+def _ghost_rows(report):
+    src = replace(context_pack.fixture_sources(), open_positions=lambda: GHOST_TRADES,
+                  reconciliation=lambda: report)
+    return context_pack.build(now=NOW, sources=src).rows
+
+
+def test_journal_opens_the_broker_reports_flat_are_not_positions():
+    rows = _ghost_rows(GHOST_REPORT)
+    positions = {row["id"]: row for row in rows if row["kind"] == "position"}
+    assert set(positions) == {"ctx:pos:T-DRAM", "ctx:pos:T-NVDA-NEW", "ctx:pos:broker:518:QTUM"}
+    stale = next(row for row in rows if row["id"] == "ctx:positions:stale")
+    assert stale["kind"] == "positions_stale" and stale["symbols"] == ["NVDA", "AAL"]
+    assert stale["text"].startswith("Journal shows 2 stale open trade(s) the broker reports flat as of ")
+    assert stale["text"].endswith(": NVDA, AAL - not positions")
+    qtum = positions["ctx:pos:broker:518:QTUM"]
+    assert qtum["symbol"] == "QTUM" and qtum["side"] == "LONG" and "(broker only, not in journal" in qtum["text"]
+    assert "broker agreed as of" in positions["ctx:pos:T-DRAM"]["text"]
+    assert "journal (not checked against broker)" in positions["ctx:pos:T-NVDA-NEW"]["text"]
+
+
+def test_no_reconciliation_keeps_every_open_trade_labelled_unchecked():
+    for report in (None, {}):
+        rows = _ghost_rows(report)
+        positions = [row for row in rows if row["kind"] == "position"]
+        assert [row["id"] for row in positions] == [f"ctx:pos:{t['trade_id']}" for t in GHOST_TRADES]
+        assert all(row["text"].endswith("; source: journal (not checked against broker)") for row in positions)
+        assert not any(row["id"] == "ctx:positions:stale" for row in rows)
+
+
+def test_an_unreadable_reconciliation_never_breaks_the_positions():
+    rows = _ghost_rows(None)
+    broken = replace(context_pack.fixture_sources(), open_positions=lambda: GHOST_TRADES,
+                     reconciliation=lambda: (_ for _ in ()).throw(OSError("locked")))
+    got = context_pack.build(now=NOW, sources=broken).rows
+    assert [r["text"] for r in got if r["kind"] == "position"] == [r["text"] for r in rows if r["kind"] == "position"]
+
+
+def test_today_line_says_how_many_journal_opens_are_stale():
+    rows = {row["id"]: row for row in _ghost_rows(GHOST_REPORT)}
+    assert rows["ctx:today"]["text"].endswith("; 2 of the journal's open trades are stale (broker flat)")
+
+
+def test_the_live_reconciliation_read_is_read_only(tmp_path, monkeypatch):
+    import json
+
+    import project_paths
+
+    db = tmp_path / "trade_journal.sqlite3"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+    conn.execute("INSERT INTO meta VALUES ('last_reconciliation', ?)", (json.dumps(GHOST_REPORT),))
+    conn.commit()
+    conn.close()
+    before = db.stat().st_mtime_ns
+    monkeypatch.setattr(project_paths, "JOURNAL_DB_FILE", db)
+    assert context_pack.live_sources().reconciliation() == GHOST_REPORT
+    assert db.stat().st_mtime_ns == before
+    monkeypatch.setattr(project_paths, "JOURNAL_DB_FILE", tmp_path / "missing.sqlite3")
+    assert context_pack.live_sources().reconciliation() is None

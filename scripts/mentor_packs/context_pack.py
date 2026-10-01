@@ -4,7 +4,8 @@ Auto mode, the D1 environment label, the trader's structural regime, open journa
 positions, Focus names, econ events for the next 7 days, and the clock. A source
 that cannot be read gives an "unknown" row, never a guess. The journal is opened
 ``mode=ro`` and the Focus files are read directly: constructing ``JournalStore`` or
-``FocusPickStore`` would migrate or rewrite the desk's stores.
+``FocusPickStore`` would migrate or rewrite the desk's stores. Open journal trades
+the last broker reconciliation calls flat are one "stale" row, not positions.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo
 
+from mentor_packs import broker_check
 from mentor_packs.registry import Pack, make_pack
 
 NAME = "context_pack"
@@ -50,6 +52,8 @@ class Sources:
     today: Callable[[datetime], str] | None = None
     #: P17: "Tape now: ..." (top 2 leading / lagging industries, today's alert counts); None = not read.
     tape_now: Callable[[datetime], str] | None = None
+    #: The journal's last broker reconciliation report (``broker_check``); None = not read (unchecked).
+    reconciliation: Callable[[], Mapping[str, Any] | None] | None = None
 
 
 def _journal_rows(sql: str) -> list[dict[str, Any]]:
@@ -83,9 +87,21 @@ def _live_regime_rows() -> list[Mapping[str, Any]]:
 
 
 def _live_open_positions() -> list[Mapping[str, Any]]:
+    from project_paths import JOURNAL_DB_FILE
+
+    path = Path(JOURNAL_DB_FILE)
+    if not path.exists():
+        return []
+    conn = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=5)
+    try:
+        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(trades)")}
+    finally:
+        conn.close()
+    # broker / account_number match a trade to the broker reconciliation; older journals lack them.
+    extra = ", ".join(c if c in columns else f"'' AS {c}" for c in ("broker", "account_number"))
     return _journal_rows(
         "SELECT trade_id, symbol, direction, quantity_opened, quantity_closed, average_entry_price, opened_at, "
-        "account_label FROM trades WHERE status = 'OPEN' ORDER BY opened_at"
+        f"account_label, {extra} FROM trades WHERE status = 'OPEN' ORDER BY opened_at"
     )
 
 
@@ -161,6 +177,7 @@ def live_sources() -> Sources:
         econ=_live_econ,
         today=_live_today,
         tape_now=_live_tape_now,
+        reconciliation=broker_check.live_report,
     )
 
 
@@ -222,11 +239,16 @@ def build(*, now: datetime | None = None, sources: Sources | None = None) -> Pac
         rows.append({"id": "ctx:regime", "kind": "regime", "text": text})
     except Exception as exc:  # noqa: BLE001
         rows.append(_unknown("ctx:regime", "Trader's regime", exc))
+    checked = broker_check.Checked()
     try:
-        positions = list(src.open_positions())
-        if not positions:
+        report = src.reconciliation() if src.reconciliation is not None else None
+    except Exception:  # noqa: BLE001 - an unreadable check = unchecked, never a broken pack
+        report = None
+    try:
+        checked = broker_check.split(src.open_positions(), report)
+        if not checked.open and not checked.broker_only:
             rows.append({"id": "ctx:positions", "kind": "positions", "text": "Open journal positions: none"})
-        for pos in positions:
+        for pos in checked.open:
             qty = float(pos.get("quantity_opened") or 0) - float(pos.get("quantity_closed") or 0)
             # The journal trade id keeps a position's evidence id stable across rebuilds.
             trade_id = str(pos.get("trade_id") or "").strip() or f"{pos.get('symbol')}@{pos.get('opened_at')}"
@@ -241,14 +263,38 @@ def build(*, now: datetime | None = None, sources: Sources | None = None) -> Pac
                     "text": (
                         f"Open {pos.get('direction')} {pos.get('symbol')} {qty:g} @ "
                         f"{float(pos.get('average_entry_price') or 0):.2f} since {str(pos.get('opened_at'))[:16]}"
+                        f"; source: {checked.label(pos)}"
                     ),
+                }
+            )
+        for record in checked.broker_only:
+            rows.append(
+                {
+                    "id": f"ctx:pos:broker:{record['account_number'] or 'unknown'}:{record['symbol']}",
+                    "kind": "position",
+                    "symbol": record["symbol"],
+                    "side": record["side"],
+                    "direction": record["side"],
+                    "text": "Open " + broker_check.broker_only_text(record, checked.when),
+                }
+            )
+        if checked.stale:
+            rows.append(
+                {
+                    "id": "ctx:positions:stale",
+                    "kind": "positions_stale",
+                    "symbols": list(dict.fromkeys(str(t.get("symbol") or "").strip().upper() for t in checked.stale)),
+                    "text": checked.stale_text(),
                 }
             )
     except Exception as exc:  # noqa: BLE001
         rows.append(_unknown("ctx:positions", "Open journal positions", exc))
     if src.today is not None:
         try:
-            rows.append({"id": "ctx:today", "kind": "today", "text": str(src.today(moment))})
+            today = str(src.today(moment))
+            if checked.stale:
+                today += f"; {len(checked.stale)} of the journal's open trades are stale (broker flat)"
+            rows.append({"id": "ctx:today", "kind": "today", "text": today})
         except Exception as exc:  # noqa: BLE001
             rows.append(_unknown("ctx:today", "Today so far", exc))
     if src.tape_now is not None:
