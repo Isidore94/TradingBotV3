@@ -46,6 +46,9 @@ FACTS_STEM = "mentor_day_facts"
 DIGEST_STEM = "mentor_day_digest"
 FACTS_SCHEMA = "mentor_day_facts_v1"
 DIGEST_SCHEMA = "mentor_day_digest_v1"
+#: P15a: the night's product for the day coach, loaded first into the morning memory.
+COACH_STEM = "mentor_coach_brief"
+COACH_SCHEMA = "mentor_coach_brief_v1"
 MAX_OUTPUT_TOKENS = 600
 MAX_DIGEST_ITEMS = 5
 MAX_OPEN_QUESTIONS = 3

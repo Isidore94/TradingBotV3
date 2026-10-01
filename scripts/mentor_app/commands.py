@@ -14,7 +14,9 @@ HELP_TEXT = (
     "- `/remember <text>` keep a note about you that I will recall later (start it with `rule:` for a rule)\n"
     "- `/plan` your trading plan by section, with ids; lines ending in [ai date] I added from your words\n"
     "- `/drop <id>` take back a line I added (e.g. `/drop plan:rules:3`); your own lines are never touched\n"
-    "- `/memory` what I loaded at start (night digests and your notes), with ids\n"
+    "- `/memory` what I loaded at start (the night's brief, digests, ideas, reviews and your notes), with ids\n"
+    "- `/brief` the night's coach brief for today: what to watch, what you may be missing, recurring issues\n"
+    "- `/issues` the recurring issues the night sees, with the date each was first seen\n"
     "- `/recall <text>` search what we said before (plain text search when the brain is off)\n"
     "- `/forget <id>` retire a note (it is kept, never deleted); `/keep <id>` says it is still true\n"
     "- `/tape` the tape: Auto mode, D1, last night's read, econ, sectors (read aloud when the brain is up)\n"
@@ -99,6 +101,10 @@ def handle(text: str) -> CommandResult | None:
         return CommandResult(name, "", note_id)
     if name == "memory":
         return CommandResult("memory")
+    if name in ("brief", "issues"):
+        if rest:
+            return CommandResult("error", f"Try `/{name}` (no arguments).")
+        return CommandResult(name)
     if name == "plan":
         return CommandResult("plan")
     if name == "drop":

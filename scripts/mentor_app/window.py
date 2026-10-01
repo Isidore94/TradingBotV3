@@ -243,6 +243,8 @@ class MentorWindow(QMainWindow):
         #: P11 /hypotheses: the permutation report paths (None = project_paths' live constants, read-only).
         self.permutation_history: Any = None
         self.permutation_report: Any = None
+        #: P15a: the night's artifacts (``night_pack.NightPaths``; None = the live ones, read-only).
+        self.night_paths: Any = None
         self._memory = memory.Memory()
         self._memory_block = ""
         self._memory_text = ""
@@ -693,7 +695,8 @@ class MentorWindow(QMainWindow):
 
     def _load_memory(self) -> None:
         """IO thread: the night digests and live notes, rendered once into the byte-stable block."""
-        self._bridge.memory_ready.emit(memory.load(self.store, ai_root=self._memory_root))
+        self._bridge.memory_ready.emit(memory.load(self.store, ai_root=self._memory_root, night_paths=self.night_paths,
+                                                   now=self._now()))
 
     def _on_memory(self, loaded: Any) -> None:
         self._memory = loaded
@@ -1200,6 +1203,11 @@ class MentorWindow(QMainWindow):
                 if self.store.check_note(note_id, stamp) else f"There is no note {note_id}. `/memory` shows the ids."))
         elif result.action == "memory":
             self._add_note(memory.as_listing(self._memory))
+        elif result.action in ("brief", "issues"):
+            # P15a: the night's coach brief, read on the IO thread (a file on the ai_store).
+            render = memory.coach_brief_text if result.action == "brief" else memory.issues_text
+            root, now = self._memory_root, self._now()
+            self._submit_io(lambda: self._bridge.note.emit(render(memory.read_coach_brief(root, now))))
         elif result.action == "recall":
             from mentor_packs import recall
 
@@ -1387,13 +1395,23 @@ class MentorWindow(QMainWindow):
         self.refresh_inbox()
 
     def _queue_memory_embeddings(self) -> None:
-        """Idle priority: embed night digests and notes the recall search has not seen yet."""
-        endpoint, items = self._endpoint, list(self._memory.items)
+        """Idle priority: embed night digests, the night's rows and ticker briefs (P15a) and notes not seen yet."""
+        endpoint, loaded, now, root, night_paths = (self._endpoint, self._memory, self._now(), self._memory_root,
+                                                    self.night_paths)
 
         def job() -> int:
             done = 0
+            paths = memory.night_paths_for(memory.digests_root(root), night_paths)
             have = self.store.embedded_refs("digest", settings.EMBED_MODEL)
-            todo = [(item.kind, item.ref_id, item.text) for item in items if item.kind == "digest" and item.ref_id not in have]
+            todo = [(item.kind, item.ref_id, item.text) for item in loaded.items
+                    if item.kind == "digest" and item.ref_id not in have]
+            try:
+                night = memory.embed_candidates(loaded, paths, now)
+            except Exception:  # noqa: BLE001 - an unreadable night read is embedded next time
+                logging.warning("Trade Mentor: the night rows could not be read for recall", exc_info=True)
+                night = []
+            seen = {kind: self.store.embedded_refs(kind, settings.EMBED_MODEL) for kind in ("night", "brief")}
+            todo += [(kind, ref, text) for kind, ref, text in night if ref not in seen[kind]]
             todo += [("note", int(row["id"]), str(row["text"])) for row in self.store.unembedded_notes(settings.EMBED_MODEL)]
             for kind, ref_id, text in todo:
                 if self.queue.should_yield():
