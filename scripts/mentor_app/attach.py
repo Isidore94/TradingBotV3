@@ -28,10 +28,12 @@ PRIORITY = {
     "veto_pack": 3,
     "regime_pack": 4,
     "book_pack": 5,
+    "fundamentals_pack": 5,
     "news_pack": 6,
     "tilt_pack": 7,
     "mirror_pack": 8,
     "night_pack": 8,
+    "recaps_pack": 8,
     "plan_lines": 9,
     "recall": 10,
 }
@@ -95,6 +97,10 @@ _PLAN = re.compile(r"\bmy plan\b|\bmy rules?\b|\btrading plan\b|\bbreak(?:ing)? 
 _NIGHT = re.compile(r"\bwhat did the night say\b|\bovernight\b|\blast night\b|\bnight(?:'s)? read\b|\bideas?\b"
                     r"|\bwhat (?:am|are) (?:i|we) missing\b|\bwhat did i get (?:wrong|right)\b|\bweek(?:ly)? review\b"
                     r"|\bthe night\b")
+#: P15b: the morning brief the trader pastes (macro, Fed, yields, oil, the dollar, releases, the playbook).
+_FUND = re.compile(r"\bfundamentals?\b|\bbrief\b|\bmacro\b|\bthe paste\b|\bwhat did claude (?:say|flag|write)\b"
+                   r"|\bclaude\b|\bcatalysts?\b|\bfed\b|\byields?\b|\boil\b|\bcrude\b|\bdollar\b|\bdxy\b"
+                   r"|\bcpi\b|\bnfp\b|\bpce\b|\bfomc\b|\bpayrolls\b|\bbottom line\b|\bplaybook\b|\bscenarios?\b")
 _RECALL = re.compile(r"\byou said\b|\bwe (?:said|talked|discussed)\b|\bremember when\b|\blast time we\b")
 _GROUP = re.compile(r"\bmy (longs|shorts|focus|names|picks|watchlist|likes|liked|book|positions|holdings)\b"
                     r"|\bfocus (longs|shorts|names)\b|\bopen (longs|shorts|positions)\b|\b(?:i'm|im|i am) (holding)\b")
@@ -322,6 +328,11 @@ def plan_attachments(
         add("plan_lines", "plan words")
     if _NIGHT.search(lowered):
         add("night_pack", "night words")
+    if _FUND.search(lowered):
+        add("fundamentals_pack", "fundamentals words", section="all")
+    elif any(request.name == "gate_pack" for request in wanted):
+        # P15b: a pre-trade check sees today's brief: the bottom line and the playbook (at most 8 rows).
+        add("fundamentals_pack", "pre-trade: today's brief", section="compact")
     if _RECALL.search(lowered):
         add("recall", "memory words", query=raw[:200])
     return sorted(wanted, key=lambda request: request.priority)

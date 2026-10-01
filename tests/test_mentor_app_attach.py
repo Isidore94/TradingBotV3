@@ -147,12 +147,13 @@ def test_native_models_get_the_attachments_as_tool_results_after_the_question():
                             tools=TOOLS, native_tools=True, build_pack=_pack, attachments=requests,
                             stream_post=lambda u, p, c: sent.append(p) or _answer("ok"))
     roles = [m["role"] for m in sent[0]["messages"]]
-    assert roles == ["system", "user", "assistant", "tool", "tool"]
+    # P15b: a pre-trade question also carries today's brief (bottom line + playbook).
+    assert roles == ["system", "user", "assistant", "tool", "tool", "tool"]
     call_names = [c["function"]["name"] for c in sent[0]["messages"][2]["tool_calls"]]
-    assert call_names == ["gate_pack", "news_pack"]
+    assert call_names == ["gate_pack", "fundamentals_pack", "news_pack"]
     assert "[gate_pack:ALL:a]" in sent[0]["messages"][3]["content"], "ids intact"
     assert sent[0]["tools"] == TOOLS, "the model can still call more"
-    assert [a["name"] for a in result["attached"]] == ["gate_pack", "news_pack"]
+    assert [a["name"] for a in result["attached"]] == ["gate_pack", "fundamentals_pack", "news_pack"]
     assert all(a["source"] == "auto" for a in result["attached"]) and result["tool_calls"] == []
     assert "gate_pack:ALL:a" in result["pack_ids"]
 
@@ -398,3 +399,20 @@ def test_night_words_attach_the_night_pack():
 def test_a_ticker_question_carries_the_brief_through_the_pick_pack_not_the_night_pack():
     names = [request.name for request in attach.plan_attachments("how does NVDA look", KNOWN, NOW)]
     assert "pick_pack" in names and "night_pack" not in names
+
+
+# ---------------------------------------------------------------- P15b fundamentals
+def test_fundamentals_words_attach_the_brief():
+    for question in ("what's the macro brief say today", "what did claude flag as the catalyst",
+                     "is the playbook bullish or bearish", "anything about yields in the brief",
+                     "what did the paste say about oil", "fed speakers today?", "how is the dollar",
+                     "cpi or nfp this week?", "pce came in soft, what's the bottom line", "fomc scenario"):
+        got = _names(attach.plan_attachments(question, KNOWN, NOW))
+        assert ("fundamentals_pack", {"section": "all"}) in got, question
+
+
+def test_a_pre_trade_question_carries_the_compact_brief_and_a_plain_one_does_not():
+    got = _names(attach.plan_attachments("thinking of taking a short like ALL, thoughts?", KNOWN, NOW))
+    assert got[0][0] == "gate_pack" and ("fundamentals_pack", {"section": "compact"}) in got
+    for question in ("how did today go", "what's the tape doing", "what am I holding", "any news on TSLA"):
+        assert "fundamentals_pack" not in _only(question), question

@@ -57,6 +57,8 @@ TOOL_PROMPT = (
     "- mirror_pack(weeks): his record in cuts (likes vs scan, vetoes, journal, regime).\n"
     "- tilt_pack: today's patterns after a loss.\n"
     "- plan_lines: his written trading plan.\n"
+    "- fundamentals_pack(day, section): the morning macro brief he pasted (bottom line, signals, playbook, "
+    "releases, full text by paragraph); outside commentary, not his view.\n"
     "- recall(query): earlier chats, night digests, his notes.\n"
     "- hypothesis_pack: the night's research queries and grades.\n"
     "\n# Examples (question -> tools)\n"

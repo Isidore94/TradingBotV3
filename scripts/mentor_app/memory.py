@@ -1,7 +1,8 @@
 """Morning memory: the night's reads and the trader's own notes, as one byte-stable block. Qt-free.
 
 P15a: the memory stands on the night. ``load`` reads, in priority order: (0) the night's coach
-brief for today (``mentor_coach_brief``), (1) the last DIGEST_LIMIT ``mentor_day_digest``
+brief for today (``mentor_coach_brief``), (P15b) today's pasted morning brief, its bottom line and
+playbook (``fundamentals_pack`` compact, FUND_LINES), (1) the last DIGEST_LIMIT ``mentor_day_digest``
 publications, (2) the top IDEA_LIMIT improvement ideas, (3) the latest day review's "were you
 right" verdicts, (4) the week review's WEEK_LINES headline lines, (5) the newest NOTE_LIMIT live
 ``profile_notes`` (call it off the Qt thread). ``render`` orders by tier, oldest first inside a
@@ -34,10 +35,13 @@ WEEK_LINES = 3
 QUESTION_OFFSET = 50
 RULE_PREFIX = "rule:"
 STILL_TRUE_DAYS = 7
-HEAD = ("# Memory\nThe night's coach brief, digests, ideas, day and week review, then the trader's own notes; "
-        "oldest first in each. Cite by id.")
+HEAD = ("# Memory\nThe night's coach brief, today's pasted morning brief, digests, ideas, day and week review, then "
+        "the trader's own notes; oldest first in each. Cite by id.")
 #: Tiers, most important first; the budget drops the highest number (oldest first) before any other.
-PRIORITY_COACH, PRIORITY_DIGEST, PRIORITY_IDEA, PRIORITY_DAY_REVIEW, PRIORITY_WEEK, PRIORITY_NOTE = range(6)
+(PRIORITY_COACH, PRIORITY_FUND, PRIORITY_DIGEST, PRIORITY_IDEA, PRIORITY_DAY_REVIEW, PRIORITY_WEEK,
+ PRIORITY_NOTE) = range(7)
+#: P15b: today's pasted brief in memory, at most this many lines (bottom line + playbook, ids kept).
+FUND_LINES = 8
 
 
 @dataclass(frozen=True)
@@ -214,6 +218,22 @@ def read_coach_brief(ai_root: Path | str | None, now: datetime | None = None) ->
         return None
 
 
+def fund_items(paths: Any = None, now: datetime | None = None) -> list[MemoryItem]:
+    """P15b tier 1: today's pasted brief, its bottom line and playbook (at most FUND_LINES, ids kept).
+
+    No brief for today = nothing here (a none row is never memory; ``fundamentals_pack`` says it when asked)."""
+    from mentor_packs import fundamentals_pack
+    from mentor_packs.night_pack import stable_ref
+
+    pack = fundamentals_pack.build("today", "compact", now=now, paths=paths)
+    if any(row.get("kind") == "none" for row in pack.rows):
+        return []
+    rows = [row for row in pack.rows if row.get("kind") == "fund"][:FUND_LINES]
+    return [MemoryItem(str(row["id"]), "fund", stable_ref(str(row["id"]), _clean(row.get("text"))),
+                       str(row.get("date") or ""), _clean(row.get("text")), PRIORITY_FUND, n)
+            for n, row in enumerate(rows)]
+
+
 def night_items(paths: Any, today: Any) -> list[MemoryItem]:
     """Tiers 2-4: the top ideas, the latest day review's verdicts, the week review's headline lines."""
     from mentor_packs import night_pack
@@ -235,7 +255,7 @@ def night_items(paths: Any, today: Any) -> list[MemoryItem]:
 
 
 def load(store: Any, *, ai_root: Path | str | None = None, budget_tokens: int = MEMORY_BUDGET_TOKENS,
-         night_paths: Any = None, now: datetime | None = None) -> Memory:
+         night_paths: Any = None, now: datetime | None = None, fund_paths: Any = None) -> Memory:
     """The memory block: the night's coach brief, digests, ideas, day and week review, then live notes.
 
     Off the Qt thread. Anything unreadable is left out, never a crash.
@@ -257,17 +277,33 @@ def load(store: Any, *, ai_root: Path | str | None = None, budget_tokens: int = 
         items += night_items(night_paths_for(root, night_paths), today)
     except Exception:  # noqa: BLE001
         logging.warning("Trade Mentor memory: the night reads could not be loaded", exc_info=True)
+    try:
+        items += fund_items(fund_paths, now)
+    except Exception:  # noqa: BLE001 - an unreadable brief never empties the memory
+        logging.warning("Trade Mentor memory: the pasted brief could not be read", exc_info=True)
     notes = store.profile_notes(limit=NOTE_LIMIT)
     return render([*items, *digest_items(publications), *note_items(notes)], budget_tokens=budget_tokens)
 
 
-def embed_candidates(memory: "Memory", paths: Any, now: datetime | None = None) -> list[tuple[str, int, str]]:
-    """``(kind, ref_id, text)`` the idle embed queue may add: every night row (``night``) and every ticker
-    brief (``brief``). The text starts with the row's own id so a recall hit cites it; a changed artifact
-    is a new ref (``stable_ref`` of id and text), so each artifact version is embedded once."""
-    from mentor_packs import night_pack
+#: The embed kinds :func:`embed_candidates` yields (the window asks the store which refs each already has).
+EMBED_KINDS = ("night", "brief", "fund")
+
+
+def embed_candidates(memory: "Memory", paths: Any, now: datetime | None = None, *,
+                     fund_paths: Any = None, recap_paths: Any = None) -> list[tuple[str, int, str]]:
+    """``(kind, ref_id, text)`` the idle embed queue may add: every night row (``night``), every ticker
+    brief (``brief``) and (P15b) each paragraph of today's pasted brief (``fund``, once per paste). The text
+    starts with the row's own id so a recall hit cites it; a changed artifact is a new ref (``stable_ref``
+    of id and text), so each artifact version is embedded once."""
+    from mentor_packs import fundamentals_pack, night_pack
 
     today = _today(now)
+    out_fund: list[tuple[str, int, str]] = []
+    try:
+        fund = fundamentals_pack.build("today", "text", now=now, paths=fund_paths)
+        out_fund = [("fund", ref, text) for ref, text in fundamentals_pack.embed_rows(fund)]
+    except Exception:  # noqa: BLE001 - an unreadable brief is embedded next time
+        logging.warning("Trade Mentor: the pasted brief could not be read for recall", exc_info=True)
     out: dict[tuple[str, int], str] = {}
     rows = [row for row in night_pack.build("all", now=now, paths=paths).rows if row.get("kind") == "night"]
     for row in rows:
@@ -278,6 +314,8 @@ def embed_candidates(memory: "Memory", paths: Any, now: datetime | None = None) 
             out[("night", item.ref_id)] = f"[{item.id}] {item.text}"
     for row in night_pack.brief_rows(paths.briefs, today):
         out[("brief", night_pack.stable_ref(row["id"], row["text"]))] = f"[{row['id']}] {row['text']}"
+    for kind, ref, text in out_fund:
+        out[(kind, ref)] = text
     return [(kind, ref, text) for (kind, ref), text in sorted(out.items())]
 
 
@@ -339,9 +377,9 @@ def substring_search(store: Any, memory: Memory, query: str, k: int) -> list[dic
         return []
     hits = [
         {"kind": item.kind, "ref_id": item.ref_id, "text": item.text, "score": 1.0,
-         **({"id": item.id} if item.kind == "night" else {})}
+         **({"id": item.id} if item.kind in ("night", "fund") else {})}
         for item in reversed(memory.items)
-        if item.kind in ("digest", "night") and needle in item.text.lower()
+        if item.kind in ("digest", "night", "fund") and needle in item.text.lower()
     ]
     for row in store.search_text(needle, limit=k):
         hits.append({"kind": row["kind"], "ref_id": row["ref_id"], "text": row["text"], "score": 1.0})

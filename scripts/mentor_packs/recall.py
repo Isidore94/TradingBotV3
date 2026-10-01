@@ -109,7 +109,8 @@ def _search_or_fall_back(search: Searcher, query: str, k: int) -> tuple[list[Map
 
 #: P15a: a night or brief embedding's text starts with its own id, e.g. ``[night:ideas:2026-09-29:1] ...``.
 _LEADING_ID = re.compile(r"^\[([a-z][a-z0-9_]*:[^\]\s]+)\] ")
-NIGHT_KINDS = ("night", "brief")
+#: P15b: the pasted brief's paragraphs (``fund``) and the recap rows (``recap``) carry their own ids too.
+NIGHT_KINDS = ("night", "brief", "fund", "recap")
 
 
 def _hit_id(hit: Mapping[str, Any]) -> str:

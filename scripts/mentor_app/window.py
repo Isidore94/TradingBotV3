@@ -204,6 +204,9 @@ class MentorWindow(QMainWindow):
         plan_path: Any = None,
         journal_path: Any = None,
         pack_builder: Callable[[str, Any], Any] | None = None,
+        forecast_service: Any = None,
+        paste_prompt: Callable[[], Any] | None = None,
+        fund_builder: Callable[[str], Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -245,6 +248,15 @@ class MentorWindow(QMainWindow):
         self.permutation_report: Any = None
         #: P15a: the night's artifacts (``night_pack.NightPaths``; None = the live ones, read-only).
         self.night_paths: Any = None
+        #: P15b: the pasted brief (``fundamentals_pack.FundPaths``) and the recap stores (``recaps_pack.RecapPaths``);
+        #: None = the live ones, read-only.
+        self.fund_paths: Any = None
+        self.recap_paths: Any = None
+        #: /paste: the Market Journal writer (None = the desk's shared service) and the dialog (None = Qt's).
+        self._forecast_service = forecast_service
+        self._paste_prompt = paste_prompt
+        #: /tape: today's brief, compact (None = the live fundamentals pack).
+        self._fund_builder = fund_builder
         self._memory = memory.Memory()
         self._memory_block = ""
         self._memory_text = ""
@@ -499,6 +511,11 @@ class MentorWindow(QMainWindow):
         self.ai_pause_button.changed.connect(self.check_ai_pause)
         header = QHBoxLayout()
         header.addStretch(1)
+        # P15b: paste the morning brief into the Market Journal (the desk's own writer).
+        self.paste_button = QPushButton("Paste brief")
+        self.paste_button.setToolTip("Paste today's morning brief; it is saved to the Market Journal for today")
+        self.paste_button.clicked.connect(self.open_paste_dialog)
+        header.addWidget(self.paste_button)
         # P11: shown only while the frontier switch is on; disabled with the reason when it cannot run.
         self.think_button = QPushButton("Think harder")
         self.think_button.setToolTip("Ask the frontier model the last question again (metered, capped per day)")
@@ -696,7 +713,7 @@ class MentorWindow(QMainWindow):
     def _load_memory(self) -> None:
         """IO thread: the night digests and live notes, rendered once into the byte-stable block."""
         self._bridge.memory_ready.emit(memory.load(self.store, ai_root=self._memory_root, night_paths=self.night_paths,
-                                                   now=self._now()))
+                                                   now=self._now(), fund_paths=self.fund_paths))
 
     def _on_memory(self, loaded: Any) -> None:
         self._memory = loaded
@@ -1203,6 +1220,11 @@ class MentorWindow(QMainWindow):
                 if self.store.check_note(note_id, stamp) else f"There is no note {note_id}. `/memory` shows the ids."))
         elif result.action == "memory":
             self._add_note(memory.as_listing(self._memory))
+        elif result.action == "paste":
+            if result.arg:
+                self.paste_brief(str(result.arg))
+            else:
+                self.open_paste_dialog()
         elif result.action in ("brief", "issues"):
             # P15a: the night's coach brief, read on the IO thread (a file on the ai_store).
             render = memory.coach_brief_text if result.action == "brief" else memory.issues_text
@@ -1398,6 +1420,7 @@ class MentorWindow(QMainWindow):
         """Idle priority: embed night digests, the night's rows and ticker briefs (P15a) and notes not seen yet."""
         endpoint, loaded, now, root, night_paths = (self._endpoint, self._memory, self._now(), self._memory_root,
                                                     self.night_paths)
+        fund_paths, recap_paths = self.fund_paths, self.recap_paths
 
         def job() -> int:
             done = 0
@@ -1406,11 +1429,11 @@ class MentorWindow(QMainWindow):
             todo = [(item.kind, item.ref_id, item.text) for item in loaded.items
                     if item.kind == "digest" and item.ref_id not in have]
             try:
-                night = memory.embed_candidates(loaded, paths, now)
+                night = memory.embed_candidates(loaded, paths, now, fund_paths=fund_paths, recap_paths=recap_paths)
             except Exception:  # noqa: BLE001 - an unreadable night read is embedded next time
                 logging.warning("Trade Mentor: the night rows could not be read for recall", exc_info=True)
                 night = []
-            seen = {kind: self.store.embedded_refs(kind, settings.EMBED_MODEL) for kind in ("night", "brief")}
+            seen = {kind: self.store.embedded_refs(kind, settings.EMBED_MODEL) for kind in memory.EMBED_KINDS}
             todo += [(kind, ref, text) for kind, ref, text in night if ref not in seen[kind]]
             todo += [("note", int(row["id"]), str(row["text"])) for row in self.store.unembedded_notes(settings.EMBED_MODEL)]
             for kind, ref_id, text in todo:
@@ -1729,11 +1752,79 @@ class MentorWindow(QMainWindow):
 
     # ------------------------------------------------------------------ tape (P5)
     def _build_tape(self) -> Any:
-        if self._tape_builder is not None:
+        if self._tape_builder is not None and self._fund_builder is None:
             return self._tape_builder()
         from mentor_packs import regime_pack
 
-        return regime_pack.build()
+        pack = self._tape_builder() if self._tape_builder is not None else regime_pack.build()
+        # P15b: the tape also reads today's pasted brief (bottom line + playbook, at most 8 rows).
+        try:
+            fund = self._build_fund("compact")
+        except Exception:  # noqa: BLE001 - an unreadable brief never costs the tape
+            logging.warning("Trade Mentor: the pasted brief could not be read for the tape", exc_info=True)
+            fund = None
+        return tape.with_fundamentals(pack, fund)
+
+    def _build_fund(self, section: str) -> Any:
+        if self._fund_builder is not None:
+            return self._fund_builder(section)
+        from mentor_packs import fundamentals_pack
+
+        return fundamentals_pack.build("today", section, now=self._now(), paths=self.fund_paths)
+
+    # ------------------------------------------------------------------ /paste (P15b)
+    def open_paste_dialog(self) -> None:
+        """The "Paste brief" button and a bare ``/paste``: a plain-text box; OK saves it for today."""
+        if self._paste_prompt is not None:
+            text = self._paste_prompt()
+        else:
+            from PySide6.QtWidgets import QInputDialog
+
+            text, ok = QInputDialog.getMultiLineText(self, "Paste the morning brief",
+                                                     "Paste today's brief. It is saved to the Market Journal for "
+                                                     "today's session.")
+            text = text if ok else None
+        if text is None:
+            return
+        self.paste_brief(str(text))
+
+    def paste_brief(self, text: str) -> None:
+        """Save a pasted brief through the Market Journal's own writer, off the Qt thread, then reload memory."""
+        body = str(text or "").strip()
+        if not body:
+            self._add_note("Nothing was pasted, so nothing was saved.")
+            return
+        from mentor_packs import fundamentals_pack
+
+        service = self._forecast_service
+        if service is None:
+            from ui.services.market_journal_service import shared_journal_service
+
+            service = shared_journal_service()  # built here, on the Qt thread; it writes on the IO thread
+        now = self._now()
+        session = fundamentals_pack.paste_session(now)
+        fund_paths = self.fund_paths
+        self._add_note(f"Saving the brief for {session}...")
+
+        def job() -> None:
+            try:
+                result = service.import_daily_forecast(text=body, target_session=session, now=now)
+            except Exception as exc:  # noqa: BLE001 - the trader is told; the text is still in the box he pasted from
+                logging.warning("Trade Mentor: the pasted brief was not saved", exc_info=True)
+                result = {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
+            if not result.get("ok"):
+                self._bridge.note.emit(f"Brief NOT saved: {result.get('reason', 'unknown')}. Paste it again.")
+                return
+            line = ""
+            try:
+                built = fundamentals_pack.build(session, "bottom_line", now=now, paths=fund_paths)
+                line = fundamentals_pack.bottom_line_sentence(built)
+            except Exception:  # noqa: BLE001 - saved is saved; the confirmation just has no bottom line
+                logging.warning("Trade Mentor: the saved brief could not be read back", exc_info=True)
+            self._bridge.note.emit(f"Brief saved for {session}: {line or 'no bottom line found by its headings'}")
+            self._load_memory()
+
+        self._submit_io(job)
 
     def _tape_narrator(self) -> Callable[[Any, str], Any] | None:
         """The narration call while the brain is up; None = the pack alone."""

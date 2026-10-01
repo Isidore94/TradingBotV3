@@ -17,6 +17,7 @@ HELP_TEXT = (
     "- `/memory` what I loaded at start (the night's brief, digests, ideas, reviews and your notes), with ids\n"
     "- `/brief` the night's coach brief for today: what to watch, what you may be missing, recurring issues\n"
     "- `/issues` the recurring issues the night sees, with the date each was first seen\n"
+    "- `/paste` paste today's morning brief (or `/paste <text>`); it is saved to the Market Journal for today\n"
     "- `/recall <text>` search what we said before (plain text search when the brain is off)\n"
     "- `/forget <id>` retire a note (it is kept, never deleted); `/keep <id>` says it is still true\n"
     "- `/tape` the tape: Auto mode, D1, last night's read, econ, sectors (read aloud when the brain is up)\n"
@@ -78,6 +79,10 @@ def handle(text: str) -> CommandResult | None:
     stripped = str(text or "").strip()
     if not stripped.startswith("/"):
         return None
+    pasted = re.fullmatch(r"/paste(?:\s+(.*))?", stripped, re.IGNORECASE | re.DOTALL)
+    if pasted:
+        # The brief is many lines: everything after the command is the text, kept as typed.
+        return CommandResult("paste", "", (pasted.group(1) or "").strip())
     head, _, rest = stripped.partition(" ")
     name, rest = head[1:].lower(), rest.strip()
     if name in ("help", "?"):

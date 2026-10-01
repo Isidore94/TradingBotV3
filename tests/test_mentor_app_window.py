@@ -305,14 +305,16 @@ def test_a_plain_pre_trade_question_auto_attaches_the_gate_and_the_log_says_so(a
         win._on_context(context_pack.fixture())  # TSLA is a swing short on Focus
         _run_turn(win, app, "im thinking of shorting TSLA thoughts?")
         assert built[0] == ("gate_pack", {"side": "SHORT", "symbol": "TSLA"})
-        assert [m["role"] for m in sent[0]["messages"]][-3:] == ["assistant", "tool", "tool"]
+        # P15b: a pre-trade question also carries today's brief (compact) between the gate and the news.
+        assert [m["role"] for m in sent[0]["messages"]][-4:] == ["assistant", "tool", "tool", "tool"]
         shown = _text(win)
         assert "Not covered:" in shown and "[gate:TSLA:book:industry]" in shown
         row = win.store.turns()[-1]
         calls = json.loads(row["tool_calls_json"])
-        assert [(c["name"], c["source"]) for c in calls] == [("gate_pack", "auto"), ("news_pack", "auto")]
+        assert [(c["name"], c["source"]) for c in calls] == [("gate_pack", "auto"), ("fundamentals_pack", "auto"),
+                                                            ("news_pack", "auto")]
         timings = json.loads(row["timings_json"])
-        assert timings["auto_packs"] == 2 and timings["prompt_tokens"] == 50 and "attach_ms" in timings
+        assert timings["auto_packs"] == 3 and timings["prompt_tokens"] == 50 and "attach_ms" in timings
         assert "Not covered:" in row["text"], "the stored turn is what the trader saw"
         win._io.submit(lambda: None).result(5)
         win.send("/latency")
