@@ -64,14 +64,15 @@ def offline_report(fixture: Mapping[str, Any]) -> dict[str, Any]:
     for item in fixture.get("questions") or ():
         # P18: self talk is kept as a journal line and answered "Noted" with no packs; a question the app
         # took for self talk would never be answered, so it scores zero.
-        kind = journal_mode.classify(item["q"])
+        planned = [request.name for request in plan_attachments(item["q"], known, now, book=book)]
+        kind = journal_mode.classify(item["q"], planned=bool(planned))
         noted = kind.statement and not kind.asks
         if item.get("journal"):
             rows.append({"q": item["q"], "expected": [JOURNAL], "attached": [JOURNAL] if noted else [],
                          "missed": [] if noted else [JOURNAL], "recall": 1.0 if noted else 0.0, "journal": True})
             continue
         expected = list(item.get("expected_packs") or ())
-        got = [] if noted else [request.name for request in plan_attachments(item["q"], known, now, book=book)]
+        got = [] if noted else planned
         hit = [name for name in expected if name in got]
         rows.append({"q": item["q"], "expected": expected, "attached": got, "missed": [n for n in expected if n not in got],
                      "recall": len(hit) / len(expected) if expected else (0.0 if noted else 1.0)})

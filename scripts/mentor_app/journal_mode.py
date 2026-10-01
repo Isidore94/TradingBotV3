@@ -2,10 +2,10 @@
 
 Pure and Qt-free. ``classify`` is deterministic: a message that opens like a question (wh-/how/should/is/can...,
 or a tool cue like "show me") or plan talk ("I stop after two losses", which plan inference reads) is a QUESTION;
-otherwise first-person self talk (I/I'm/feeling/annoyed/chased/fomo...) is a STATEMENT, kept as a
-``journal_entries`` row; anything else is a QUESTION, as before P18. A first-person sentence with a question inside
-("?", a wh-word, "should I", "talk me...") is a QUESTION, unless it carries a mood word: then it is stored AND
-answered. ``/journal on`` makes every message a statement. Mood tags are the desk's ``trader_state_tags`` codes,
+the planner decides the rest: a pack from ``attach.plan_attachments``, a "?", a question inside, a request or trade
+cue ("want to", "thinking of", "need", "buy", "size", "stop"...) or a ticker make it an ASK, answered normally and
+also stored when it carries a mood word. Only first-person self talk with none of those is a pure journal line,
+answered "Noted". ``/journal on`` keeps every message. Mood tags are the desk's ``trader_state_tags`` codes,
 matched by fixed words.
 """
 
@@ -81,22 +81,53 @@ _QUESTION_INSIDE = re.compile(
 _FEELING = re.compile(r"\b(?:feeling|feel|felt|nervous|anxious|impatient|greedy|scared|stressed)\b", re.IGNORECASE)
 
 
-def classify(text: str, *, forced: bool = False) -> Kind:
+#: A request or a trade intent: an ask even without "?" (review 2026-09-30: the planner decides).
+_REQUEST_CUE = re.compile(
+    r"\b(?:thinking (?:of|about)|about to|want to|wanna|need|needs|i'd like|i would like|wonder|wondering"
+    r"|going (?:long|short)|buy|buying|sell|selling|add|adding|size|sizing|stop)\b",
+    re.IGNORECASE,
+)
+_TICKER = re.compile(r"\$[A-Za-z]{1,5}\b|(?<![A-Za-z$])[A-Z]{2,5}(?![A-Za-z])")
+#: Upper-case words that are not tickers.
+_NOT_TICKERS = frozenset({"OK", "AM", "PM", "ET", "PT", "FOMO", "LOL", "OMG", "TBH", "IMO", "UGH", "WTF", "ATR",
+                          "VWAP", "RTH", "EOD", "PNL"})
+
+
+def has_ticker(text: str) -> bool:
+    return any(match.group(0).lstrip("$").upper() not in _NOT_TICKERS for match in _TICKER.finditer(str(text or "")))
+
+
+def is_ask(text: str, *, planned: bool = False) -> bool:
+    """An ask: the planner attached a pack, or a "?", a question, a tool, request or trade cue, or a ticker."""
+    words = " ".join(str(text or "").split())
+    return bool(planned or "?" in words or _TOOL_CUE.search(words) or _QUESTION_INSIDE.search(words)
+                or _REQUEST_CUE.search(words) or has_ticker(words))
+
+
+def has_mood(text: str) -> bool:
+    return bool(mood_tags(text) or _FEELING.search(str(text or "")))
+
+
+def classify(text: str, *, forced: bool = False, planned: bool = False) -> Kind:
     """Deterministic: QUESTION (answer only), STATEMENT (store, one-line reply) or both.
 
-    A sentence with a question inside is a QUESTION unless it also carries a mood word: then it is self talk
-    with a question, stored AND answered."""
+    The planner decides (review 2026-09-30): ``planned`` (``attach.plan_attachments`` returned a pack), a "?", a
+    question, a tool, request or trade cue, or a ticker make it an ASK, answered normally and ALSO stored when it
+    carries a mood word. Only first-person self talk with none of those is a pure journal line ("Noted")."""
     words = " ".join(str(text or "").split())
-    asks = "?" in words or bool(_TOOL_CUE.search(words) or _QUESTION_INSIDE.search(words))
+    asks = is_ask(words, planned=planned)
     if forced:
-        return Kind(statement=bool(words), asks=asks)
+        # Dictation: every line is kept; only a real question or request is also answered (not a bare ticker).
+        spoken = "?" in words or bool(_TOOL_CUE.search(words) or _QUESTION_INSIDE.search(words)
+                                      or _REQUEST_CUE.search(words))
+        return Kind(statement=bool(words), asks=spoken)
     if not words or _QUESTION_START.match(words) or _TOOL_START.match(words) or _PLAN_CUE.search(words):
         return Kind(statement=False, asks=True)
-    if not _SELF_TALK.search(words):
-        return Kind(statement=False, asks=True)
-    if asks and not (mood_tags(words) or _FEELING.search(words)):
-        return Kind(statement=False, asks=True)  # first person, but a question about trading, not self talk
-    return Kind(statement=True, asks=asks)
+    if asks:
+        return Kind(statement=has_mood(words), asks=True)
+    if _SELF_TALK.search(words):
+        return Kind(statement=True, asks=False)
+    return Kind(statement=False, asks=True)
 
 
 def vocabulary_codes() -> tuple[tuple[str, ...], int | None]:

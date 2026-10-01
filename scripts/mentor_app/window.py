@@ -1237,7 +1237,12 @@ class MentorWindow(QMainWindow):
         # P18: self talk is kept as a journal line with a one-line "Noted"; a question inside it is answered too.
         from mentor_app import journal_mode
 
-        kind = journal_mode.classify(text, forced=self._journal_on)
+        # The planner decides: any pack it would attach makes this an ask (answered; stored too if it has a mood).
+        rows = self._context_pack.rows if self._context_pack is not None else ()
+        planned = bool(attach.plan_attachments(
+            text, attach.known_symbols(rows, self._liked_names, self._journal_symbols), self._now(),
+            book=attach.book_symbols(rows), liked=self._liked_names))
+        kind = journal_mode.classify(text, forced=self._journal_on, planned=planned)
         if kind.statement:
             self.record_journal(text, asks=kind.asks)
             if not kind.asks:

@@ -1,4 +1,4 @@
-"""P13-P18 mentor eval: the 120 plain questions (P18: three journal statements), offline attach recall pinned at >= 97.5 %, and the style score.
+"""P13-P18 mentor eval: the 126 plain questions (P18: three journal statements), offline attach recall pinned at >= 97.5 %, and the style score.
 
 Never runs --live."""
 
@@ -16,10 +16,10 @@ import mentor_eval  # noqa: E402
 from mentor_packs import registry  # noqa: E402
 
 
-def test_the_fixture_has_the_120_eval_questions_with_real_pack_names():
+def test_the_fixture_has_the_126_eval_questions_with_real_pack_names():
     fixture = mentor_eval.load_fixture()
     questions = fixture["questions"]
-    assert len(questions) == 120 and len({q["q"] for q in questions}) == 120
+    assert len(questions) == 126 and len({q["q"] for q in questions}) == 126
     assert sum(1 for q in questions if q.get("concept")) == 2
     journal = [q for q in questions if q.get("journal")]
     # P18: a journal statement expects no pack: it is kept as a journal line and answered "Noted".
@@ -37,7 +37,7 @@ def test_the_fixture_has_the_120_eval_questions_with_real_pack_names():
 
 def test_offline_attach_recall_is_at_least_ninety_seven_and_a_half_percent():
     report = mentor_eval.offline_report(mentor_eval.load_fixture())
-    assert report["questions"] == 120
+    assert report["questions"] == 126
     assert report["attach_recall"] >= 0.975, [row for row in report["rows"] if row["missed"]]
     assert report["attach_recall"] == 1.0, [row for row in report["rows"] if row["missed"]]
 

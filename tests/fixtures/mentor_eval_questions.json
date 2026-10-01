@@ -6,11 +6,11 @@
     "questions",
     "book"
   ],
-  "raw_input_sha256": "661f7a823345d99f74d9a9416a1238b92e2d3aee1a633f05c3d8fad158d2e46f",
+  "raw_input_sha256": "c0d0652d6f272954233ddd9dc4b8758e3b8c0ee1ddfc6dde1078abe1ef281827",
   "acquired_at": "2026-09-30T19:31:39-07:00",
   "as_of": "2026-09-30T19:31:39-07:00",
-  "universe_version": "trader_plain_questions_v6",
-  "provider_assumptions": "Hand-written questions in the trader's own style (2026-09-30), not a desk capture: the 100 of the 2026-09-30 live eval (the first 60 from P13/P14/P15b, then 40 harder ones; the last 25 are the hard tier; P17 adds 8 tape questions: RS, bars, alerts; P18 adds 12: three journal statements (journal: true, no pack, kept as a journal line and answered 'Noted'), habits x3, reads x3, routine x1, bars-fresh x2). known_symbols stands in for his universe (Focus, likes, book, journal); book is his open book (a subset), so a book question ('my longs', 'my open shorts') reads only those names (P16). expected_packs are what the app should fetch (P14: no regime without a market or pre-trade cue; P16: book scope, veto aggregates with the mirror, watch-tomorrow, regime-or-me, this week vs last week); concept questions need none; must_mention are checklist sections (gate questions) or words the live reply should carry; simple marks the questions the style score holds to 600 characters.",
+  "universe_version": "trader_plain_questions_v7",
+  "provider_assumptions": "Hand-written questions in the trader's own style (2026-09-30), not a desk capture: the 100 of the 2026-09-30 live eval (the first 60 from P13/P14/P15b, then 40 harder ones; the last 25 are the hard tier; P17 adds 8 tape questions: RS, bars, alerts; P18 adds 12: three journal statements (journal: true, no pack, kept as a journal line and answered 'Noted'), habits x3, reads x3, routine x1, bars-fresh x2; the P18 review adds 6 first-person asks without '?' that must be answered, never only 'Noted'). known_symbols stands in for his universe (Focus, likes, book, journal); book is his open book (a subset), so a book question ('my longs', 'my open shorts') reads only those names (P16). expected_packs are what the app should fetch (P14: no regime without a market or pre-trade cue; P16: book scope, veto aggregates with the mirror, watch-tomorrow, regime-or-me, this week vs last week); concept questions need none; must_mention are checklist sections (gate questions) or words the live reply should carry; simple marks the questions the style score holds to 600 characters.",
   "expected_keys": [
     "checklist"
   ],
@@ -1156,7 +1156,7 @@
       ]
     },
     {
-      "q": "feeling tired and a bit bored, nothing is setting up",
+      "q": "so tired today, can't focus",
       "expected_packs": [],
       "journal": true,
       "must_mention": [
@@ -1164,7 +1164,7 @@
       ]
     },
     {
-      "q": "tempted to revenge trade after that stop",
+      "q": "I hate this chop, so frustrated",
       "expected_packs": [],
       "journal": true,
       "must_mention": [
@@ -1250,6 +1250,70 @@
       ],
       "must_mention": [
         "NVDA"
+      ]
+    },
+    {
+      "q": "I'm thinking of going long AMD here, size 200 stop 151",
+      "expected_packs": [
+        "gate_pack"
+      ],
+      "must_mention": [
+        "earnings",
+        "plan",
+        "tape",
+        "cell",
+        "book",
+        "news"
+      ]
+    },
+    {
+      "q": "I want to short TSLA here",
+      "expected_packs": [
+        "gate_pack"
+      ],
+      "must_mention": [
+        "earnings",
+        "plan",
+        "tape",
+        "cell",
+        "book",
+        "news"
+      ]
+    },
+    {
+      "q": "I'm about to buy NVDA",
+      "expected_packs": [
+        "pick_pack"
+      ],
+      "must_mention": [
+        "NVDA"
+      ]
+    },
+    {
+      "q": "I want to know my win rate this month",
+      "expected_packs": [
+        "journal_pack"
+      ],
+      "must_mention": [
+        "win"
+      ]
+    },
+    {
+      "q": "I need my P&L for the week",
+      "expected_packs": [
+        "journal_pack"
+      ],
+      "must_mention": [
+        "net"
+      ]
+    },
+    {
+      "q": "I'd like to see my trades today",
+      "expected_packs": [
+        "journal_pack"
+      ],
+      "must_mention": [
+        "trade"
       ]
     }
   ]

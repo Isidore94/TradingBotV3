@@ -21,15 +21,57 @@ from mentor_packs import journal_pack  # noqa: E402
 NOW = journal_pack.FIXTURE_NOW  # Wed 2026-09-30 11:00 ET
 
 
-@pytest.mark.parametrize("text", [
-    "I'm annoyed, I chased TWLO again",
-    "feeling tired today",
-    "tempted to revenge trade that one",
-    "bored, nothing is moving and I want to click something",
-])
-def test_self_talk_is_a_statement_that_does_not_ask(text):
-    kind = journal_mode.classify(text)
+def _kind(text, known=("AMD", "TSLA", "NVDA", "SPY")):
+    """Like the window: the planner runs first and decides."""
+    from mentor_app import attach
+
+    planned = bool(attach.plan_attachments(text, {sym: "" for sym in known}, NOW))
+    return journal_mode.classify(text, planned=planned)
+
+
+PURE_STATEMENTS = [
+    "ugh I chased that open again, annoyed at myself",
+    "I'm annoyed, I chased that one again",
+    "so tired today, can't focus",
+    "FOMO again, ugh",
+    "I'm nervous",
+    "annoyed at myself",
+    "I hate this chop, so frustrated",
+    "I got greedy on that one",
+    "me again chasing, ugh",
+    "I'm bored and restless",
+]
+
+
+@pytest.mark.parametrize("text", PURE_STATEMENTS)
+def test_pure_self_talk_is_a_statement_that_does_not_ask(text):
+    kind = _kind(text)
     assert kind.statement and not kind.asks
+
+
+#: The reviewer's seven: first-person requests with no "?" are asks, never only "Noted".
+FIRST_PERSON_ASKS = [
+    "I'm thinking of going long AMD here, size 200 stop 151",
+    "I want to short TSLA here",
+    "I'm about to buy NVDA",
+    "I want to know my win rate",
+    "I need my P&L for the week",
+    "I'd like to see my trades today",
+    "I wonder if SPY holds VWAP",
+]
+
+
+@pytest.mark.parametrize("text", FIRST_PERSON_ASKS)
+def test_first_person_requests_are_asks_without_a_question_mark(text):
+    kind = _kind(text)
+    assert kind.asks and not kind.statement
+    assert journal_mode.classify(text).asks  # the cues alone, even with no pack planned
+
+
+def test_a_ticker_or_a_pack_with_a_mood_word_is_answered_and_stored():
+    for text in ("I'm annoyed, I chased TWLO again", "feeling tired today", "tempted to revenge trade that one"):
+        kind = _kind(text)
+        assert kind.asks and kind.statement, text
 
 
 @pytest.mark.parametrize("text", [
@@ -182,13 +224,31 @@ def _settle(win):
 
 def test_window_keeps_a_statement_and_answers_in_one_line_without_the_model(window):
     window._brain_ok = False
-    window.send("I'm annoyed, I chased AMD")
+    window.send("I'm annoyed, I chased that one")
     _settle(window)
     text = window.transcript.toPlainText()
     assert "Noted, 10:10, after the AMD stop (fomo, tilted)." in text
     assert "brain is off" not in text.lower() and window._worker is None
-    assert [row["text"] for row in window.store.journal_entries()] == ["I'm annoyed, I chased AMD"]
+    assert [row["text"] for row in window.store.journal_entries()] == ["I'm annoyed, I chased that one"]
     assert window.store.turns() == []  # a journal line is not a chat turn
+
+
+@pytest.mark.parametrize("text", FIRST_PERSON_ASKS)
+def test_window_answers_a_first_person_request_and_never_only_notes_it(window, text):
+    window._brain_ok = False
+    window.send(text)
+    _settle(window)
+    assert "Noted," not in window.transcript.toPlainText()
+    assert window.store.journal_entries() == [] and [row["text"] for row in window.store.turns()] == [text]
+
+
+def test_window_a_ticker_with_a_mood_word_is_answered_and_stored(window):
+    window._brain_ok = False
+    window.send("I'm annoyed, I chased AMD")
+    _settle(window)
+    assert len(window.store.journal_entries()) == 1
+    assert [row["text"] for row in window.store.turns()] == ["I'm annoyed, I chased AMD"]
+    assert "brain is off" in window.transcript.toPlainText().lower()
 
 
 def test_window_answers_a_question_and_keeps_no_journal_line(window):
