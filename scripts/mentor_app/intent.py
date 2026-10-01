@@ -94,7 +94,9 @@ OBJECT_FILLER = frozenset({"my", "the", "some", "half", "all", "losses", "loss",
 TAKE_WORDS = frozenset({"take", "taking", "enter", "entering"})
 TAKE_INTO = frozenset({"get", "getting"})
 CLAUSE_WORDS = frozenset({"and", "but", "then"})
-_TOKEN = re.compile(r"\$?[A-Za-z][A-Za-z'\-]*|[,;?—]")
+_TOKEN = re.compile(r"\$?[A-Za-z][A-Za-z'\-]*|[,;:?—]")
+SEPARATORS = (",", ";", ":", "?", "—")
+_QUOTED = re.compile(r'"[^"]*"|“[^”]*”')
 
 
 @dataclass(frozen=True)
@@ -112,10 +114,31 @@ def _tokens(text: str) -> list[str]:
     return [tok.lstrip("$") if tok[0] == "$" else tok for tok in _TOKEN.findall(text or "")]
 
 
+def _quoted(text: str) -> set[int]:
+    """Indices of the tokens inside quotation marks ('"sell AMD" he said')."""
+    ranges = [(m.start(), m.end()) for m in _QUOTED.finditer(text or "")]
+    return {n for n, m in enumerate(_TOKEN.finditer(text or ""))
+            if any(a < m.start() < b for a, b in ranges)}
+
+
+#: (f) a third-person subject before the verb in its clause: the verb is someone else's, never his ask.
+THIRD_PERSON = frozenset({"he", "she", "they", "him", "her", "them", "he's", "she's", "they're", "hes", "shes",
+                          "anyone", "someone", "somebody", "everyone", "everybody", "nobody", "people", "guys",
+                          "analysts", "analyst", "who", "who's", "whos", "street", "guy", "twitter", "wife",
+                          "husband", "brother", "sister", "friend", "buddy", "dad", "mom", "boss", "cathie",
+                          "funds", "traders", "experts", "everybody's"})
+SAY_WORDS = frozenset({"says", "said", "say", "told", "tells", "recommends", "recommended", "thinks", "wants",
+                       "suggests", "suggested", "reckons"})
+FIRST_PERSON_WORDS = frozenset({"i", "i'm", "im", "i'd", "i've", "i'll", "id", "ive"})
+#: "I'm buying AMD" is a present intent; "... all morning / since the open" is narration.
+DURATION = re.compile(r"\b(?:all (?:morning|day|week|session|afternoon)|since|for (?:the )?(?:last|past)|"
+                      r"every (?:day|morning)|lately|recently)\b")
+
+
 def _clause_starts(toks: list[str]) -> set[int]:
     starts, fresh = set(), True
     for i, tok in enumerate(toks):
-        if tok in (",", ";", "?", "—") or tok.lower() in CLAUSE_WORDS:
+        if tok in SEPARATORS or tok.lower() in CLAUSE_WORDS:
             fresh = True
             continue
         if fresh:
@@ -133,7 +156,7 @@ FILLER = frozenset({"my", "the", "some", "half", "all", "of", "on", "in", "into"
                     "little", "bit", "out", "back", "me", "losses", "loss", "like", "rest", "remaining", "entire",
                     "whole", "shares", "bunch", "this", "that"})
 #: After the verb these mean "no object": the clause rules pick the ticker.
-OBJECTLESS = frozenset({"it", "them", "here", "now", "at", "?", ",", ";", "\u2014", "too", "already", "today",
+OBJECTLESS = frozenset({"it", "them", "here", "now", "at", "?", ",", ";", ":", "\u2014", "too", "already", "today",
                         "please", "or", "and", "but", "then", "soon", "first"})
 #: A ticker followed by one of these is an adjective, never an object.
 ADJ_NOUNS = frozenset({"noise", "chart", "charts", "setup", "setups", "news", "earnings", "call", "calls", "story",
@@ -234,7 +257,7 @@ def spans(text: str, tickers: Iterable[str]) -> list[tuple[int, int, str]]:
             # "a QCOM long at 230", "size up TSLA short": the side right after its ticker, at the end or before
             # at/here/now - never "the TSLA short", "my AMD long".
             trailing = (is_ticker(i - 1) and at(i - 2) not in HELD_NOUN_PREV
-                        and nxt in ("", "at", "here", "now", ",", "?"))
+                        and nxt in ("", "at", "here", "now", ",", "?", ":", ";", "\u2014"))
             if (framed and nxt not in SIDE_NEVER_NEXT and (is_ticker(i + 1) or nxt in SIDE_OBJECT_NEXT)) or trailing:
                 found.append((i, i, GO_SHORT if word == "short" else GO_LONG))
             i += 1
@@ -252,7 +275,7 @@ def spans(text: str, tickers: Iterable[str]) -> list[tuple[int, int, str]]:
                 found.append((i, i + 2, EXIT))  # "take NVDA off" - never "off my watchlist"
             i += 3
             continue
-        if word in TAKE_WORDS and is_ticker(i + 1):
+        if word in TAKE_WORDS and (is_ticker(i + 1) or (nxt in ("it", "them") and at(i + 2) in ("", "?", ","))):
             found.append((i, i, TAKE))  # "should I take TSLA", "entering TSLA"
             i += 1
             continue
@@ -291,7 +314,7 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
     out: dict[str, set[str]] = {sym: set() for sym in upper}
     clause, number = [], 0
     for tok in toks:
-        if tok in (",", ";", "?", "\u2014") or tok.lower() in CLAUSE_WORDS:
+        if tok in SEPARATORS or tok.lower() in CLAUSE_WORDS:
             number += 1
         clause.append(number)
     words_of: dict[int, list[str]] = {}
@@ -309,7 +332,7 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
             asked.add(clause[n - 1])
     clause_start: dict[int, int] = {}
     for n, c in enumerate(clause):
-        if toks[n] in (",", ";", "?", "\u2014") or lowered[n] in CLAUSE_WORDS:
+        if toks[n] in SEPARATORS or lowered[n] in CLAUSE_WORDS:
             continue
         clause_start.setdefault(c, n)
     # A ticker followed by a noun ("the AMD noise", "QCOM short interest") is an adjective: never an object.
@@ -321,24 +344,47 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
 
     places = [(i, tok.upper()) for i, tok in enumerate(toks) if tok.upper() in upper and not adjective(i)]
     ticker_at = dict(places)
-    names_in_sentence = {sym for _, sym in places}
+    # The objectless fallback may land on a ticker used as an adjective ("QCOM buyback - buy?").
+    names_in_sentence = {tok.upper() for tok in toks if tok.upper() in upper}
+    every_place = [(i, tok.upper()) for i, tok in enumerate(toks) if tok.upper() in upper]
     found = spans(text, upper)
+    quoted = _quoted(text)
     imperative = set()
     for first, _last, _kind in found:
         lead = clause_start.get(clause[first], -1)
-        if first == lead or (first == lead + 1 and lowered[lead] in IMPERATIVE_LEAD):
-            imperative.add(clause[first])
+        if (first == lead or (first == lead + 1 and lowered[lead] in IMPERATIVE_LEAD)
+                or (first >= 2 and lowered[first - 2] in FIRST_PERSON_WORDS and lowered[first - 1] == "say")):
+            imperative.add(clause[first])  # "sell AMD", "just trim NVDA", "I say sell AMD"
     for first, last, kind in found:
         c = clause[first]
+        lead = clause_start.get(c, first)
+        before = range(lead, first)
+        # (f) someone else's verb: a third-person subject or a sayer before it, or inside quotation marks.
+        sayer = any(lowered[n] in SAY_WORDS and not (n and lowered[n - 1] in FIRST_PERSON_WORDS) for n in before)
+        third = any(lowered[n] in THIRD_PERSON or (toks[n][0].isupper() and not toks[n].isupper() and n > 0
+                                                    and lowered[n] not in FIRST_PERSON_WORDS
+                                                    and toks[n].upper() not in upper) for n in before)
+        if kind not in STATUSES and (first in quoted or sayer or third):
+            continue
+        progressive = (first >= 1 and lowered[first - 1] in ("i'm", "im") or (
+            first >= 2 and lowered[first - 2:first] == ["i", "am"])) and lowered[first].endswith("ing")
+        if kind not in (PAST, *STATUSES) and progressive and not DURATION.search(" ".join(words_of[c])):
+            imperative.add(c)  # "I'm buying AMD": a present intent
         if kind not in (PAST, *STATUSES) and c in past_clauses:
             kind = PAST  # "I cut half my AMD this morning" is what he did
         if kind not in (PAST, *STATUSES) and c not in asked and c not in imperative:
+            if kind in (GO_LONG, GO_SHORT) and first - 1 in ticker_at:
+                continue  # "ALL short - take it?": a side tag after its ticker, not a verb of its own
             kind = PAST  # (e) plain narration with no ask cue ("I cut AMD at 155") is history, never a gate
         j, skipped = last + 1, 0
         while j < len(toks) and lowered[j] in FILLER and toks[j].upper() not in upper and skipped < OBJECT_WINDOW:
             j, skipped = j + 1, skipped + 1
         if j < len(toks) and j in ticker_at and clause[j] == c:
             out[ticker_at[j]].add(kind)  # the direct object
+            k = j + 1
+            while k + 1 < len(toks) and lowered[k] in ("or", "and", "&") and k + 1 in ticker_at:
+                out[ticker_at[k + 1]].add(kind)  # "should I buy QCOM or AMD": coordinated objects
+                k += 2
             continue
         nxt = lowered[j] if j < len(toks) else ""
         if j < len(toks) and toks[j].upper() in upper and j not in ticker_at:
@@ -350,7 +396,7 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
         if len(names_in_sentence) == 1:
             out[next(iter(names_in_sentence))].add(kind)
             continue
-        here = [(i, sym) for i, sym in places if clause[i] == c]
+        here = [(i, sym) for i, sym in every_place if clause[i] == c]
         if len({sym for _, sym in here}) == 1:
             out[here[0][1]].add(kind)
             continue

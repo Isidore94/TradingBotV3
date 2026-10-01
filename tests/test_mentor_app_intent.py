@@ -1,4 +1,6 @@
-"""P18 review round 5: one table-driven intent resolver. Every sentence from the four review rounds, with the book."""
+"""P18 intent resolver (review rounds 5-10): the TABLE of phrasings with their book, and the GUARD table.
+
+Every reviewer sentence from rounds 1-10 is a TABLE row; ``test_the_table_size_is_pinned`` pins the count."""
 
 from __future__ import annotations
 
@@ -234,6 +236,34 @@ TABLE = [
     ("I sold QCOM yesterday", BOOK, {"QCOM": HISTORY}),
     ("trim NVDA into strength", BOOK, {"NVDA": EXIT_L}),
     ("cover TSLA at 350", BOOK, {"TSLA": EXIT_S}),
+    # round 10 (f): someone else's verb is never his ask
+    ("should he sell TSLA?", BOOK, {}),
+    ("did he sell TSLA?", BOOK, {}),
+    ("he's selling AMD?", BOOK, {}),
+    ("who is buying NVDA?", BOOK, {}),
+    ("is Cathie buying NVDA?", BOOK, {}),
+    ("is anyone shorting QCOM?", BOOK, {}),
+    ("the guy on twitter is shorting TSLA?", BOOK, {}),
+    ("my wife says sell AMD?", BOOK, {}),
+    ("analysts say buy QCOM?", BOOK, {}),
+    ('"sell AMD" he said', BOOK, {}),
+    ("my brother wants to buy AMD", BOOK, {}),
+    ("I say sell AMD", BOOK, {"AMD": EXIT_L}),
+    ("I say buy QCOM", BOOK, {"QCOM": NEW_L}),
+    # round 10: first-person present progressive is a present intent; with a duration it is narration
+    ("I'm buying AMD", BOOK, {"AMD": ADD_L}),
+    ("I'm selling AMD", BOOK, {"AMD": EXIT_L}),
+    ("I'm covering TSLA", BOOK, {"TSLA": EXIT_S}),
+    ("I'm buying QCOM", BOOK, {"QCOM": NEW_L}),
+    ("I'm buying AMD all morning", BOOK, {"AMD": HISTORY}),
+    ("I'm selling NVDA since the open", BOOK, {"NVDA": HISTORY}),
+    # round 10: coordinated objects, an ask after a noun, "it" bound to the clause's ticker
+    ("should I buy QCOM or AMD", NOT_HELD, {"QCOM": NEW_L, "AMD": NEW_L}),
+    ("should I buy QCOM or AMD", BOOK, {"QCOM": NEW_L, "AMD": ADD_L}),
+    ("QCOM buyback \u2014 buy?", BOOK, {"QCOM": NEW_L}),
+    ("NVDA: short it", BOOK, {"NVDA": FLIP_TO_SHORT}),
+    ("QCOM: short it", BOOK, {"QCOM": NEW_S}),
+    ("ALL short \u2014 take it?", BOOK, {"ALL": NEW_S}),
     # pure questions, no verb
     ("how is AMD trading right now", BOOK, {}),
     ("what's the news on NVDA", BOOK, {}),
@@ -266,8 +296,8 @@ def _gates(text, book):
     return out
 
 
-def test_the_table_covers_at_least_forty_phrasings():
-    assert len(TABLE) >= 40
+def test_the_table_size_is_pinned():
+    assert len(TABLE) == 210 and len(GUARD) == 20
 
 
 @pytest.mark.parametrize("text,book,want", TABLE, ids=[f"{n}:{row[0][:40]}" for n, row in enumerate(TABLE)])
