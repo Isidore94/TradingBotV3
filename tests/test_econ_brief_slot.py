@@ -362,3 +362,37 @@ def test_another_nights_rejection_is_not_quoted(monkeypatch, tmp_path):
     other = dict(NIGHT_0925["ledger_rows"][0], session_date="2026-09-24")
     _outcome, evidence = _run_0925(monkeypatch, tmp_path, ledger_rows=[other])
     assert REJECTED_0925 not in evidence["instructions"]
+
+
+# ---------------------------------------------------------------------------
+# P19: no clock time without its event id (the 2026-09 "a time in" rejections)
+def test_every_line_must_cite_at_least_one_event_in_the_schema():
+    from ai_jobs import econ_brief_narration as job
+
+    ids = job.NARRATION_JSON_SCHEMA["properties"]["lines"]["items"]["properties"]["event_ids"]
+    assert ids["minItems"] == 1
+    assert ids["maxItems"] == 4
+
+
+def test_the_instruction_says_no_time_without_its_event_id():
+    from ai_jobs import econ_brief_narration as job
+
+    evidence = job._evidence(_pack())
+    assert (
+        "every clock time you write must have its event id in that line's event_ids; "
+        "if you cannot cite it, give no time"
+    ) in evidence["instructions"]
+
+
+def test_a_time_with_empty_event_ids_is_still_rejected_by_the_unchanged_checker(monkeypatch, tmp_path):
+    from ai_jobs import econ_brief_narration as job
+
+    pack = _pack()
+    reply = _good_reply(pack)
+    reply["lines"][1] = {"text": "Watch the 1 p.m. auction.", "event_ids": []}
+    with pytest.raises(ValueError, match="is not the time of an event it cites"):
+        job.validate(reply, pack)
+    # The retry still quotes the rejected line back to the model.
+    outcome, evidence = _run_0925(monkeypatch, tmp_path, ledger_rows=[NIGHT_0925["ledger_rows"][0]])
+    assert f'Do not write: "{REJECTED_0925}"' in evidence["instructions"]
+    assert outcome["status"] == "degraded_no_narrative"
