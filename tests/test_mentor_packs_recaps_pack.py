@@ -115,6 +115,25 @@ def test_read_only(world):
 
 def test_keywords_are_a_fixed_stem():
     assert recaps_pack.keywords("Chasing extended names") == recaps_pack.keywords("chased an extended name")
+    # Review advisory 2: the most frequent words in text order, not the first four alphabetically.
+    one = "buying dips, chasing adds into losers, more losers"
+    two = "buying dips, chasing adds into winners, more winners"
+    assert recaps_pack.keywords(one) != recaps_pack.keywords(two), "two different long lines, two keys"
+    assert recaps_pack.keywords(one) == recaps_pack.keywords(one)
+    assert recaps_pack.keywords(one) == "buy_dip_chas_loser"
+
+
+def test_a_tagged_stop_lesson_is_keyed_by_its_tag(world):
+    import json
+
+    with open(world.events, "a", encoding="utf-8") as handle:
+        for n, day in ((20, "2026-09-28"), (21, "2026-09-29")):
+            handle.write(json.dumps({"schema": "day_recap_event_v1", "id": f"rc-{n}", "kind": "lesson",
+                                     "session_date": day, "recorded_at": f"{day}T18:00:00-07:00", "supersedes": "",
+                                     "keep": "", "stop": f"different words {n}", "try": "", "mood": None,
+                                     "tag": "respect_stop"}) + "\n")
+    keys = [row["key"] for row in recaps_pack.build(10, "issues", now=NOW, paths=world).rows if row.get("key")]
+    assert "stop:respect_stop" in keys
     assert recaps_pack.keywords("the a of") == ""
     assert recaps_pack.slug("Wait For Confirmation!") == "wait_for_confirmation"
 

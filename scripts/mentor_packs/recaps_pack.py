@@ -119,8 +119,11 @@ def slug(value: Any) -> str:
 
 
 def keywords(text: Any, limit: int = 4) -> str:
-    """The theme key of free text: its content words (plural 's' dropped), sorted, at most ``limit``."""
-    words = []
+    """The theme key of free text: its ``limit`` most frequent content words (fixed stem), in text order.
+
+    Ties keep the earlier word, so two different long lines get two keys and the same line one key."""
+    words: list[str] = []
+    counts: dict[str, int] = defaultdict(int)
     for word in re.findall(r"[a-z]+", str(text or "").lower()):
         if len(word) < 3 or word in _STOPWORDS:
             continue
@@ -131,9 +134,11 @@ def keywords(text: Any, limit: int = 4) -> str:
             word = word[:-2]
         elif len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
             word = word[:-1]
+        counts[word] += 1
         if word not in words:
             words.append(word)
-    return "_".join(sorted(words)[:limit])
+    top = set(sorted(words, key=lambda w: (-counts[w], words.index(w)))[:limit])
+    return "_".join(word for word in words if word in top)
 
 
 def _read_json(path: Path) -> Any:
@@ -331,7 +336,8 @@ def recurrence(paths: RecapPaths, days: list[str], events: list[dict[str, Any]])
             continue
         kind = row.get("kind")
         if kind == "lesson" and _clean(row.get("stop")):
-            key = keywords(row.get("stop"))
+            # The lesson's tag when it carries one; else the key words of its stop line.
+            key = slug(row.get("tag")) if _clean(row.get("tag")) else keywords(row.get("stop"))
             if key:
                 hit(f"stop:{key}", day, _clean(row.get("stop"), 80))
         elif kind == "card_answer" and str(row.get("option") or "") in NEGATIVE_OPTIONS:
