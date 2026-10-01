@@ -2,7 +2,7 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-09-30 PT (Mentor P15a built, in flight)
+**Updated:** 2026-09-30 PT (Mentor P15a + P15b built, in flight)
 
 - **Live on `main`:** rounds 1-2 (`81272d42`, `2d59aace`, `3802c0d7`), p9 phases 1-4
   (`849390a2`, `55bbeb26`, `d382986e`, `79e8d658`), p10 research lake + auto regimes
@@ -12,7 +12,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 - **GUI:** 4K design live; selftests 105/105; long Qt runs still crash workers.
 - **Merged 2026-09-30, live at the next desk restart:** Trade Mentor app P0-P13 (`370c6efb`, `8f7664fc` Pause AI, `e9c77690` P7-P12, `152e765f` plan inference, `e864ddb9` P13 plain-language routing): chat, `/plan` `/drop`, `/pick`, `/vetoes`, `/tape`, `/check`, `/news`, `/book` (Questrade + IBKR), `/mirror`, `/tilt`, `/debate`, `/hypotheses`; gates #311-#318, #321-#327, #329. `mentor_app_enabled` off until #312; frontier OFF.
 - **Merged 2026-09-30 (P14 tone):** short answers; eval style 96 %, p50 1.3 s; gate #332 re-check owed after restart.
-- **In flight:** Mentor P15a night feeds the coach (`claude/mentor-app-p15a-night-feed-2026-09-30`, gate #333): `night_pack`, coach brief, memory on the night, `mentor_review` un-cut. Next: P15b.
+- **In flight:** Mentor P15a (gate #333) then P15b on top (`claude/mentor-app-p15b-fundamentals-recaps-2026-09-30`, gate #334): `/paste` brief + `fundamentals_pack`, `recaps_pack` issues, app owns the Mentor by default, feelings question.
 - **Desk:** next launch uses main; live checks are in GATES.
 - **Night throughput (2026-09-30):** slot retries x3, budget 360, every care name briefed nightly and last on the slate (#331), nightly permutation report + per-setup sentences (#330, shadow only). Parked: Mentor recall index (worktree only). Next: morning pre-brief queue; rule audit once plan lines exist.
 - **gpt-oss:20b vs gemma4:12b:** effort `high`, 8k think tokens live. Probe 2 10-01 02:05 runs both, then flip `ai_local_model_medium`.

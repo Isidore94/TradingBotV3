@@ -33,7 +33,10 @@ here.
   style guard + score, market-cue-only regime, `earnings_pack`, month window, tilt on "stop trading", chat book fetch.
   P15a night feeds the coach built (trader 2026-09-30, `claude/mentor-app-p15a-night-feed-2026-09-30`, gate #333):
   `night_pack`, pick brief row, memory on the night (3000 tokens), `mentor_review` un-cut with night inputs,
-  coach brief + `/brief` `/issues`. Next: P15b fundamentals + recaps + flag.
+  coach brief + `/brief` `/issues`.
+  P15b fundamentals + recaps + flag built (trader 2026-09-30, `claude/mentor-app-p15b-fundamentals-recaps-2026-09-30`,
+  gate #334): `fundamentals_pack` + `/paste`, `recaps_pack` + recurrence table + `/recaps`, app owns the Mentor by
+  default, one feelings question per closed trade.
   Next only by the trader's word: an alerts pack, a movers pack, more recall sources.
 
 ## Plan to 8/10, round 2 (trader's brief, 2026-09-25 evening)
