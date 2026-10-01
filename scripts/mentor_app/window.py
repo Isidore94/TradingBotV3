@@ -25,7 +25,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPlainTextEdit,
     QPushButton,
-    QScrollArea,
     QSplitter,
     QTextBrowser,
     QVBoxLayout,
@@ -65,6 +64,13 @@ RECONNECT_BACKOFF_SECONDS = 10 * 60
 #: On close the app waits at most this long for each model unload.
 SHUTDOWN_UNLOAD_SECONDS = 4
 CHIP_KINDS = ("auto_mode", "d1_env", "regime")
+#: (label, command, tooltip): the quick-button row above the input box.
+QUICK_BUTTONS = (
+    ("Tape", "/tape", "The tape now: Auto mode, D1, last night's read, econ, sectors"),
+    ("Tilt", "/tilt", "Today's patterns after a loss, and how often they led to a red rest of day"),
+    ("Mirror", "/mirror", "Your own record over 6 weeks: likes, vetoes, journal, regime"),
+    ("Scorecard", "/scorecard", "How the challenges have done, and how the app itself is doing"),
+)
 #: A background tape narration that fails is tried once more for the same pack hash, then not again.
 TAPE_MAX_FAILURES_PER_HASH = 2
 
@@ -138,6 +144,7 @@ class _Bridge(QObject):
     journal_symbols = Signal(object)
     habit_item = Signal(object)
     routine_ready = Signal(object)
+    dock_saved = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -212,6 +219,7 @@ class MentorWindow(QMainWindow):
         forecast_service: Any = None,
         paste_prompt: Callable[[], Any] | None = None,
         fund_builder: Callable[[str], Any] | None = None,
+        desk_dock: Callable[[Any], Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -296,7 +304,7 @@ class MentorWindow(QMainWindow):
         self._bridge.pick_built.connect(self._on_pick_built)
         self._bridge.pick_card.connect(self._on_pick_card)
         self._bridge.pick_failed.connect(self._on_pick_failed)
-        self._bridge.liked_ready.connect(self._sync_pick_chips)
+        self._bridge.liked_ready.connect(self._on_liked)
         self._bridge.veto_built.connect(self._on_veto_built)
         self._bridge.veto_card.connect(self._on_veto_card)
         self._bridge.veto_failed.connect(self._on_veto_failed)
@@ -343,6 +351,8 @@ class MentorWindow(QMainWindow):
         self._tape_failures: dict[str, int] = {}
         self._bridge.tape_ready.connect(self._on_tape_ready)
         self._bridge.tape_refreshed.connect(self._on_tape_refreshed)
+        # Dock: float over the desk's Mentor tab; a factory window -> DeskDock (tests point it at a fake file).
+        self._desk_dock_arg = desk_dock
         # P1: with `mentor_app_enabled` on, this process owns the Trade Mentor card.
         self.card_host = card_host
         if self.card_host is None:
@@ -502,23 +512,18 @@ class MentorWindow(QMainWindow):
         self.routine_chip.clicked.connect(self._show_routine)
         self.chip_row.addWidget(self.routine_chip)
         self.chip_row.addStretch(1)
-        # One chip per Focus name: its pick card (P2).
-        self.pick_chips: dict[str, QPushButton] = {}
-        pick_strip = QWidget()
-        self.pick_chip_row = QHBoxLayout(pick_strip)
-        self.pick_chip_row.setContentsMargins(0, 0, 0, 0)
-        self.pick_chip_row.setSpacing(4)
-        self.pick_more = QLabel("")
-        self.pick_more.setObjectName("MutedLabel")
-        self.pick_more.setVisible(False)
-        self.pick_chip_row.addWidget(self.pick_more)
-        self.pick_chip_row.addStretch(1)
-        self.pick_scroll = QScrollArea()
-        self.pick_scroll.setWidget(pick_strip)
-        self.pick_scroll.setWidgetResizable(True)
-        self.pick_scroll.setFixedHeight(38)
-        self.pick_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.pick_scroll.setVisible(False)
+        # Quick buttons: one click runs the read (the liked picks are a `/pick SYM` away).
+        self.quick_buttons: dict[str, QPushButton] = {}
+        self.quick_row = QHBoxLayout()
+        self.quick_row.setSpacing(6)
+        for label, command, tip in QUICK_BUTTONS:
+            button = QPushButton(label)
+            button.setObjectName("MentorQuickButton")
+            button.setToolTip(tip)
+            button.clicked.connect(lambda _=False, cmd=command: self.send(cmd))
+            self.quick_buttons[command] = button
+            self.quick_row.addWidget(button)
+        self.quick_row.addStretch(1)
         self.input = InputBox()
         self.input.setPlaceholderText("Ask the mentor... (Enter sends, Shift+Enter new line, Win+H to dictate)")
         self.input.setFixedHeight(84)
@@ -552,6 +557,17 @@ class MentorWindow(QMainWindow):
         self.paste_button.setToolTip("Paste today's morning brief; it is saved to the Market Journal for today")
         self.paste_button.clicked.connect(self.open_paste_dialog)
         header.addWidget(self.paste_button)
+        # Dock: put this window over the desk's Mentor tab (Undock gives the free window back).
+        from mentor_app.desk_dock import DeskDock
+
+        self.desk_dock = (self._desk_dock_arg or DeskDock)(self)
+        self.dock_button = QPushButton("Dock")
+        self.dock_button.setToolTip("Put the Mentor inside the desk's Mentor tab")
+        self.dock_button.clicked.connect(self.toggle_dock)
+        self.desk_dock.changed.connect(self._on_dock_changed)
+        self.desk_dock.note.connect(self._add_note)
+        self._bridge.dock_saved.connect(self._on_dock_saved)
+        header.addWidget(self.dock_button)
         # P11: shown only while the frontier switch is on; disabled with the reason when it cannot run.
         self.think_button = QPushButton("Think harder")
         self.think_button.setToolTip("Ask the frontier model the last question again (metered, capped per day)")
@@ -566,12 +582,12 @@ class MentorWindow(QMainWindow):
         left_layout.addWidget(self.banner)
         left_layout.addWidget(self.transcript, 3)
         if self.card_host is not None:
-            # The Trade Mentor card sits in the conversation column, under the chat.
-            left_layout.addWidget(self.card_host.dock, 2)
+            # The Trade Mentor card sits in the conversation column, under the chat, sized to what is up.
+            left_layout.addWidget(self.card_host.dock, 0)
             self.card_host.cardShown.connect(self._on_card_shown)
             self.card_host.dock.mentor_card.set_ai_request_provider(self._brain_fill_request)
         left_layout.addLayout(self.chip_row)
-        left_layout.addWidget(self.pick_scroll)
+        left_layout.addLayout(self.quick_row)
         left_layout.addLayout(input_row)
 
         self.inbox_header = QLabel("Inbox")
@@ -650,6 +666,7 @@ class MentorWindow(QMainWindow):
         self._tilt_timer.start()
         self.install_recall_fallback()
         self._submit_io(self._open_session)
+        self._submit_io(self._load_dock_state)
         self.refresh_context()
         self._paused_until = self._ai_paused_until()
         if self._paused_until is not None:
@@ -669,6 +686,7 @@ class MentorWindow(QMainWindow):
         self._desk_timer.stop()
         self._pick_timer.stop()
         self._tilt_timer.stop()
+        self.desk_dock.shutdown()
         from mentor_packs import recall
 
         recall.set_fallback(None)
@@ -730,6 +748,36 @@ class MentorWindow(QMainWindow):
         self.show()
         self.raise_()
         self.activateWindow()
+
+    # ------------------------------------------------------------------ dock
+    def toggle_dock(self) -> None:
+        """The Dock / Undock button: flip, and remember it for the next start.
+
+        Only the button saves: an undock because the desk went away keeps "docked" for next time.
+        """
+        docked = self.desk_dock.toggle()
+        self._save_dock_state(docked)
+
+    def _on_dock_changed(self, docked: bool) -> None:
+        self.dock_button.setText("Undock" if docked else "Dock")
+        self.dock_button.setToolTip(
+            "Give the Mentor its own window again" if docked else "Put the Mentor inside the desk's Mentor tab"
+        )
+
+    def _save_dock_state(self, docked: bool) -> None:
+        from mentor_app.desk_dock import STATE_KEY
+
+        self._submit_io(lambda: self.store.set_state(STATE_KEY, "on" if docked else "off"))
+
+    def _load_dock_state(self) -> None:
+        from mentor_app.desk_dock import STATE_KEY
+
+        self._bridge.dock_saved.emit(self.store.get_state(STATE_KEY) == "on")
+
+    def _on_dock_saved(self, docked: Any) -> None:
+        """Docked at the last close: dock again at start."""
+        if docked is True and not self._shut and not self.desk_dock.docked:
+            self.desk_dock.dock()
 
     def _submit_io(self, fn: Callable[[], Any]) -> None:
         try:
@@ -1734,30 +1782,9 @@ class MentorWindow(QMainWindow):
 
         return narrate
 
-    def _sync_pick_chips(self, liked: Any) -> None:
-        """One chip per liked pick, newest first, at most MAX_CHIPS; the rest are a `/pick` away."""
-        everything = [(str(sym).upper(), str(side or "").upper()) for sym, side in liked or ()]
-        self._liked_names = list(everything)
-        wanted = everything[: pick_jobs.MAX_CHIPS]
-        extra = len(everything) - len(wanted)
-        self.pick_more.setText(f"+{extra} more: /pick SYM" if extra > 0 else "")
-        self.pick_more.setVisible(extra > 0)
-        if [(sym, chip.property("side")) for sym, chip in self.pick_chips.items()] == wanted:
-            return
-        for chip in self.pick_chips.values():
-            self.pick_chip_row.removeWidget(chip)
-            chip.deleteLater()
-        self.pick_chips = {}
-        for index, (symbol, side) in enumerate(wanted):
-            chip = QPushButton(f"{symbol} {side[:1]}".strip())
-            chip.setObjectName("MentorPickChip")
-            chip.setFlat(True)
-            chip.setProperty("side", side)
-            chip.setToolTip(f"{symbol} {side.lower()}: what the desk knows, narrated")
-            chip.clicked.connect(lambda _=False, sym=symbol, sd=side: self.show_pick(sym, sd))
-            self.pick_chip_row.insertWidget(index, chip)
-            self.pick_chips[symbol] = chip
-        self.pick_scroll.setVisible(bool(wanted))
+    def _on_liked(self, liked: Any) -> None:
+        """Keep the liked picks (newest first) for auto-attach and the prefetch; no chips are drawn."""
+        self._liked_names = [(str(sym).upper(), str(side or "").upper()) for sym, side in liked or ()]
 
     def show_pick(self, symbol: str, side: str = "") -> None:
         """The pick's card: the cached one at once, then a rebuild off-thread; narrate if the pack changed."""

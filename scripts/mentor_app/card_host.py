@@ -15,13 +15,15 @@ import threading
 from datetime import datetime
 from typing import Any, Callable
 
-from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal
+from PySide6.QtWidgets import QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 from ui.services.mentor_host import MentorHostMixin
 
 #: The econ view is re-read this often (same cadence as the desk's reminder service).
 ECON_REFRESH_MS = 15 * 60_000
+#: The dock never takes more than this share of the window's height; the transcript keeps the rest.
+DOCK_MAX_SHARE = 0.6
 
 
 class MentorCardDock(QWidget):
@@ -56,13 +58,37 @@ class MentorCardDock(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.scroll)
-        self.mentor_card.answered.connect(lambda _slot_id: self._sync())
-        self.mentor_card.skipped.connect(lambda _record: self._sync())
+        self._body = body
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        # The card hides itself (answered, skipped, expired) after its signals fire, so the
+        # dock follows the children's own show/hide and re-sizes when their content changes.
+        for watched in (self.mentor_card, self.econ_block, body):
+            watched.installEventFilter(self)
         self.setVisible(False)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt override
+        kind = event.type()
+        if kind in (QEvent.Type.Show, QEvent.Type.Hide) and watched is not self._body:
+            self._sync()
+        elif kind == QEvent.Type.LayoutRequest and watched is self._body:
+            self.updateGeometry()
+        return False
 
     def _sync(self) -> None:
         """The dock shows only while the card or the econ block has something up."""
-        self.setVisible(self.mentor_card.isVisibleTo(self) or self.econ_block.isVisibleTo(self))
+        wanted = self.mentor_card.isVisibleTo(self) or self.econ_block.isVisibleTo(self)
+        if self.isHidden() == wanted:
+            self.setVisible(wanted)
+        self.updateGeometry()
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        """As tall as what is up (card or econ block), capped so the chat always keeps room."""
+        base = super().sizeHint()
+        height = self._body.sizeHint().height() + 2 * self.scroll.frameWidth()
+        window = self.window()
+        if window is not None and window is not self and window.height() > 0:
+            height = min(height, int(window.height() * DOCK_MAX_SHARE))
+        return QSize(base.width(), max(0, height))
 
     # -- the surface the host drives (same names as AlertChartReview) --------
     def show_mentor_slot(self, slot, previous=None) -> None:

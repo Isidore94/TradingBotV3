@@ -2,7 +2,7 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-10-01 08:00 PT (P18 + P20 merged; restart desk + app)
+**Updated:** 2026-10-01 09:30 PT (Mentor UI merged; restart desk + app)
 
 - **Live on `main`:** rounds 1-2, p9 phases 1-4, p10 research lake + auto regimes (research
   only); rolling RRS, cutoff 1.0 (`TRADINGBOTV3_RRS_ENGINE=desk` = old); Movers tint + SMA
@@ -19,13 +19,13 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   (your reads and grades), desk-side 60 s M5 publisher, one table-driven trade-intent gate (a
   wrong gate is a blocker); live 125-question eval on gemma4: tool hit 99 %, 0 errors, first
   token p50 1.4 s; gates #341-#344. P20: brief asks answer in 3 plain sentences, simple
-  replies lose bullets/bold (style pass 95 %), `$cat` / lowercase chains / "but" read right; gate #345.
+  replies plain; gate #345. Mentor UI: card box hides when done, Tape/Tilt/Mirror/Scorecard buttons, Dock into the desk Mentor tab; gate #346.
 - **Night (2026-09-30):** retries x3, budget 360, care names briefed nightly (#331), nightly
   permutation report (#330, shadow). Merged 10-01 (#338): P19 night rejections (econ time
   needs its id, regime read 1 retry, day show fits, idea with unknown ids dropped), digest
   cap, mentor digest retry. Next: morning pre-brief queue; rule audit once plan lines exist.
-- **gemma4:12b is the night model** (live since 10-01, thinking OFF; probe 2: gpt-oss:20b at
-  high cut at the 23k ceiling). In flight, not merged: `claude/gemma4-thinking-high-2026-10-01`.
+- **gemma4:12b is the night model** (live since 10-01, thinking OFF).
+  In flight, not merged: `claude/gemma4-thinking-high-2026-10-01`.
 - **Night window:** 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435; the app uses
   11436). No local models on the mini-PC: host down = facts only; rerun a missed night with
   `--session <date> --force`. No builders, merges or test runs 22:00-02:00 PT.

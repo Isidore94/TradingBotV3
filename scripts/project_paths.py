@@ -364,6 +364,9 @@ def get_diagnostics_dir() -> Path:
 LOCAL_LOG_DIR = LOCAL_SETTINGS_DIR / "logs"
 #: When the trader last saw each night slot's output on screen (`slot_output_reads`).
 SLOT_OUTPUT_READS_FILE = LOCAL_SETTINGS_DIR / "slot_output_reads.json"
+#: The desk's Mentor tab spot (window handle + screen rect); the Mentor app docks over it.
+#: Per machine: a window handle means nothing on another PC. Single writer: the desk.
+MENTOR_DOCK_FILE = LOCAL_SETTINGS_DIR / "mentor_dock.json"
 RUNTIME_DATA_DIR = DATA_DIR / "runtime"
 REPORTS_DIR = OUTPUT_DIR / "reports"
 AI_SUMMARY_EXPORT_DIR = REPORTS_DIR / "ai_summaries"

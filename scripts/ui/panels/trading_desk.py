@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
+    QLabel,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
@@ -28,6 +29,7 @@ from ui.panels.watchlists_panel import WatchlistsPanel
 from ui.services.focus_service import FocusService
 from ui.services.price_alert_service import PriceAlertService
 from ui.services.group_tape_service import GroupTapeService
+from ui.services.mentor_dock_publisher import MentorDockPublisher
 from ui.services.swing_favorites_service import SwingFavoritesService
 from ui.services.watchlist_tab_service import WatchlistTabService
 from ui.timer_utils import SignalCoalescer
@@ -886,6 +888,19 @@ class TradingDeskPanel(QWidget):
         return self._setups_expanded
 
 
+class MentorDockPlaceholder(QFrame):
+    """The Mentor tab's body: an empty spot the Trade Mentor app floats over when docked."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("MentorDockPlaceholder")
+        self.hint = QLabel("Click Dock in the Trade Mentor to put it here.")
+        self.hint.setObjectName("MutedLabel")
+        self.hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.hint)
+
+
 class MasterAvwapWorkspace(QFrame):
     #: The Watchlist tab became the current one. The desk listens: the column
     #: this workspace lives in opens hidden, and a tab nobody can see cannot
@@ -902,6 +917,7 @@ class MasterAvwapWorkspace(QFrame):
         parent=None,
         *,
         watchlist_tab: QWidget | None = None,
+        mentor_dock_publisher=None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
@@ -925,6 +941,14 @@ class MasterAvwapWorkspace(QFrame):
             self.tabs.addTab(self.industry_panel, "Industry Board")
         if self.rs_window_panel is not None:
             self.tabs.addTab(self.rs_window_panel, "RS Window")
+        # The Trade Mentor app (its own process) can dock over this tab; the desk only
+        # publishes where the placeholder sits (MENTOR_DOCK_FILE).
+        self.mentor_placeholder = MentorDockPlaceholder()
+        mentor_index = self.tabs.addTab(self.mentor_placeholder, "Mentor")
+        self.tabs.setTabToolTip(mentor_index, "Click Dock in the Trade Mentor to put it here")
+        self.mentor_dock_publisher = mentor_dock_publisher or MentorDockPublisher(
+            self.tabs, self.mentor_placeholder, parent=self
+        )
         self.master_panel.scan_service.finished.connect(lambda *_args: self.theta_panel.refresh())
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
