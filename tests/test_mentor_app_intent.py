@@ -157,6 +157,30 @@ TABLE = [
     ("I bought NVDA yesterday, add?", BOOK, {"NVDA": ADD_L}),
     ("I bought QCOM yesterday, add?", BOOK, {"QCOM": HISTORY}),
     ("I bought NVDA yesterday", BOOK, {"NVDA": HISTORY}),
+    # round 8: a status frame carries across coordinated side words
+    ("I'm short TSLA and long AMD, thoughts?", BOOK, {"TSLA": STATUS, "AMD": STATUS}),
+    ("I'm long QCOM and short TSLA", BOOK, {"QCOM": NEW_L, "TSLA": STATUS}),
+    ("I'm long NVDA and AMD", BOOK, {"NVDA": STATUS, "AMD": STATUS}),
+    ("I'm long on AMD, thoughts?", BOOK, {"AMD": STATUS}),
+    ("I'm long on QCOM, thoughts?", BOOK, {"QCOM": NEW_L}),
+    # round 8: got into / got in are history; a past marker makes any verb history
+    ("I got into AMD this morning", BOOK, {"AMD": HISTORY}),
+    ("got in ALL at the open, how's it look?", BOOK, {"ALL": HISTORY}),
+    ("I got into QCOM yesterday", BOOK, {"QCOM": HISTORY}),
+    ("I cut half my AMD this morning", BOOK, {"AMD": HISTORY}),
+    ("cut out the AMD noise", BOOK, {}),
+    ("cut out the QCOM noise", BOOK, {}),
+    ("cut my losses on AMD?", BOOK, {"AMD": EXIT_L}),
+    ("get into QCOM here", NOT_HELD, {}),  # QCOM has no known side: no gate
+    ("get into ALL here", BOOK, {"ALL": NEW_S}),
+    # round 8 advisories
+    ("get me out of NVDA", BOOK, {"NVDA": EXIT_L}),
+    ("get me out of QCOM", BOOK, {"QCOM": NONE}),
+    ("I'm long AMD and it's breaking down, out?", BOOK, {"AMD": EXIT_L}),
+    ("TSLA shorts covering, should I?", BOOK, {}),
+    ("QCOM shorts covering, should I?", BOOK, {}),
+    ("I'm taking AMD off my watchlist", BOOK, {}),
+    ("I'm taking QCOM off my watchlist", BOOK, {}),
     # pure questions, no verb
     ("how is AMD trading right now", BOOK, {}),
     ("what's the news on NVDA", BOOK, {}),
@@ -251,3 +275,31 @@ def test_a_status_attaches_the_pick_and_the_book_and_no_gate():
 
 def test_the_legacy_side_words_are_gone_from_attach():
     assert not hasattr(attach, "_side_words") and not hasattr(attach, "_SHORT_WORD")
+
+
+#: The final guard, as its own table: each row breaks one condition, so no gate opens.
+GUARD = [
+    # (a) no present-tense trade verb
+    ("AMD looks heavy into the close", "a"),
+    ("QCOM sold off hard", "a"),
+    ("bought NVDA at 140", "a"),
+    # (b) the ticker is not the direct object (an adjective, or the verb has another object)
+    ("buy the AMD dip?", "b"),
+    ("cut out the NVDA noise", "b"),
+    ("sell the TSLA news?", "b"),
+    ("add the QCOM idea to my list", "b"),
+    # (c) a past-time marker in the clause
+    ("sell AMD yesterday was right", "c"),
+    ("I trimmed NVDA earlier", "c"),
+    ("cover TSLA last week worked", "c"),
+    ("add QCOM at the open was a mistake", "c"),
+    # (d) a status frame on a held name
+    ("I'm long AMD", "d"),
+    ("I am short TSLA here", "d"),
+]
+
+
+@pytest.mark.parametrize("text,why", GUARD, ids=[f"{why}:{text[:40]}" for text, why in GUARD])
+def test_the_final_guard_opens_no_gate(text, why):
+    requests = attach.plan_attachments(text, KNOWN, NOW, book=list(BOOK))
+    assert not [r for r in requests if r.name == "gate_pack"], why

@@ -42,6 +42,8 @@ PHRASES: tuple[tuple[tuple[str, ...], str], ...] = tuple(sorted((
     (("sold",), PAST), (("covered",), PAST), (("bought",), PAST), (("trimmed",), PAST),
     (("exited",), PAST), (("got", "out"), PAST), (("stopped", "out"), PAST), (("stop", "out"), PAST),
     (("i'm", "out"), PAST), (("im", "out"), PAST), (("i", "am", "out"), PAST),
+    (("got", "into"), PAST), (("got", "in"), PAST),
+    (("get", "me", "out"), EXIT), (("getting", "me", "out"), EXIT),
     # covering a short
     (("buy", "back"), COVER), (("buying", "back"), COVER), (("buy", "it", "back"), COVER),
     (("cover",), COVER), (("covering",), COVER),
@@ -86,7 +88,7 @@ OBJECT_ONLY = frozenset({"flat", "cut"})
 OBJECT_FILLER = frozenset({"my", "the", "some", "half", "all", "losses", "loss", "on", "in", "of", "position", "out"})
 #: "take/enter/get into X": a trade with no side said; it takes the known side (only with a ticker right after).
 TAKE_WORDS = frozenset({"take", "taking", "enter", "entering"})
-TAKE_INTO = frozenset({"get", "getting", "got"})
+TAKE_INTO = frozenset({"get", "getting"})
 CLAUSE_WORDS = frozenset({"and", "but", "then"})
 _TOKEN = re.compile(r"\$?[A-Za-z][A-Za-z'\-]*|[,;?—]")
 
@@ -118,8 +120,35 @@ def _clause_starts(toks: list[str]) -> set[int]:
     return starts
 
 
-def verbs(text: str, tickers: Iterable[str]) -> list[tuple[int, str]]:
-    """``[(token index, class)]`` for every verb phrase in ``text``."""
+#: The final guard (P18 review round 8). A gate opens only for a present-tense verb whose ticker is its direct
+#: object (within OBJECT_WINDOW filler words) or, with no object at all, the one ticker the clause rules give;
+#: never for a ticker used as an adjective ("the AMD noise"); a clause with a past-time marker turns its verbs
+#: into history. A quiet miss is acceptable; a wrong gate is not.
+OBJECT_WINDOW = 4
+FILLER = frozenset({"my", "the", "some", "half", "all", "of", "on", "in", "into", "to", "position", "more", "a",
+                    "little", "bit", "out", "back", "me", "losses", "loss", "like", "rest", "remaining", "entire",
+                    "whole", "shares", "bunch", "this", "that"})
+#: After the verb these mean "no object": the clause rules pick the ticker.
+OBJECTLESS = frozenset({"it", "them", "here", "now", "at", "?", ",", ";", "\u2014", "too", "already", "today",
+                        "please", "or", "and", "but", "then", "soon", "first"})
+#: A ticker followed by one of these is an adjective, never an object.
+ADJ_NOUNS = frozenset({"noise", "chart", "charts", "setup", "setups", "news", "earnings", "call", "calls", "story",
+                       "long", "short", "position", "trade", "trades", "idea", "ideas", "side", "squeeze",
+                       "interest", "buyback", "buybacks", "move", "levels", "level", "thesis", "puts", "dip", "dips",
+                       "pop", "bounce", "breakout", "breakdown", "rip", "run", "gap", "flush", "weakness", "strength"})
+PAST_MARKER = re.compile(r"\b(?:yesterday|earlier|ago|this morning|last (?:week|night|month|friday|monday|tuesday|"
+                         r"wednesday|thursday|session)|at the open|on (?:monday|tuesday|wednesday|thursday|friday))\b")
+#: "TSLA shorts covering": a market phrase - the verb's subject is the crowd, not him.
+MARKET_SUBJECTS = frozenset({"shorts", "longs", "bears", "bulls", "buyers", "sellers", "funds", "people",
+                             "everyone", "traders"})
+#: A clause starting with one of these has its own subject: a carried status frame stops.
+NEW_SUBJECT = frozenset({"i", "it", "it's", "its", "he", "she", "we", "they", "you", "this", "that", "what",
+                         "how", "should", "is", "does", "do", "can"})
+WATCHLIST_WORDS = frozenset({"watchlist", "list", "radar", "screen", "focus"})
+
+
+def spans(text: str, tickers: Iterable[str]) -> list[tuple[int, int, str]]:
+    """``[(first token, last token, class)]`` for every verb phrase in ``text``."""
     toks = _tokens(text)
     lowered = [t.lower() for t in toks]
     upper = {str(t).upper() for t in tickers}
@@ -128,40 +157,55 @@ def verbs(text: str, tickers: Iterable[str]) -> list[tuple[int, str]]:
     def is_ticker(j: int) -> bool:
         return 0 <= j < len(toks) and toks[j].upper() in upper
 
-    found: list[tuple[int, str]] = []
+    def at(j: int) -> str:
+        return lowered[j] if 0 <= j < len(toks) else ""
+
+    found: list[tuple[int, int, str]] = []
+    carry = ""  # a status frame ("I'm long ...") carried across coordinated side words
     i = 0
     while i < len(toks):
-        word = lowered[i]
-        prev = lowered[i - 1] if i else ""
-        nxt = lowered[i + 1] if i + 1 < len(toks) else ""
+        word, prev, nxt = lowered[i], at(i - 1), at(i + 1)
+        if i in starts and carry and word in NEW_SUBJECT:
+            carry = ""
         if word in CLOSE_WORDS:
             if prev not in ("the", "a") and nxt not in CLOSE_PRICE_NEXT and (nxt in CLOSE_OBJECT_NEXT or is_ticker(i + 1)):
-                found.append((i, CLOSE))
+                found.append((i, i, CLOSE))
             i += 1
             continue
         if word == "closed":
             # "I closed AMD" is history; "AMD closed red / above vwap" is a price.
             if prev not in ("the", "a") and nxt not in CLOSE_PRICE_NEXT:
-                found.append((i, PAST))
+                found.append((i, i, PAST))
+            i += 1
+            continue
+        if word == "out" and i in starts and at(i + 1) in ("", "?", ",", ";"):
+            found.append((i, i, EXIT))  # "..., out?"
             i += 1
             continue
         if word in ("short", "long"):
-            if prev == "a" and nxt in ("on", "in", "for") and is_ticker(i + 2):
-                found.append((i, GO_SHORT if word == "short" else GO_LONG))  # "a long on TGT"
+            side_status = STATUS_SHORT if word == "short" else STATUS_LONG
+            obj = is_ticker(i + 1) or nxt in SIDE_OBJECT_NEXT or (nxt == "on" and is_ticker(i + 2))
+            if carry and i in starts and obj:
+                found.append((i, i, side_status))  # "I'm short TSLA and long AMD"
                 i += 1
                 continue
-            status = prev in ("i'm", "im") or (prev == "am" and i >= 2 and lowered[i - 2] == "i")
-            if status and (is_ticker(i + 1) or nxt in SIDE_OBJECT_NEXT):
-                found.append((i, STATUS_SHORT if word == "short" else STATUS_LONG))  # "I'm long AMD"
+            if prev == "a" and nxt in ("on", "in", "for") and is_ticker(i + 2):
+                found.append((i, i, GO_SHORT if word == "short" else GO_LONG))  # "a long on TGT"
+                i += 1
+                continue
+            status = prev in ("i'm", "im") or (prev == "am" and at(i - 2) == "i")
+            if status and obj:
+                found.append((i, i, side_status))  # "I'm long AMD", "I'm long on AMD"
+                carry = side_status
                 i += 1
                 continue
             framed = (i in starts or prev in SIDE_FRAME_PREV) and prev not in SIDE_NEVER_PREV
             # "a QCOM long at 230", "size up TSLA short": the side right after its ticker, at the end or before
             # at/here/now - never "the TSLA short", "my AMD long".
-            trailing = (is_ticker(i - 1) and (lowered[i - 2] if i >= 2 else "") not in HELD_NOUN_PREV
+            trailing = (is_ticker(i - 1) and at(i - 2) not in HELD_NOUN_PREV
                         and nxt in ("", "at", "here", "now", ",", "?"))
             if (framed and nxt not in SIDE_NEVER_NEXT and (is_ticker(i + 1) or nxt in SIDE_OBJECT_NEXT)) or trailing:
-                found.append((i, GO_SHORT if word == "short" else GO_LONG))
+                found.append((i, i, GO_SHORT if word == "short" else GO_LONG))
             i += 1
             continue
         if word in OBJECT_ONLY:
@@ -169,60 +213,109 @@ def verbs(text: str, tickers: Iterable[str]) -> list[tuple[int, str]]:
             while j < len(toks) and j <= i + 4 and lowered[j] in OBJECT_FILLER:
                 j += 1
             if is_ticker(j):
-                found.append((i, EXIT))
+                found.append((i, i, EXIT))
             i += 1
             continue
-        if word in TAKE_WORDS and is_ticker(i + 1) and (lowered[i + 2] if i + 2 < len(toks) else "") != "off":
-            found.append((i, TAKE))  # "should I take TSLA", "entering TSLA"
+        if word in ("take", "taking") and is_ticker(i + 1) and at(i + 2) == "off":
+            if at(i + 3) not in ("my", "the") and at(i + 3) not in WATCHLIST_WORDS:
+                found.append((i, i + 2, EXIT))  # "take NVDA off" - never "off my watchlist"
+            i += 3
+            continue
+        if word in TAKE_WORDS and is_ticker(i + 1):
+            found.append((i, i, TAKE))  # "should I take TSLA", "entering TSLA"
             i += 1
             continue
         if word in TAKE_INTO and nxt in ("into", "in") and is_ticker(i + 2):
-            found.append((i, TAKE))  # "getting into ALL"
+            found.append((i, i + 1, TAKE))  # "getting into ALL"
             i += 2
-            continue
-        if word in ("take", "taking") and is_ticker(i + 1) and i + 2 < len(toks) and lowered[i + 2] == "off":
-            found.append((i, EXIT))  # "take NVDA off"
-            i += 3
             continue
         for phrase, kind in PHRASES:
             if tuple(lowered[i:i + len(phrase)]) != phrase:
                 continue
-            after = lowered[i + len(phrase)] if i + len(phrase) < len(toks) else ""
+            after = at(i + len(phrase))
             if kind == COVER and phrase[-1] == "back" and after in BUYBACK_NOUN_NEXT:
                 break  # a buyback program, not a cover
-            found.append((i, kind))
+            if prev in MARKET_SUBJECTS and kind != PAST:
+                break  # "TSLA shorts covering": the crowd, not him
+            found.append((i, i + len(phrase) - 1, kind))
             i += len(phrase) - 1
             break
         i += 1
     return found
 
 
+def verbs(text: str, tickers: Iterable[str]) -> list[tuple[int, str]]:
+    """``[(token index, class)]`` for every verb phrase in ``text``."""
+    return [(first, kind) for first, _last, kind in spans(text, tickers)]
+
+
 def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
-    """``{TICKER: {verb classes}}`` by the clause rules above."""
+    """``{TICKER: {verb classes}}``: the object rule first, then the clause rules, under the final guard."""
     toks = _tokens(text)
+    lowered = [t.lower() for t in toks]
     upper = [str(t).upper() for t in tickers]
-    places = [(i, tok.upper()) for i, tok in enumerate(toks) if tok.upper() in upper]
     out: dict[str, set[str]] = {sym: set() for sym in upper}
     clause, number = [], 0
     for tok in toks:
-        if tok in (",", ";", "?", "—") or tok.lower() in CLAUSE_WORDS:
+        if tok in (",", ";", "?", "\u2014") or tok.lower() in CLAUSE_WORDS:
             number += 1
         clause.append(number)
+    words_of: dict[int, list[str]] = {}
+    for n, c in enumerate(clause):
+        words_of.setdefault(c, []).append(lowered[n])
+    past_clauses = {c for c, words in words_of.items() if PAST_MARKER.search(" ".join(words))}
+    # A ticker followed by a noun ("the AMD noise", "QCOM short interest") is an adjective: never an object.
+    def adjective(i: int) -> bool:
+        nxt = lowered[i + 1] if i + 1 < len(toks) else ""
+        if nxt in ("long", "short"):  # "the TSLA short" is his position; "QCOM short interest" is a noun phrase
+            return (lowered[i + 2] if i + 2 < len(toks) else "") in SIDE_NEVER_NEXT
+        return nxt in ADJ_NOUNS
+
+    places = [(i, tok.upper()) for i, tok in enumerate(toks) if tok.upper() in upper and not adjective(i)]
+    ticker_at = dict(places)
     names_in_sentence = {sym for _, sym in places}
-    for index, kind in verbs(text, upper):
+    found = spans(text, upper)
+    for first, last, kind in found:
+        c = clause[first]
+        if kind not in (PAST, STATUS_LONG, STATUS_SHORT) and c in past_clauses:
+            kind = PAST  # "I cut half my AMD this morning" is what he did
+        j, skipped = last + 1, 0
+        while j < len(toks) and lowered[j] in FILLER and toks[j].upper() not in upper and skipped < OBJECT_WINDOW:
+            j, skipped = j + 1, skipped + 1
+        if j < len(toks) and j in ticker_at and clause[j] == c:
+            out[ticker_at[j]].add(kind)  # the direct object
+            continue
+        nxt = lowered[j] if j < len(toks) else ""
+        if j < len(toks) and toks[j].upper() in upper and j not in ticker_at:
+            continue  # the object is a ticker used as an adjective: no gate
+        if j < len(toks) and nxt not in OBJECTLESS and clause[j] == c and not (
+                kind in (GO_LONG, GO_SHORT) and first > 0 and first - 1 in ticker_at):
+            continue  # a non-ticker object ("buy the dip"): no gate, a quiet miss
+        # No object: the clause rules.
         if len(names_in_sentence) == 1:
             out[next(iter(names_in_sentence))].add(kind)
             continue
-        here = [(i, sym) for i, sym in places if clause[i] == clause[index]]
+        here = [(i, sym) for i, sym in places if clause[i] == c]
         if len({sym for _, sym in here}) == 1:
             out[here[0][1]].add(kind)
             continue
-        after = [(i - index, sym) for i, sym in here if i > index]
-        before = [(index - i, sym) for i, sym in here if i < index]
-        if after:
-            out[min(after)[1]].add(kind)
-        elif before:
+        before = [(first - i, sym) for i, sym in here if i < first]
+        if before:
             out[min(before)[1]].add(kind)
+    # A carried status frame covers coordinated tickers with no verb of their own ("I'm long NVDA and AMD").
+    status_kind, status_clause = "", -1
+    verb_clauses = {clause[first]: kind for first, _last, kind in found}
+    for c in sorted(words_of):
+        kind = verb_clauses.get(c)
+        if kind in (STATUS_LONG, STATUS_SHORT):
+            status_kind, status_clause = kind, c
+            continue
+        if kind is not None or not status_kind or (words_of[c] and words_of[c][0] in NEW_SUBJECT):
+            status_kind = "" if kind is not None or (words_of[c] and words_of[c][0] in NEW_SUBJECT) else status_kind
+            continue
+        for i, sym in places:
+            if clause[i] == c and c > status_clause:
+                out[sym].add(status_kind)
     return out
 
 
