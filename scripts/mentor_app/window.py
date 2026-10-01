@@ -145,6 +145,26 @@ class _Bridge(QObject):
     habit_item = Signal(object)
     routine_ready = Signal(object)
     dock_saved = Signal(object)
+    view_saved = Signal(object)
+
+
+#: Saved view choices (chat store state keys).
+FONT_KEY = "view_font_pt"
+CLEAR_ON_SEND_KEY = "view_clear_on_send"
+FONT_MIN, FONT_MAX = 8, 28
+
+
+class _Blocks(list):
+    """The transcript blocks; remembers which ones changed since the last Clear."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.touched: set[int] = set()
+
+    def __setitem__(self, index, value) -> None:  # noqa: ANN001
+        super().__setitem__(index, value)
+        if isinstance(index, int):
+            self.touched.add(index % len(self))
 
 
 class InputBox(QPlainTextEdit):
@@ -279,7 +299,10 @@ class MentorWindow(QMainWindow):
         self._plan_after = 0
         self._session_id: int | None = None
         self._worker: Any = None
-        self._blocks: list[str] = []
+        self._blocks: _Blocks = _Blocks()
+        #: Clear hides the blocks before this index; the chat history behind them is kept.
+        self._shown_from = 0
+        self._clear_on_send = False
         self._io = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mentor-store")
         self._threads: list[threading.Thread] = []
         self._focus_server = None
@@ -551,6 +574,27 @@ class MentorWindow(QMainWindow):
         self.ai_pause_button = AiPauseButton(self, now=self._now)
         self.ai_pause_button.changed.connect(self.check_ai_pause)
         header = QHBoxLayout()
+        # Its own row so a narrow docked tab still fits. Clear wipes the screen only; the mentor remembers.
+        view_row = QHBoxLayout()
+        self.clear_button = QPushButton("Clear")
+        self.clear_button.setToolTip("Clear the screen. The mentor still remembers the talk.")
+        self.clear_button.clicked.connect(self.clear_screen)
+        view_row.addWidget(self.clear_button)
+        self.clear_on_send_button = QPushButton("Clear on new prompt")
+        self.clear_on_send_button.setCheckable(True)
+        self.clear_on_send_button.setToolTip("When on, the screen clears each time you ask something")
+        self.clear_on_send_button.toggled.connect(self.set_clear_on_send)
+        view_row.addWidget(self.clear_on_send_button)
+        self.font_down_button = QPushButton("A-")
+        self.font_down_button.setToolTip("Smaller text")
+        self.font_down_button.clicked.connect(lambda: self.change_font(-1))
+        view_row.addWidget(self.font_down_button)
+        self.font_up_button = QPushButton("A+")
+        self.font_up_button.setToolTip("Bigger text")
+        self.font_up_button.clicked.connect(lambda: self.change_font(1))
+        view_row.addWidget(self.font_up_button)
+        self._bridge.view_saved.connect(self._on_view_saved)
+        view_row.addStretch(1)
         header.addStretch(1)
         # P15b: paste the morning brief into the Market Journal (the desk's own writer).
         self.paste_button = QPushButton("Paste brief")
@@ -579,6 +623,7 @@ class MentorWindow(QMainWindow):
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.addLayout(header)
+        left_layout.addLayout(view_row)
         left_layout.addWidget(self.banner)
         left_layout.addWidget(self.transcript, 3)
         if self.card_host is not None:
@@ -615,12 +660,56 @@ class MentorWindow(QMainWindow):
         self.refresh_inbox()
 
     def _render(self) -> None:
-        self.transcript.setMarkdown("\n\n---\n\n".join(self._blocks))
+        start, touched = self._shown_from, self._blocks.touched
+        shown = [block for i, block in enumerate(self._blocks) if i >= start or i in touched]
+        self.transcript.setMarkdown("\n\n---\n\n".join(shown))
         self.transcript.moveCursor(QTextCursor.MoveOperation.End)
 
     def _add_block(self, markdown: str) -> None:
         self._blocks.append(markdown)
         self._render()
+
+    def clear_screen(self) -> None:
+        """Hide everything on screen; the chat history the model reads is untouched."""
+        cut = len(self._blocks)
+        if self._stream_index is not None:
+            cut = min(cut, self._stream_index)  # a reply still streaming stays up
+        self._shown_from = cut
+        self._blocks.touched.clear()  # a card still building comes back when it lands
+        self._render()
+
+    def set_clear_on_send(self, on: bool) -> None:
+        self._clear_on_send = bool(on)
+        self._submit_io(lambda: self.store.set_state(CLEAR_ON_SEND_KEY, "on" if on else "off"))
+
+    def change_font(self, step: int) -> None:
+        size = max(FONT_MIN, min(FONT_MAX, self.transcript.font().pointSize() + int(step)))
+        self._apply_font(size)
+        self._submit_io(lambda: self.store.set_state(FONT_KEY, str(size)))
+
+    def _apply_font(self, size: int) -> None:
+        for widget in (self.transcript, self.input):
+            font = widget.font()
+            font.setPointSize(int(size))
+            widget.setFont(font)
+        self._render()
+
+    def _load_view_state(self) -> None:
+        self._bridge.view_saved.emit((self.store.get_state(FONT_KEY), self.store.get_state(CLEAR_ON_SEND_KEY)))
+
+    def _on_view_saved(self, saved: Any) -> None:
+        """The text size and Clear-on-new-prompt from the last run."""
+        font, clear_on = saved
+        try:
+            size = int(font)
+        except (TypeError, ValueError):
+            size = 0
+        if FONT_MIN <= size <= FONT_MAX:
+            self._apply_font(size)
+        self.clear_on_send_button.blockSignals(True)
+        self.clear_on_send_button.setChecked(clear_on == "on")
+        self.clear_on_send_button.blockSignals(False)
+        self._clear_on_send = clear_on == "on"
 
     def _add_note(self, markdown: str) -> None:
         self._add_block(f"*Mentor (desk):* {markdown}")
@@ -667,6 +756,7 @@ class MentorWindow(QMainWindow):
         self.install_recall_fallback()
         self._submit_io(self._open_session)
         self._submit_io(self._load_dock_state)
+        self._submit_io(self._load_view_state)
         self.refresh_context()
         self._paused_until = self._ai_paused_until()
         if self._paused_until is not None:
@@ -1276,6 +1366,8 @@ class MentorWindow(QMainWindow):
         self.send(text)
 
     def send(self, text: str) -> None:
+        if self._clear_on_send:
+            self.clear_screen()
         self._maybe_still_true()
         result = commands.handle(text)
         if result is not None:

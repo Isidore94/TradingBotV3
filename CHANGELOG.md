@@ -56,3 +56,4 @@
 
 - 2026-09-28 Desk: removed the "Best right now" box from the M5 column and its "Show: Best right now" filter choice (trader: it listed weak names); a saved Best choice falls back to Grade B and up. Gates #231/#232 retired.
 - 2026-10-01 Mentor dock: the docked Mentor checks its real owner window every poll and sets the desk again when Qt drops it, so clicking the desk never hides the Mentor behind it (trader lost it after a veto).
+- 2026-10-01 Mentor app: Clear (screen only; the mentor keeps the talk), a "Clear on new prompt" toggle, and A-/A+ text size, both remembered (trader).

@@ -630,3 +630,67 @@ def test_a_token_after_the_turn_ended_changes_nothing(window, app):
     window._on_token("STALE")
     assert window._blocks == before, "a late token from a finished stream never lands in a card"
     assert "STALE" not in _text(window)
+
+
+def _flush_io(win):
+    from PySide6.QtWidgets import QApplication
+
+    win._io.submit(lambda: None).result(timeout=5)
+    QApplication.processEvents()
+
+
+def test_clear_empties_the_screen_but_the_bot_keeps_the_talk(window):
+    window.chat.add("user", "earlier question")
+    window._add_note("old line")
+    window._add_note("older card")
+    turns = list(window.chat.turns)
+    window.clear_button.click()
+    assert "old line" not in _text(window) and "older card" not in _text(window)
+    assert list(window.chat.turns) == turns, "the bot still remembers what was said"
+    window._add_note("new line")
+    assert "new line" in _text(window) and "old line" not in _text(window)
+
+
+def test_a_card_still_building_shows_up_after_a_clear(window):
+    window._add_block("**Pick NVDA**: building...")
+    index = len(window._blocks) - 1
+    window.clear_screen()
+    window._blocks[index] = "**Pick NVDA**: done"
+    window._render()
+    assert "done" in _text(window), "a reply that lands after Clear is not lost"
+
+
+def test_a_streaming_reply_stays_on_screen_through_a_clear(window):
+    window._add_note("old line")
+    window._stream_index = len(window._blocks)
+    window._blocks.append("**Mentor:** half")
+    window.clear_screen()
+    assert "half" in _text(window) and "old line" not in _text(window)
+    window._stream_index = None
+
+
+def test_clear_on_new_prompt_clears_before_each_question(window):
+    assert window.clear_on_send_button.isCheckable() and not window.clear_on_send_button.isChecked()
+    window._add_note("old line")
+    window.send("/help")
+    assert "old line" in _text(window), "off by default"
+    window.clear_on_send_button.click()
+    _flush_io(window)
+    window.send("/help")
+    assert "old line" not in _text(window) and "/help" in _text(window)
+    assert window.store.get_state("view_clear_on_send") == "on"
+
+
+def test_font_buttons_grow_and_shrink_the_text_and_are_remembered(window):
+    start = window.transcript.font().pointSize()
+    window.font_up_button.click()
+    window.font_up_button.click()
+    assert window.transcript.font().pointSize() == start + 2
+    assert window.input.font().pointSize() == start + 2
+    window.font_down_button.click()
+    assert window.transcript.font().pointSize() == start + 1
+    _flush_io(window)
+    assert window.store.get_state("view_font_pt") == str(start + 1)
+    for _ in range(60):
+        window.font_down_button.click()
+    assert window.transcript.font().pointSize() >= 8, "never shrinks to nothing"
