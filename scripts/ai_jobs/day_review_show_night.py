@@ -154,12 +154,21 @@ def _evidence(pack: Mapping[str, Any], narration: Mapping[str, Any] | None, dige
                     dropped.setdefault(item, part)
             evidence["pack_trimmed"] = list(trimmed)
             evidence["allowed_source_ids"] = [item for item in allowed if item not in dropped]
+            if part == "trades":
+                # Said plainly, so a show with no trade slide is never read as "no trades".
+                evidence["trades_omitted"] = day_review_show.trades_omitted_line(_trade_count(pack))
     if _chars(evidence) > MAX_EVIDENCE_CHARS:
         raise ValueError(
             f"the show evidence is {_chars(evidence)} characters after trimming; "
             f"at most {MAX_EVIDENCE_CHARS} fit the {TIMEOUT_SECONDS}s call"
         )
     return evidence, dropped
+
+
+def _trade_count(pack: Mapping[str, Any]) -> int:
+    trades = pack.get("trades")
+    rows = trades.get("rows") if isinstance(trades, Mapping) else None
+    return len([row for row in rows or () if isinstance(row, Mapping)])
 
 
 def _chars(evidence: Mapping[str, Any]) -> int:
@@ -223,7 +232,7 @@ def run_day_review_show(
                 f"the show cited id(s) dropped to fit the call: {', '.join(hidden)}"
             )
         model = str(result.get("model") or "")
-        story._atomic_write(destination, {
+        record = {
             "schema": day_review_show.SCHEMA,
             "session_date": session,
             "generated_at": story._moment(now),
@@ -233,7 +242,11 @@ def run_day_review_show(
             "model": model,
             "narration_read": narration is not None,
             "show": deck,
-        })
+        }
+        if "trades" in (evidence.get("pack_trimmed") or ()):
+            record["trades_omitted"] = _trade_count(pack)
+            record["show"] = day_review_show.with_trades_omitted(deck, record["trades_omitted"])
+        story._atomic_write(destination, record)
     except Exception as exc:  # noqa: BLE001 - the last good show is the fallback
         _log.debug("The day show was not written.", exc_info=True)
         return _result(STATUS_DEGRADED, f"the show was rejected; the prior show was kept: {exc}")

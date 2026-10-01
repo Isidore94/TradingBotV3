@@ -456,6 +456,63 @@ def test_the_show_view_hides_no_id_before_trimming():
         assert day_review_pack.allowed_source_ids(night._show_view(pack)) == day_review_pack.allowed_source_ids(pack)
 
 
+def _trades_dropped_pack() -> dict:
+    """The 09-29 shape: heavy enough that the whole trades section goes."""
+    pack = _heavy_pack()
+    words = "testing the bottom of the range and the buying has stalled here again "
+    pack["trader_said"] = list(pack["trader_said"]) + [
+        {"at": f"2026-09-25T15:{i:02d}:10+00:00", "direction": "", "entry_id": f"mj-more-{i:02d}",
+         "horizon": "", "kind": "observation", "source_id": f"said:mj-more-{i:02d}:observation",
+         "text": words * 2, "timeframe": "M5"}
+        for i in range(6)
+    ]
+    return pack
+
+
+def _no_trade_reply() -> dict:
+    reply = _heavy_reply()
+    reply["slides"][3] = _slide("number", "The small caps", "IWM had its own day.", ["measured:IWM"])
+    return reply
+
+
+def test_a_show_with_its_trades_dropped_says_so_in_the_evidence_and_the_close_slide(tmp_path):
+    from ai_jobs import day_review_show_night as night
+
+    pack = _trades_dropped_pack()
+    day_review_pack.write_pack(pack, root=tmp_path)
+    calls = []
+
+    def _request(**kwargs):
+        calls.append(kwargs)
+        return {"summary": copy.deepcopy(_no_trade_reply()), "model": "gemma3:12b"}
+
+    outcome = night.run_day_review_show(session_date=SESSION, root=tmp_path, request=_request)
+    assert outcome["status"] == "ok", outcome
+    line = "trades omitted to fit tonight's call (10 trades that day)"
+    evidence = calls[0]["evidence"]
+    assert "trades" in evidence["pack_trimmed"]
+    assert evidence["trades_omitted"] == line
+    stored = json.loads(show.show_path(SESSION, root=tmp_path).read_text(encoding="utf-8"))
+    assert stored["trades_omitted"] == 10
+    close = stored["show"]["slides"][-1]
+    assert close["kind"] == "close" and close["lines"] == [line]
+    # The desk re-verifies the deck and still prints the line on the close slide.
+    chosen = show.desk_deck(stored, pack, session_date=SESSION)
+    assert chosen["facts_only"] is False
+    assert line in chosen["deck"]["slides"][-1]["lines"]
+
+
+def test_a_show_that_kept_its_trades_says_nothing_about_omitting_them(tmp_path):
+    from ai_jobs import day_review_show_night as night
+
+    _pack_, calls, request = _write_heavy(tmp_path, _heavy_reply())
+    night.run_day_review_show(session_date=SESSION, root=tmp_path, request=request)
+    assert "trades_omitted" not in calls[0]["evidence"]
+    stored = json.loads(show.show_path(SESSION, root=tmp_path).read_text(encoding="utf-8"))
+    assert "trades_omitted" not in stored
+    assert "lines" not in stored["show"]["slides"][-1]
+
+
 def test_the_model_is_handed_the_packs_tickers_and_xlk_still_rejects(tmp_path):
     from ai_jobs import day_review_show_night as night
 

@@ -652,6 +652,27 @@ def with_regime_read(deck: Mapping[str, Any], regime_read: Mapping[str, Any] | N
     return body
 
 
+def trades_omitted_line(count: int) -> str:
+    """The desk's own line for a show whose trades were dropped to fit the night call."""
+    return f"trades omitted to fit tonight's call ({int(count)} trades that day)"
+
+
+def with_trades_omitted(deck: Mapping[str, Any], count: Any) -> dict[str, Any]:
+    """The deck with `trades_omitted_line` on its close slide (else its last); no count, no change."""
+    body = dict(deck or {})
+    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+        return body
+    slides = [dict(slide) for slide in body.get("slides") or () if isinstance(slide, Mapping)]
+    if not slides:
+        return body
+    at = max((index for index, slide in enumerate(slides) if slide.get("kind") == "close"), default=len(slides) - 1)
+    line = trades_omitted_line(count)
+    if line not in (slides[at].get("lines") or ()):
+        slides[at]["lines"] = [*list(slides[at].get("lines") or ()), line]
+    body["slides"] = slides
+    return body
+
+
 def desk_deck(
     stored: Mapping[str, Any] | None,
     pack: Mapping[str, Any] | None,
@@ -697,7 +718,7 @@ def desk_deck(
                     if isinstance(slide, Mapping)
                 ],
             }
-            deck = verify_show(reply, pack)
+            deck = with_trades_omitted(verify_show(reply, pack), stored.get("trades_omitted"))
         except (ShowRejected, AttributeError, TypeError) as exc:
             fallback_reason = f"the show failed its checks: {exc}"
         else:
