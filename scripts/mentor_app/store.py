@@ -613,6 +613,14 @@ class MentorChatStore:
             row["mood_tags"] = json.loads(row.pop("mood_tags_json") or "[]")
         return rows
 
+    def asks(self, since_utc: str = "") -> list[dict[str, Any]]:
+        """P18 D: the asks view (PT bucket, weekday, pack set, kind per user turn); ``mentor_app.routines``."""
+        from mentor_app import routines
+
+        rows = self._read("SELECT id, ts_utc, role, tool_calls_json FROM turns WHERE ts_utc >= ? ORDER BY id",
+                          (since_utc,))
+        return routines.asks_from_turns(rows)
+
     def unembedded_journal(self, model: str, *, limit: int = 50) -> list[dict[str, Any]]:
         return self._read(
             "SELECT j.id, j.text FROM journal_entries j LEFT JOIN embeddings e "

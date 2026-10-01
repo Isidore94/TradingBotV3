@@ -24,6 +24,8 @@ HELP_TEXT = (
     "- `/journal` today's journal lines with their mood tags; `/journal on` keeps every message as a journal line"
     " (long dictation), `/journal off` goes back to telling self talk from questions\n"
     "- `/habits` what you keep saying and feeling, counted by the night over 30 days (observations, never rules)\n"
+    "- `/routine` what you usually ask at each half hour (I get it ready when that half hour starts);"
+    " `/forget routine 06:30` hides a line\n"
     "- `/recall <text>` search what we said before (plain text search when the brain is off)\n"
     "- `/forget <id>` retire a note (it is kept, never deleted); `/keep <id>` says it is still true\n"
     "- `/tape` the tape: Auto mode, D1, last night's read, econ, sectors (read aloud when the brain is up)\n"
@@ -108,6 +110,15 @@ def handle(text: str) -> CommandResult | None:
         if not rest:
             return CommandResult("error", "Try `/remember I stop after two losses`.")
         return CommandResult("remember", "", rest)
+    if name == "forget" and rest.lower().split()[:1] == ["routine"]:
+        bucket = rest.split(None, 1)[1].strip() if len(rest.split()) > 1 else ""
+        if not re.fullmatch(r"\d{1,2}:(?:00|30)", bucket):
+            return CommandResult("error", "Try `/forget routine 06:30` (the half hour `/routine` shows).")
+        return CommandResult("forget_routine", "", bucket.zfill(5))
+    if name in ("routine", "routines"):
+        if rest:
+            return CommandResult("error", "Try `/routine` (no arguments).")
+        return CommandResult("routine")
     if name in ("forget", "keep"):
         from mentor_app.memory import parse_note_id
 

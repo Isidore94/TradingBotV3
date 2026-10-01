@@ -148,6 +148,9 @@ def coach_items(payload: Mapping[str, Any] | None) -> list[MemoryItem]:
             refs = ", ".join(str(ref) for ref in item.get("evidence_refs") or ())
             rows.append({"id": f"night:coach:{day}:{prefix}{n}", "date": day,
                          "text": f"{label}{since}: {_clean(item['text'])}" + (f" (cites {refs})" if refs else "")})
+    if _clean(payload.get("routine")):
+        # P18: the night's one routine line, written by code only on the night the routine changed.
+        rows.append({"id": f"night:coach:{day}:r1", "date": day, "text": f"routine: {_clean(payload['routine'])}"})
     return [night_item(row, PRIORITY_COACH, n) for n, row in enumerate(rows)]
 
 

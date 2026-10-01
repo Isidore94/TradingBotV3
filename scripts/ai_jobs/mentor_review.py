@@ -705,6 +705,30 @@ def read_tape_candidate(session: str, grades: Sequence[Mapping[str, Any]]) -> di
             "text": f"Your rest-of-day read and the tape disagreed {len(run)} sessions running ({days})"}
 
 
+ROUTINES_FILE = "mentor_routines.json"
+#: Calendar days of turns read for the routine count (enough for 10 session days).
+ROUTINE_LOOKBACK_DAYS = 21
+
+
+def publish_routines(root: Path, path: Path, session: str, built_utc: str) -> str:
+    """P18 D: write ``mentor_routines.json`` from the asks view; returns the brief's line ("" unless it changed)."""
+    from mentor_app import routines
+
+    lo = (datetime.fromisoformat(session).date() - timedelta(days=ROUTINE_LOOKBACK_DAYS)).isoformat()
+    rows = _rows(path, "SELECT id, ts_utc, role, tool_calls_json FROM turns WHERE ts_utc >= ? ORDER BY id", (lo,))
+    table = routines.find_routines(routines.asks_from_turns(rows), session)
+    target = Path(root) / ROUTINES_FILE
+    old = routines.read_routines(target)
+    if _text(old.get("session_date")) == session:  # a rerun keeps tonight's line unless the table moved again
+        line = _text(old.get("line")) if old.get("routines") == table["routines"] else routines.routine_line(
+            table, {"routines": old.get("previous") or []})
+        previous = old.get("previous") or []
+    else:
+        line, previous = routines.routine_line(table, old), old.get("routines") or []
+    _publish(target, {**table, "built_utc": built_utc, "line": line, "previous": previous})
+    return line
+
+
 def build_inputs(path: Path, session: str, facts: Mapping[str, Any], *, report: Any = None,
                  night: Mapping[str, Sequence[Mapping[str, Any]]] | None = None) -> dict[str, Any]:
     """Everything the model may see, with ids; ``inputs_hash`` ignores the clock."""
@@ -984,7 +1008,7 @@ def _fact_issue(issue: Mapping[str, Any]) -> dict[str, Any]:
 
 def brief_payload(session: str, built_utc: str, inputs: Mapping[str, Any], candidates: Sequence[Mapping[str, Any]],
                   *, kept: Mapping[str, Any] | None = None, model: str = "", dropped: int = 0,
-                  habits: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
+                  habits: Sequence[Mapping[str, Any]] = (), routine: str = "") -> dict[str, Any]:
     """The published coach brief; without ``kept`` it is the facts part only (issues worded by code)."""
     body = kept or {"watch": [], "missing": [], "one_line": dict(NO_ONE_LINE),
                     "issues": [_fact_issue(issue) for issue in candidates[:MAX_ISSUES]]}
@@ -995,6 +1019,8 @@ def brief_payload(session: str, built_utc: str, inputs: Mapping[str, Any], candi
         "missing": list(body.get("missing") or ()), "issues": list(body.get("issues") or ()), "dropped": dropped,
         # P18: the top habits (observations, never rules), worded by the model when it answered, else by code.
         "habits": [dict(item) for item in habits],
+        # P18: "You usually ask X at Y", only on the night the routine table changed (code, never model text).
+        "routine": routine,
     }
 
 
@@ -1008,12 +1034,12 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def publish_fact_brief(root: Path, session: str, built_utc: str, inputs: Mapping[str, Any],
                        candidates: Sequence[Mapping[str, Any]],
-                       habits: Sequence[Mapping[str, Any]] = ()) -> Path | None:
+                       habits: Sequence[Mapping[str, Any]] = (), routine: str = "") -> Path | None:
     """The deterministic half: publish the facts-only brief unless a worded one already stands for the session."""
     path = published_path(root, COACH_STEM, session)
     if _read_json(path).get("worded"):
         return None
-    return _publish(path, brief_payload(session, built_utc, inputs, candidates, habits=habits))
+    return _publish(path, brief_payload(session, built_utc, inputs, candidates, habits=habits, routine=routine))
 
 
 def ask_brief(request: Callable[..., Mapping[str, Any]], *, model: str, post: Callable[..., Any],
@@ -1183,6 +1209,14 @@ def run_mentor_review(
     except Exception as exc:  # noqa: BLE001 - habits never cost the review; the last good registry stays
         _log.debug("mentor_review: habits could not be counted.", exc_info=True)
         habits_note = f"; habits not counted ({type(exc).__name__}: {exc})"
+    # P18 D: the asks of the last session days counted into routines (deterministic); the brief's line on change.
+    routine = ""
+    try:
+        routine = publish_routines(root, path, session, facts["built_utc"])
+        outputs.append(str(Path(root) / ROUTINES_FILE))
+    except Exception as exc:  # noqa: BLE001 - routines never cost the review; the last good file stays
+        _log.debug("mentor_review: routines could not be counted.", exc_info=True)
+        habits_note += f"; routines not counted ({type(exc).__name__}: {exc})"
     night["issues"] = candidate_rows(candidates)
     registry_note = ""
     try:
@@ -1210,7 +1244,8 @@ def run_mentor_review(
         fact_habits = mentor_habits.fact_habits(habits)
     brief_path = published_path(root, COACH_STEM, session)
     try:
-        if publish_fact_brief(root, session, facts["built_utc"], inputs, candidates, fact_habits) is not None:
+        if publish_fact_brief(root, session, facts["built_utc"], inputs, candidates, fact_habits,
+                              routine) is not None:
             outputs.append(str(brief_path))
     except OSError as exc:
         inputs_note += f"; the facts-only coach brief could not be published ({exc})"
@@ -1262,7 +1297,8 @@ def run_mentor_review(
                 habits_said = f", habits not worded, code wording kept: {exc}"
         try:
             _publish(brief_path, brief_payload(session, facts["built_utc"], inputs, candidates, kept=kept_brief,
-                                               model=brief_model, dropped=brief_dropped, habits=worded_habits))
+                                               model=brief_model, dropped=brief_dropped, habits=worded_habits,
+                                               routine=routine))
         except OSError as exc:
             return f"coach brief could not be published (the last good one is kept): {exc}"
         if str(brief_path) not in outputs:
