@@ -380,12 +380,18 @@ def _agg_row(row_id: str, label: str, members: list[dict[str, Any]], tier: dict[
         d1_text = f"D1 {SLICE_HORIZON_SESSIONS}-session outcome n={d1_n}" + (
             f" (too few vs the floor {floor})" if d1_n < floor else " (mixed sides: no single baseline)")
     verdict = VERDICT_WORDS[out["verdict"]]
+    h5 = out[f"h{VERDICT_HORIZON}"]
+    if h5["n"] and h5["mean"] is not None and out["verdict"] != "too_few":
+        # The basis sits next to the verdict, so the 10-session numbers are never read as its reason.
+        verdict = f"({VERDICT_HORIZON}d mean {_pct(h5['mean'])}, n={h5['n']}): {verdict}"
     if row_id == "veto:agg:total":
         verdict = verdict.replace("vetoing this reason", "vetoing these names as a whole")
     out.update({"d1_n": d1_n, "d1_wins": d1_wins, "d1_lb": d1_lb, "clears_baseline": clears, "verdict_text": verdict})
     if out["verdict"] == "too_few":
         verdict = f"too few ({out['h5']['n']} measured at 5 sessions, floor {floor})"
     out["text"] = (f"{label}: {len(members)} veto(es); " + "; ".join(parts) + f"; {d1_text}; clears_baseline: "
+                   f"{clears}; verdict {verdict}" if verdict.startswith("(") else
+                   f"{label}: {len(members)} veto(es); " + "; ".join(parts) + f"; {d1_text}; clears_baseline: "
                    f"{clears}; verdict: {verdict}")
     return out
 
@@ -445,12 +451,15 @@ def build_window(scope: str, *, now: datetime | None = None, paths: VetoPaths | 
         row.update({"reason_code": reason, "side": side})
         agg.append(row)
 
-    def rank(row: Mapping[str, Any]) -> tuple[int, float]:
+    def order(row: Mapping[str, Any]) -> tuple[int, float]:
         # Worst record first: a veto that cost a winning cohort, by its mean side return; too few last.
         mean = row["h5"]["mean"]
         return (0 if row["verdict"] != "too_few" else 1, -(mean if mean is not None else 0.0))
 
-    rows.extend(sorted(agg, key=rank))
+    from mentor_packs.mirror_pack import rank_vetoes
+
+    rows.extend(rank_vetoes(sorted(agg, key=order), mean=lambda row: row["h5"]["mean"],
+                            measured=lambda row: row["verdict"] != "too_few"))
     total_sides = {m["side"] for m in members}
     total = _agg_row("veto:agg:total", "All vetoes together (what the vetoed set did as a whole)", members, tier,
                      cohort, through, floor, baselines, next(iter(total_sides)) if len(total_sides) == 1 else "")

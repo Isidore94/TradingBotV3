@@ -492,11 +492,12 @@ def known_symbols(
     The order is what a capped group read (``earnings_pack``) keeps first: the book, never the Focus tail.
     """
     out: dict[str, str] = {}
+    held: set[str] = set()
 
     def put(sym: Any, side: Any = "") -> None:
         key = str(sym or "").strip().upper()
-        if not key:
-            return
+        if not key or key in held:
+            return  # a book name's side is the position's, never a Focus or liked side
         value = str(side or "").strip().upper()
         value = value if value in ("LONG", "SHORT") else ""
         if key not in out or (value and not out[key]):
@@ -505,7 +506,8 @@ def known_symbols(
     rows = list(context_rows or ())
     for row in rows:
         if row.get("kind") == "position":
-            put(row.get("symbol"), row.get("direction") or "")
+            put(row.get("symbol"), row.get("side") or row.get("direction") or "")
+            held.add(str(row.get("symbol") or "").strip().upper())
     for item in liked or ():
         if isinstance(item, (tuple, list)) and item:
             put(item[0], item[1] if len(item) > 1 else "")
@@ -533,7 +535,8 @@ def recent_cited_ids(turns: Iterable[Any], last: int = 6) -> set[str]:
     for turn in kept:
         role = getattr(turn, "role", None) or (turn.get("role") if isinstance(turn, Mapping) else "")
         text = getattr(turn, "text", None) or (turn.get("text") if isinstance(turn, Mapping) else "")
-        if role == "assistant":
+        # P16: an empty-reply data dump shows every row; the model cited none of them, so nothing is deduped.
+        if role == "assistant" and not str(text or "").startswith("(the model returned no text"):
             found.update(cited_ids(text))
     return found
 

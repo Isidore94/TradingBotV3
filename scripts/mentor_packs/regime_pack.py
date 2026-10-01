@@ -160,6 +160,11 @@ def snapshot_key(day: date | str) -> str:
     return SNAPSHOT_KEY.format(day=str(day)[:10])
 
 
+def snapshot_clean(pack: Pack) -> bool:
+    """A tape with every source read (no ``unknown`` row) is the only one worth keeping for tomorrow's diff."""
+    return bool(pack.rows) and not any(row.get("kind") == "unknown" for row in pack.rows)
+
+
 def snapshot_json(pack: Pack) -> str:
     """The rows of a built tape, as stored for tomorrow's diff (no as-of stamp)."""
     return json.dumps([row for row in pack.rows if row.get("kind") != "asof"], sort_keys=True, default=str)
@@ -201,6 +206,12 @@ def _previous_weekday(day: date) -> date:
     return back
 
 
+def _event_key(row: Mapping[str, Any]) -> tuple[str, str, str]:
+    """An econ event by (date, time ET, label in lower-case words): its row id is positional and renumbers daily."""
+    words = " ".join(re.findall(r"[a-z0-9]+", str(row.get("label") or "").lower()))
+    return str(row.get("date") or "")[:10], str(row.get("time_et") or ""), words
+
+
 def diff_rows(rows: list[dict[str, Any]], previous: tuple[str, list[dict[str, Any]]] | None,
               today: date) -> list[dict[str, Any]]:
     """P16: ``tape:diff:<k>`` rows, today's tape against the previous session's snapshot."""
@@ -211,6 +222,10 @@ def diff_rows(rows: list[dict[str, Any]], previous: tuple[str, list[dict[str, An
     day, old = previous
     now_by, old_by = {str(r.get("id")): r for r in rows}, {str(r.get("id")): r for r in old}
     out: list[dict[str, Any]] = []
+    expected = _previous_weekday(today).isoformat()
+    if day < expected:
+        out.append({"id": "tape:diff:gap", "kind": "diff",
+                    "text": f"Tape diff: no clean snapshot for {expected}; comparing with {day} instead"})
 
     def changed(key: str, what: str, before: str, after: str) -> None:
         same = before == after
@@ -231,9 +246,9 @@ def diff_rows(rows: list[dict[str, Any]], previous: tuple[str, list[dict[str, An
         return next((str(r.get("date")) for r in by.values() if r.get("kind") == "night" and r.get("date")), "none")
 
     changed("night", "the night read's date", night_date(old_by), night_date(now_by))
-    old_econ = {key for key, r in old_by.items() if r.get("kind") == "econ"}
-    new_today = [r for key, r in now_by.items() if r.get("kind") == "econ" and key not in old_econ
-                 and str(r.get("date") or "") == today.isoformat()]
+    old_econ = {_event_key(r) for r in old_by.values() if r.get("kind") == "econ" and r.get("label")}
+    new_today = [r for r in now_by.values() if r.get("kind") == "econ" and r.get("label")
+                 and _event_key(r) not in old_econ and str(r.get("date") or "") == today.isoformat()]
     out.append({"id": "tape:diff:econ", "kind": "diff", "changed": bool(new_today),
                 "text": (f"Since {day}: new econ events today: " + "; ".join(str(r.get("text")) for r in new_today)
                          if new_today else f"Since {day}: no new econ events listed for today")})

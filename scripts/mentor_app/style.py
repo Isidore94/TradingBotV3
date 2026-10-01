@@ -34,9 +34,10 @@ _CONTEXT = re.compile(r"\bregime\b|\bbear channel\b|\bbull channel\b|\bbreadth\b
 
 #: P16: a reply that ends by announcing a fetch it never makes ("I am checking your journal...").
 _ANNOUNCE = re.compile(
-    r"\b(?:i am|i'm|im) (?:now )?(?:checking|pulling|looking|fetching|getting|reviewing|going to "
-    r"(?:check|pull|look|fetch|get|review))\b|\blet me (?:check|pull|look|fetch|get|see|review)\b"
-    r"|\bi(?: will|'ll) (?:now )?(?:check|pull|look|fetch|get|review)\b", re.I)
+    r"\b(?:i am|i'm|im) (?:now )?(?:checking|pulling|fetching|reviewing|looking (?:up|at|into)|going to "
+    r"(?:check|pull|fetch|review|look (?:up|at|into)))\b|\blet me (?:check|pull|fetch|get|review|look (?:up|at|into))\b"
+    r"|\bi(?: will|'ll) (?:now )?(?:check|pull|fetch|review|look (?:up|at|into)) (?:your|the|my|his|that|those)\b",
+    re.I)
 #: Appended when a reply announced a fetch and the app had nothing more to fetch.
 NO_FETCH_NOTE = "(no further data was fetched)"
 #: The one re-ask after an announced fetch: the planner's packs again, and an order to answer.
@@ -47,7 +48,8 @@ FETCH_RETRY_PROMPT = ("The app fetched the data for this question again (below).
 
 def announces_fetch(reply: str) -> bool:
     """True when the reply's last sentence announces a fetch ("I am checking", "let me pull", "I will look")."""
-    return bool(_ANNOUNCE.search(_last_sentence(reply)))
+    last = _last_sentence(reply)
+    return bool(_ANNOUNCE.search(last)) and not _CITATION.search(last)
 
 
 def _is_header(line: str) -> bool:

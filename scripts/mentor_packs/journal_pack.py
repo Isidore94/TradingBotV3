@@ -164,10 +164,16 @@ def outcome_rows(label: str, units: list[journal_read.Unit]) -> list[dict[str, A
         pool, by, why = priced, "$", "ranked by $ (no trade here has a planned stop, so no R)"
     else:
         pool, by, why = [], "", ""
+    stopped_losers = [u for u in with_r if u.pnl is not None and u.pnl < 0]
     for key, choose in (("best", max), ("worst", min)):
         if not pool:
             rows.append({"id": f"jrn:{label}:{key}", "kind": key, "text": f"{key.title()} trade: none closed with a PnL"})
             continue
+        if key == "worst" and by == "R" and len(stopped_losers) < 2:
+            # Too few stopped losers to rank by R: a stopped winner could come out "worst". Rank by $.
+            pool, by = priced, "$"
+            why = (f"ranked by $ ({len(stopped_losers)} losing trade(s) with a planned stop, fewer than 2 to rank "
+                   "by R)")
         unit = choose(pool, key=lambda u: (u.r if by == "R" else u.pnl))
         side = str(unit.trades[0].get("direction") or "?").upper() if len(unit.trades) == 1 else "SPREAD"
         result = f"{unit.r:+.2f}R ({_money(unit.pnl)} $)" if unit.r is not None else f"{_money(unit.pnl)} $"

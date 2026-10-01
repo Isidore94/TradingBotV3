@@ -111,10 +111,11 @@ def test_best_and_worst_rank_by_r_when_a_stop_exists_and_say_why():
     best, worst = rows["jrn:2026-09-30:best"], rows["jrn:2026-09-30:worst"]
     assert best["by"] == "R" and best["symbol"] == "NVDA" and "+1.00R" in best["text"]
     assert "ranked by R (1 of 3 trade(s) have a planned stop" in best["text"]
-    assert worst["symbol"] == "NVDA", "only stopped trades are ranked by R"
+    # Review advisory: one stopped trade (a winner) cannot be the worst by R; fewer than 2 stopped losers = by $.
+    assert worst["symbol"] == "AMD" and worst["by"] == "$" and "fewer than 2 to rank by R" in worst["text"]
     week = {row["id"]: row for row in _journal_pack("week").rows}
     assert week["jrn:wk2026-09-28:best"]["symbol"] == "NVDA"
-    assert week["jrn:wk2026-09-28:worst"]["symbol"] == "TSLA" and "-0.50R" in week["jrn:wk2026-09-28:worst"]["text"]
+    assert week["jrn:wk2026-09-28:worst"]["symbol"] == "AMD", "one stopped loser (TSLA): by $"
 
 
 def test_best_by_dollars_when_no_trade_has_a_stop():
@@ -333,15 +334,20 @@ def test_the_tape_diff_says_what_changed_since_the_previous_snapshot(tmp_path):
     from mentor_packs import regime_pack
 
     now = datetime(2026, 9, 30, 15, 0, tzinfo=timezone.utc)
-    yesterday = regime_pack.build(now=datetime(2026, 9, 29, 15, 0, tzinfo=timezone.utc),
-                                  sources=regime_pack.fixture_sources())
+    yesterday = regime_pack.build(now=datetime(2026, 9, 29, 15, 0, tzinfo=timezone.utc), sources=replace(
+        regime_pack.fixture_sources(), econ=lambda session: {
+            "today": [{"id": "t1", "date": session, "time_et": "08:30", "label": "CPI (Aug)"},
+                      {"id": "t2", "date": session, "time_et": "10:00", "label": "JOLTS"}],
+            "week": [{"id": "w1", "date": "2026-09-30", "time_et": "09:45", "label": "Chicago  PMI"},
+                     {"id": "w2", "date": "2026-09-30", "time_et": "10:00", "label": "ISM manufacturing"}]}))
     older = [dict(row, regime="strong since 2026-08-01") if row["id"] == "tape:regime" else row
              for row in __import__("json").loads(regime_pack.snapshot_json(yesterday))]
     db = _tape_store(tmp_path, {"2026-09-28": older, "2026-09-29": __import__("json").loads(
         regime_pack.snapshot_json(yesterday))})
     sources = replace(regime_pack.fixture_sources(), d1_env=lambda day: "bullish_trend", econ=lambda session: {
-        "today": [{"id": "t1", "date": session, "time_et": "10:00", "label": "ISM Manufacturing"},
-                  {"id": "t2", "date": session, "time_et": "09:45", "label": "Chicago PMI"}]})
+        "today": [{"id": "t1", "date": session, "time_et": "13:00", "label": "Fed Governor Waller speaks"},
+                  {"id": "t2", "date": session, "time_et": "09:45", "label": "Chicago PMI"},
+                  {"id": "t3", "date": session, "time_et": "10:00", "label": "ISM Manufacturing"}]})
     pack = regime_pack.build(diff=True, now=now, sources=sources, chat_db=db)
     rows = {row["id"]: row for row in pack.rows}
     assert rows["tape:diff:d1env"]["changed"] is True
@@ -350,7 +356,7 @@ def test_the_tape_diff_says_what_changed_since_the_previous_snapshot(tmp_path):
     assert rows["tape:diff:leaders"]["changed"] is False and "Technology" in rows["tape:diff:leaders"]["text"]
     assert rows["tape:diff:night"]["changed"] is False
     econ = rows["tape:diff:econ"]["text"]
-    assert rows["tape:diff:econ"]["changed"] is True and "Chicago PMI" in econ and "ISM" not in econ, "only the new one"
+    assert econ == "Since 2026-09-29: new econ events today: Econ 2026-09-30 13:00 ET: Fed Governor Waller speaks", econ
     assert not any(row["id"].startswith("tape:diff") for row in regime_pack.build(
         now=now, sources=sources, chat_db=db).rows), "no diff unless asked"
 
@@ -394,3 +400,145 @@ def test_the_app_snapshots_the_first_tape_of_the_pt_day_and_never_overwrites(tmp
     pack = regime_pack.build(diff=True, now=datetime(2026, 10, 1, 15, 0, tzinfo=timezone.utc),
                              sources=regime_pack.fixture_sources(), chat_db=store.path)
     assert any(row["id"] == "tape:diff:d1env" and row["changed"] is False for row in pack.rows)
+
+
+# ---------------------------------------------------------------- live rerun fixes (2026-09-30 evening)
+def _live_context():
+    """The context pack the app builds: journal positions as ``ctx:pos:*`` rows, plus Focus shorts LULU and MKC."""
+    from dataclasses import replace
+
+    from mentor_packs import context_pack
+
+    positions = [{"trade_id": f"T{i}", "symbol": sym, "direction": side, "quantity_opened": 10, "quantity_closed": 0,
+                  "average_entry_price": 50.0, "opened_at": "2026-09-20T10:00:00-04:00"}
+                 for i, (sym, side) in enumerate((("NVDA", "SHORT"), ("DRAM", "Short"), ("QCOM", "LONG")))]
+    sources = replace(context_pack.fixture_sources(), open_positions=lambda: positions)
+    rows = [dict(row) for row in context_pack.build(now=NOW, sources=sources).rows]
+    rows.append({"kind": "focus", "category": "swing", "side": "short", "names": ["LULU", "MKC"]})
+    return rows
+
+
+def test_the_live_context_book_pools_the_real_book_by_its_side():
+    rows = _live_context()
+    assert [r["direction"] for r in rows if r.get("kind") == "position"] == ["SHORT", "SHORT", "LONG"]
+    known = attach.known_symbols(rows, [], [])
+    assert attach.book_symbols(rows) == ["NVDA", "DRAM", "QCOM"]
+    got = attach.plan_attachments("which of my open shorts is most at risk into earnings", known, NOW,
+                                  book=attach.book_symbols(rows))
+    earn = next(r for r in got if r.name == "earnings_pack")
+    assert earn.args["symbols"] == ["NVDA", "DRAM"] and earn.args["book"] == ["NVDA", "DRAM"]
+    assert "book_pack" in [r.name for r in got]
+    # A book name never takes a Focus side, even when its own side is unknown.
+    rows = [{"kind": "position", "symbol": "NVDA", "side": ""},
+            {"kind": "focus", "category": "swing", "side": "long", "names": ["NVDA", "V"]}]
+    assert attach.known_symbols(rows, [("NVDA", "LONG")], []) == {"NVDA": "", "V": "LONG"}
+
+
+def test_an_empty_reply_never_renders_empty(caplog):
+    from mentor_app import brain
+
+    requests = attach.plan_attachments("what's the tape doing", {}, NOW)
+    with caplog.at_level("WARNING"):
+        result, sent, _ = _turn([""], requests)
+    assert result["empty_fallback"] is True
+    assert result["text"].startswith("(the model returned no text; here is the data)\n\n")
+    assert "[regime_pack:row]" in result["text"] and "returned no text" in caplog.text
+    result, _, _ = _turn([""], [])
+    assert result["text"] == "(the model returned no text; no data was attached)" and brain.EMPTY_REPLY_LINE
+
+
+def _veto_agg_world():
+    """Three LONG veto reasons over the floor with 5d means +1 %, -2.83 % and -4.53 %."""
+    veto_pack, world = _veto_world()
+    from datetime import date, timedelta
+
+    notes, cohort = [], ["trade_date,symbol,side,source,h1_date,h1_return,h3_date,h3_return,h5_date,h5_return,"
+                         "h10_date,h10_return"]
+    for reason, h5, h10 in (("compressed", 0.01, 0.05), ("incoming_trendline", -0.0283, 0.02),
+                            ("too_extended_from_base", -0.0453, -0.01)):
+        for index in range(30):
+            day = (date(2026, 8, 3) + timedelta(days=index % 10)).isoformat()
+            sym = f"{reason[:2].upper()}{index:02d}"
+            notes.append(__import__("json").dumps({"event_type": "veto", "symbol": sym, "side": "LONG",
+                                                   "session_date": day, "created_at": f"{day}T09:00:00-07:00",
+                                                   "decision_session": day, "reason_code": reason,
+                                                   "event_id": f"{sym}-{day}"}))
+            cohort.append(f"{day},{sym},LONG,veto,{day},0,{day},0,{day},{h5},{day},{h10}")
+    world.annotations.write_text("\n".join(notes) + "\n", encoding="utf-8")
+    world.veto_outcomes.write_text("\n".join(cohort) + "\n", encoding="utf-8")
+    return veto_pack, world
+
+
+def test_veto_aggregates_carry_their_rank_and_the_verdict_names_its_basis():
+    veto_pack, world = _veto_agg_world()
+    pack = veto_pack.build(scope="month", now=datetime(2026, 8, 25, 20, 0, tzinfo=timezone.utc), paths=world)
+    rows = {row["id"]: row for row in pack.rows}
+    ranks = {key: rows[f"veto:agg:{key}:LONG"]["rank"] for key in
+             ("compressed", "incoming_trendline", "too_extended_from_base")}
+    assert ranks == {"compressed": 1, "incoming_trendline": 2, "too_extended_from_base": 3}
+    assert rows["veto:agg:compressed:LONG"]["text"].startswith("worst #1 of 3 veto records (cost the most): ")
+    assert rows["veto:agg:incoming_trendline:LONG"]["text"].startswith("#2 of 3 veto records: ")
+    assert rows["veto:agg:too_extended_from_base:LONG"]["text"].startswith(
+        "#3 of 3 veto records (avoided the most loss): ")
+    text = rows["veto:agg:too_extended_from_base:LONG"]["text"]
+    assert "verdict (5d mean -4.53%, n=30): vetoing this reason: avoided a losing cohort" in text
+    assert "rank" not in rows["veto:agg:total"]
+
+
+def test_mirror_veto_rows_carry_their_rank():
+    from mentor_packs import mirror_pack
+
+    ranked = [row for row in mirror_pack.fixture().rows if row.get("kind") == "veto" and "rank" in row]
+    assert [row["rank"] for row in ranked] == [1] and ranked[0]["text"].startswith("worst #1 of 1 veto records")
+    assert all("rank" not in row for row in mirror_pack.fixture().rows if row.get("too_few"))
+    from mentor_app.chat_model import PERSONA_PROMPT
+
+    assert "For best/worst questions, read the row's rank; never re-rank yourself." in PERSONA_PROMPT
+
+
+def test_recap_issues_carry_their_rank_by_sessions():
+    from mentor_packs import recaps_pack
+
+    issues = [row for row in recaps_pack.fixture().rows if row.get("kind") == "issue"]
+    assert issues and [row["rank"] for row in issues] == list(range(1, len(issues) + 1))
+    assert issues[0]["text"].startswith(f"#1 of {len(issues)} by sessions: ")
+    assert [row["count"] for row in issues] == sorted((row["count"] for row in issues), reverse=True)
+
+
+def test_a_tape_with_an_unknown_row_is_not_snapshotted_and_a_gap_is_said(tmp_path):
+    from types import SimpleNamespace
+
+    from mentor_app.store import MentorChatStore
+    from mentor_app.window import MentorWindow
+    from mentor_packs import regime_pack
+    from mentor_packs.registry import make_pack
+
+    store = MentorChatStore(tmp_path / "mentor_chat.sqlite3")
+    host = SimpleNamespace(store=store, _now=lambda: datetime(2026, 9, 29, 15, 0, tzinfo=timezone.utc))
+    good = regime_pack.build(now=host._now(), sources=regime_pack.fixture_sources())
+    broken = make_pack(regime_pack.NAME, [*good.rows, {"id": "tape:breadth", "kind": "unknown", "text": "x"}])
+    MentorWindow._snapshot_tape(host, broken)
+    assert store.get_state("tape:snapshot:2026-09-29") is None, "an unknown row: retry at the next build"
+    host._now = lambda: datetime(2026, 9, 28, 15, 0, tzinfo=timezone.utc)
+    MentorWindow._snapshot_tape(host, good)
+    pack = regime_pack.build(diff=True, now=datetime(2026, 9, 30, 15, 0, tzinfo=timezone.utc),
+                             sources=regime_pack.fixture_sources(), chat_db=store.path)
+    gap = next(row for row in pack.rows if row["id"] == "tape:diff:gap")
+    assert gap["text"] == "Tape diff: no clean snapshot for 2026-09-29; comparing with 2026-09-28 instead"
+
+
+def test_a_plan_to_cover_is_not_an_announced_fetch():
+    from mentor_app import style
+
+    assert not style.announces_fetch("Hold it; I'll look to cover into the 10:00 print.")
+    assert not style.announces_fetch("I am checking that against your record: 3 of 9 stopped [jrn:x:totals].")
+    assert style.announces_fetch("I will check your journal for the stops.")
+    assert style.announces_fetch("Let me pull your recent trades.")
+
+
+def test_an_empty_reply_data_dump_does_not_count_as_citations():
+    from mentor_app import brain
+
+    turns = [{"role": "assistant", "text": f"{brain.EMPTY_REPLY_LINE}\n\n## book_pack\n[book:pos:1:NVDA] NVDA 10"},
+             {"role": "assistant", "text": "Short NVDA [book:pos:2:NVDA]."}]
+    assert attach.recent_cited_ids(turns) == {"book:pos:2:NVDA"}

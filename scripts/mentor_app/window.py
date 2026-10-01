@@ -1203,8 +1203,8 @@ class MentorWindow(QMainWindow):
         from mentor_packs import regime_pack
 
         try:
-            if getattr(pack, "name", "") != regime_pack.NAME or not getattr(pack, "rows", ()):
-                return
+            if getattr(pack, "name", "") != regime_pack.NAME or not regime_pack.snapshot_clean(pack):
+                return  # an unreadable source: try again at the next build
             key = regime_pack.snapshot_key(self._now().astimezone(regime_pack.PT).date())
             if self.store.get_state(key) is None:
                 self.store.set_state(key, regime_pack.snapshot_json(pack))

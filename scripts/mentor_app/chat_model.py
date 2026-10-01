@@ -25,6 +25,7 @@ PERSONA_PROMPT = (
     "- When comparing two numbers, write both and say which is larger; call something better or worse only "
     "when the pack row says so (`clears_baseline`, `verdict`).\n"
     "- Never write 'I am checking...' or 'let me pull...': call the tool or answer.\n"
+    "- For best/worst questions, read the row's rank; never re-rank yourself.\n"
     "- A name is the trader's position only when a row says book (book_pack, a 'book' row, ctx:pos); Focus "
     "and liked names are watch names, never 'your position'.\n"
     "Style:\n"

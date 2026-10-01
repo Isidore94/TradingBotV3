@@ -402,6 +402,13 @@ def run_turn(
         _fetch_check(result, convo, attachments, build_pack, note_pack, question, attach_budget_tokens,
                      on_tool_call, on_token, cancelled, model=model, url=url, keep_alive=keep_alive,
                      num_ctx=num_ctx, stream_post=stream_post)
+    if not result["cancelled"] and not result["text"].strip():
+        # P16: an empty reply never renders empty: the data the app sent, under one plain line.
+        logging.warning("Trade Mentor: the model returned no text; showing the %d pack(s) sent",
+                        len(result["pack_texts"]))
+        result["empty_fallback"] = True
+        result["text"] = "\n\n".join([EMPTY_REPLY_LINE, *result["pack_texts"]]) if result["pack_texts"] else (
+            f"{EMPTY_REPLY_LINE[:-len('; here is the data)')]}; no data was attached)")
     if gate_packs and not result["cancelled"]:
         from mentor_app import checklist
 
@@ -419,6 +426,10 @@ def run_turn(
     }
     logging.info("Trade Mentor turn: %s", json.dumps(result["timings"], sort_keys=True))
     return result
+
+
+#: P16: what an empty model reply shows instead, above the packs the app sent.
+EMPTY_REPLY_LINE = "(the model returned no text; here is the data)"
 
 
 def _fetch_check(result: dict[str, Any], convo: list[dict[str, Any]], attachments: Sequence[Any],
