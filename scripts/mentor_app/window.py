@@ -144,6 +144,7 @@ class _Bridge(QObject):
     journal_symbols = Signal(object)
     habit_item = Signal(object)
     routine_ready = Signal(object)
+    dock_saved = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -218,6 +219,7 @@ class MentorWindow(QMainWindow):
         forecast_service: Any = None,
         paste_prompt: Callable[[], Any] | None = None,
         fund_builder: Callable[[str], Any] | None = None,
+        desk_dock: Callable[[Any], Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -349,6 +351,8 @@ class MentorWindow(QMainWindow):
         self._tape_failures: dict[str, int] = {}
         self._bridge.tape_ready.connect(self._on_tape_ready)
         self._bridge.tape_refreshed.connect(self._on_tape_refreshed)
+        # Dock: float over the desk's Mentor tab; a factory window -> DeskDock (tests point it at a fake file).
+        self._desk_dock_arg = desk_dock
         # P1: with `mentor_app_enabled` on, this process owns the Trade Mentor card.
         self.card_host = card_host
         if self.card_host is None:
@@ -553,6 +557,17 @@ class MentorWindow(QMainWindow):
         self.paste_button.setToolTip("Paste today's morning brief; it is saved to the Market Journal for today")
         self.paste_button.clicked.connect(self.open_paste_dialog)
         header.addWidget(self.paste_button)
+        # Dock: put this window over the desk's Mentor tab (Undock gives the free window back).
+        from mentor_app.desk_dock import DeskDock
+
+        self.desk_dock = (self._desk_dock_arg or DeskDock)(self)
+        self.dock_button = QPushButton("Dock")
+        self.dock_button.setToolTip("Put the Mentor inside the desk's Mentor tab")
+        self.dock_button.clicked.connect(self.toggle_dock)
+        self.desk_dock.changed.connect(self._on_dock_changed)
+        self.desk_dock.note.connect(self._add_note)
+        self._bridge.dock_saved.connect(self._on_dock_saved)
+        header.addWidget(self.dock_button)
         # P11: shown only while the frontier switch is on; disabled with the reason when it cannot run.
         self.think_button = QPushButton("Think harder")
         self.think_button.setToolTip("Ask the frontier model the last question again (metered, capped per day)")
@@ -651,6 +666,7 @@ class MentorWindow(QMainWindow):
         self._tilt_timer.start()
         self.install_recall_fallback()
         self._submit_io(self._open_session)
+        self._submit_io(self._load_dock_state)
         self.refresh_context()
         self._paused_until = self._ai_paused_until()
         if self._paused_until is not None:
@@ -670,6 +686,7 @@ class MentorWindow(QMainWindow):
         self._desk_timer.stop()
         self._pick_timer.stop()
         self._tilt_timer.stop()
+        self.desk_dock.shutdown()
         from mentor_packs import recall
 
         recall.set_fallback(None)
@@ -731,6 +748,36 @@ class MentorWindow(QMainWindow):
         self.show()
         self.raise_()
         self.activateWindow()
+
+    # ------------------------------------------------------------------ dock
+    def toggle_dock(self) -> None:
+        """The Dock / Undock button: flip, and remember it for the next start.
+
+        Only the button saves: an undock because the desk went away keeps "docked" for next time.
+        """
+        docked = self.desk_dock.toggle()
+        self._save_dock_state(docked)
+
+    def _on_dock_changed(self, docked: bool) -> None:
+        self.dock_button.setText("Undock" if docked else "Dock")
+        self.dock_button.setToolTip(
+            "Give the Mentor its own window again" if docked else "Put the Mentor inside the desk's Mentor tab"
+        )
+
+    def _save_dock_state(self, docked: bool) -> None:
+        from mentor_app.desk_dock import STATE_KEY
+
+        self._submit_io(lambda: self.store.set_state(STATE_KEY, "on" if docked else "off"))
+
+    def _load_dock_state(self) -> None:
+        from mentor_app.desk_dock import STATE_KEY
+
+        self._bridge.dock_saved.emit(self.store.get_state(STATE_KEY) == "on")
+
+    def _on_dock_saved(self, docked: Any) -> None:
+        """Docked at the last close: dock again at start."""
+        if docked is True and not self._shut and not self.desk_dock.docked:
+            self.desk_dock.dock()
 
     def _submit_io(self, fn: Callable[[], Any]) -> None:
         try:
