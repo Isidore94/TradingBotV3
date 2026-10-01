@@ -396,3 +396,46 @@ def test_a_time_with_empty_event_ids_is_still_rejected_by_the_unchanged_checker(
     outcome, evidence = _run_0925(monkeypatch, tmp_path, ledger_rows=[NIGHT_0925["ledger_rows"][0]])
     assert f'Do not write: "{REJECTED_0925}"' in evidence["instructions"]
     assert outcome["status"] == "degraded_no_narrative"
+
+
+def _run_with_events(monkeypatch, tmp_path, *, today, week, reply):
+    import econ_brief
+    from ai_jobs import econ_brief_narration as job
+
+    pack = dict(NIGHT_0925["pack"], today=today, week=week)
+    monkeypatch.setattr(econ_brief, "build_pack", lambda _f, *, target_session: dict(pack))
+    out_dir = tmp_path / "out"
+    good = econ_brief.night_dir(out_dir) / "2026-09-28.json"
+    good.parent.mkdir(parents=True, exist_ok=True)
+    good.write_text('{"kept": "the last good file"}\n', encoding="utf-8")
+    request = _request_returning(reply)
+    outcome = job.run_econ_brief(
+        session_date="2026-09-25", out_dir=out_dir,
+        forecasts=_forecasts(("2026-09-24", "brief")), request=request,
+        ledger_path=tmp_path / "ai_job_ledger.jsonl",
+    )
+    return outcome, request, good
+
+
+def test_a_pack_with_no_parsed_events_is_skipped_without_a_model(monkeypatch, tmp_path):
+    from ai_jobs import ledger
+
+    reply = {"lines": [{"text": "A quiet day.", "event_ids": []}] * 3}
+    outcome, request, good = _run_with_events(monkeypatch, tmp_path, today=[], week=[], reply=reply)
+    assert outcome["status"] == ledger.STATUS_SKIPPED
+    assert outcome["reason"] == "no parsed events for 2026-09-28; nothing to narrate"
+    assert request.calls == []
+    assert good.read_text(encoding="utf-8") == '{"kept": "the last good file"}\n'
+
+
+def test_a_pack_with_events_still_asks_and_every_line_needs_an_id(monkeypatch, tmp_path):
+    from ai_jobs import econ_brief_narration as job
+
+    week = NIGHT_0925["pack"]["week"]
+    assert week
+    reply = {"lines": [{"text": "A quiet day.", "event_ids": []}] * 3}
+    outcome, request, _good = _run_with_events(monkeypatch, tmp_path, today=[], week=week, reply=reply)
+    assert request.calls
+    assert request.calls[0]["schema"] is job.NARRATION_JSON_SCHEMA
+    assert job.NARRATION_JSON_SCHEMA["properties"]["lines"]["items"]["properties"]["event_ids"]["minItems"] == 1
+    assert outcome["status"] != "skipped"

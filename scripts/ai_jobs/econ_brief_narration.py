@@ -251,6 +251,14 @@ def run_econ_brief(
             "reason": f"{econ_brief.NO_BRIEF_TEXT} Nothing to summarise for {target}.",
             "outputs": [],
         }
+    if not list(pack.get("today") or ()) and not list(pack.get("week") or ()):
+        # Every line must cite an event id; with none parsed there is nothing to cite.
+        return {
+            "status": "skipped",
+            "model": "",
+            "reason": f"no parsed events for {target}; nothing to narrate",
+            "outputs": [],
+        }
     # A retry quotes what the earlier attempts were rejected for, so the model does not repeat it.
     prior = prior_rejected_sentences(day, ledger_path=ledger_path)
     evidence = _evidence(pack, prior)
