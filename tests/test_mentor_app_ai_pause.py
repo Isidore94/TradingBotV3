@@ -168,6 +168,38 @@ def test_a_pause_before_the_model_is_known_unloads_the_configured_chat_model(win
     assert _unloaded(window) == sorted(["qwen3:14b", settings.EMBED_MODEL])
 
 
+def test_a_pause_unloads_what_the_host_has_loaded_not_a_stale_saved_tag(window):
+    """2026-10-01: pause unloaded a saved night tag the host no longer has (HTTP 404), not the loaded ones."""
+    project_paths.save_local_settings({"ai_local_model_medium": "gemma4:12b",
+                                       "ai_local_model_large": "hf.co/bartowski/google_gemma-3-27b-it-GGUF:Q3_K_M"})
+    asked = []
+
+    def get(url, timeout):
+        asked.append(url)
+        return {"models": [{"name": "gemma4:12b", "model": "gemma4:12b"},
+                           {"name": "nomic-embed-text:latest", "model": "nomic-embed-text:latest"}]}
+
+    window._get = get
+    _up(window)
+    window.send("/ai off 2h")
+    _join(window)
+
+    assert asked == ["http://127.0.0.1:11436/api/ps"]
+    assert _unloaded(window) == sorted(["gemma4:12b", settings.EMBED_MODEL])
+
+
+def test_a_pause_falls_back_to_the_configured_tags_when_the_host_cannot_list(window):
+    def get(url, timeout):
+        raise ConnectionError("no ps")
+
+    window._get = get
+    _up(window)
+    window.send("/ai off 2h")
+    _join(window)
+
+    assert {"gpt-oss:20b", settings.EMBED_MODEL} <= set(_unloaded(window))
+
+
 def test_a_chat_turn_while_paused_makes_no_model_call(window):
     _up(window)
     window.send("/ai off 2h")

@@ -613,6 +613,24 @@ def unload(endpoint: str, model: str, *, post: Post = default_post, timeout: flo
     return post(f"{endpoint.rstrip('/')}/api/chat", {"model": model, "messages": [], "keep_alive": 0}, timeout)
 
 
+def default_get(url: str, timeout: float) -> Mapping[str, Any]:
+    response = requests.get(url, timeout=timeout)
+    if response.status_code != 200:
+        raise BrainError(f"HTTP {response.status_code}: {response.text[:200]}")
+    return response.json()
+
+
+def loaded_models(endpoint: str, *, get: Callable[[str, float], Mapping[str, Any]] = default_get,
+                  timeout: float = 10) -> tuple[str, ...]:
+    """The tags the host has in memory now (Ollama ``GET /api/ps``)."""
+    reply = get(f"{endpoint.rstrip('/')}/api/ps", timeout)
+    rows = (reply or {}).get("models")
+    if not isinstance(rows, list):
+        raise BrainError("/api/ps listed no models array")
+    names = (str((row or {}).get("model") or (row or {}).get("name") or "").strip() for row in rows)
+    return tuple(dict.fromkeys(name for name in names if name))
+
+
 def unload_embedder(endpoint: str, model: str, *, post: Post = default_post, timeout: float = 60) -> Mapping[str, Any]:
     """Unload an embedding model: it has no chat route, so an empty /api/embed carries keep_alive 0."""
     return post(f"{endpoint.rstrip('/')}/api/embed", {"model": model, "input": [], "keep_alive": 0}, timeout)
