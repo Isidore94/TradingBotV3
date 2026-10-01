@@ -253,6 +253,39 @@ def test_the_three_real_bad_ids_drop_one_idea_and_a_mixed_idea_keeps_only_its_va
     assert "2 stored, 1 dropped (unknown source)" in outcome["reason"]
 
 
+def _four_ideas(night, invented_index=None):
+    allowed = _allowed(night)
+    measurable = _first_measurable()
+    out = []
+    for index in range(4):
+        evidence = ["2026-09-23/report_card:walkaway_counts"] if index == invented_index else allowed[:1]
+        out.append(fx.idea_payload(f"Distinct idea number {index}.", measurable=measurable, evidence=evidence))
+    return out
+
+
+def test_four_ideas_with_one_on_invented_ids_store_three_and_drop_one(night):
+    """Hand-counted: 4 offered, one on an invented id -> 3 stored, 1 dropped
+    (unknown source); the cap counts what would be STORED, so no whole-reject."""
+    from ai_jobs import improvement_ideas, ledger
+
+    outcome, _calls = _run(night, fx.reply(_four_ideas(night, invented_index=2)))
+    assert outcome["status"] == ledger.STATUS_OK, outcome.get("reason")
+    assert [row["text"] for row in _stored(night)] == [
+        "Distinct idea number 0.", "Distinct idea number 1.", "Distinct idea number 3.",
+    ]
+    assert outcome["extra"]["drop_reasons"] == {improvement_ideas.DROP_UNKNOWN_SOURCE: 1}
+    assert "3 stored, 1 dropped (unknown source)" in outcome["reason"]
+
+
+def test_four_ideas_all_on_valid_ids_still_reject_whole_on_the_cap(night):
+    from ai_jobs import ledger
+
+    outcome, _calls = _run(night, fx.reply(_four_ideas(night)))
+    assert outcome["status"] == ledger.STATUS_FAILED
+    assert "4 usable ideas" in outcome["reason"]
+    assert _stored(night) == []
+
+
 def test_an_idea_over_the_citation_cap_is_still_rejected_whole_even_with_unknown_ids(night):
     """The drop is for an unknown id only; a bound break still rejects the answer."""
     from ai_jobs import improvement_ideas, ledger
