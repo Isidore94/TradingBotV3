@@ -257,6 +257,27 @@ def build(n: Any = DEFAULT_N, *, now: datetime | None = None, sources: Sources |
     return make_pack(NAME, rows)
 
 
+def disagreement_run(grades: Iterable[Mapping[str, Any]], session: str, days: int = 2) -> list[dict[str, Any]]:
+    """The last ``days`` sessions with a measured CLICKED rest-of-day call, ending on ``session``, when every
+    measured call on each was graded wrong (his read and the tape disagreed); [] otherwise."""
+    import market_read_grades as grader
+
+    by_session: dict[str, list[Mapping[str, Any]]] = {}
+    for grade in grades or ():
+        day = str(grade.get("session") or "")[:10]
+        if (str(grade.get("source") or "") == grader.SOURCE_CLICK and str(grade.get("horizon") or "") == "rest_of_day"
+                and str(grade.get("verdict") or "") in (grader.VERDICT_RIGHT, grader.VERDICT_WRONG, grader.VERDICT_FLAT)
+                and day and day <= session):
+            by_session.setdefault(day, []).append(grade)
+    last = sorted(by_session)[-days:]
+    if len(last) < days or last[-1] != session:
+        return []
+    if not all(all(str(g.get("verdict")) == grader.VERDICT_WRONG for g in by_session[day]) for day in last):
+        return []
+    return [{"session": day, "entry_ids": sorted({str(g.get("entry_id") or "") for g in by_session[day]})}
+            for day in last]
+
+
 def conflict_text(pack: Pack, side: str, now: datetime) -> str:
     """The gate's line when today's read disagrees with the trade's side; "" when it does not (or no read today)."""
     today = now.astimezone(ET).date().isoformat()

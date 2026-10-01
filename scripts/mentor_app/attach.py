@@ -38,6 +38,7 @@ PRIORITY = {
     "bars_pack": 3,
     "alerts_pack": 4,
     "reads_pack": 3,
+    "habits_pack": 6,
     "plan_lines": 9,
     "hypothesis_pack": 9,
     "recall": 10,
@@ -144,6 +145,10 @@ _ALERTS = re.compile(r"\balerts?\b|\balerted\b|\bwhat fired\b|\bfired today\b|\b
 #: P18: the trader's own Market Journal reads and how they graded.
 _READS = re.compile(r"\bmy (?:market )?reads?\b|\bwhat did i say the market would do\b|\bwas i right about\b"
                     r"|\bmy call on\b|\bmy market calls?\b|\bmy predictions?\b|\bdid i (?:call|read) it\b")
+#: P18: what the trader keeps saying and feeling (the night's habit counts).
+_HABITS = re.compile(r"\bbad habits?\b|\bmy habits?\b|\bwhat do i keep\b|\bpattern in what i (?:say|said)\b"
+                     r"|\bwhen do i (?:get|feel) (?:frustrated|tilted|angry|annoyed|bored)\b"
+                     r"|\bwhat have i been feeling\b|\bhow have i been feeling\b|\bwhat do i keep saying\b")
 _PLAN = re.compile(r"\bmy plan\b|\bmy rules?\b|\btrading plan\b|\bbreak(?:ing)? (?:a|my) rule\b")
 #: P15a: the night's reads (day review verdicts, ideas, contrasts, week review, story, digest).
 _NIGHT = re.compile(r"\bwhat did the night say\b|\bovernight\b|\blast night\b|\bnight(?:'s)? read\b|\bideas?\b"
@@ -442,6 +447,8 @@ def plan_attachments(
         add("alerts_pack", "alert words", day=alert_day, **({"symbol": symbols[0]} if symbols else {}))
     if _READS.search(lowered):
         add("reads_pack", "read words", n=10)
+    if _HABITS.search(lowered):
+        add("habits_pack", "habit words")
     if _RECALL.search(lowered):
         add("recall", "memory words", query=raw[:200])
     return sorted(wanted, key=lambda request: request.priority)

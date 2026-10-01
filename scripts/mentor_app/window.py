@@ -135,6 +135,7 @@ class _Bridge(QObject):
     frontier_card = Signal(object)
     frontier_state = Signal(object)
     journal_symbols = Signal(object)
+    habit_item = Signal(object)
 
 
 class InputBox(QPlainTextEdit):
@@ -197,6 +198,7 @@ class MentorWindow(QMainWindow):
         mirror_request: Callable[..., Any] | None = None,
         tilt_builder: Callable[[], Any] | None = None,
         tilt_journal: Any = None,
+        habits_sources: Any = None,
         debate_request: Callable[..., Any] | None = None,
         frontier_request: Callable[..., Any] | None = None,
         frontier_post: Callable[..., Any] | None = None,
@@ -276,6 +278,9 @@ class MentorWindow(QMainWindow):
         self._bridge.journal_symbols.connect(self._on_journal_symbols)
         self._bridge.brain_state.connect(self._on_brain_state)
         self._bridge.memory_ready.connect(self._on_memory)
+        # P18: the night's habits; one Inbox item a week at most, only for a habit followed by red days.
+        self._habits_sources = habits_sources
+        self._bridge.habit_item.connect(self._on_habit_item)
         self._bridge.still_true.connect(self._on_still_true)
         self._bridge.note.connect(self._add_note)
         self._bridge.pick_built.connect(self._on_pick_built)
@@ -727,6 +732,28 @@ class MentorWindow(QMainWindow):
         """IO thread: the night digests and live notes, rendered once into the byte-stable block."""
         self._bridge.memory_ready.emit(memory.load(self.store, ai_root=self._memory_root, night_paths=self.night_paths,
                                                    now=self._now(), fund_paths=self.fund_paths))
+        self._check_habit_inbox()
+
+    def _check_habit_inbox(self) -> None:
+        """IO thread: the week's one habit Inbox item, when the night marked a habit for it."""
+        from mentor_packs import habits_pack
+
+        try:
+            pack = habits_pack.build(sources=self._habits_sources)
+            found = habits_pack.inbox_line(pack, self.store.get_state(habits_pack.INBOX_WEEK_KEY), self._now())
+        except Exception:  # noqa: BLE001 - an unreadable habit file posts nothing
+            logging.warning("Trade Mentor: the habit Inbox check failed", exc_info=True)
+            return
+        if found is not None:
+            self._bridge.habit_item.emit(found)
+
+    def _on_habit_item(self, found: Any) -> None:
+        from mentor_packs import habits_pack
+
+        week, line = found
+        if self.inbox.add("habits", line) is not None:
+            self._submit_io(lambda: self.store.set_state(habits_pack.INBOX_WEEK_KEY, week))
+            self.refresh_inbox()
 
     def _on_memory(self, loaded: Any) -> None:
         self._memory = loaded
@@ -1208,6 +1235,10 @@ class MentorWindow(QMainWindow):
         if name == "journal_pack":
             # P15b: the feelings this app stored ride on their trades (its own chat store, read-only).
             return brain._default_build(name, {**dict(args or {}), "chat_db": self.store.path})
+        if name == "habits_pack":
+            from mentor_packs import habits_pack
+
+            return habits_pack.build(sources=self._habits_sources)
         if name == "regime_pack":
             # P16: the diff reads earlier snapshots from this app's store; the day's first tape is snapshotted.
             pack = brain._default_build(name, {**dict(args or {}), "chat_db": self.store.path})
@@ -2740,13 +2771,19 @@ class MentorWindow(QMainWindow):
         """P17 /rs and /alerts: one pack as a card with its ids (queue thread; file reads only)."""
         from mentor_packs import registry
 
-        try:
-            args.setdefault("liked", [sym for sym, _side in self._liked()])
-        except Exception:  # noqa: BLE001 - no liked marks; the book still marks
-            pass
-        pack = registry.build(name, **args)
+        if name == "habits_pack":
+            # P18 /habits: the night's habit counts (its file; tests pass their own).
+            from mentor_packs import habits_pack
+
+            pack = habits_pack.build(sources=self._habits_sources)
+        else:
+            try:
+                args.setdefault("liked", [sym for sym, _side in self._liked()])
+            except Exception:  # noqa: BLE001 - no liked marks; the book still marks
+                pass
+            pack = registry.build(name, **args)
         lines = [f"- [{row['id']}] {row.get('text', '')}" for row in pack.rows]
-        title = {"rs_pack": "Relative strength", "alerts_pack": "Alerts"}.get(name, name)
+        title = {"rs_pack": "Relative strength", "alerts_pack": "Alerts", "habits_pack": "Habits"}.get(name, name)
         return f"**{title}**\n\n" + ("\n".join(lines) if lines else (pack.empty_text or "nothing"))
 
     # ------------------------------------------------------------------ /debate (P10)

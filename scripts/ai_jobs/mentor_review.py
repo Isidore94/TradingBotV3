@@ -86,6 +86,11 @@ MAX_HYPOTHESES = 3
 MAX_ITEM_CHARS = 280
 MAX_TURNS = 20
 MAX_TURN_CHARS = 300
+#: P18: every turn of the day rides (no 20-turn cap), each up to MAX_TURN_TEXT, the oldest dropped first to fit.
+MAX_TURN_TEXT = 600
+TURN_BUDGET_CHARS = 9000
+#: P18: the day's journal lines, the oldest dropped first to fit; the habit counts see every line regardless.
+JOURNAL_BUDGET_CHARS = 6000
 MAX_LATENCY_VALUES = 500
 TIMEOUT_SECONDS = 600
 RESERVE_MINUTES = 10.0
@@ -174,6 +179,12 @@ def _pt_day(stamp: Any) -> str:
 def _moment(now: datetime | None) -> datetime:
     stamp = now or datetime.now(timezone.utc)
     return stamp if stamp.tzinfo else stamp.astimezone()
+
+
+def _live_journal() -> Path:
+    import project_paths
+
+    return Path(project_paths.JOURNAL_DB_FILE)
 
 
 def _chat_path(path: Path | str | None) -> Path:
@@ -646,6 +657,54 @@ def update_issue_registry(root: Path, session: str, candidates: Sequence[Mapping
                                           "issues": dict(sorted(issues.items()))})
 
 
+def budgeted(rows: Sequence[Mapping[str, Any]], budget: int) -> list[dict[str, Any]]:
+    """The newest rows whose texts fit ``budget`` characters, in their order (the oldest go first)."""
+    kept: list[dict[str, Any]] = []
+    used = 0
+    for row in reversed(rows):
+        used += len(_text(row.get("text")))
+        if used > budget and kept:
+            break
+        kept.append(dict(row))
+    return kept[::-1]
+
+
+def journal_rows(items: Sequence[Mapping[str, Any]], session: str) -> list[dict[str, Any]]:
+    """P18: the day's journal lines as citable inputs (``journal:<id>``), budgeted oldest-first."""
+    rows = [{"id": item["id"], "text": f"{item['bucket_et']} ET [{', '.join(item['tags']) or 'no tag'}]"
+                                       + (" after a loss" if item.get("after_loss") else "") + f": {item['text']}"}
+            for item in items if item["kind"] == "journal" and item["day"] == session]
+    return budgeted(rows, JOURNAL_BUDGET_CHARS)
+
+
+def read_rows(session: str, moment: datetime, sources: Any = None) -> tuple[list[dict[str, Any]], list[Any]]:
+    """P18: the session's own Market Journal reads with their grades (``read:<entry_id>``), and every grade."""
+    from mentor_packs import reads_pack
+
+    src = sources if sources is not None else reads_pack.live_sources()
+    pack = reads_pack.build(n=reads_pack.MAX_N, now=moment, sources=src)
+    rows = [{"id": row["id"], "text": _text(row.get("text"))[:MAX_TURN_TEXT]} for row in pack.rows
+            if row.get("kind") in ("current", "read") and row.get("session") == session]
+    try:
+        grades = list(src.grades())
+    except Exception:  # noqa: BLE001 - unreadable grades: no disagreement run, never a guess
+        grades = []
+    return rows, grades
+
+
+def read_tape_candidate(session: str, grades: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """P18: an issue when his clicked rest-of-day read and the tape disagreed two sessions running."""
+    from mentor_packs import reads_pack
+
+    run = reads_pack.disagreement_run(grades, session)
+    if not run:
+        return None
+    refs = [f"read:{entry}" for day in run for entry in day["entry_ids"] if entry]
+    days = ", ".join(day["session"] for day in run)
+    return {"key": "read_vs_tape", "id": "issue:read_vs_tape", "count": len(run), "refs": refs[:5],
+            "text": f"Your rest-of-day read and the tape disagreed {len(run)} sessions running ({days})"}
+
+
 def build_inputs(path: Path, session: str, facts: Mapping[str, Any], *, report: Any = None,
                  night: Mapping[str, Sequence[Mapping[str, Any]]] | None = None) -> dict[str, Any]:
     """Everything the model may see, with ids; ``inputs_hash`` ignores the clock."""
@@ -665,11 +724,11 @@ def build_inputs(path: Path, session: str, facts: Mapping[str, Any], *, report: 
         for row in _day_rows(path, "challenges", "issued_utc", session)
         if not (split and row.get("kind") in ("gate", "tilt"))
     ]
-    turns = [
-        {"id": f"turn:{row['id']}", "role": _text(row.get("role")), "text": _text(row.get("text"))[:MAX_TURN_CHARS]}
+    turns = budgeted([
+        {"id": f"turn:{row['id']}", "role": _text(row.get("role")), "text": _text(row.get("text"))[:MAX_TURN_TEXT]}
         for row in _day_rows(path, "turns", "ts_utc", session)
         if row.get("role") in ("user", "assistant")
-    ][-MAX_TURNS:]
+    ], TURN_BUDGET_CHARS)
     rows = fact_rows(facts)
     report_rows, vocab = hypothesis_context(report)
     sections = {key: [dict(row) for row in value] for key, value in (night or {}).items() if key != "unread"}
@@ -924,7 +983,8 @@ def _fact_issue(issue: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def brief_payload(session: str, built_utc: str, inputs: Mapping[str, Any], candidates: Sequence[Mapping[str, Any]],
-                  *, kept: Mapping[str, Any] | None = None, model: str = "", dropped: int = 0) -> dict[str, Any]:
+                  *, kept: Mapping[str, Any] | None = None, model: str = "", dropped: int = 0,
+                  habits: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
     """The published coach brief; without ``kept`` it is the facts part only (issues worded by code)."""
     body = kept or {"watch": [], "missing": [], "one_line": dict(NO_ONE_LINE),
                     "issues": [_fact_issue(issue) for issue in candidates[:MAX_ISSUES]]}
@@ -933,6 +993,8 @@ def brief_payload(session: str, built_utc: str, inputs: Mapping[str, Any], candi
         "model": model, "prompt_version": BRIEF_PROMPT_VERSION, "inputs_hash": _text(inputs.get("inputs_hash")),
         "one_line": dict(body.get("one_line") or NO_ONE_LINE), "watch": list(body.get("watch") or ()),
         "missing": list(body.get("missing") or ()), "issues": list(body.get("issues") or ()), "dropped": dropped,
+        # P18: the top habits (observations, never rules), worded by the model when it answered, else by code.
+        "habits": [dict(item) for item in habits],
     }
 
 
@@ -945,12 +1007,13 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def publish_fact_brief(root: Path, session: str, built_utc: str, inputs: Mapping[str, Any],
-                       candidates: Sequence[Mapping[str, Any]]) -> Path | None:
+                       candidates: Sequence[Mapping[str, Any]],
+                       habits: Sequence[Mapping[str, Any]] = ()) -> Path | None:
     """The deterministic half: publish the facts-only brief unless a worded one already stands for the session."""
     path = published_path(root, COACH_STEM, session)
     if _read_json(path).get("worded"):
         return None
-    return _publish(path, brief_payload(session, built_utc, inputs, candidates))
+    return _publish(path, brief_payload(session, built_utc, inputs, candidates, habits=habits))
 
 
 def ask_brief(request: Callable[..., Mapping[str, Any]], *, model: str, post: Callable[..., Any],
@@ -992,7 +1055,11 @@ def model_wanted(*, session_date: str = "", chat_db: Path | str | None = None, *
         return False
     session = _text(session_date)[:10]
     try:
-        return bool(_day_rows(path, "turns", "ts_utc", session)) if session else True
+        if not session:
+            return True
+        # P18: a day of journal lines only (no chat) still has habits to word.
+        return bool(_day_rows(path, "turns", "ts_utc", session)
+                    or _rows(path, "SELECT id FROM journal_entries WHERE day_et = ? LIMIT 1", (session,)))
     except (sqlite3.Error, ValueError):
         return True
 
@@ -1031,6 +1098,8 @@ def run_mentor_review(
     night_paths: Any = None,
     mirror_builder: Callable[[], Any] | None = None,
     recap_paths: Any = None,
+    journal_db: Path | str | None = None,
+    reads_sources: Any = None,
     **_ignored: Any,
 ) -> dict[str, Any]:
     """One night's review of the Trade Mentor app's day. Never raises."""
@@ -1079,6 +1148,41 @@ def run_mentor_review(
     registry = read_issue_registry(root)
     candidates = issue_candidates(path, session, night_paths=night_paths, earlier=earlier, registry=registry,
                                   recap_paths=recap_paths)
+    # P18: the day's Market Journal reads + grades, and "read vs tape two sessions running" as an issue.
+    try:
+        reads, grades = read_rows(session, moment, reads_sources)
+    except Exception:  # noqa: BLE001 - unreadable reads cost only their rows
+        _log.debug("mentor_review: the reads could not be read.", exc_info=True)
+        reads, grades = [], []
+    if reads:
+        night["reads"] = reads
+    read_tape = read_tape_candidate(session, grades)
+    if read_tape is not None:
+        read_tape["first_seen"] = min(_text((registry.get("read_vs_tape") or {}).get("first_seen")) or session,
+                                      session)
+        candidates = sorted([*candidates, read_tape], key=lambda item: (-item["count"], item["first_seen"],
+                                                                         item["key"]))
+    # P18: every journal line and user turn of the last 30 days, counted into habits (deterministic).
+    habits: list[dict[str, Any]] = []
+    habits_note = ""
+    try:
+        from ai_jobs import mentor_habits
+
+        first, last = mentor_habits.window(session)
+        said = mentor_habits.said(path, first, last)
+        journal_path = journal_db if journal_db is not None else _live_journal()
+        habits = mentor_habits.find_habits(said, red_after=mentor_habits.red_after_from_journal(journal_path))
+        lines = journal_rows(said, session)
+        if lines:
+            night["journal"] = lines
+        if habits:
+            night["habits"] = mentor_habits.habit_rows(habits)
+        outputs.append(str(mentor_habits.publish_registry(root, session, habits, facts["built_utc"],
+                                                          mentor_habits.day_facts(said, session))))
+        summary["habits"] = len(habits)
+    except Exception as exc:  # noqa: BLE001 - habits never cost the review; the last good registry stays
+        _log.debug("mentor_review: habits could not be counted.", exc_info=True)
+        habits_note = f"; habits not counted ({type(exc).__name__}: {exc})"
     night["issues"] = candidate_rows(candidates)
     registry_note = ""
     try:
@@ -1097,17 +1201,23 @@ def run_mentor_review(
         _log.debug("mentor_review could not read the permutation report.", exc_info=True)
         report = None
     inputs = build_inputs(path, session, facts, report=report, night=night)
-    inputs_note = f"{summary['inputs']} night input(s), {len(candidates)} issue candidate(s){registry_note}"
+    inputs_note = (f"{summary['inputs']} night input(s), {len(candidates)} issue candidate(s){registry_note}"
+                   f"{habits_note}")
+    fact_habits: list[dict[str, Any]] = []
+    if habits:
+        from ai_jobs import mentor_habits
+
+        fact_habits = mentor_habits.fact_habits(habits)
     brief_path = published_path(root, COACH_STEM, session)
     try:
-        if publish_fact_brief(root, session, facts["built_utc"], inputs, candidates) is not None:
+        if publish_fact_brief(root, session, facts["built_utc"], inputs, candidates, fact_habits) is not None:
             outputs.append(str(brief_path))
     except OSError as exc:
         inputs_note += f"; the facts-only coach brief could not be published ({exc})"
     if not ask:
         return {"status": ledger.STATUS_OK, "model": "", "outputs": outputs, "extra": summary,
                 "reason": f"facts published for {session}; {graded_note}; {inputs_note}; no model asked"}
-    if not (inputs["turns"] or inputs["profile_notes"] or facts["challenges"]["issued"]):
+    if not (inputs["turns"] or inputs["profile_notes"] or facts["challenges"]["issued"] or night.get("journal")):
         return {"status": ledger.STATUS_OK, "model": "", "outputs": outputs, "extra": summary,
                 "reason": f"no mentor conversation on {session}, so no model was loaded; {inputs_note}"}
 
@@ -1138,9 +1248,21 @@ def run_mentor_review(
         except Exception as exc:  # noqa: BLE001 - the facts part stands
             _log.debug("mentor_review could not ask for the coach brief.", exc_info=True)
             return f"coach brief: no local model answered, facts part kept: {exc}"
+        worded_habits, habits_said = fact_habits, ""
+        if habits:
+            from ai_jobs import mentor_habits
+
+            try:
+                worded_habits, _habit_model, habit_dropped = mentor_habits.ask_habits(
+                    request, model=model, post=post, habits=habits, session=session)
+                habits_said = f", {len(worded_habits)} habit(s) worded ({habit_dropped} dropped)"
+            except mentor_habits.HabitsRejected as exc:
+                habits_said = f", habits rejected, code wording kept: {exc}"
+            except Exception as exc:  # noqa: BLE001 - the code-worded habits stand
+                habits_said = f", habits not worded, code wording kept: {exc}"
         try:
             _publish(brief_path, brief_payload(session, facts["built_utc"], inputs, candidates, kept=kept_brief,
-                                               model=brief_model, dropped=brief_dropped))
+                                               model=brief_model, dropped=brief_dropped, habits=worded_habits))
         except OSError as exc:
             return f"coach brief could not be published (the last good one is kept): {exc}"
         if str(brief_path) not in outputs:
@@ -1148,7 +1270,7 @@ def run_mentor_review(
         summary.update({"brief_watch": len(kept_brief["watch"]), "brief_missing": len(kept_brief["missing"]),
                         "brief_issues": len(kept_brief["issues"]), "brief_dropped": brief_dropped})
         return (f"coach brief {len(kept_brief['watch'])} watch, {len(kept_brief['missing'])} missing, "
-                f"{len(kept_brief['issues'])} issue(s)")
+                f"{len(kept_brief['issues'])} issue(s){habits_said}")
 
     digest_path = published_path(root, DIGEST_STEM, session)
     if not force and digest_path.exists():

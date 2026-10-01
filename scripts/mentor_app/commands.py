@@ -23,6 +23,7 @@ HELP_TEXT = (
     "- `/feel <SYM|trade id> <words>` how a trade felt, kept with that trade\n"
     "- `/journal` today's journal lines with their mood tags; `/journal on` keeps every message as a journal line"
     " (long dictation), `/journal off` goes back to telling self talk from questions\n"
+    "- `/habits` what you keep saying and feeling, counted by the night over 30 days (observations, never rules)\n"
     "- `/recall <text>` search what we said before (plain text search when the brain is off)\n"
     "- `/forget <id>` retire a note (it is kept, never deleted); `/keep <id>` says it is still true\n"
     "- `/tape` the tape: Auto mode, D1, last night's read, econ, sectors (read aloud when the brain is up)\n"
@@ -134,6 +135,10 @@ def handle(text: str) -> CommandResult | None:
         if word not in ("", "on", "off"):
             return CommandResult("error", "Try `/journal`, `/journal on` or `/journal off`.")
         return CommandResult("journal", "", word)
+    if name in ("habits", "habit"):
+        if rest:
+            return CommandResult("error", "Try `/habits` (no arguments).")
+        return CommandResult("pack", "", ("habits_pack", {}))
     if name == "plan":
         return CommandResult("plan")
     if name == "drop":

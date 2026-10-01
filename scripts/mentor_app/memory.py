@@ -138,13 +138,13 @@ def coach_items(payload: Mapping[str, Any] | None) -> list[MemoryItem]:
         rows.append({"id": f"night:coach:{day}:0", "date": day,
                      "text": "coach brief: " + _clean(lead["text"]) + (f" (cites {refs})" if refs else "")})
     for prefix, key, label in (("w", "watch", "watch"), ("m", "missing", "you may be missing"),
-                               ("i", "issues", "recurring issue")):
+                               ("i", "issues", "recurring issue"), ("h", "habits", "habit")):
         for n, item in enumerate(payload.get(key) or (), start=1):
             if not isinstance(item, Mapping) or not _clean(item.get("text")):
                 continue
             if key == "watch" and led_by_watch and item is watch[0]:
                 continue  # already the lead line
-            since = f" (since {item['first_seen']})" if key == "issues" and item.get("first_seen") else ""
+            since = f" (since {item['first_seen']})" if key in ("issues", "habits") and item.get("first_seen") else ""
             refs = ", ".join(str(ref) for ref in item.get("evidence_refs") or ())
             rows.append({"id": f"night:coach:{day}:{prefix}{n}", "date": day,
                          "text": f"{label}{since}: {_clean(item['text'])}" + (f" (cites {refs})" if refs else "")})
