@@ -380,7 +380,7 @@ def _brief(tmp_path):
 
 
 GOOD_DIGEST = {"digest": [{"text": "He asked about NVDA.", "evidence_refs": ["turn:1"]}], "open_questions": []}
-EMPTY_BRIEF = {"watch": [], "missing": [], "issues": [], "one_line": ""}
+EMPTY_BRIEF = {"watch": [], "missing": [], "issues": [], "one_line": {"text": "", "evidence_refs": []}}
 
 
 def _two_calls(brief_reply):
@@ -420,7 +420,7 @@ def test_the_facts_half_publishes_the_issue_candidates_without_a_model(rich, tmp
     assert out["status"] == "ok" and "issue candidate(s)" in out["reason"]
     brief = _brief(tmp_path)
     assert brief["schema"] == "mentor_coach_brief_v1" and brief["worded"] is False
-    assert brief["watch"] == [] and brief["missing"] == [] and brief["one_line"] == ""
+    assert brief["watch"] == [] and brief["missing"] == [] and brief["one_line"] == {"text": "", "evidence_refs": []}
     keys = [item["key"] for item in brief["issues"]]
     assert {"veto_won", "tilt:fast_reentry", "rule:plan:risk:1", "miss:incoming_trendline"} <= set(keys)
     assert len(keys) <= 5 and all(item["first_seen"] == SESSION for item in brief["issues"])
@@ -445,14 +445,14 @@ def test_the_coach_brief_is_worded_cited_and_bounded(rich, tmp_path):
         "issues": [{"key": "tilt:fast_reentry", "text": "You re-enter fast after a loss",
                     "evidence_refs": ["issue:tilt:fast_reentry"]},
                    {"key": "made_up", "text": "An invented issue", "evidence_refs": ["issue:veto_won"]}],
-        "one_line": "Slow down after a loss today.",
+        "one_line": {"text": "Slow down after a loss today.", "evidence_refs": ["night:day_review:2026-09-29:1"]},
     }
     request, calls = _two_calls(reply)
     out = _rich_run(rich, tmp_path, request=request)
     assert out["status"] == "ok" and "coach brief 4 watch, 1 missing" in out["reason"]
     assert calls[1]["schema"] is mentor_review.BRIEF_JSON_SCHEMA
     brief = _brief(tmp_path)
-    assert brief["worded"] is True and brief["one_line"] == "Slow down after a loss today."
+    assert brief["worded"] is True and brief["one_line"]["text"] == "Slow down after a loss today."
     assert len(brief["watch"]) == 4 and [m["text"] for m in brief["missing"]] == ["Trendline vetoes ran anyway"]
     assert brief["issues"][0] == {"key": "tilt:fast_reentry", "text": "You re-enter fast after a loss",
                                   "evidence_refs": ["issue:tilt:fast_reentry"], "first_seen": SESSION, "count": 2}
@@ -489,10 +489,10 @@ def test_no_brief_call_without_time_left_in_the_reserve(rich, tmp_path, monkeypa
 
 
 def test_a_later_facts_only_run_never_overwrites_a_worded_brief(rich, tmp_path):
-    request, _calls = _two_calls({**EMPTY_BRIEF, "one_line": "Worded."})
+    request, _calls = _two_calls({**EMPTY_BRIEF, "one_line": {"text": "Worded.", "evidence_refs": ["night:day_review:2026-09-29:1"]}})
     _rich_run(rich, tmp_path, request=request)
     _rich_run(rich, tmp_path, ask=False)
-    assert _brief(tmp_path)["one_line"] == "Worded."
+    assert _brief(tmp_path)["one_line"]["text"] == "Worded."
 
 
 def test_the_brief_call_is_capped_at_500_output_tokens(rich, tmp_path):
@@ -511,7 +511,7 @@ def test_the_brief_call_is_capped_at_500_output_tokens(rich, tmp_path):
 
 def test_the_brief_writes_nothing_to_the_chat_db(rich, tmp_path):
     before = _dump(rich["chat"])
-    request, _calls = _two_calls({**EMPTY_BRIEF, "one_line": "x"})
+    request, _calls = _two_calls({**EMPTY_BRIEF, "one_line": {"text": "x", "evidence_refs": ["night:day_review:2026-09-29:1"]}})
     out = mentor_review.run_mentor_review(  # daytime: the app grades, so the night writes no grading column
         session_date=SESSION, now=datetime(2026, 9, 29, 12, 0, tzinfo=PT), chat_db=rich["chat"],
         ai_root=tmp_path / "ai", request=request, night_paths=rich["night_paths"],
@@ -527,3 +527,65 @@ def test_an_unreadable_night_input_never_costs_the_review(rich, tmp_path):
     out = _run(rich["chat"], tmp_path, ask=False, night_paths=rich["night_paths"], mirror_builder=broken)
     assert out["status"] == "ok" and out["extra"]["night_inputs"]["mirror"] == 0
     assert out["extra"]["unread"] == ["mirror (PermissionError)"]
+
+
+# ---------------------------------------------------------------- review fixes (2026-09-30)
+def test_the_night_inputs_and_issues_read_the_superseding_siblings(rich, tmp_path):
+    """Blocker: a rerun writes `<name>.1.json` (D6); the review reads the correction, never the first file."""
+    from mentor_packs import night_pack
+
+    night_pack.write_fixture_corrections(rich["night_paths"])
+    night = mentor_review.night_inputs(rich["chat"], SESSION, NIGHT, night_paths=rich["night_paths"],
+                                       mirror_builder=rich["mirror_builder"])
+    contrasts = " ".join(row["text"] for row in night["contrasts"])
+    assert "CORRECTED" in contrasts and "incoming_trendline" not in contrasts
+    assert "miss_contrast-2026-09-29.1:group:corrected_group" in contrasts
+    assert "close_r 9.99 (n=99)" in night["digest_facts"][0]["text"]
+    assert "facts/2026/2026-09-29.1.json" in night["digest_facts"][0]["text"]
+    keys = [item["key"] for item in mentor_review.issue_candidates(rich["chat"], SESSION,
+                                                                   night_paths=rich["night_paths"])]
+    assert "miss:corrected_group" in keys and "miss:incoming_trendline" not in keys
+
+
+def test_an_issue_left_out_of_the_brief_keeps_its_first_seen_in_the_registry(rich, tmp_path):
+    """Advisory 1: the registry remembers every candidate, also the sixth that never reaches the brief."""
+    store = MentorChatStore(rich["chat"])
+    for cid, day in (("tilt:2026-09-25:s1", "2026-09-25"), ("tilt:2026-09-29:s2", SESSION)):
+        store.add_challenge(cid, kind="tilt", symbol="", claim="size up after a win", issued_utc=_stamp(day),
+                            outcome={"status": "open", "day": day, "at": f"{day}T11:00:00-04:00",
+                                     "pattern": "size_up"})
+    _rich_run(rich, tmp_path, ask=False)
+    registry = json.loads((tmp_path / "ai" / "mentor_issue_registry.json").read_text(encoding="utf-8"))["issues"]
+    published = [item["key"] for item in _brief(tmp_path)["issues"]]
+    left_out = sorted(set(registry) - set(published))
+    assert len(published) == 5 and left_out, "six candidates, five in the brief"
+    assert all(registry[key]["first_seen"] == SESSION and registry[key]["nights_seen"] == 1 for key in left_out)
+    later = "2026-09-30"
+    mentor_review.run_mentor_review(session_date=later, now=datetime(2026, 9, 30, 23, 0, tzinfo=PT),
+                                    chat_db=rich["chat"], ai_root=tmp_path / "ai", ask=False,
+                                    night_paths=rich["night_paths"], mirror_builder=rich["mirror_builder"])
+    again = mentor_review.read_issue_registry(tmp_path / "ai")
+    assert all(again[key]["first_seen"] == SESSION and again[key]["last_seen"] == later for key in left_out)
+    candidates = mentor_review.issue_candidates(rich["chat"], later, night_paths=rich["night_paths"],
+                                                registry=again)
+    assert all(item["first_seen"] == SESSION for item in candidates if item["key"] in left_out)
+    mentor_review.run_mentor_review(session_date=later, now=datetime(2026, 9, 30, 23, 30, tzinfo=PT),
+                                    chat_db=rich["chat"], ai_root=tmp_path / "ai", ask=False,
+                                    night_paths=rich["night_paths"], mirror_builder=rich["mirror_builder"])
+    assert mentor_review.read_issue_registry(tmp_path / "ai")[left_out[0]]["nights_seen"] == 2, "a rerun counts once"
+
+
+def test_an_uncited_one_line_is_dropped_and_a_foreign_one_rejects_the_brief(rich, tmp_path):
+    """Advisory 3: the one line is model text loaded into memory, so it must cite like every other item."""
+    request, _calls = _two_calls({**EMPTY_BRIEF, "one_line": {"text": "Trust your gut today.", "evidence_refs": []},
+                                  "watch": [{"text": "SPY at its 50 SMA", "evidence_refs": ["night:day_review:2026-09-29:1"]}]})
+    out = _rich_run(rich, tmp_path, request=request)
+    brief = _brief(tmp_path)
+    assert out["status"] == "ok" and brief["worded"] is True
+    assert brief["one_line"] == {"text": "", "evidence_refs": []} and brief["dropped"] == 1
+    request, _calls = _two_calls({**EMPTY_BRIEF, "one_line": {"text": "x", "evidence_refs": ["pick:TSLA:cell"]}})
+    out = _rich_run(rich, tmp_path, request=request, force=True)
+    assert "coach brief rejected" in out["reason"] and _brief(tmp_path)["watch"], "the last good brief stays"
+    request, _calls = _two_calls({**EMPTY_BRIEF, "one_line": "a plain string"})
+    out = _rich_run(rich, tmp_path, request=request, force=True)
+    assert "coach brief rejected" in out["reason"]

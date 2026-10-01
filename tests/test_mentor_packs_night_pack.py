@@ -38,8 +38,8 @@ GOLDEN = """## night_pack
 [night:story:2026-09-29:0] Market story 2026-09-29: The market is in a bear channel, lower highs, day 2. (src: market_story:2026-09-29; rollup:weekly:2026-W40)
 [night:story:2026-09-29:1] Changed: SPY is 0.06% above its 20-day SMA. (src: market_story:2026-09-29)
 [night:story:2026-09-29:2] Changed: Monthly rollups are incomplete. (src: market_story:2026-09-29)
-[night:digest:2026-09-29:0] what is working: The D1 scan found several high-tier shorts. (src: scan.tier_list)
-[night:digest:2026-09-29:1] what is not working: M5 alerts closed mixed, mean close_r -0.05. (src: outcomes.intraday_finals)"""
+[night:digest:2026-09-29:0] what is working: The D1 scan found several high-tier shorts. (src: scan.tier_list in narration/2026/2026-09-29.json)
+[night:digest:2026-09-29:1] what is not working: M5 alerts closed mixed, mean close_r -0.05. (src: outcomes.intraday_finals in narration/2026/2026-09-29.json)"""
 
 
 @pytest.fixture()
@@ -145,7 +145,7 @@ def test_digest_facts_are_headline_values_with_their_pointers(world):
     rows, day = night_pack.digest_fact_rows(world, "2026-09-29")
     assert day == "2026-09-29" and 0 < len(rows) <= night_pack.MAX_FACT_ROWS
     assert rows[0]["text"].startswith("Daily digest 2026-09-29: settled outcomes mean close_r -0.0511 (n=57)")
-    assert rows[0]["src"] == "outcomes.intraday_finals"
+    assert rows[0]["src"] == "outcomes.intraday_finals in facts/2026/2026-09-29.json"
 
 
 def test_latest_briefs_take_the_newest_briefed_row_per_symbol(world):
@@ -177,3 +177,19 @@ def test_one_unreadable_artifact_never_blanks_the_others(world, monkeypatch):
     rows = _rows(night_pack.build(now=NOW, paths=world))
     assert rows["night:week:none"]["kind"] == "unknown" and "PermissionError" in rows["night:week:none"]["text"]
     assert "night:day_review:2026-09-29:1" in rows
+
+
+def test_a_superseding_sibling_wins_and_is_the_file_cited(world):
+    """Review blocker: the writers never edit a pack (D6); the correction is `<name>.1.json`."""
+    night_pack.write_fixture_corrections(world)
+    rows = _rows(night_pack.build(now=NOW, paths=world))
+    assert rows["night:miss:2026-09-29:0"]["text"].startswith("Miss contrast 2026-09-29 over 20 sessions: CORRECTED")
+    assert rows["night:miss:2026-09-29:1"]["src"] == "miss_contrast-2026-09-29.1:group:corrected_group"
+    assert "CORRECTED" in rows["night:prediction:2026-09-29:0"]["text"]
+    assert rows["night:prediction:2026-09-29:0"]["src"] == "prediction_contrast-2026-09-29.1"
+    assert rows["night:digest:2026-09-29:0"]["text"].startswith("what is working: CORRECTED statement.")
+    assert rows["night:digest:2026-09-29:0"]["file"] == "narration/2026/2026-09-29.1.json"
+    facts, _day = night_pack.digest_fact_rows(world, "2026-09-29")
+    assert "close_r 9.99 (n=99)" in facts[0]["text"] and facts[0]["file"] == "facts/2026/2026-09-29.1.json"
+    texts = " ".join(row["text"] for row in night_pack.build(now=NOW, paths=world).rows)
+    assert "high-tier shorts" not in texts and "incoming_trendline" not in texts, "the corrected files are not read"

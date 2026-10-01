@@ -61,6 +61,10 @@ DIGEST_SCHEMA = "mentor_day_digest_v1"
 #: P15a: the night's product for the day coach, loaded first into the morning memory.
 COACH_STEM = "mentor_coach_brief"
 COACH_SCHEMA = "mentor_coach_brief_v1"
+#: Every recurring-issue candidate by stable key (first_seen survives an issue left out of the brief).
+REGISTRY_FILE = "mentor_issue_registry.json"
+REGISTRY_SCHEMA = "mentor_issue_registry_v1"
+REGISTRY_SESSIONS = 60
 MAX_OUTPUT_TOKENS = 600
 #: P15a coach brief: a second call (<= 500 tokens) only after the digest call succeeded with time to spare.
 MAX_BRIEF_TOKENS = 500
@@ -500,7 +504,8 @@ def _strip_src(text: str) -> str:
 
 
 def issue_candidates(path: Path, session: str, *, night_paths: Any = None,
-                     earlier: Sequence[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
+                     earlier: Sequence[Mapping[str, Any]] = (),
+                     registry: Mapping[str, Mapping[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Recurring problems over the last REVIEW_SESSIONS sessions, found by code (the model only words and ranks).
 
     Each has a stable ``key`` (so ``first_seen`` carries over from ``earlier`` coach briefs), an
@@ -584,10 +589,42 @@ def issue_candidates(path: Path, session: str, *, night_paths: Any = None,
             if isinstance(item, Mapping) and _text(item.get("key")) and _text(item.get("first_seen")):
                 key = _text(item["key"])
                 seen[key] = min(seen.get(key, item["first_seen"]), _text(item["first_seen"]))
+    # The issue registry remembers every candidate, also one that never made the top five of a brief.
+    for key, entry in (registry or {}).items():
+        if isinstance(entry, Mapping) and _text(entry.get("first_seen")):
+            seen[key] = min(seen.get(key, entry["first_seen"]), _text(entry["first_seen"]))
     for item in found:
-        item["first_seen"] = seen.get(item["key"], session)
+        item["first_seen"] = min(seen.get(item["key"], session), session)
     found.sort(key=lambda item: (-item["count"], item["first_seen"], item["key"]))
     return found
+
+
+def registry_path(root: Path) -> Path:
+    return Path(root) / REGISTRY_FILE
+
+
+def read_issue_registry(root: Path) -> dict[str, dict[str, Any]]:
+    """``{key: {first_seen, last_seen, nights_seen, sessions}}``; {} when none or unreadable."""
+    issues = _read_json(registry_path(root)).get("issues")
+    return {str(key): dict(value) for key, value in (issues or {}).items() if isinstance(value, Mapping)}
+
+
+def update_issue_registry(root: Path, session: str, candidates: Sequence[Mapping[str, Any]],
+                          registry: Mapping[str, Mapping[str, Any]], built_utc: str) -> Path:
+    """Record every candidate seen on ``session`` (the facts half, every night): first_seen never moves later,
+    a rerun of the same session counts once. Temp-and-rename; a failed write keeps the last good file."""
+    issues = {key: dict(value) for key, value in registry.items()}
+    for item in candidates:
+        entry = issues.setdefault(item["key"], {})
+        sessions = sorted({*entry.get("sessions", ()), session})[-REGISTRY_SESSIONS:]
+        entry.update({
+            "first_seen": min(_text(entry.get("first_seen")) or item["first_seen"], item["first_seen"], session),
+            "last_seen": max(_text(entry.get("last_seen")) or session, session),
+            "sessions": sessions, "nights_seen": max(int(entry.get("nights_seen") or 0), len(sessions)),
+            "text": item["text"], "count": item["count"],
+        })
+    return _publish(registry_path(root), {"schema": REGISTRY_SCHEMA, "updated_utc": built_utc,
+                                          "issues": dict(sorted(issues.items()))})
 
 
 def build_inputs(path: Path, session: str, facts: Mapping[str, Any], *, report: Any = None,
@@ -754,13 +791,14 @@ def read_published(root: Path, stem: str, *, limit: int = 5) -> list[dict[str, A
 # ---------------------------------------------------------------------------
 # P15a: the coach brief - the night's product for the day coach
 # ---------------------------------------------------------------------------
-BRIEF_PROMPT_VERSION = "mentor_coach_brief_v1"
+BRIEF_PROMPT_VERSION = "mentor_coach_brief_v2"
 BRIEF_SCHEMA_NAME = "tradingbot_mentor_coach_brief"
 BRIEF_INSTRUCTIONS = (
     "Write tomorrow morning's coach brief for the trader from the evidence below. watch: at most four "
     "things to watch today. missing: at most three things he may be missing, from the contrasts, ideas and "
     "day review. issues: rank and word the recurring issues listed in issue_candidates, each by its key; "
-    "never invent an issue. one_line: one short sentence for the top of his day. Every item cites ids copied "
+    "never invent an issue. one_line: one short sentence for the top of his day, with its own ids. Every item "
+    "and the one line cite ids copied "
     "exactly from allowed_evidence_ids. Copy numbers; never compute one. Never suggest an order, a size, or a "
     "change to a rule, detector, score or alert; these are observations, never rules."
 )
@@ -783,9 +821,19 @@ BRIEF_JSON_SCHEMA: dict[str, Any] = {
         "watch": {"type": "array", "items": _ITEM},
         "missing": {"type": "array", "items": _ITEM},
         "issues": {"type": "array", "items": _KEYED},
-        "one_line": {"type": "string", "maxLength": MAX_ONE_LINE},
+        "one_line": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["text", "evidence_refs"],
+            "properties": {
+                "text": {"type": "string", "maxLength": MAX_ONE_LINE},
+                "evidence_refs": {"type": "array", "items": {"type": "string"}},
+            },
+        },
     },
 }
+#: The published one line when the model gave none or left it uncited (memory leads with the first watch item).
+NO_ONE_LINE: dict[str, Any] = {"text": "", "evidence_refs": []}
 
 
 def candidate_rows(candidates: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -826,8 +874,18 @@ def check_brief(reply: Any, inputs: Mapping[str, Any],
             if issue is not None:
                 item = {"key": issue["key"], **item, "first_seen": issue["first_seen"], "count": issue["count"]}
             kept[key].append(item)
-    one_line = _text(reply.get("one_line"))
-    kept["one_line"] = one_line if len(one_line) <= MAX_ONE_LINE else ""
+    line = reply.get("one_line")
+    if line is not None and not isinstance(line, Mapping):
+        raise MentorReviewRejected("one_line was not an object with text and evidence_refs")
+    refs = _refs(line or {})
+    for ref in refs:
+        if ref not in allowed:
+            raise MentorReviewRejected(f"one_line cited {ref!r}, which tonight does not carry")
+    text = _text((line or {}).get("text"))
+    cited = bool(text and refs and len(text) <= MAX_ONE_LINE)
+    kept["one_line"] = {"text": text, "evidence_refs": refs} if cited else dict(NO_ONE_LINE)
+    if text and kept["one_line"] == NO_ONE_LINE:
+        dropped += 1  # an uncited one line is model text with nothing under it
     # The model ranks and words; an issue it left out still stands, worded by the code, after its ranking.
     for issue in candidates:
         if len(kept["issues"]) >= MAX_ISSUES:
@@ -845,12 +903,12 @@ def _fact_issue(issue: Mapping[str, Any]) -> dict[str, Any]:
 def brief_payload(session: str, built_utc: str, inputs: Mapping[str, Any], candidates: Sequence[Mapping[str, Any]],
                   *, kept: Mapping[str, Any] | None = None, model: str = "", dropped: int = 0) -> dict[str, Any]:
     """The published coach brief; without ``kept`` it is the facts part only (issues worded by code)."""
-    body = kept or {"watch": [], "missing": [], "one_line": "",
+    body = kept or {"watch": [], "missing": [], "one_line": dict(NO_ONE_LINE),
                     "issues": [_fact_issue(issue) for issue in candidates[:MAX_ISSUES]]}
     return {
         "schema": COACH_SCHEMA, "session_date": session, "built_utc": built_utc, "worded": kept is not None,
         "model": model, "prompt_version": BRIEF_PROMPT_VERSION, "inputs_hash": _text(inputs.get("inputs_hash")),
-        "one_line": body.get("one_line", ""), "watch": list(body.get("watch") or ()),
+        "one_line": dict(body.get("one_line") or NO_ONE_LINE), "watch": list(body.get("watch") or ()),
         "missing": list(body.get("missing") or ()), "issues": list(body.get("issues") or ()), "dropped": dropped,
     }
 
@@ -993,8 +1051,14 @@ def run_mentor_review(
     night = night_inputs(path, session, moment, night_paths=night_paths, mirror_builder=mirror_builder)
     earlier = [payload for payload in read_published(root, COACH_STEM, limit=15)
                if _text(payload.get("session_date"))[:10] < session]
-    candidates = issue_candidates(path, session, night_paths=night_paths, earlier=earlier)
+    registry = read_issue_registry(root)
+    candidates = issue_candidates(path, session, night_paths=night_paths, earlier=earlier, registry=registry)
     night["issues"] = candidate_rows(candidates)
+    registry_note = ""
+    try:
+        update_issue_registry(root, session, candidates, registry, facts["built_utc"])
+    except OSError as exc:
+        registry_note = f"; the issue registry could not be updated (the last good one is kept): {exc}"
     counts = {key: len(value) for key, value in night.items() if key != "unread"}
     summary.update({"night_inputs": counts, "inputs": sum(counts.values()), "issues": len(candidates)})
     if night.get("unread"):
@@ -1007,7 +1071,7 @@ def run_mentor_review(
         _log.debug("mentor_review could not read the permutation report.", exc_info=True)
         report = None
     inputs = build_inputs(path, session, facts, report=report, night=night)
-    inputs_note = f"{summary['inputs']} night input(s), {len(candidates)} issue candidate(s)"
+    inputs_note = f"{summary['inputs']} night input(s), {len(candidates)} issue candidate(s){registry_note}"
     brief_path = published_path(root, COACH_STEM, session)
     try:
         if publish_fact_brief(root, session, facts["built_utc"], inputs, candidates) is not None:

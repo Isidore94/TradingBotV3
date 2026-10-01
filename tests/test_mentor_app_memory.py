@@ -245,7 +245,8 @@ def test_still_true_uses_the_windows_clock_on_any_date(window, app, monkeypatch,
 
 # ---------------------------------------------------------------- P15a: the memory stands on the night
 COACH = {"schema": "mentor_coach_brief_v1", "session_date": "2026-09-28", "worded": True,
-         "one_line": "Bounces in a bear channel have been early for you.",
+         "one_line": {"text": "Bounces in a bear channel have been early for you.",
+                      "evidence_refs": ["night:day_review:2026-09-28:2"]},
          "watch": [{"text": "SPY at its 50 SMA", "evidence_refs": ["night:story:2026-09-28:0"]}],
          "missing": [{"text": "Trendline vetoes ran 21% of the time", "evidence_refs": ["night:miss:2026-09-28:1"]}],
          "issues": [{"key": "wrong_reads", "text": "Two reads graded wrong", "first_seen": "2026-09-24", "count": 3,
@@ -304,6 +305,23 @@ def test_no_night_on_file_leaves_digests_and_notes_as_before(tmp_path):
     loaded = memory.load(MentorChatStore(tmp_path / "chat.sqlite3"), ai_root=root,
                          night_paths=night_pack.NightPaths(), now=NOW)
     assert [item.id for item in loaded.items] == ["mem:digest:2026092800"], "a none row is never memory"
+
+
+@pytest.mark.parametrize("one_line", [{"text": "Trust your gut.", "evidence_refs": []}, "Trust your gut.", None])
+def test_without_a_cited_one_line_the_first_watch_item_leads(tmp_path, one_line):
+    """Review advisory 3: uncited model text never leads the memory; the first watch item does, once."""
+    root = tmp_path / "ai"
+    root.mkdir(parents=True)
+    payload = {**COACH, "one_line": one_line}
+    (root / "mentor_coach_brief_2026-09-28.json").write_text(json.dumps(payload), encoding="utf-8")
+    from mentor_packs import night_pack
+
+    loaded = memory.load(MentorChatStore(tmp_path / "c.sqlite3"), ai_root=root,
+                         night_paths=night_pack.NightPaths(), now=NOW)
+    assert loaded.items[0].id == "night:coach:2026-09-28:0"
+    assert loaded.items[0].text == "coach brief: watch: SPY at its 50 SMA (cites night:story:2026-09-28:0)"
+    assert "Trust your gut" not in loaded.text
+    assert "night:coach:2026-09-28:w1" not in [item.id for item in loaded.items], "not shown twice"
 
 
 def test_a_coach_brief_dated_after_today_is_not_loaded(tmp_path):

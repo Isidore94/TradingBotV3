@@ -576,7 +576,7 @@ def _publish(pack: Mapping[str, Any], root: Any = None) -> Path:
     return publish(target, json.dumps(pack, indent=1, sort_keys=True, default=str) + "\n")
 
 
-def read_latest(session_date: str, *, root: Any = None) -> dict[str, Any] | None:
+def read_latest_file(session_date: str, *, root: Any = None) -> tuple[Path, dict[str, Any]] | None:
     """The newest pack for ``session_date``, or ``None``. Never raises.
 
     TJ-5's week story and TJ-12's Day Review line read through here; this packet
@@ -598,7 +598,7 @@ def read_latest(session_date: str, *, root: Any = None) -> dict[str, Any] | None
         except ValueError:
             return 0
 
-    newest: dict[str, Any] | None = None
+    newest: tuple[Path, dict[str, Any]] | None = None
     best = -1
     for path in candidates:
         order = _index(path)
@@ -609,8 +609,14 @@ def read_latest(session_date: str, *, root: Any = None) -> dict[str, Any] | None
         except (OSError, ValueError):
             continue
         if isinstance(payload, Mapping):
-            newest, best = dict(payload), order
+            newest, best = (path, dict(payload)), order
     return newest
+
+
+def read_latest(session_date: str, *, root: Any = None) -> dict[str, Any] | None:
+    """The newest pack for ``session_date`` (a superseding sibling wins, D6), or ``None``."""
+    found = read_latest_file(session_date, root=root)
+    return found[1] if found else None
 
 
 # ---------------------------------------------------------------------------

@@ -58,7 +58,7 @@ MAX_WEEK_ROWS = 6
 MAX_STORY_ROWS = 5
 MAX_DIGEST_LINES = 6
 MAX_FACT_ROWS = 10
-BRIEF_SESSIONS = 10
+BRIEF_SESSIONS = 30
 BRIEF_LINES = 3
 BRIEF_STATUS = "briefed"
 _DATE = re.compile(r"(\d{4}-\d{2}-\d{2})")
@@ -173,8 +173,11 @@ def day_review_rows(paths: NightPaths, today: date, days: int = 1) -> tuple[list
     files = _dated(_glob(paths.day_review / "narration" if paths.day_review else None, "????-??-??.json"), today)
     rows: list[dict[str, Any]] = []
     dates: list[str] = []
-    for day, path in files[:days]:
-        payload = _read_json(path)
+    from ai_jobs import day_review_narration
+
+    for day, _path in files[:days]:
+        # The writer's own reader (one verified file per session, replaced in place, never a sibling).
+        payload = day_review_narration.read_narration(day, root=paths.day_review)
         narration = payload.get("narration") if isinstance(payload, Mapping) else None
         if not isinstance(narration, Mapping):
             continue
@@ -261,14 +264,29 @@ def _feature_text(group: Mapping[str, Any]) -> str:
             f"{top.get('median_a')} vs {group.get('label_b', 'b')} n={top.get('n_b')} median {top.get('median_b')})")
 
 
+def _latest_contrast(module: Any, paths: NightPaths, today: date) -> tuple[str, Path, dict[str, Any]] | None:
+    """(session, file, pack) of the newest session on or before ``today``, read by the writer's own
+    ``read_latest_file`` so a superseding sibling (``<name>.1.json``, D6) wins over the first file."""
+    if paths.digests is None:
+        return None
+    sessions = sorted({found.group(1) for path in _glob(paths.digests, f"{module.PACK_PREFIX}-????-??-??*.json")
+                       if (found := _DATE.search(path.name)) and found.group(1) <= today.isoformat()}, reverse=True)
+    for session in sessions:
+        latest = module.read_latest_file(session, root=paths.digests)
+        if latest is not None:
+            return session, latest[0], latest[1]
+    return None
+
+
 def miss_rows(paths: NightPaths, today: date) -> tuple[list[dict[str, Any]], list[str]]:
     """The latest miss contrast: its statement, then the leader groups and other reportable ones (<= 5 rows)."""
-    files = _dated(_glob(paths.digests, "miss_contrast-????-??-??.json"), today)
-    payload = _read_json(files[0][1]) if files else None
-    if not isinstance(payload, Mapping):
+    from ai_jobs import miss_contrast
+
+    found = _latest_contrast(miss_contrast, paths, today)
+    if found is None:
         return [_none("miss", "no miss_contrast file")], []
-    day = files[0][0]
-    stem = f"miss_contrast-{day}"
+    day, path, payload = found
+    stem = path.stem  # the file actually read: a correction cites itself
     rows = [_row("miss", day, 0, f"Miss contrast {day} over {payload.get('window_sessions', '?')} sessions: "
                  f"{_clean(payload.get('statement'), 200)}", stem)]
     groups = {str(g.get("name")): g for g in payload.get("groups") or () if isinstance(g, Mapping) and g.get("name")}
@@ -285,12 +303,13 @@ def miss_rows(paths: NightPaths, today: date) -> tuple[list[dict[str, Any]], lis
 
 def prediction_rows(paths: NightPaths, today: date) -> tuple[list[dict[str, Any]], list[str]]:
     """The latest prediction contrast: its statement, then right/wrong per horizon (<= 5 rows)."""
-    files = _dated(_glob(paths.digests, "prediction_contrast-????-??-??.json"), today)
-    payload = _read_json(files[0][1]) if files else None
-    if not isinstance(payload, Mapping):
+    from ai_jobs import prediction_contrast
+
+    found = _latest_contrast(prediction_contrast, paths, today)
+    if found is None:
         return [_none("prediction", "no prediction_contrast file")], []
-    day = files[0][0]
-    stem = f"prediction_contrast-{day}"
+    day, path, payload = found
+    stem = path.stem  # the file actually read: a correction cites itself
     rows = [_row("prediction", day, 0, f"Prediction contrast {day}: {_clean(payload.get('statement'), 200)}", stem)]
     horizons = payload.get("horizons") or {}
     for n, key in enumerate(sorted(horizons)[: MAX_CONTRAST_ROWS - 1], start=1):
@@ -317,17 +336,23 @@ def week_rows(paths: NightPaths, today: date) -> tuple[list[dict[str, Any]], lis
     folder = paths.day_review / "week" if paths.day_review else None
     this_week, last_week = week_id(today), week_id(today - timedelta(days=7))
     wanted = [last_week, this_week] if today.weekday() <= 2 else [this_week, last_week]
+    from ai_jobs import week_review_narration
+
+    def read(week: str) -> Any:
+        # The writer's own reader: one verified file per week, replaced in place, never a sibling.
+        return week_review_narration.read_week_narration(week, root=paths.day_review) if folder else None
+
     payload, wid = None, ""
     for candidate in wanted:
-        payload = _read_json(folder / f"{candidate}.json") if folder else None
+        payload = read(candidate)
         if isinstance(payload, Mapping):
             wid = candidate
             break
     if not wid:
         # An older review is still the newest the night wrote: shown with its own week id.
-        older = sorted((p for p in _glob(folder, "????-W??.json") if p.stem <= this_week), reverse=True)
-        payload = _read_json(older[0]) if older else None
-        wid = older[0].stem if older and isinstance(payload, Mapping) else ""
+        older = sorted((p.stem for p in _glob(folder, "????-W??.json") if p.stem <= this_week), reverse=True)
+        payload = read(older[0]) if older else None
+        wid = older[0] if older and isinstance(payload, Mapping) else ""
     narration = payload.get("narration") if isinstance(payload, Mapping) else None
     if not wid or not isinstance(narration, Mapping):
         return [_none("week", "no week_review_narration file")], []
@@ -379,11 +404,10 @@ def story_rows(paths: NightPaths, today: date, days: int = 1) -> tuple[list[dict
 # ---------------------------------------------------------------- daily digest
 def digest_rows(paths: NightPaths, today: date, days: int = 1) -> tuple[list[dict[str, Any]], list[str]]:
     """The latest daily digest narration: its summary and statements, <= 6 lines a night."""
-    files = _dated(_glob(paths.digests / "narration" if paths.digests else None, "*/????-??-??.json"), today)
     rows: list[dict[str, Any]] = []
     dates: list[str] = []
-    for day, path in files[:days]:
-        payload = _read_json(path)
+    for day, path, payload in _latest_digest_files(paths, today, "narration")[:days]:
+        where = _relative(path, paths.digests)
         narration = payload.get("narration") if isinstance(payload, Mapping) else None
         if not isinstance(narration, Mapping):
             continue
@@ -401,10 +425,29 @@ def digest_rows(paths: NightPaths, today: date, days: int = 1) -> tuple[list[dic
                 src = ", ".join(refs) or str(metric.get("source_id") or "") or f"daily_digest:{day}"
                 lines.append((f"{section.replace('_', ' ')}: {_clean(item.get('statement'), 220)}", src))
         for n, (text, src) in enumerate(lines[:MAX_DIGEST_LINES]):
-            rows.append(_row("digest", day, n, text, src))
+            rows.append(_row("digest", day, n, text, f"{src} in {where}", file=where))
     if not rows:
         rows.append(_none("digest", "no daily_digest narration file"))
     return rows, dates
+
+
+def _relative(path: Path, root: Path | None) -> str:
+    try:
+        return Path(path).relative_to(root).as_posix() if root is not None else Path(path).name
+    except ValueError:
+        return Path(path).name
+
+
+def _latest_digest_files(paths: NightPaths, today: date, kind: str) -> list[tuple[str, Path, dict[str, Any]]]:
+    """``(session, file, payload)`` newest first, on or before ``today``, read by the digest's own latest-reader
+    (``latest_pack_files_by_session`` / ``latest_narration_files_by_session``): a superseding sibling wins (D6)."""
+    if paths.digests is None:
+        return []
+    from ai_jobs import digest
+
+    reader = digest.latest_pack_files_by_session if kind == "facts" else digest.latest_narration_files_by_session
+    latest = reader(Path(paths.digests))
+    return [(day, *latest[day]) for day in sorted(latest, reverse=True) if day <= today.isoformat()]
 
 
 def _fact_value(node: Any) -> str:
@@ -421,11 +464,11 @@ def digest_fact_rows(paths: NightPaths, session: str, limit: int = MAX_FACT_ROWS
         today = date.fromisoformat(str(session)[:10])
     except ValueError:
         return [_none("digest_fact", "no session date")], ""
-    files = _dated(_glob(paths.digests / "facts" if paths.digests else None, "*/????-??-??.json"), today)
-    payload = _read_json(files[0][1]) if files else None
-    if not isinstance(payload, Mapping):
+    files = _latest_digest_files(paths, today, "facts")
+    if not files:
         return [_none("digest_fact", "no daily_digest facts file")], ""
-    day = files[0][0]
+    day, path, payload = files[0]
+    where = _relative(path, paths.digests)
     picks: list[tuple[str, Any, str]] = []
     outcomes = (payload.get("outcomes") or {}).get("overall") or {}
     pointer = ((payload.get("outcomes") or {}).get("pointer") or {}).get("source_id") or "outcomes"
@@ -442,13 +485,14 @@ def digest_fact_rows(paths: NightPaths, session: str, limit: int = MAX_FACT_ROWS
     for label, node, src in picks:
         shown = _fact_value(node)
         if shown and len(rows) < limit:
-            rows.append(_row("digest_fact", day, len(rows), f"Daily digest {day}: {label} {shown}", src))
+            rows.append(_row("digest_fact", day, len(rows), f"Daily digest {day}: {label} {shown}", f"{src} in {where}",
+                             file=where))
     names = payload.get("names") or {}
     for key in sorted(names):
         node = names[key]
         if isinstance(node, Mapping) and node.get("n") is not None and len(rows) < limit:
             rows.append(_row("digest_fact", day, len(rows), f"Daily digest {day}: {key.replace('_', ' ')} n={node['n']}",
-                             str(node.get("source_id") or key)))
+                             f"{node.get('source_id') or key} in {where}", file=where))
     return rows or [_none("digest_fact", f"daily digest {day} carried no headline value")], day
 
 
@@ -504,22 +548,54 @@ def brief_lines(summary: Mapping[str, Any]) -> tuple[list[str], list[str]]:
 
 
 def latest_briefs(root: Path | None, today: date, *, sessions: int = BRIEF_SESSIONS) -> dict[str, dict[str, Any]]:
-    """``{SYM: {session, lines, evidence_refs}}``: each symbol's newest briefed row in the last ``sessions`` manifests."""
+    """``{SYM: {session, lines, evidence_refs, reused}}``: each symbol's newest briefed row in the last
+    ``sessions`` manifests or the night's evidence cache (a reused brief writes no manifest row for the
+    night that reused it). ``reused`` = the brief is older than the newest brief night and the cache holds
+    it for reuse while the symbol's evidence is unchanged."""
     if root is None:
         return {}
     # The session is the manifest's folder name: <year>/<session>/ticker_briefs_manifest.jsonl.
     manifests = _glob(Path(root), "????/????-??-??/ticker_briefs_manifest.jsonl")
     found = sorted(((p.parent.name, p) for p in manifests if _DATE.fullmatch(p.parent.name)
                     and p.parent.name <= today.isoformat()), reverse=True)[:sessions]
-    out: dict[str, dict[str, Any]] = {}
+    newest_night = found[0][0] if found else ""
+    rows: dict[str, tuple[str, dict[str, Any]]] = {}
     for session, path in found:
         for sym, row in _manifest(path).items():
-            if sym in out:
-                continue
-            lines, refs = brief_lines(row["result"]["summary"])
-            if lines:
-                out[sym] = {"session": session, "lines": lines, "evidence_refs": refs}
+            rows.setdefault(sym, (session, row))
+    cached = _evidence_cache(Path(root))
+    for sym, row in cached.items():
+        session = str(row.get("session_date") or "")[:10]
+        summary = (row.get("result") or {}).get("summary") if isinstance(row.get("result"), Mapping) else None
+        if (_DATE.fullmatch(session) and session <= today.isoformat() and isinstance(summary, Mapping)
+                and session > rows.get(sym, ("", {}))[0]):
+            rows[sym] = (session, row)
+    out: dict[str, dict[str, Any]] = {}
+    for sym, (session, row) in rows.items():
+        lines, refs = brief_lines(row["result"]["summary"])
+        if lines:
+            reused = sym in cached and str(cached[sym].get("session_date") or "")[:10] == session < newest_night
+            out[sym] = {"session": session, "lines": lines, "evidence_refs": refs, "reused": reused}
     return out
+
+
+def _evidence_cache(root: Path) -> dict[str, dict[str, Any]]:
+    """The briefs' evidence cache (newest briefed row per symbol), read by its writer's reader, cached by mtime."""
+    from ai_jobs import week_names
+
+    path = week_names.evidence_cache_path(root)
+    try:
+        stat = path.stat()
+    except OSError:
+        return {}
+    sig = (stat.st_size, stat.st_mtime_ns)
+    hit = _BRIEF_CACHE.get(str(path))
+    if hit and hit[0] == sig:
+        return hit[1]
+    rows = {sym.upper(): row for sym, row in week_names.read_evidence_cache(path).items()
+            if str(row.get("status") or "") == BRIEF_STATUS}
+    _BRIEF_CACHE[str(path)] = (sig, rows)
+    return rows
 
 
 def brief_rows(root: Path | None, today: date) -> list[dict[str, Any]]:
@@ -684,6 +760,27 @@ def write_fixture_world(root: Path | str) -> NightPaths:
          "status": "membership_only"},
     )) + "\n", encoding="utf-8")
     return NightPaths(digests=digests, briefs=briefs, day_review=review, ideas=ideas, ideas_state=state, story=story)
+
+
+def write_fixture_corrections(paths: NightPaths) -> None:
+    """Superseding siblings (D6) for the fixture night: each says CORRECTED or carries 9.99."""
+    digests = Path(paths.digests)
+    (digests / "miss_contrast-2026-09-29.1.json").write_text(json.dumps({
+        "schema": "miss_contrast_v1", "session_date": "2026-09-29", "window_sessions": 20, "statement": "CORRECTED",
+        "leaders": ["corrected_group"],
+        "groups": [{"name": "corrected_group", "reportable": True, "rate": 0.0999, "measured": 99, "n": 99,
+                    "misses": 9}]}), encoding="utf-8")
+    (digests / "prediction_contrast-2026-09-29.1.json").write_text(json.dumps({
+        "schema": "prediction_contrast_v1", "session_date": "2026-09-29", "statement": "CORRECTED", "horizons": {}}),
+        encoding="utf-8")
+    (digests / "narration" / "2026" / "2026-09-29.1.json").write_text(json.dumps({
+        "schema": "daily_digest_narration_v1", "session_date": "2026-09-29", "narration": {
+            "what_is_working": [{"statement": "CORRECTED statement.", "evidence_refs": ["scan.tier_list"]}]}}),
+        encoding="utf-8")
+    (digests / "facts" / "2026" / "2026-09-29.1.json").write_text(json.dumps({
+        "schema": "daily_digest_facts_v3", "session_date": "2026-09-29",
+        "outcomes": {"pointer": {"source_id": "outcomes.intraday_finals"},
+                     "overall": {"close_r": {"value": 9.99, "n": 99}}}}), encoding="utf-8")
 
 
 def fixture() -> Pack:

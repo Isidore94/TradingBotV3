@@ -623,8 +623,11 @@ def _brief_rows(symbol: str, today: date, paths: PickPaths) -> list[dict[str, An
         return [{"id": f"pick:{symbol}:brief:none", "kind": "brief_none",
                  "text": f"Night brief: none for {symbol} in the last {night_pack.BRIEF_SESSIONS} brief nights"}]
     refs = list(brief["evidence_refs"])
-    text = f"Night brief ({brief['session']}): " + " | ".join(brief["lines"])
+    head = (f"Night brief from {brief['session']}, evidence unchanged since: " if brief.get("reused")
+            else f"Night brief ({brief['session']}): ")
+    text = head + " | ".join(brief["lines"])
     return [{"id": f"pick:{symbol}:brief", "kind": "brief", "session": brief["session"], "evidence_refs": refs,
+             "reused": bool(brief.get("reused")),
              "text": text + (f" (src: {', '.join(refs[:3])})" if refs else "")}]
 
 

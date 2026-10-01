@@ -334,6 +334,34 @@ def test_a_brief_from_after_the_market_date_is_never_read(world):
     assert "future" not in _rows(pick_pack.build("NVDA", now=NOW, paths=world))["pick:NVDA:brief"]["text"]
 
 
+def test_a_reused_or_older_brief_is_still_shown_never_none(world):
+    """Review advisory 2: a reused brief writes no manifest row, and 10 sessions was too short a look-back."""
+    import json
+
+    from ai_jobs import week_names
+
+    def manifest(day, rows):
+        folder = world.briefs / "2026" / day
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "ticker_briefs_manifest.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows),
+                                                             encoding="utf-8")
+
+    brief = {"status": "briefed", "result": {"summary": {"executive_summary": "TSLA based above its anchor."}}}
+    manifest("2026-09-08", [{**brief, "symbol": "TSLA", "session_date": "2026-09-08"}])
+    for day in range(9, 26):  # 15+ later brief nights that did not re-brief TSLA or AMD
+        if datetime(2026, 9, day).weekday() < 5:
+            manifest(f"2026-09-{day:02d}", [{"symbol": "ZZZ", "status": "membership_only"}])
+    week_names.append_evidence_cache(week_names.evidence_cache_path(world.briefs), {
+        "symbol": "AMD", "session_date": "2026-09-10", "status": "briefed",
+        "result": {"summary": {"executive_summary": "AMD faded into its band."}}}, "hash-amd")
+    tsla = _rows(pick_pack.build("TSLA", now=NOW, paths=world))
+    assert tsla["pick:TSLA:brief"]["text"] == "Night brief (2026-09-08): TSLA based above its anchor."
+    amd = _rows(pick_pack.build("AMD", now=NOW, paths=world))
+    assert "pick:AMD:brief:none" not in amd
+    assert amd["pick:AMD:brief"]["text"] == "Night brief from 2026-09-10, evidence unchanged since: AMD faded into its band."
+    assert amd["pick:AMD:brief"]["reused"] is True
+
+
 def test_a_swing_or_claimed_pick_stays_on_the_d1_branch(world):
     for symbol in ("NVDA", "TSLA"):
         ids = pick_pack.build(symbol, now=NOW, paths=world).ids
