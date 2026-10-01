@@ -46,13 +46,32 @@ def _flag(monkeypatch, value):
 
 
 @pytest.mark.parametrize(
-    ("raw", "expected"), [(None, False), (False, False), ("", False), ("off", False), (True, True), ("true", True), (1, True)]
+    ("raw", "expected"),
+    # P15b (2026-09-30): on by default; only an explicit off rolls back to the desk's Mentor.
+    [(None, True), (False, False), ("", True), ("off", False), ("false", False), (0, False), ("no", False),
+     (True, True), ("true", True), (1, True), ("garbage", True)],
 )
-def test_the_flag_is_off_unless_explicitly_on(monkeypatch, raw, expected):
+def test_the_flag_is_on_unless_explicitly_off(monkeypatch, raw, expected):
     from ui.services.mentor_launcher import mentor_app_enabled
 
     _flag(monkeypatch, raw)
     assert mentor_app_enabled() is expected
+
+
+def test_an_unset_flag_is_on_and_an_explicit_false_in_the_file_is_off(monkeypatch, tmp_path):
+    import json
+
+    import project_paths
+    from ui.services.mentor_launcher import mentor_app_enabled
+
+    real = project_paths.get_local_setting
+    settings: dict = {}
+    monkeypatch.setattr(project_paths, "get_local_setting",
+                        lambda key, default=None: settings.get(key, default) if key == "mentor_app_enabled"
+                        else real(key, default))
+    assert mentor_app_enabled() is True, "no setting at all: the app owns the Mentor"
+    settings.update(json.loads('{"mentor_app_enabled": false}'))
+    assert mentor_app_enabled() is False, "the trader's explicit false restores the desk card"
 
 
 @pytest.fixture()

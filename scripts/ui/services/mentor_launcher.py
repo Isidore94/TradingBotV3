@@ -18,20 +18,31 @@ from typing import Any, Callable
 _DETACHED = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
 #: Local setting: on = the Trade Mentor app owns the Mentor (card, slots file, journal
-#: events) and the desk builds none of it. Default off = the desk's own Mentor popup.
+#: events) and the desk builds none of it. On by default since 2026-09-30 (P15b); an
+#: explicit off (``false``/``0``/``no``/``off``) restores the desk's own Mentor popup.
 MENTOR_APP_ENABLED_KEY = "mentor_app_enabled"
+MENTOR_APP_DEFAULT = True
+_OFF_WORDS = ("0", "false", "no", "off")
+_ON_WORDS = ("1", "true", "yes", "on")
 #: Passed only by the desk's launch: the app exits after the desk does.
 FOLLOW_DESK_FLAG = "--follow-desk"
 
 
 def mentor_app_enabled() -> bool:
-    """True only for an explicit on (``true``/``1``/``yes``/``on``); anything else is off."""
+    """On unless explicitly off: a bool is itself, ``false``/``0``/``no``/``off`` is off, unset or unreadable is on."""
     from project_paths import get_local_setting
 
-    raw = get_local_setting(MENTOR_APP_ENABLED_KEY, False)
+    raw = get_local_setting(MENTOR_APP_ENABLED_KEY, MENTOR_APP_DEFAULT)
     if isinstance(raw, bool):
         return raw
-    return str(raw or "").strip().lower() in ("1", "true", "yes", "on")
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    word = str(raw if raw is not None else "").strip().lower()
+    if word in _OFF_WORDS:
+        return False
+    if word in _ON_WORDS:
+        return True
+    return MENTOR_APP_DEFAULT
 
 
 def _python() -> str:
