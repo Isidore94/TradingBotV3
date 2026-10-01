@@ -650,7 +650,9 @@ def simple_turn(text: str, requests: Iterable[Any]) -> bool:
     if {getattr(request, "name", "") for request in requests} & LIST_PACKS or _LONG_ASK.search(lowered):
         return False
     if _ONE_LINE.search(lowered):
-        return True  # he asked for one line ("in one line, how should I feel about my week")
+        # An explicit one-line ask wins, even over the planner's "trade intent" (it also fires on
+        # "how should I feel about my trading"): plain formatting only, never a cap.
+        return True
     if any(getattr(request, "reason", "") == "trade intent" for request in requests):
         return False  # a tickerless pre-trade question ("should I buy here?") keeps the default guard
     return len(re.findall(r"[a-z0-9$'&]+", lowered)) <= SIMPLE_MAX_WORDS

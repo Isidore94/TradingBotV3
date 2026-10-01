@@ -43,7 +43,9 @@ NOT_SUMMARY = ["should I buy NVDA here", "im thinking of shorting TSLA thoughts?
 #: Re-review of dcf5a45a: every simple turn gets the plain guard (formatting only), never the instruction.
 SIMPLE_PLAIN = ["how did I do last week", "how did I do today", "whats SPY doing", "what's on the econ calendar tomorrow",
                 "am I tilting", "what are my rules on shorts", "any news on TSLA",
-                "in one line, how should I feel about my trading this week"]
+                "in one line, how should I feel about my trading this week",
+                # an explicit one-line ask wins over the planner's "trade intent": plain only, never a cap
+                "briefly, should I buy here?", "should I short the open in one line"]
 #: Not simple: a pre-trade check, a list, a comparison or an explanation keeps the default guard.
 DEFAULT_TURN = ["should I buy NVDA here", "im thinking of shorting TSLA thoughts?", "should I buy here?",
                 "compare NVDA and AMD for a long", "what am I holding", "anything reporting this week in my longs?",
