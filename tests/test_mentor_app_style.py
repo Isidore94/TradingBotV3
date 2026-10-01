@@ -71,6 +71,15 @@ def test_a_wrong_premise_is_said_first():
     assert "If the question's premise is wrong by the data, say so in the first sentence, then answer" in PERSONA_PROMPT
 
 
+def test_a_book_correction_is_never_proved_with_the_rows_it_corrects():
+    """2026-10-01: told "you have 19 open positions", the trader said he holds DRAM and QTUM; the Mentor agreed
+    and still cited [book:asof] for the corrected claim."""
+    assert ("If the trader corrects what he holds, do not cite book or ctx ids as proof of his corrected claim; "
+            "say the desk data disagrees and which source it came from (journal or broker, and its time).") \
+        in PERSONA_PROMPT
+    assert "A journal position is not the broker's book" in PERSONA_PROMPT
+
+
 # ---------------------------------------------------------------- the scorer
 def test_the_scorer_sees_the_how_am_i_doing_wrapper():
     got = style.measure(HOW_AM_I_DOING, "how am i doing today")

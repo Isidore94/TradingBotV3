@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
+from mentor_packs import broker_check
 from mentor_packs.registry import Pack, make_pack
 
 NAME = "book_pack"
@@ -73,6 +74,8 @@ class Sources:
     #: The last stored IBKR snapshot / failure (P12); both None = IBKR not read yet, not in the pack.
     ibkr_snapshot: Callable[[], Mapping[str, Any] | None] = lambda: None
     ibkr_status: Callable[[], Mapping[str, Any] | None] = lambda: None
+    #: The journal's last broker reconciliation report (``broker_check``); None = journal trades unchecked.
+    reconciliation: Callable[[], Mapping[str, Any] | None] = lambda: None
     now: datetime | None = field(default=None, compare=False)
 
 
@@ -146,6 +149,7 @@ def live_sources() -> Sources:
         max_positions=lambda: get_local_setting(MAX_POSITIONS_SETTING, None),
         ibkr_snapshot=db_ibkr_snapshot_reader(MENTOR_CHAT_DB_FILE),
         ibkr_status=db_status_reader(MENTOR_CHAT_DB_FILE, IBKR_STATUS_KEY),
+        reconciliation=lambda: broker_check.read_report(JOURNAL_DB_FILE),
     )
 
 
@@ -253,8 +257,14 @@ def _snapshot_book(snap: Mapping[str, Any], journal_accounts: list[Mapping[str, 
     return accounts, [dict(p) for p in snap.get("positions") or ()]
 
 
-def _journal_book(trades: Iterable[Mapping[str, Any]], journal_accounts: list[Mapping[str, Any]]) -> tuple[list, list]:
+def _journal_book(trades: Iterable[Mapping[str, Any]], journal_accounts: list[Mapping[str, Any]],
+                  checked: broker_check.Checked | None = None, extra: Iterable[Mapping[str, Any]] = ()
+                  ) -> tuple[list, list]:
+    """Journal open trades netted per account/symbol/side; ``checked`` labels each one's source and
+    ``extra`` adds the broker-only positions the reconciliation found."""
+    checked = checked or broker_check.Checked()
     grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    labels: dict[tuple[str, str, str], set[str]] = {}
     for trade in trades:
         sym = _sym(trade.get("symbol"))
         side = str(trade.get("direction") or "").strip().upper()
@@ -269,14 +279,23 @@ def _journal_book(trades: Iterable[Mapping[str, Any]], journal_accounts: list[Ma
                                        "symbol": sym, "side": side, "open_qty": 0.0, "cost": 0.0,
                                        "avg_known": True, "market_value": None})
         row["open_qty"] += qty
+        labels.setdefault(key, set()).add(checked.label(trade))
         if entry is None:
             row["avg_known"] = False
         else:
             row["cost"] += entry * qty
     positions = []
-    for row in grouped.values():
+    for key, row in grouped.items():
         avg = row.pop("cost") / row["open_qty"] if row.pop("avg_known") and row["open_qty"] else None
-        positions.append({**row, "avg_price": avg})
+        found = labels.get(key) or set()
+        label = next(iter(found)) if len(found) == 1 else broker_check.UNCHECKED
+        positions.append({**row, "avg_price": avg, "source_label": label})
+    for record in extra:
+        positions.append({"account_number": record["account_number"] or "journal", "account_label": "",
+                          "symbol": record["symbol"], "side": record["side"],
+                          "open_qty": abs(float(record["broker_quantity"])), "avg_price": None, "market_value": None,
+                          "security_type": record.get("security_type") or "", "broker_only": True,
+                          "source_label": f"broker check {checked.when} (broker only, not in journal)"})
     known = {str(a.get("account_number") or ""): dict(a) for a in journal_accounts}
     for pos in positions:
         known.setdefault(pos["account_number"], {"account_number": pos["account_number"],
@@ -361,6 +380,8 @@ class Book:
     asof: str
     #: e.g. "Questrade", "Questrade + IBKR", "Questrade + IBKR journal" (the gate's book line).
     label: str = "journal"
+    #: "Journal shows N stale open trade(s) the broker reports flat ..." for the journal brokers; "" = none.
+    stale_text: str = ""
 
 
 def _why_not(snap: Any, status: Mapping[str, Any], moment: datetime) -> str:
@@ -387,6 +408,10 @@ def load_book(src: Sources, now: datetime | None = None) -> Book:
     except Exception:  # noqa: BLE001 - the tax label is optional; unreadable = the type words
         journal_accounts = []
     trades = list(src.open_trades() or ())
+    try:
+        report = src.reconciliation()
+    except Exception:  # noqa: BLE001 - an unreadable check = journal trades unchecked, never a broken book
+        report = None
     feeds = {"QUESTRADE": (src.snapshot(), src.status() or {}),
              "IBKR": (src.ibkr_snapshot(), src.ibkr_status() or {})}
     in_play = ["QUESTRADE"] + (["IBKR"] if feeds["IBKR"][0] or feeds["IBKR"][1] else [])
@@ -409,12 +434,15 @@ def load_book(src: Sources, now: datetime | None = None) -> Book:
 
     accounts: list[dict[str, Any]] = []
     positions: list[dict[str, Any]] = []
+    stale: list[Mapping[str, Any]] = []
     for broker in in_play:
         if broker in fresh:
             got = _snapshot_book(fresh[broker].as_dict(), journal_accounts, broker)
         else:
-            got = _journal_book([t for t in trades if bucket(t) == broker],
-                                [a for a in journal_accounts if bucket(a) == broker])
+            checked = broker_check.split([t for t in trades if bucket(t) == broker], report)
+            stale += checked.stale
+            extra = [r for r in checked.broker_only if bucket(r) == broker]
+            got = _journal_book(checked.open, [a for a in journal_accounts if bucket(a) == broker], checked, extra)
         for row in (*got[0], *got[1]):
             row["broker"] = broker
         accounts += got[0]
@@ -433,7 +461,7 @@ def load_book(src: Sources, now: datetime | None = None) -> Book:
         text = "Source: " + "; ".join(f"{BROKER_NAMES[b]} positions at {_pt(fresh[b].fetched_utc)}" for b in named)
         if missing:
             text += f"; journal open trades for {' and '.join(BROKER_NAMES[b] for b in missing)} ({gone})"
-    stops = _stops(trades)
+    stops = _stops([t for t in trades if not any(t is s for s in stale)])
     for pos in positions:
         stop = _stop_for(stops, pos)
         avg, qty = _num(pos.get("avg_price")), _num(pos.get("open_qty"))
@@ -455,7 +483,9 @@ def load_book(src: Sources, now: datetime | None = None) -> Book:
     for account in accounts:
         account["class"] = tax_class(account)
         account["count"] = sum(1 for p in positions if _acct_key(p) == _acct_key(account))
-    return Book(source, text, accounts, positions, industries, max_positions, asof, label)
+    stale_text = broker_check.Checked(stale=list(stale), checked_at=str((report or {}).get("checked_at") or "")
+                                      ).stale_text() if stale else ""
+    return Book(source, text, accounts, positions, industries, max_positions, asof, label, stale_text)
 
 
 # ---------------------------------------------------------------- rows
@@ -521,6 +551,8 @@ def position_rows(book: Book) -> list[dict[str, Any]]:
             risk = f"$ at risk {_money(pos['at_risk'])} (stop {pos['stop']:g})"
         else:
             risk = "stop unknown"
+        if pos.get("source_label"):
+            risk += f"; source: {pos['source_label']}"
         rows.append({"id": row_id, "kind": "position", "broker": str(pos.get("broker") or "QUESTRADE"),
                      "account_number": acct, "symbol": sym, "side": side,
                      "qty": qty, "avg_price": avg, "market_value": value, "at_risk": pos.get("at_risk"),
@@ -624,11 +656,15 @@ def short_hint(book: Book) -> dict[str, Any] | None:
 
 
 def book_rows(book: Book) -> list[dict[str, Any]]:
-    rows = [{"id": "book:asof", "kind": "asof", "text": f"Book as of {_pt(book.asof)}"},
+    asof = f"Book as of {_pt(book.asof)}" + (" from the journal, not a broker snapshot"
+                                              if book.source == "journal" else "")
+    rows = [{"id": "book:asof", "kind": "asof", "text": asof},
             {"id": "book:source", "kind": "source", "source": book.source, "text": book.source_text}]
     rows += account_rows(book)
     positions = position_rows(book)
     rows += positions or [{"id": "book:pos:none", "kind": "position_none", "text": "No open positions"}]
+    if book.stale_text:
+        rows.append({"id": "book:stale", "kind": "stale", "text": book.stale_text})
     rows += exposure_rows(book)
     rows += hint_rows(book)
     return rows

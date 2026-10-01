@@ -356,6 +356,15 @@ def test_tape_and_chips_show_the_context_pack(window):
     window._on_context(context_pack.fixture())
     assert window.chips["auto_mode"].text().startswith("Auto mode: DESK")
     assert window.chips["positions"].text() == "Open: 1"
+    # 2026-10-01: journal opens the broker reports flat are not counted; a broker-only one is.
+    from test_mentor_packs_context_pack import _ghost_rows, GHOST_REPORT
+    from mentor_packs.registry import make_pack
+
+    window._on_context(make_pack(context_pack.NAME, _ghost_rows(GHOST_REPORT)))
+    assert window.chips["positions"].text() == "Open: 3"
+    window._show_chip("positions")
+    assert "[ctx:positions:stale] Journal shows 2 stale open trade(s)" in _text(window)
+    window._on_context(context_pack.fixture())
     window._show_chip("d1_env")
     assert "[ctx:d1_env]" in _text(window)
     # P5: /tape is the regime pack now (tests/test_mentor_app_tape.py); it is built off-thread.

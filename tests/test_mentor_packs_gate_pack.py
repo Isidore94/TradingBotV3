@@ -271,3 +271,22 @@ def test_exit_is_a_strict_boolean(tmp_path):
         pack = gate_pack.build("LONG", "ALL", now=NOW, sources=src, exit=value)
         assert pack.rows[0]["exit"] is want, value
         assert bool([r for r in pack.rows if r["kind"] == "intent"]) is want, value
+
+
+# 2026-10-01: a journal open the broker reports flat is not "already held" and not book exposure.
+def test_a_trade_the_broker_reports_flat_is_not_in_the_gate_book(tmp_path):
+    import dataclasses
+
+    trades = [_trade("T1", "NVDA", "LONG", 50, 120.0, None), _trade("T2", "AMD", "SHORT", 100, 150.0, 152.5)]
+    report = {"checked_at": "2026-09-28T23:00:00", "agreed": [], "mismatched": [
+        {"kind": "JOURNAL_OPEN_BROKER_FLAT", "broker": "QUESTRADE", "account_number": "", "symbol": "NVDA",
+         "trade_ids": ["T1"]}]}
+    src = dataclasses.replace(gate_pack.fixture_sources(tmp_path, trades=trades), reconciliation=lambda: report)
+    pack = gate_pack.build("LONG", "NVDA", now=NOW, sources=src)
+    ids = {row["id"] for row in pack.rows}
+    assert "gate:NVDA:book:T1" not in ids and "gate:NVDA:book:T2" in ids
+    assert _row(pack, "NVDA:book:industry")["same_symbol_open"] is False
+    assert _row(pack, "NVDA:book:industry")["open_count"] == 1
+    assert _row(pack, "NVDA:book:stale")["text"].endswith(": NVDA - not positions")
+    exit_pack = gate_pack.build("LONG", "NVDA", now=NOW, sources=src, exit=True)
+    assert "not in the open book" in next(r for r in exit_pack.rows if r["kind"] == "intent")["text"]

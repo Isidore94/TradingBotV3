@@ -61,7 +61,8 @@ def test_golden_journal_fallback_says_why_and_never_mixes():
     assert rows["book:source"]["source"] == "journal"
     assert "cash unknown (the journal has no cash)" in rows["book:acct:111"]["text"]
     assert rows["book:pos:222:AMD"]["text"] == ("SHORT AMD 100 @ 150.00 in Margin 222; market value unknown; "
-                                                 "$ at risk $250.00 (stop 152.5)")
+                                                 "$ at risk $250.00 (stop 152.5); "
+                                                 "source: journal (not checked against broker)")
     assert rows["book:side:LONG"]["text"] == "LONG: 1 position(s), gross market value unknown (1 without a market value)"
     assert "Questrade positions" not in pack.as_text()
 
@@ -241,3 +242,81 @@ def test_option_positions_say_not_computed_never_a_number(extra):
     row = next(r for r in pack.rows if r["kind"] == "position")
     assert row["at_risk"] is None
     assert "$ at risk: not computed (option)" in row["text"]
+
+
+# ---------------------------------------------------------------- 2026-10-01: stale journal opens (book ghosts)
+GHOST_REPORT = {
+    "checked_at": "2026-09-28T22:04:00",
+    "brokers": ["QUESTRADE"],
+    "agreed": [{"broker": "QUESTRADE", "account_number": "111", "symbol": "NVDA", "trade_ids": ["T2"]}],
+    "mismatched": [
+        {"kind": "JOURNAL_OPEN_BROKER_FLAT", "broker": "QUESTRADE", "account_number": "222", "symbol": "AMD",
+         "journal_quantity": -100, "broker_quantity": 0, "trade_ids": ["T1"]},
+        {"kind": "BROKER_OPEN_JOURNAL_FLAT", "broker": "QUESTRADE", "account_number": "111", "symbol": "QTUM",
+         "journal_quantity": 0, "broker_quantity": 20, "trade_ids": []},
+    ],
+}
+
+
+def _ghost_build(report, **kwargs):
+    import dataclasses
+
+    src = dataclasses.replace(book_pack.fixture_sources(**kwargs), reconciliation=lambda: report)
+    return book_pack.build(now=NOW, sources=src)
+
+
+def test_journal_book_drops_trades_the_broker_reports_flat():
+    rows = _rows(_ghost_build(GHOST_REPORT, status={"reason": "no token", "at_utc": FRESH}))
+    positions = {k: r for k, r in rows.items() if r["kind"] == "position"}
+    assert set(positions) == {"book:pos:111:NVDA", "book:pos:111:QTUM"}
+    assert rows["book:stale"]["text"].startswith("Journal shows 1 stale open trade(s) the broker reports flat as of ")
+    assert rows["book:stale"]["text"].endswith(": AMD - not positions")
+    nvda = positions["book:pos:111:NVDA"]["text"]
+    assert "; source: journal, broker agreed as of " in nvda and nvda.endswith(" PT")
+    assert "(broker only, not in journal" in positions["book:pos:111:QTUM"]["text"]
+    assert positions["book:pos:111:QTUM"]["side"] == "LONG" and positions["book:pos:111:QTUM"]["qty"] == 20
+    assert rows["book:side:SHORT"]["count"] == 0, "the stale AMD short is not exposure"
+    assert "book:hint:cluster:Semiconductors" not in rows
+    assert rows["book:acct:222"]["count"] == 0 and rows["book:acct:111"]["count"] == 2
+
+
+def test_journal_book_without_a_check_says_it_is_unchecked():
+    for report in (None, {}):
+        rows = _rows(_ghost_build(report, status={"reason": "no token", "at_utc": FRESH}))
+        positions = [r for r in rows.values() if r["kind"] == "position"]
+        assert len(positions) == 2
+        assert all(r["text"].endswith("; source: journal (not checked against broker)") for r in positions)
+        assert "book:stale" not in rows
+        assert rows["book:asof"]["text"].endswith("from the journal, not a broker snapshot")
+
+
+def test_an_unreadable_check_never_breaks_the_book():
+    broken = _ghost_build(None, status={"reason": "no token", "at_utc": FRESH})
+    import dataclasses
+
+    src = dataclasses.replace(book_pack.fixture_sources(status={"reason": "no token", "at_utc": FRESH}),
+                              reconciliation=lambda: (_ for _ in ()).throw(OSError("locked")))
+    assert book_pack.build(now=NOW, sources=src).as_text() == broken.as_text()
+
+
+def test_a_fresh_broker_snapshot_ignores_the_check():
+    pack = _ghost_build(GHOST_REPORT, snapshot=qp.fixture_snapshot(FRESH).as_dict())
+    assert [(row["id"], row["text"]) for row in pack.rows] == GOLDEN_QUESTRADE
+
+
+def test_live_book_reads_the_reconciliation_read_only(tmp_path, monkeypatch):
+    import json
+    import sqlite3
+
+    import project_paths
+
+    db = tmp_path / "trade_journal.sqlite3"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+    conn.execute("INSERT INTO meta VALUES ('last_reconciliation', ?)", (json.dumps(GHOST_REPORT),))
+    conn.commit()
+    conn.close()
+    before = db.stat().st_mtime_ns
+    monkeypatch.setattr(project_paths, "JOURNAL_DB_FILE", db)
+    assert book_pack.live_sources().reconciliation() == GHOST_REPORT
+    assert db.stat().st_mtime_ns == before

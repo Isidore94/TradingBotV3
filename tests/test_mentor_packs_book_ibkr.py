@@ -114,7 +114,8 @@ def test_ibkr_down_keeps_questrade_and_labels_ibkr_journal_with_the_backoff():
         "Source: Questrade positions at Tue 09-29 07:05 PT; journal open trades for IBKR "
         "(IBKR unavailable: TWS not running (backing off 52 min))")
     assert rows["book:pos:IBKR:U901:TSLA"]["text"] == (
-        "SHORT TSLA 20 @ 250.00 in IBKR U901; market value unknown; $ at risk $200.00 (stop 260)")
+        "SHORT TSLA 20 @ 250.00 in IBKR U901; market value unknown; $ at risk $200.00 (stop 260); "
+        "source: journal (not checked against broker)")
     assert "cash unknown (the journal has no cash)" in rows["book:acct:IBKR:U900"]["text"]
     assert rows["book:pos:222:AMD"]["market_value"] == -14800.0, "Questrade still from its snapshot"
     assert not any(k.startswith("book:pos:IBKR") and rows[k]["market_value"] is not None for k in rows

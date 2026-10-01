@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from mentor_packs import bars_pack, book_pack, pick_pack, plan_lines, reads_pack, regime_pack
+from mentor_packs import bars_pack, book_pack, broker_check, pick_pack, plan_lines, reads_pack, regime_pack
 from mentor_packs.registry import Pack, make_pack
 
 NAME = "gate_pack"
@@ -90,6 +90,8 @@ class Sources:
     bars_sources: Any = field(default=None, compare=False)
     #: P18: the trader's Market Journal reads (``reads_pack.Sources``); None = not read.
     reads_sources: Any = field(default=None, compare=False)
+    #: The journal's last broker reconciliation report (``broker_check``); None = journal trades unchecked.
+    reconciliation: Callable[[], Mapping[str, Any] | None] = field(default=lambda: None, compare=False)
 
 
 def _live_risk() -> Any:
@@ -141,14 +143,24 @@ def live_sources() -> Sources:
                    book_snapshot=live_book.snapshot, book_status=live_book.status, accounts=live_book.accounts,
                    max_positions=live_book.max_positions, ibkr_book_snapshot=live_book.ibkr_snapshot,
                    ibkr_book_status=live_book.ibkr_status, bars_sources=bars_pack.live_sources(),
-                   reads_sources=reads_pack.live_sources())
+                   reads_sources=reads_pack.live_sources(), reconciliation=live_book.reconciliation)
 
 
 def book_sources(src: Sources) -> book_pack.Sources:
     """The book pack's sources from the gate's own (the journal fallback is the gate's open trades)."""
     return book_pack.Sources(snapshot=src.book_snapshot, status=src.book_status, open_trades=src.open_trades,
                              accounts=src.accounts, industry_map=src.industry_map, max_positions=src.max_positions,
-                             ibkr_snapshot=src.ibkr_book_snapshot, ibkr_status=src.ibkr_book_status)
+                             ibkr_snapshot=src.ibkr_book_snapshot, ibkr_status=src.ibkr_book_status,
+                             reconciliation=src.reconciliation)
+
+
+def _checked_trades(src: Sources) -> broker_check.Checked:
+    """The open journal trades split by the last broker check (unreadable = all unchecked)."""
+    try:
+        report = src.reconciliation()
+    except Exception:  # noqa: BLE001 - an unreadable check never breaks the gate
+        report = None
+    return broker_check.split(src.open_trades() or (), report)
 
 
 # ---------------------------------------------------------------- small helpers
@@ -253,7 +265,8 @@ def _questrade_rows(prefix: str, symbol: str, book: book_pack.Book,
 
 def _journal_rows(prefix: str, symbol: str, src: Sources,
                   imap: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
-    trades = list(src.open_trades() or ())
+    checked = _checked_trades(src)
+    trades = list(checked.open)
     own_industry = _industry(symbol, imap)
     rows: list[dict[str, Any]] = []
     same_industry: list[str] = []
@@ -284,6 +297,8 @@ def _journal_rows(prefix: str, symbol: str, src: Sources,
     rows.append({"id": f"{prefix}:book:industry", "kind": "book_industry", "industry": own_industry,
                  "same_industry_count": len(names), "open_count": len(trades),
                  "same_symbol_open": any(row.get("same_symbol") for row in rows), "text": text})
+    if checked.stale:
+        rows.append({"id": f"{prefix}:book:stale", "kind": "book_stale", "text": checked.stale_text()})
     return rows
 
 
@@ -339,7 +354,8 @@ def _price_age(rows: list[dict[str, Any]], moment: datetime) -> str:
 def _intent_row(prefix: str, sym: str, side: str, src: Sources, rows: list[dict[str, Any]],
                 moment: datetime) -> dict[str, Any]:
     """P18: an exit of a held position - its size, average, stop and today's R from the last cached price."""
-    held = [t for t in src.open_trades() if _sym(t.get("symbol")) == sym and _side(t.get("direction")) == side]
+    held = [t for t in _checked_trades(src).open
+            if _sym(t.get("symbol")) == sym and _side(t.get("direction")) == side]
     head = f"Intent: EXIT of a held {side} {sym} (closing or trimming it), not a new trade"
     if not held:
         return {"id": f"{prefix}:intent", "kind": "intent", "exit": True,
