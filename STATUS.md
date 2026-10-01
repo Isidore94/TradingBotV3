@@ -2,7 +2,7 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-09-30 PT (Mentor P15a + P15b built, in flight)
+**Updated:** 2026-09-30 evening PT (Mentor P0-P15 merged; first full night with the coach brief is 2026-10-01)
 
 - **Live on `main`:** rounds 1-2 (`81272d42`, `2d59aace`, `3802c0d7`), p9 phases 1-4
   (`849390a2`, `55bbeb26`, `d382986e`, `79e8d658`), p10 research lake + auto regimes
@@ -10,9 +10,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   old); Movers tint + SMA gate (`13b2e2cb`), Yahoo guard (`56ce3965`), Movers boxes, Dip
   anchors, focus preview, idle-probe skip (`1751c338`); gates #257-#306.
 - **GUI:** 4K design live; selftests 105/105; long Qt runs still crash workers.
-- **Merged 2026-09-30, live at the next desk restart:** Trade Mentor app P0-P13 (`370c6efb`, `8f7664fc` Pause AI, `e9c77690` P7-P12, `152e765f` plan inference, `e864ddb9` P13 plain-language routing): chat, `/plan` `/drop`, `/pick`, `/vetoes`, `/tape`, `/check`, `/news`, `/book` (Questrade + IBKR), `/mirror`, `/tilt`, `/debate`, `/hypotheses`; gates #311-#318, #321-#327, #329. `mentor_app_enabled` off until #312; frontier OFF.
-- **Merged 2026-09-30 (P14 tone):** short answers; eval style 96 %, p50 1.3 s; gate #332 re-check owed after restart.
-- **Merged 2026-09-30 (P15 a+b), live at the next desk + app restart:** the coach's memory stands on the night (coach brief, fundamentals, digest, ideas, day/week review); `/brief`, `/issues`, `/recaps`, `/paste`, `/feel`, `/night`; `mentor_app_enabled` on by default; `mentor_review` un-cut and writes the coach brief (first full night: 2026-10-01). Gates #333-#334.
+- **Merged 2026-09-30, live at the next desk + app restart:** Trade Mentor app P0-P15 (`e9c77690`, `e864ddb9`, `b2402479`, `19b837d3`) + Pause AI (`8f7664fc`): chat on gemma4:12b with native tools, auto-attach from plain language, `/pick /vetoes /tape /check /news /book /mirror /tilt /debate /hypotheses /brief /issues /recaps /paste /feel /night /scorecard`; memory stands on the night; `mentor_app_enabled` on by default; frontier OFF (trader). Gates #311-#318, #321-#326, #329, #332-#334.
 - **Desk:** next launch uses main; live checks are in GATES.
 - **Night throughput (2026-09-30):** slot retries x3, budget 360, every care name briefed nightly and last on the slate (#331), nightly permutation report + per-setup sentences (#330, shadow only). Parked: Mentor recall index (worktree only). Next: morning pre-brief queue; rule audit once plan lines exist.
 - **gpt-oss:20b vs gemma4:12b:** effort `high`, 8k think tokens live. Probe 2 10-01 02:05 runs both, then flip `ai_local_model_medium`.
