@@ -426,3 +426,25 @@ def test_a_pre_trade_question_carries_the_compact_brief_and_a_plain_one_does_not
     assert got[0][0] == "gate_pack" and ("fundamentals_pack", {"section": "compact"}) in got
     for question in ("how did today go", "what's the tape doing", "what am I holding", "any news on TSLA"):
         assert "fundamentals_pack" not in _only(question), question
+
+
+# ---------------------------------------------------------------- P18 review: pre-trade intents by verb
+def _gate_sides(text, known=KNOWN, book=()):
+    return [(r.args["side"], r.args["symbol"]) for r in attach.plan_attachments(text, known, NOW, book=book)
+            if r.name == "gate_pack"]
+
+
+def test_pre_trade_verbs_route_to_the_gate_with_the_side_from_the_verb():
+    # MSFT has no known side: the verb alone sets it.
+    assert _gate_sides("I'm about to buy MSFT") == [("LONG", "MSFT")]
+    assert _gate_sides("about to sell MSFT") == [("SHORT", "MSFT")]
+    assert _gate_sides("going long MSFT here") == [("LONG", "MSFT")]
+    assert _gate_sides("going short MSFT here") == [("SHORT", "MSFT")]
+    # No side in the verb: the known side (the book's side when the name is held).
+    assert _gate_sides("entering TSLA") == [("SHORT", "TSLA")]
+    assert _gate_sides("adding to AMD", book=["AMD"]) == [("SHORT", "AMD")]
+    assert _gate_sides("adding to NVDA") == [("LONG", "NVDA")]
+
+
+def test_a_sell_off_is_not_a_sell():
+    assert _gate_sides("NVDA sell-off today, what happened") == []

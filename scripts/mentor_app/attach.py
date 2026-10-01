@@ -73,6 +73,8 @@ _INTENT = re.compile(
     r"\bthinking (?:of|about)\b|\bshould i\b|\btake\b|\btaking\b|\bgo(?:ing)? (?:long|short)\b|\benter(?:ing)?\b"
     r"|\badd(?:ing)? (?:to )?\b|\bsize\b|\bsizing\b|\bget(?:ting)? (?:in|into)\b|\bworth (?:a|the) (?:trade|shot)\b"
     r"|\bplanning (?:to|on)\b|\bwant to (?:short|buy|long)\b"
+    # P18 review: "about to buy NVDA", "selling AMD here" are pre-trade intents too ("sell-off" is not).
+    r"|\babout to\b|\bbuy(?:ing)?\b|\bsell(?:ing)?\b(?!-)"
     r"|\bpre-?trade\b|\bchecklist for\b|\bmy stop (?:be|go)\b|\bstop be on\b"
     r"|\bwhere (?:do|should) i (?:put|place) (?:my|the) stop\b"
 )
@@ -178,7 +180,7 @@ _EARNINGS_ALONE = re.compile(
     r"^\W*(?:any\s+)?earnings\b|\b(?:earnings|reports?|reporting)\s+(?:this|next)\s+week\b"
     r"|\b(?:earnings|reports?|reporting)\s+(?:today|tomorrow)\b|\b(?:anything|anyone|who|who's|whos)\s+(?:is\s+)?"
     r"report(?:s|ing)?\b")
-_SHORT_WORD = re.compile(r"\bshort(?:ing|s|ed)?\b|\bsell(?:ing)? short\b|\bput(?:s)?\b")
+_SHORT_WORD = re.compile(r"\bshort(?:ing|s|ed)?\b|\bsell(?:ing)?\b(?!-)|\bput(?:s)?\b")
 _LONG_WORD = re.compile(r"\blong\b|\bbuy(?:ing)?\b|\bgo long\b|\bcalls?\b")
 
 
