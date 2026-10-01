@@ -18,7 +18,7 @@ from mentor_app import attach, intent  # noqa: E402
 NOW = datetime(2026, 9, 30, 15, 0, tzinfo=timezone.utc)
 #: The default book: AMD and NVDA held long, TSLA held short. ALL and MSFT are watched, not held.
 BOOK = {"AMD": "LONG", "NVDA": "LONG", "TSLA": "SHORT"}
-KNOWN = {**BOOK, "ALL": "SHORT", "MSFT": ""}
+KNOWN = {**BOOK, "ALL": "SHORT", "MSFT": "", "QCOM": ""}
 NOT_HELD: dict[str, str] = {}
 
 EXIT_L = ("exit", "LONG")
@@ -27,7 +27,10 @@ ADD_L = ("add", "LONG")
 ADD_S = ("add", "SHORT")
 NEW_L = ("new", "LONG")
 NEW_S = ("new", "SHORT")
+HISTORY = ("history", "")
 NONE = ("none_to_exit", "")
+FLIP_TO_LONG = [("exit", "SHORT"), ("new", "LONG")]
+FLIP_TO_SHORT = [("exit", "LONG"), ("new", "SHORT")]
 
 #: (sentence, book, {ticker: (kind, side)}). Tickers not listed get no gate.
 TABLE = [
@@ -83,6 +86,43 @@ TABLE = [
     # no trade verb: no gate for a held name; the intent words still gate a name not held
     ("entering TSLA", NOT_HELD, {"TSLA": NEW_S}),
     ("thinking of taking a short like ALL, thoughts?", BOOK, {"ALL": NEW_S}),
+    # round 6: bare short/long are verbs only in a verb frame
+    ("what's the short interest on QCOM", BOOK, {}),
+    ("is the TSLA short squeeze over", BOOK, {}),
+    ("how long has NVDA been basing", BOOK, {}),
+    ("how long should I hold AMD", BOOK, {}),
+    ("does NVDA trade long", BOOK, {}),
+    ("any long ideas besides QCOM", BOOK, {}),
+    ("I'm short TSLA, cover?", BOOK, {"TSLA": EXIT_S}),
+    ("go long QCOM", BOOK, {"QCOM": NEW_L}),
+    ("short QCOM here", BOOK, {"QCOM": NEW_S}),
+    ("the short side looks better", BOOK, {}),
+    ("how long can TSLA keep running", BOOK, {}),
+    ("buy TSLA", BOOK, {"TSLA": EXIT_S}),
+    ("go long TSLA", BOOK, {"TSLA": FLIP_TO_LONG}),
+    ("go short AMD", BOOK, {"AMD": FLIP_TO_SHORT}),
+    # round 6: past tense is history, never a live intent
+    ("sold AMD at 150", BOOK, {"AMD": HISTORY}),
+    ("I closed AMD at 150", BOOK, {"AMD": HISTORY}),
+    ("I sold AMD, should I buy QCOM?", BOOK, {"AMD": HISTORY, "QCOM": NEW_L}),
+    ("covered TSLA this morning", BOOK, {"TSLA": HISTORY}),
+    ("bought NVDA at the open", BOOK, {"NVDA": HISTORY}),
+    ("trimmed NVDA into the pop", BOOK, {"NVDA": HISTORY}),
+    ("exited AMD early", BOOK, {"AMD": HISTORY}),
+    ("I'm out of AMD now", BOOK, {"AMD": HISTORY}),
+    ("got out of NVDA", BOOK, {"NVDA": HISTORY}),
+    ("stop out of AMD", BOOK, {"AMD": HISTORY}),
+    # round 6: quiet exits
+    ("take some off AMD", BOOK, {"AMD": EXIT_L}),
+    ("take NVDA off", BOOK, {"NVDA": EXIT_L}),
+    ("cut AMD", BOOK, {"AMD": EXIT_L}),
+    ("flat TSLA", BOOK, {"TSLA": EXIT_S}),
+    ("go flat AMD", BOOK, {"AMD": EXIT_L}),
+    ("NVDA is flat today", BOOK, {}),
+    # round 6: a buyback is a company's, not a cover
+    ("AMD buy back program announced", BOOK, {}),
+    ("does TSLA have a buyback", BOOK, {}),
+    ("should I buy back TSLA", BOOK, {"TSLA": EXIT_S}),
     # pure questions, no verb
     ("how is AMD trading right now", BOOK, {}),
     ("what's the news on NVDA", BOOK, {}),
@@ -97,13 +137,19 @@ TABLE = [
 
 def _gates(text, book):
     requests = attach.plan_attachments(text, {**KNOWN, **book}, NOW, book=list(book))
-    out = {}
+    out: dict = {}
     for r in requests:
         if r.name == "gate_pack":
             kind = "exit" if r.args.get("exit") else "add" if r.args.get("add") else "new"
-            out[r.args["symbol"]] = (kind, r.args["side"])
+            got = (kind, r.args["side"])
+            if r.args.get("flip"):
+                out.setdefault(r.args["symbol"], []).append(got)
+            else:
+                out[r.args["symbol"]] = got
         elif r.name == "pick_pack" and str(r.args.get("note") or "").startswith("No position in"):
             out[r.args["symbol"]] = NONE
+        elif r.name == "pick_pack" and r.reason.startswith("history on "):
+            out[r.args["symbol"]] = HISTORY
     return out
 
 
@@ -127,7 +173,7 @@ def test_close_needs_an_object_and_sell_off_is_one_token():
     assert intent.verbs("the close", []) == []
     assert intent.verbs("close my NVDA", ["NVDA"]) == [(0, "close")]
     assert intent.verbs("NVDA sell-off", ["NVDA"]) == []
-    assert intent.verbs("sell short AMD", ["AMD"]) == [(0, "short")]
+    assert intent.verbs("sell short AMD", ["AMD"]) == [(0, "go_short")]
     assert intent.verbs("buy it back", []) == [(0, "cover")]
 
 
@@ -144,3 +190,19 @@ def test_the_gate_names_the_intent_and_a_name_not_held_gets_a_no_position_note(t
     pack = pick_pack.build("ALL", paths=paths, note="No position in ALL to exit")
     assert pack.rows[0] == {"id": "pick:ALL:note", "kind": "note", "symbol": "ALL",
                             "text": "No position in ALL to exit"}
+
+
+def test_a_flip_names_both_halves_in_its_request_rows(tmp_path):
+    from mentor_packs import gate_pack
+
+    src = gate_pack.fixture_sources(tmp_path)
+    out = gate_pack.build("SHORT", "ALL", sources=src, exit=True, flip=True).rows[0]["text"]
+    new = gate_pack.build("LONG", "ALL", sources=src, flip=True).rows[0]["text"]
+    assert out.startswith("Request: EXIT of a held SHORT ALL") and out.endswith("; a FLIP: then a new LONG ALL")
+    assert new.startswith("Request: new LONG ALL") and new.endswith("; a FLIP from a held SHORT ALL")
+    assert gate_pack.build("LONG", "ALL", sources=src, flip="0").rows[0]["flip"] is False
+
+
+def test_history_attaches_the_journal_and_the_pick_never_a_gate():
+    names = [r.name for r in attach.plan_attachments("sold AMD at 150", KNOWN, NOW, book=list(BOOK))]
+    assert "journal_pack" in names and "pick_pack" in names and "gate_pack" not in names

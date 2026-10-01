@@ -344,8 +344,15 @@ def plan_attachments(
                     note=f"No position in {item.symbol} to exit: it is not in the open book")
                 noted.add(item.symbol)
                 continue
+            if item.kind == "history":
+                # Past tense ("sold AMD at 150") is what he did: the journal and the pick, never a gate.
+                add("journal_pack", f"{item.symbol}: what he already did", day="today")
+                add("pick_pack", f"history on {item.symbol}", symbol=item.symbol)
+                noted.add(item.symbol)
+                continue
+            flags = {"exit": True} if item.kind == "exit" else {"add": True} if item.kind == "add" else {}
             add("gate_pack", f"{item.kind} {item.side} {item.symbol}", side=item.side, symbol=item.symbol,
-                **({"exit": True} if item.kind == "exit" else {"add": True} if item.kind == "add" else {}))
+                **flags, **({"flip": True} if item.flip else {}))
             if item.kind == "exit":
                 add("journal_pack", f"exit of a held {item.symbol}: today's trades", day="today")
                 add("pick_pack", f"exit of a held {item.symbol}", symbol=item.symbol)

@@ -505,4 +505,4 @@ def test_each_verb_binds_to_its_own_ticker():
     assert gates == [{"side": "LONG", "symbol": "AMD", "exit": True}, {"side": "LONG", "symbol": "NVDA", "add": True}]
     from mentor_app import intent
 
-    assert intent.bind("sell AMD and buy NVDA", ["AMD", "NVDA"]) == {"AMD": {"sell"}, "NVDA": {"long"}}
+    assert intent.bind("sell AMD and buy NVDA", ["AMD", "NVDA"]) == {"AMD": {"sell"}, "NVDA": {"buy"}}

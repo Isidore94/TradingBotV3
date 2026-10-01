@@ -43,6 +43,8 @@ SCHEMA: dict[str, Any] = {
                 "size": {"type": "number", "description": "Shares, if typed."},
                 "stop": {"type": "number", "description": "Stop price, if typed."},
                 "entry": {"type": "number", "description": "Entry price, if typed."},
+                "flip": {"type": "boolean", "description": (
+                    "True for either half of a side flip: closing the held side and opening the other.")},
                 "add": {"type": "boolean", "description": (
                     "True when he is adding to a position he already holds on this side.")},
                 "exit": {"type": "boolean", "description": (
@@ -361,10 +363,14 @@ def _intent_row(prefix: str, sym: str, side: str, src: Sources, rows: list[dict[
 
 def build(side: str = "", symbol: str = "", size: Any = None, stop: Any = None, entry: Any = None, *,
           now: datetime | None = None, sources: Sources | None = None, exit: Any = False,
-          add: Any = False) -> Pack:
-    """Build the gate pack for one request. File and DB reads: call it on a worker."""
+          add: Any = False, flip: Any = False) -> Pack:
+    """Build the gate pack for one request. File and DB reads: call it on a worker.
+
+    P18: ``flip`` marks one half of a side flip (exit the held side, then a new trade on the other)."""
     exit = _flag(exit)
     add = _flag(add) and not exit
+    flip = _flag(flip) and not add
+    other = {"LONG": "SHORT", "SHORT": "LONG"}.get(_side(side), "")
     sym, chosen = _sym(symbol), _side(side)
     if not sym or not sym.replace(".", "").replace("-", "").isalnum():
         return make_pack(NAME, (), empty_text="gate_pack needs a ticker, e.g. /check short NVDA")
@@ -382,11 +388,13 @@ def build(side: str = "", symbol: str = "", size: Any = None, stop: Any = None, 
         "id": f"{prefix}:req", "kind": "request", "side": chosen, "symbol": sym,
         "size": size_v, "stop": stop_v, "entry": entry_v, "key": request_key(chosen, sym, size, stop, entry),
         "at_utc": moment.astimezone(timezone.utc).isoformat(timespec="seconds"), "plan_sha": plan_sha,
-        "exit": bool(exit), "add": bool(add),
+        "exit": bool(exit), "add": bool(add), "flip": bool(flip),
         "text": ((f"Request: EXIT of a held {chosen} {sym} (sell/cover/trim), not a new trade" if exit else
                   f"Request: ADD to a held {chosen} {sym}, size {_fmt(size_v)}, stop {_fmt(stop_v)}, entry "
                   f"{_fmt(entry_v)}" if add else
-                  f"Request: new {chosen} {sym}, size {_fmt(size_v)}, stop {_fmt(stop_v)}, entry {_fmt(entry_v)}")),
+                  f"Request: new {chosen} {sym}, size {_fmt(size_v)}, stop {_fmt(stop_v)}, entry {_fmt(entry_v)}")
+                 + ((f"; a FLIP: then a new {other} {sym}" if exit else f"; a FLIP from a held {other} {sym}")
+                    if flip else "")),
     }]
     try:
         rows.append(_risk_row(prefix, chosen, size_v, stop_v, entry_v, src))
