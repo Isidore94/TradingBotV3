@@ -82,14 +82,18 @@ def offline_report(fixture: Mapping[str, Any]) -> dict[str, Any]:
 
 def style_summary(rows: list[Mapping[str, Any]], fixture: Mapping[str, Any]) -> dict[str, Any]:
     """Adds ``style`` / ``style_after_app`` / ``style_pass`` to every answered row; returns the overall numbers."""
-    from mentor_app import style
+    from mentor_app import attach, style
 
     simple = {str(item["q"]) for item in fixture.get("questions") or () if item.get("simple")}
+    known, now = dict(fixture.get("known_symbols") or {}), _now(fixture)
+    book = [str(sym).upper() for sym in fixture.get("book") or ()]
     answered = [row for row in rows if "error" not in row]
     for row in answered:
         reply = str(row.get("reply") or "")
         row["style"] = style.measure(reply, row["q"])
-        row["style_after_app"] = style.measure(style.guard(reply)[0], row["q"])
+        # P20: a summary ask is guarded as the app guards it (plain: no bullets, no bold).
+        plain = attach.summary_turn(row["q"], attach.plan_attachments(row["q"], known, now, book=book))
+        row["style_after_app"] = style.measure(style.guard(reply, plain=plain)[0], row["q"])
         row["simple"] = row["q"] in simple
         row["style_pass"] = style.passes(row["style"], simple=row["simple"])
         row["style_pass_after_app"] = style.passes(row["style_after_app"], simple=row["simple"])
@@ -162,7 +166,8 @@ def live_report(fixture: Mapping[str, Any], *, out_dir: Path) -> dict[str, Any]:
         try:
             result = brain.run_turn(messages, model=model, endpoint=endpoint, keep_alive=settings.keep_alive(),
                                     num_ctx=settings.context_tokens(), tools=registry.tool_schemas(),
-                                    native_tools=native, attachments=requests, question=item["q"])
+                                    native_tools=native, attachments=requests, question=item["q"],
+                                    **attach.turn_shape(item["q"], requests))
         except Exception as exc:  # noqa: BLE001 - one failed question is reported, the run goes on
             rows.append({"q": item["q"], "error": f"{type(exc).__name__}: {exc}"})
             continue

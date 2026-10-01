@@ -1,0 +1,158 @@
+"""P20: a brief / tape summary ask is answered in three plain sentences (live eval 2026-10-01).
+
+Six simple questions ran 700-1800 chars with bold headers and bullets the guard could not shorten (every
+line cited). The app now adds a per-turn instruction after the user message, caps num_predict for that
+turn, and the guard strips markdown emphasis and bullet markers on those turns - formatting only."""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = ROOT_DIR / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from mentor_app import attach, brain, style  # noqa: E402
+
+NOW = datetime(2026, 9, 30, 15, 0, tzinfo=timezone.utc)
+KNOWN = {"AMD": "LONG", "NVDA": "LONG", "TSLA": "SHORT", "QCOM": ""}
+BOOK = ["AMD", "NVDA", "TSLA"]
+#: The six simple questions that failed the style check after the guard in the 2026-10-01 live eval.
+SIX = ["what's the macro brief say today", "whats the macro brief say today", "is the playbook bullish or bearish",
+       "anything about yields in the brief", "what did the night brief say", "whats the market like this morning"]
+NOT_SUMMARY = ["should I buy NVDA here", "im thinking of shorting TSLA thoughts?", "what does the brief say about NVDA",
+               "anything about AMD in the brief", "is the playbook today bullish or bearish and does my book match it",
+               "how did I do today", "whats SPY doing"]
+
+
+def _shape(text):
+    return attach.turn_shape(text, attach.plan_attachments(text, KNOWN, NOW, book=BOOK))
+
+
+@pytest.mark.parametrize("text", SIX)
+def test_the_six_summary_asks_get_the_three_sentence_instruction_and_a_token_cap(text):
+    assert _shape(text) == {"turn_instruction": attach.SUMMARY_INSTRUCTION, "max_tokens": attach.SUMMARY_MAX_TOKENS}
+    assert "at most three plain sentences" in attach.SUMMARY_INSTRUCTION and 200 <= attach.SUMMARY_MAX_TOKENS <= 300
+
+
+@pytest.mark.parametrize("text", NOT_SUMMARY)
+def test_a_pre_trade_or_ticker_question_keeps_the_default_turn(text):
+    assert _shape(text) == {}
+
+
+def _answer(text):
+    return [json.dumps({"message": {"content": text}, "done": False}).encode(),
+            json.dumps({"message": {"content": ""}, "done": True}).encode()]
+
+
+def _turn(model="gemma4:12b", **shape):
+    sent = []
+    brain.run_turn([{"role": "system", "content": "s"}, {"role": "user", "content": "is the playbook bullish"}],
+                   model=model, endpoint="http://x", native_tools=True, tools=[{"function": {"name": "t"}}],
+                   stream_post=lambda url, payload, cancelled: sent.append(payload) or _answer("ok [a:b:c]."),
+                   **shape)
+    return sent[0]
+
+
+def test_the_instruction_follows_the_user_message_and_num_predict_is_capped_for_that_turn_only():
+    payload = _turn(turn_instruction=attach.SUMMARY_INSTRUCTION, max_tokens=attach.SUMMARY_MAX_TOKENS)
+    user = [m for m in payload["messages"] if m["role"] == "user"][-1]["content"]
+    assert user.startswith("is the playbook bullish") and user.endswith(attach.SUMMARY_INSTRUCTION)
+    assert payload["options"]["num_predict"] == attach.SUMMARY_MAX_TOKENS
+    plain = _turn()
+    assert "num_predict" not in plain["options"]
+    assert [m for m in plain["messages"] if m["role"] == "user"][-1]["content"] == "is the playbook bullish"
+
+
+def test_a_thinking_model_gets_the_instruction_but_no_cap_its_reasoning_would_eat():
+    payload = _turn(model="gpt-oss:20b", turn_instruction=attach.SUMMARY_INSTRUCTION,
+                    max_tokens=attach.SUMMARY_MAX_TOKENS)
+    assert "num_predict" not in payload["options"]
+    assert [m for m in payload["messages"] if m["role"] == "user"][-1]["content"].endswith(attach.SUMMARY_INSTRUCTION)
+
+
+LONG_REPLY = """### Macro brief
+**Bottom line:** risk-on into CPI, futures +0.4% [fund:2026-09-30:bottom_line].
+
+**Playbook:**
+- Buy pullbacks to the 5 day AVWAP in NVDA and AMD [fund:2026-09-30:playbook:1]
+* Fade gaps above 5,820 on SPY [fund:2026-09-30:playbook:2]
++ **Risk:** CPI at 08:30 ET; a hot print flips it [fund:2026-09-30:risk:1]"""
+
+
+def _words(text):
+    return re.findall(r"[A-Za-z0-9.:,+%\-\[\]]+", text.replace("*", " ").replace("#", " "))
+
+
+def test_the_plain_guard_strips_formatting_only_and_keeps_every_id_number_and_ticker():
+    text, _removed = style.guard(LONG_REPLY, plain=True)
+    assert "**" not in text and "#" not in text
+    assert not any(re.match(r"\s*[-*+]\s", line) for line in text.split("\n"))
+    assert attach.cited_ids(text) == attach.cited_ids(LONG_REPLY) and len(attach.cited_ids(text)) == 4
+    assert re.findall(r"\d+", text) == re.findall(r"\d+", LONG_REPLY)
+    assert re.findall(r"\b[A-Z]{2,5}\b", text) == re.findall(r"\b[A-Z]{2,5}\b", LONG_REPLY)
+    kept = [w for w in _words(LONG_REPLY) if w not in ("-", "+", "Playbook:")]
+    assert all(w in text for w in kept), [w for w in kept if w not in text]
+    assert "Bottom line: risk-on into CPI" in text and "Buy pullbacks to the 5 day AVWAP" in text
+
+
+def test_the_default_guard_leaves_bold_and_bullets_alone():
+    text, _ = style.guard(LONG_REPLY)
+    assert "**Bottom line:**" in text and "- Buy pullbacks" in text
+
+
+def test_the_eval_guards_a_summary_ask_the_way_the_app_does():
+    import mentor_eval
+
+    rows = [{"q": "is the playbook bullish or bearish", "reply": LONG_REPLY},
+            {"q": "how am i doing today", "reply": LONG_REPLY}]
+    mentor_eval.style_summary(rows, mentor_eval.load_fixture())
+    assert rows[0]["style"]["bullets"] == 3 and rows[0]["style_after_app"]["bullets"] == 0
+    assert rows[1]["style_after_app"]["bullets"] == 3, "a non-summary question keeps the default guard"
+
+
+def test_a_summary_turn_shows_plain_text_and_stores_the_raw_reply(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    from mentor_app import settings
+    from mentor_app.prefetch import PrefetchQueue
+    from mentor_app.store import MentorChatStore
+    from mentor_app.window import MentorWindow
+    from mentor_packs.registry import make_pack
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings, "gpu_block_reason", lambda now=None: "")
+    monkeypatch.setattr(settings, "context_tokens", lambda: 8192)
+    sent: list = []
+    rows = [{"id": "fund:2026-09-30:bottom_line", "text": "risk-on into CPI, futures +0.4%"},
+            {"id": "fund:2026-09-30:playbook:1", "text": "buy pullbacks to the 5 day AVWAP"},
+            {"id": "fund:2026-09-30:playbook:2", "text": "fade gaps above 5,820"},
+            {"id": "fund:2026-09-30:risk:1", "text": "CPI at 08:30 ET"}]
+    win = MentorWindow(store=MentorChatStore(tmp_path / "mentor_chat.sqlite3"), queue=PrefetchQueue(),
+                       stream_post=lambda url, payload, cancelled: sent.append(payload) or _answer(LONG_REPLY),
+                       post=lambda url, payload, timeout: {}, pack_builder=lambda name, args: make_pack(name, rows))
+    try:
+        win._brain_ok, win._endpoint, win._model, win._native_tools = True, "http://x", "gemma4:12b", True
+        win.send("is the playbook bullish or bearish")
+        assert win._worker is not None and win._worker.wait(5000)
+        deadline = time.monotonic() + 5
+        while win._worker is not None and time.monotonic() < deadline:
+            app.processEvents()
+        win._io.submit(lambda: None).result(5)
+        assert sent[0]["options"]["num_predict"] == attach.SUMMARY_MAX_TOKENS
+        assert [m for m in sent[0]["messages"] if m["role"] == "user"][-1]["content"].endswith(
+            attach.SUMMARY_INSTRUCTION)
+        shown = win._blocks[-1]
+        assert "**Bottom line" not in shown and "- Buy pullbacks" not in shown and "Bottom line: risk-on" in shown
+        assert win.store.turns()[-1]["text"] == LONG_REPLY, "the turn log keeps the model's raw words"
+    finally:
+        win.shutdown()
+        win.deleteLater()

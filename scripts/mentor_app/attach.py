@@ -619,6 +619,32 @@ _GENERIC_ID_PARTS = frozenset({"pick", "gate", "tape", "ctx", "jrn", "news", "bo
                                "night", "brief", "coach"})
 
 
+#: P20: a brief / tape summary ask (live eval 2026-10-01: 700-1800 chars of bold headers and bullets).
+SUMMARY_PACKS = frozenset({"fundamentals_pack", "night_pack", "regime_pack"})
+_SUMMARY_CUE = re.compile(r"\bwhat(?:'s|s| does| did| do)\b.*\bsay\b|\bbrief\b|\bplaybook\b|\bmarket like\b")
+SUMMARY_INSTRUCTION = ("Answer in at most three plain sentences: the bottom line, the playbook, one risk. "
+                       "Prose only: no bullets, no bold, no headers. Cite ids inline.")
+#: The summary turn's num_predict (three cited sentences fit well inside it).
+SUMMARY_MAX_TOKENS = 260
+
+
+def summary_turn(text: str, requests: Iterable[Any]) -> bool:
+    """True for a summary ask: no ticker (indexes included), no gate, every planned pack a brief / night / regime
+    pack, and at least one pack planned or a summary cue ("what does the brief say", "playbook", "market like")."""
+    raw = str(text or "")
+    names = {getattr(request, "name", "") for request in requests or ()}
+    if not names <= SUMMARY_PACKS or find_symbols(raw, set(INDEX_SYMBOLS)):
+        return False
+    return bool(names) or bool(_SUMMARY_CUE.search(raw.lower()))
+
+
+def turn_shape(text: str, requests: Iterable[Any]) -> dict[str, Any]:
+    """The per-turn ``run_turn`` arguments: the three-sentence instruction and a token cap on a summary ask."""
+    if summary_turn(text, requests):
+        return {"turn_instruction": SUMMARY_INSTRUCTION, "max_tokens": SUMMARY_MAX_TOKENS}
+    return {}
+
+
 def names_subject(question: str, row_id: str) -> bool:
     """True when the question names what a row is about (its ticker or its topic word)."""
     words = set(re.findall(r"[a-z0-9]+", str(question or "").lower()))

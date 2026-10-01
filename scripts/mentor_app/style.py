@@ -123,24 +123,35 @@ def carries_substance(text: str) -> bool:
 _TICKER = re.compile(r"(?<![A-Za-z0-9])\$?([A-Z]{2,5})(?![A-Za-z0-9])")
 
 
-def guard(reply: str) -> tuple[str, list[str]]:
+#: P20 plain turns: a leading bullet marker (``- ``, ``* ``, ``+ ``); numbered items keep their number.
+_BULLET_MARK = re.compile(r"^(\s*)[-*+]\s+(?=\S)")
+
+
+def _plain(line: str) -> str:
+    """Formatting only: drop a bullet marker and ``**`` emphasis; every word, number, citation and ticker stays."""
+    return _BULLET_MARK.sub(r"\1", line).replace("**", "")
+
+
+def guard(reply: str, *, plain: bool = False) -> tuple[str, list[str]]:
     """(the reply with headers turned bold and a trailing offer removed, the text that was removed).
 
     Only three rewrites, and never on a line with a citation, a number or a ticker except (a):
     (a) ``### X`` -> ``**X**``; (b) a bold label line ending in ":" is dropped; (c) a trailing offer or
     closing question is dropped, a sentence at a time, from a last line that carries no substance.
+    ``plain`` (P20 summary turns): a header becomes its plain text and every line loses bullet markers and ``**``.
     """
     removed: list[str] = []
     out: list[str] = []
     for line in str(reply or "").split("\n"):
         header = _HEADER.match(line)
         if header:
-            out.append(f"**{header.group(1).strip().strip('*').rstrip(':')}**")
+            title = header.group(1).strip().strip("*").rstrip(":")
+            out.append(title if plain else f"**{title}**")
             continue
         if _BOLD_LABEL.match(line) and not carries_substance(line):
             removed.append(line.strip())
             continue
-        out.append(line)
+        out.append(_plain(line) if plain else line)
     # Trailing offers / closing questions: whole sentences at the end of the last paragraph, repeatedly.
     while True:
         while out and not out[-1].strip():
