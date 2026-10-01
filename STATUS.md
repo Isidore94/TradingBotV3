@@ -24,8 +24,8 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   permutation report (#330, shadow). Merged 10-01 (#338): P19 night rejections (econ time
   needs its id, regime read 1 retry, day show fits, idea with unknown ids dropped), digest
   cap, mentor digest retry. Next: morning pre-brief queue; rule audit once plan lines exist.
-- **gemma4:12b is the night model** (live since 10-01, thinking OFF; probe 2: gpt-oss:20b at
-  high cut at the 23k ceiling). In flight, not merged: `claude/gemma4-thinking-high-2026-10-01`.
+- **gemma4:12b is the night model** (live since 10-01, thinking OFF).
+  In flight, not merged: `claude/gemma4-thinking-high-2026-10-01`.
 - **Night window:** 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435; the app uses
   11436). No local models on the mini-PC: host down = facts only; rerun a missed night with
   `--session <date> --force`. No builders, merges or test runs 22:00-02:00 PT.
