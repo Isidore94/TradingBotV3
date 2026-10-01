@@ -230,10 +230,16 @@ def test_a_rejected_night_is_an_attempt_and_is_capped(night):
     `failed` rows, and the third firing stopped by the cap. The counts of what
     the rejected answer held travel with the row.
     """
-    from ai_jobs import ledger
+    from ai_jobs import improvement_ideas, ledger
 
     tj5.write_week(night["root"], narrated=tj5.PACKED_SESSIONS)
-    calls = _passes(night, _one_idea(night, evidence=["2020-01-02/report_card:did_well"]))
+    # Since P19 an unknown id only drops its idea, so the rejection here is a
+    # bound break: more cited ids than tonight's cap rejects the answer whole.
+    inputs = improvement_ideas.build_ideas_inputs(SESSION, root=night["root"])
+    allowed = list(inputs["allowed_source_ids"])
+    cap = min(improvement_ideas.MAX_EVIDENCE_PER_IDEA, len(allowed))
+    over_cap = allowed[:1] + [f"2020-01-02/report_card:did_well_{index}" for index in range(cap)]
+    calls = _passes(night, _one_idea(night, evidence=over_cap))
 
     assert len(calls) == 2, f"the night asked the model {len(calls)} times"
     rows = _ledger_rows(night["ledger"])

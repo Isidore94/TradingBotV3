@@ -180,11 +180,14 @@ def test_a_fourth_idea_is_rejected_by_the_verifier_not_trimmed_by_the_schema(nig
     assert len(improvement_ideas.read_ideas()) == 2
 
 
-def test_an_idea_citing_an_id_this_night_does_not_carry_is_rejected_whole(night):
-    """A fabricated citation is the defect TJ-4 and TJ-5 both reject WHOLE.
+def test_an_idea_citing_only_ids_this_night_does_not_carry_is_dropped_not_stored(night):
+    """P19 (2026-09-30, the lead's brief on the trader's word): a fabricated
+    citation DROPS ITS IDEA (`DROP_UNKNOWN_SOURCE`), counted; it no longer costs
+    the night's other ideas. Before P19 this rejected the whole answer, and one
+    invented id lost three nights in a row.
 
-    Hand-counted: 2 ideas, one of them citing `no-such-session/said:made-up`,
-    which is in no pack -> nothing is written at all.
+    Hand-counted: 2 ideas, one citing only `no-such-session/said:made-up`, which
+    is in no pack -> 1 stored, 1 dropped, and the invented id is nowhere on disk.
     """
     from ai_jobs import improvement_ideas, ledger
 
@@ -204,9 +207,68 @@ def test_an_idea_citing_an_id_this_night_does_not_carry_is_rejected_whole(night)
         ),
     )
 
-    assert outcome["status"] != ledger.STATUS_OK
+    assert outcome["status"] == ledger.STATUS_OK, outcome.get("reason")
+    stored = _stored(night)
+    assert [row["text"] for row in stored] == ["A real one."]
+    assert "made-up" not in night["ideas"].read_text(encoding="utf-8")
+    assert outcome["extra"]["drop_reasons"] == {improvement_ideas.DROP_UNKNOWN_SOURCE: 1}
+    assert "1 stored, 1 dropped (unknown source)" in outcome["reason"]
+
+
+def test_the_three_real_bad_ids_drop_one_idea_and_a_mixed_idea_keeps_only_its_valid_ids(night):
+    """The three ids gemma invented in the ledger (2026-09-21..24), cited the way
+    it cited them: one idea on two bad ids is dropped; a good idea is kept; a
+    mixed idea is kept with only the ids tonight carries."""
+    from ai_jobs import improvement_ideas, ledger
+
+    bad = ["2026-09-23/report_card:walkaway_counts", "program_card_v1", "2026-09-21/report_card:a_"]
+    allowed = _allowed(night)
+    assert len(allowed) >= 2 and not set(bad) & set(allowed)
+    measurable = _first_measurable()
+    outcome, _calls = _run(
+        night,
+        fx.reply(
+            [
+                fx.idea_payload("Invented grounds.", measurable=measurable, evidence=bad[:2]),
+                fx.idea_payload("Wait for the second test.", measurable=measurable, evidence=allowed[:1]),
+                fx.idea_payload(
+                    "Size the second entry smaller.",
+                    measurable=measurable,
+                    evidence=[allowed[1], bad[2]],
+                ),
+            ]
+        ),
+    )
+
+    assert outcome["status"] == ledger.STATUS_OK, outcome.get("reason")
+    stored = {row["text"]: row for row in _stored(night)}
+    assert sorted(stored) == ["Size the second entry smaller.", "Wait for the second test."]
+    assert stored["Size the second entry smaller."]["evidence"] == [allowed[1]]
+    assert stored["Wait for the second test."]["evidence"] == allowed[:1]
+    text = night["ideas"].read_text(encoding="utf-8")
+    for item in bad:
+        assert item not in text
+    assert outcome["extra"]["dropped"] == 1
+    assert outcome["extra"]["drop_reasons"] == {improvement_ideas.DROP_UNKNOWN_SOURCE: 1}
+    assert "2 stored, 1 dropped (unknown source)" in outcome["reason"]
+
+
+def test_an_idea_over_the_citation_cap_is_still_rejected_whole_even_with_unknown_ids(night):
+    """The drop is for an unknown id only; a bound break still rejects the answer."""
+    from ai_jobs import improvement_ideas, ledger
+
+    inputs = improvement_ideas.build_ideas_inputs(fx.SESSION, root=night["root"])
+    allowed = list(inputs["allowed_source_ids"])
+    cap = min(improvement_ideas.MAX_EVIDENCE_PER_IDEA, len(allowed))
+    measurable = _first_measurable()
+    too_many = allowed[:1] + [f"made-up-{index}" for index in range(cap)]
+    outcome, _calls = _run(
+        night,
+        fx.reply([fx.idea_payload("Too many cites.", measurable=measurable, evidence=too_many)]),
+    )
+    assert outcome["status"] == ledger.STATUS_FAILED
+    assert "tonight allows at most" in outcome["reason"]
     assert _stored(night) == []
-    assert improvement_ideas.read_ideas() == () or list(improvement_ideas.read_ideas()) == []
 
 
 def test_check_ideas_is_a_function_the_slot_calls_and_a_test_can_call(night):
