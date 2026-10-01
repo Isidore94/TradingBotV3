@@ -421,6 +421,15 @@ class MentorWindow(QMainWindow):
         self._feel_waiting: list[tuple[Any, dict]] = []
         self._inbox_feel: dict[int, dict] = {}
         self._feel_asked: set[str] = set()
+        # P18 journal mode: `/journal on` (persisted) keeps every message as a journal line.
+        self._journal_on = False
+
+        def load_journal_mode() -> None:
+            from mentor_app import journal_mode
+
+            self._journal_on = self.store.get_state(journal_mode.MODE_KEY) == "on"
+
+        self._submit_io(load_journal_mode)
         self._bridge.tilt_ready.connect(self._on_tilt_ready)
         self._bridge.tilt_card.connect(self._on_tilt_card)
         self._tilt_timer = QTimer(self)
@@ -1121,6 +1130,14 @@ class MentorWindow(QMainWindow):
             self._run_command(result)
             return
         self._add_block(f"**You:** {text}")
+        # P18: self talk is kept as a journal line with a one-line "Noted"; a question inside it is answered too.
+        from mentor_app import journal_mode
+
+        kind = journal_mode.classify(text, forced=self._journal_on)
+        if kind.statement:
+            self.record_journal(text, asks=kind.asks)
+            if not kind.asks:
+                return
         self._store_turn("user", text)
         paused = self._ai_paused_until()
         if paused is not None:
@@ -1254,6 +1271,8 @@ class MentorWindow(QMainWindow):
             self._add_note(memory.as_listing(self._memory))
         elif result.action == "feel":
             self.record_feeling(*result.arg)
+        elif result.action == "journal":
+            self._journal_command(str(result.arg or ""))
         elif result.action == "paste":
             text, session = result.arg
             if text:
@@ -1561,6 +1580,15 @@ class MentorWindow(QMainWindow):
                 vectors = brain.embed(endpoint, [row["text"]], model=settings.EMBED_MODEL, post=self._post)
                 if vectors:
                     self.store.put_embedding("turn", row["id"], settings.EMBED_MODEL, vectors[0], text=row["text"][:2000])
+                    done += 1
+            # P18: journal lines are recalled too (kind "journal").
+            for row in self.store.unembedded_journal(settings.EMBED_MODEL, limit=20):
+                if self.queue.should_yield():
+                    break
+                vectors = brain.embed(endpoint, [row["text"]], model=settings.EMBED_MODEL, post=self._post)
+                if vectors:
+                    self.store.put_embedding("journal", row["id"], settings.EMBED_MODEL, vectors[0],
+                                             text=row["text"][:2000])
                     done += 1
             return done
 
@@ -2978,6 +3006,38 @@ class MentorWindow(QMainWindow):
         for day, ids in by_day.items():
             if day:
                 self._submit_io(lambda day=day, ids=ids: tilt_watch.mark_asked(self.store, day, ids))
+
+    def record_journal(self, text: str, *, asks: bool = False) -> None:
+        """P18: store one journal-mode statement with its tags and context (IO thread; journal read-only)."""
+        from mentor_app import journal_mode
+        from mentor_packs import tilt_pack
+
+        journal = self._tilt_journal if self._tilt_journal is not None else tilt_pack.live_journal()
+        rows = list(self._context_pack.rows) if self._context_pack is not None else []
+        now, forced = self._now(), self._journal_on
+
+        def job() -> None:
+            fields = journal_mode.entry_fields(text, now, context_rows=rows, journal=journal, forced=forced, asks=asks)
+            self._bridge.note.emit(journal_mode.noted_line(fields, self.store.add_journal_entry(fields)))
+
+        self._submit_io(job)
+        if self._brain_ok and not asks:
+            self._queue_embeddings()  # an answered statement embeds after its reply
+
+    def _journal_command(self, word: str) -> None:
+        """``/journal on|off`` sets the mode (persisted); ``/journal`` shows today's entries (IO thread)."""
+        from mentor_app import journal_mode
+
+        if word in ("on", "off"):
+            self._journal_on = word == "on"
+            self._submit_io(lambda: self.store.set_state(journal_mode.MODE_KEY, word))
+            self._add_note("Journal mode ON: every message is kept as a journal line (a question in it is still "
+                           "answered). `/journal off` to stop." if word == "on"
+                           else "Journal mode OFF: I keep self talk and answer questions.")
+            return
+        day = self._now().astimezone(journal_mode.ET).date().isoformat()
+        self._submit_io(lambda: self._bridge.note.emit(
+            journal_mode.entries_text(self.store.journal_entries(day, day), day)))
 
     def record_feeling(self, ref: str, words: str) -> None:
         """``/feel <SYM|trade id> <words>``: one feelings note kept with its trade (IO thread; journal read-only)."""

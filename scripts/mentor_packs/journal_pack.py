@@ -6,7 +6,8 @@ close times (ET), size, R on the planned risk or $ with "R unknown", hold time, 
 account's tax class. Then totals (count, wins, net R over the trades that have one, net $,
 largest loss) and the open positions. Ids: ``jrn:<day>:<trade_id>`` (a spread joins its trade
 ids with ``+``), ``jrn:<day>:totals``, ``jrn:<day>:open:<trade_id>``. A week's ``<day>`` is
-``wk<monday>``; a month's is ``mo<YYYY-MM>``. A day's and a month's totals row comes first (a month's
+``wk<monday>``; a month's is ``mo<YYYY-MM>``. P18: the trader's journal-mode lines (mentor chat store, ``mode=ro``)
+ride after the trades as ``jrn:<day>:entry:<id>`` with their mood tags. A day's and a month's totals row comes first (a month's
 carries the win rate), so the answer survives the attach budget. The journal store class is never built; missing data is "unknown".
 """
 
@@ -245,6 +246,48 @@ def read_feelings(chat_db: Path | str | None) -> dict[str, str]:
     return {str(row["trade_id"]): " ".join(str(row["text"] or "").split()) for row in rows if row["trade_id"]}
 
 
+def read_entries(chat_db: Path | str | None, first: date, last: date) -> list[dict[str, Any]]:
+    """P18: the trader's journal-mode lines for ``first..last`` (ET days) from the mentor chat store (``mode=ro``)."""
+    import json
+
+    path = Path(chat_db) if chat_db is not None else live_chat_db()
+    conn = journal_read.connect_ro(path)
+    if conn is None:
+        return []
+    try:
+        if not journal_read._columns(conn, "journal_entries"):
+            return []
+        rows = conn.execute("SELECT id, ts_utc, day_et, text, mood_tags_json, last_trade_id, last_trade_text "
+                            "FROM journal_entries WHERE day_et >= ? AND day_et <= ? ORDER BY id",
+                            (first.isoformat(), last.isoformat())).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+    out = []
+    for row in rows:
+        try:
+            tags = [str(tag) for tag in json.loads(row["mood_tags_json"] or "[]")]
+        except ValueError:
+            tags = []
+        out.append({**dict(row), "mood_tags": tags})
+    return out
+
+
+def entry_rows(label: str, entries: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """One row per journal line: time ET, its mood tags, the trade it came after, the trader's words."""
+    rows = []
+    for entry in entries:
+        moment = journal_read.parse_time(entry.get("ts_utc"))
+        stamp = moment.astimezone(ET).strftime("%a %H:%M") + " ET" if moment else "time unknown"
+        tags = ", ".join(entry.get("mood_tags") or ()) or "no mood tag"
+        after = f", after {entry['last_trade_text']} ({entry['last_trade_id']})" if entry.get("last_trade_text") else ""
+        rows.append({"id": f"jrn:{label}:entry:{entry['id']}", "kind": "entry", "tags": list(entry.get("mood_tags") or ()),
+                     "trade": str(entry.get("last_trade_id") or ""),
+                     "text": f"Journal line {stamp} [{tags}]{after}, in your words: {' '.join(str(entry.get('text') or '').split())}"})
+    return rows
+
+
 def build(day: Any = "today", *, now: datetime | None = None, journal: Path | str | None = None,
           chat_db: Path | str | None = None) -> Pack:
     """Build the journal pack. Journal reads (``mode=ro``): call it on a worker.
@@ -280,6 +323,8 @@ def build(day: Any = "today", *, now: datetime | None = None, journal: Path | st
                 words = feelings[trade_id].split(" felt: ", 1)[-1]  # the note's own label is dropped here
                 rows.append({"id": f"jrn:{label}:{trade_id}:feel", "kind": "feeling", "symbol": unit.symbol,
                              "text": f"How {unit.symbol} ({trade_id}) felt, in your words: {words}"})
+    # P18: the day's journal lines, with their mood tags, right after the trades.
+    rows.extend(entry_rows(label, read_entries(chat_db, first, last)))
     opened_in_span = [t for t in open_trades if _in(journal_read.parse_time(t.get("opened_at")), first, last)]
     values = [unit.pnl for unit in closed_units]
     known_values = [v for v in values if v is not None]

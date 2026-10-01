@@ -21,6 +21,8 @@ HELP_TEXT = (
     " closed session, like the desk; `/paste for 2026-09-30 ...` picks the session\n"
     "- `/recaps [n]` your last n day recaps (10 unless you say; `all`) and the issues that keep coming back\n"
     "- `/feel <SYM|trade id> <words>` how a trade felt, kept with that trade\n"
+    "- `/journal` today's journal lines with their mood tags; `/journal on` keeps every message as a journal line"
+    " (long dictation), `/journal off` goes back to telling self talk from questions\n"
     "- `/recall <text>` search what we said before (plain text search when the brain is off)\n"
     "- `/forget <id>` retire a note (it is kept, never deleted); `/keep <id>` says it is still true\n"
     "- `/tape` the tape: Auto mode, D1, last night's read, econ, sectors (read aloud when the brain is up)\n"
@@ -127,6 +129,11 @@ def handle(text: str) -> CommandResult | None:
         if len(parts) < 2:
             return CommandResult("error", "Try `/feel SHOP rushed it` or `/feel <trade id> calm`.")
         return CommandResult("feel", "", (parts[0], parts[1].strip()))
+    if name == "journal":
+        word = rest.lower()
+        if word not in ("", "on", "off"):
+            return CommandResult("error", "Try `/journal`, `/journal on` or `/journal off`.")
+        return CommandResult("journal", "", word)
     if name == "plan":
         return CommandResult("plan")
     if name == "drop":
