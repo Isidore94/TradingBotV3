@@ -3,8 +3,9 @@
 Reads the night's ``mentor_habits.json`` (``ai_jobs.mentor_habits``, in the ai_store digests folder): the habits seen
 on 3+ days of the last 30 (a mood tag or a 3-word phrase), each with first/last seen, days seen, example ids and
 when it shows up (after a loss, before the open, late day, regime), plus the last session's mood-tag counts. Ids:
-``habits:asof``, ``habit:<key>`` (the night's own ids), ``habits:day``. Counts and observations, never rules. A
-missing file is "not counted yet", never "no habits".
+``habits:asof``, ``habit:<key>`` (the night's own ids), ``habits:day``. P18 D: the routine table rides too
+(``mentor_routines.json``): what he usually asks per PT half hour, ``routine:<HHMM>``. Counts and observations,
+never rules. A missing file is "not counted yet", never "no habits".
 """
 
 from __future__ import annotations
@@ -35,6 +36,8 @@ HABITS_FILE = "mentor_habits.json"
 @dataclass(frozen=True)
 class Sources:
     registry: Callable[[], Path | None]
+    #: The night's routine table (``mentor_app.routines``); None = not read.
+    routines: Callable[[], Path | None] = lambda: None
 
 
 def _live_registry() -> Path | None:
@@ -44,8 +47,30 @@ def _live_registry() -> Path | None:
     return None if root is None else Path(root) / HABITS_FILE
 
 
+def _live_routines() -> Path | None:
+    from mentor_app import routines
+
+    return routines.live_path()
+
+
 def live_sources() -> Sources:
-    return Sources(registry=_live_registry)
+    return Sources(registry=_live_registry, routines=_live_routines)
+
+
+def routine_rows(path: Path | None) -> list[dict[str, Any]]:
+    """What he usually asks per PT half hour (packs asked on 5+ of his last 10 session days)."""
+    from mentor_app import routines
+
+    payload = routines.read_routines(path)
+    rows = []
+    for row in payload.get("routines") or ():
+        if not isinstance(row, Mapping) or not row.get("bucket"):
+            continue
+        packs = ", ".join(f"{p['name']} on {p['days']} days" for p in row.get("packs") or ())
+        rows.append({"id": f"routine:{str(row['bucket']).replace(':', '')}", "kind": "routine",
+                     "text": (f"Usual ask at {row['bucket']} PT (last {len(payload.get('session_days') or ())} "
+                              f"session days): {packs}")})
+    return rows
 
 
 def _context_text(context: Mapping[str, Any]) -> str:
@@ -61,14 +86,23 @@ def build(*, sources: Sources | None = None) -> Pack:
     """Build the habits pack (one file read: call it on a worker)."""
     src = sources or live_sources()
     path = src.registry()
+    try:
+        usual = routine_rows(src.routines())
+    except Exception:  # noqa: BLE001 - an unreadable routine table costs only its rows
+        usual = []
+
+    def without(why: str) -> Pack:
+        rows = [{"id": "habits:none", "kind": "none", "text": f"Habits: {why}"}, *usual] if usual else ()
+        return make_pack(NAME, rows, empty_text=why)
+
     if path is None:
-        return make_pack(NAME, (), empty_text="no ai_store is configured, so the night's habit counts are unknown")
+        return without("no ai_store is configured, so the night's habit counts are unknown")
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return make_pack(NAME, (), empty_text="the night has not counted your habits yet; unknown")
+        return without("the night has not counted your habits yet; unknown")
     except (OSError, ValueError) as exc:
-        return make_pack(NAME, (), empty_text=f"the habit counts could not be read ({type(exc).__name__}); unknown")
+        return without(f"the habit counts could not be read ({type(exc).__name__}); unknown")
     habits = [h for h in payload.get("habits") or () if isinstance(h, Mapping) and h.get("id")]
     session = str(payload.get("session_date") or "?")
     rows: list[dict[str, Any]] = [{
@@ -92,6 +126,7 @@ def build(*, sources: Sources | None = None) -> Pack:
                      "text": (f"{day.get('session_date', session)}: {day.get('journal_lines', 0)} journal line(s), "
                               f"{day.get('turns', 0)} question(s); mood tags {tags}; lines after a loss "
                               f"{day.get('after_loss', 0)}, after a win {day.get('after_win', 0)}")})
+    rows += usual
     return make_pack(NAME, rows)
 
 

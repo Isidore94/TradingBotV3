@@ -6,11 +6,11 @@
     "questions",
     "book"
   ],
-  "raw_input_sha256": "56730330877fd1958fd17859737d721ecc38464532303badd6b3e2fe6b26149e",
+  "raw_input_sha256": "661f7a823345d99f74d9a9416a1238b92e2d3aee1a633f05c3d8fad158d2e46f",
   "acquired_at": "2026-09-30T19:31:39-07:00",
   "as_of": "2026-09-30T19:31:39-07:00",
-  "universe_version": "trader_plain_questions_v5",
-  "provider_assumptions": "Hand-written questions in the trader's own style (2026-09-30), not a desk capture: the 100 of the 2026-09-30 live eval (the first 60 from P13/P14/P15b, then 40 harder ones; the last 25 are the hard tier; P17 adds 8 tape questions: RS, bars, alerts). known_symbols stands in for his universe (Focus, likes, book, journal); book is his open book (a subset), so a book question ('my longs', 'my open shorts') reads only those names (P16). expected_packs are what the app should fetch (P14: no regime without a market or pre-trade cue; P16: book scope, veto aggregates with the mirror, watch-tomorrow, regime-or-me, this week vs last week); concept questions need none; must_mention are checklist sections (gate questions) or words the live reply should carry; simple marks the questions the style score holds to 600 characters.",
+  "universe_version": "trader_plain_questions_v6",
+  "provider_assumptions": "Hand-written questions in the trader's own style (2026-09-30), not a desk capture: the 100 of the 2026-09-30 live eval (the first 60 from P13/P14/P15b, then 40 harder ones; the last 25 are the hard tier; P17 adds 8 tape questions: RS, bars, alerts; P18 adds 12: three journal statements (journal: true, no pack, kept as a journal line and answered 'Noted'), habits x3, reads x3, routine x1, bars-fresh x2). known_symbols stands in for his universe (Focus, likes, book, journal); book is his open book (a subset), so a book question ('my longs', 'my open shorts') reads only those names (P16). expected_packs are what the app should fetch (P14: no regime without a market or pre-trade cue; P16: book scope, veto aggregates with the mirror, watch-tomorrow, regime-or-me, this week vs last week); concept questions need none; must_mention are checklist sections (gate questions) or words the live reply should carry; simple marks the questions the style score holds to 600 characters.",
   "expected_keys": [
     "checklist"
   ],
@@ -1145,6 +1145,111 @@
       ],
       "must_mention": [
         "ALL"
+      ]
+    },
+    {
+      "q": "ugh I chased that open again, annoyed at myself",
+      "expected_packs": [],
+      "journal": true,
+      "must_mention": [
+        "Noted"
+      ]
+    },
+    {
+      "q": "feeling tired and a bit bored, nothing is setting up",
+      "expected_packs": [],
+      "journal": true,
+      "must_mention": [
+        "Noted"
+      ]
+    },
+    {
+      "q": "tempted to revenge trade after that stop",
+      "expected_packs": [],
+      "journal": true,
+      "must_mention": [
+        "Noted"
+      ]
+    },
+    {
+      "q": "what are my bad habits",
+      "expected_packs": [
+        "habits_pack"
+      ],
+      "must_mention": [
+        "habit"
+      ]
+    },
+    {
+      "q": "what do I keep saying when I lose",
+      "expected_packs": [
+        "habits_pack"
+      ],
+      "must_mention": [
+        "habit"
+      ]
+    },
+    {
+      "q": "when do I get frustrated during the day",
+      "expected_packs": [
+        "habits_pack"
+      ],
+      "must_mention": [
+        "habit"
+      ]
+    },
+    {
+      "q": "what was my read this morning",
+      "expected_packs": [
+        "reads_pack"
+      ],
+      "must_mention": [
+        "read"
+      ]
+    },
+    {
+      "q": "was I right about SPY yesterday",
+      "expected_packs": [
+        "reads_pack"
+      ],
+      "must_mention": [
+        "SPY"
+      ]
+    },
+    {
+      "q": "how are my predictions doing lately",
+      "expected_packs": [
+        "reads_pack"
+      ],
+      "must_mention": [
+        "n="
+      ]
+    },
+    {
+      "q": "what do I usually ask at the open",
+      "expected_packs": [
+        "habits_pack"
+      ],
+      "must_mention": [
+        "usual"
+      ]
+    },
+    {
+      "q": "how is AMD trading right now",
+      "expected_packs": [
+        "bars_pack"
+      ],
+      "must_mention": [
+        "AMD"
+      ]
+    },
+    {
+      "q": "where is NVDA currently",
+      "expected_packs": [
+        "bars_pack"
+      ],
+      "must_mention": [
+        "NVDA"
       ]
     }
   ]

@@ -148,7 +148,8 @@ _READS = re.compile(r"\bmy (?:market )?reads?\b|\bwhat did i say the market woul
 #: P18: what the trader keeps saying and feeling (the night's habit counts).
 _HABITS = re.compile(r"\bbad habits?\b|\bmy habits?\b|\bwhat do i keep\b|\bpattern in what i (?:say|said)\b"
                      r"|\bwhen do i (?:get|feel) (?:frustrated|tilted|angry|annoyed|bored)\b"
-                     r"|\bwhat have i been feeling\b|\bhow have i been feeling\b|\bwhat do i keep saying\b")
+                     r"|\bwhat have i been feeling\b|\bhow have i been feeling\b|\bwhat do i keep saying\b"
+                     r"|\bwhat do i usually (?:ask|look at|check)\b|\bmy (?:usual|morning) routine\b|\bmy routines?\b")
 _PLAN = re.compile(r"\bmy plan\b|\bmy rules?\b|\btrading plan\b|\bbreak(?:ing)? (?:a|my) rule\b")
 #: P15a: the night's reads (day review verdicts, ideas, contrasts, week review, story, digest).
 _NIGHT = re.compile(r"\bwhat did the night say\b|\bovernight\b|\blast night\b|\bnight(?:'s)? read\b|\bideas?\b"

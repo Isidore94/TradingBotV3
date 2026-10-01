@@ -40,6 +40,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_FIXTURE = ROOT_DIR / "tests" / "fixtures" / "mentor_eval_questions.json"
 #: Pre-trade questions: those whose expected packs include the gate.
 GATE = "gate_pack"
+#: P18: what a journal statement is expected to produce offline (a stored line, no pack).
+JOURNAL = "journal_entry"
 
 
 def load_fixture(path: Path | str = DEFAULT_FIXTURE) -> dict[str, Any]:
@@ -52,6 +54,7 @@ def _now(fixture: Mapping[str, Any]) -> datetime:
 
 def offline_report(fixture: Mapping[str, Any]) -> dict[str, Any]:
     """Attach recall per question and overall (mean over questions)."""
+    from mentor_app import journal_mode
     from mentor_app.attach import plan_attachments
 
     now, known = _now(fixture), dict(fixture.get("known_symbols") or {})
@@ -59,11 +62,19 @@ def offline_report(fixture: Mapping[str, Any]) -> dict[str, Any]:
     book = [str(sym).upper() for sym in fixture.get("book") or ()]
     rows = []
     for item in fixture.get("questions") or ():
+        # P18: self talk is kept as a journal line and answered "Noted" with no packs; a question the app
+        # took for self talk would never be answered, so it scores zero.
+        kind = journal_mode.classify(item["q"])
+        noted = kind.statement and not kind.asks
+        if item.get("journal"):
+            rows.append({"q": item["q"], "expected": [JOURNAL], "attached": [JOURNAL] if noted else [],
+                         "missed": [] if noted else [JOURNAL], "recall": 1.0 if noted else 0.0, "journal": True})
+            continue
         expected = list(item.get("expected_packs") or ())
-        got = [request.name for request in plan_attachments(item["q"], known, now, book=book)]
+        got = [] if noted else [request.name for request in plan_attachments(item["q"], known, now, book=book)]
         hit = [name for name in expected if name in got]
         rows.append({"q": item["q"], "expected": expected, "attached": got, "missed": [n for n in expected if n not in got],
-                     "recall": len(hit) / len(expected) if expected else 1.0})
+                     "recall": len(hit) / len(expected) if expected else (0.0 if noted else 1.0)})
     recall = statistics.fmean(row["recall"] for row in rows) if rows else 0.0
     return {"mode": "offline", "questions": len(rows), "attach_recall": round(recall, 4), "rows": rows}
 
@@ -141,6 +152,8 @@ def live_report(fixture: Mapping[str, Any], *, out_dir: Path) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     rows, firsts = [], []
     for item in fixture.get("questions") or ():
+        if item.get("journal"):
+            continue  # P18: a journal statement gets "Noted" from the app, never a model turn
         chat = ChatModel()
         chat.add("user", item["q"])
         messages = chat.messages(context_text=context.as_text(), budget_tokens=settings.context_tokens())

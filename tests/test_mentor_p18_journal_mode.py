@@ -41,10 +41,20 @@ def test_self_talk_is_a_statement_that_does_not_ask(text):
     "mode?",
     "I stop after two losses.",  # plan talk: the model and plan inference see it
     "From now on I only trade the first hour",
+    # First person with a question inside and no mood word: a question about trading, answered, not journaled.
+    "I want to short SMH, talk me out of it or into it",
+    "I keep getting stopped out on longs in this regime, is that the regime or me",
+    "if I had followed my vetoes exactly this month how would I have done",
+    "cpi tomorrow, should I be careful",
 ])
 def test_questions_are_not_journal_lines(text):
     kind = journal_mode.classify(text)
     assert not kind.statement and kind.asks
+
+
+def test_self_talk_with_a_question_inside_is_stored_and_answered():
+    kind = journal_mode.classify("I'm up on the day and tempted to add risk, what does my history say about that")
+    assert kind.statement and kind.asks
 
 
 def test_a_statement_with_a_question_is_stored_and_answered():

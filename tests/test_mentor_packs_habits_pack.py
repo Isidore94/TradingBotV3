@@ -206,6 +206,22 @@ def test_read_and_tape_disagreeing_two_sessions_running_is_an_issue(chat, tmp_pa
 
 
 # ------------------------------------------------------------------ the app
+def test_the_routine_table_rides_in_the_habits_pack(tmp_path):
+    table = {"session_date": SESSION, "session_days": ["d"] * 10, "routines": [
+        {"bucket": "06:30", "packs": [{"name": "regime_pack", "days": 7}]}]}
+    path = tmp_path / "mentor_routines.json"
+    path.write_text(json.dumps(table), encoding="utf-8")
+    src = habits_pack.fixture_sources(tmp_path)
+    pack = habits_pack.build(sources=habits_pack.Sources(registry=src.registry, routines=lambda: path))
+    row = next(r for r in pack.rows if r["id"] == "routine:0630")
+    assert row["text"] == "Usual ask at 06:30 PT (last 10 session days): regime_pack on 7 days"
+    only = habits_pack.build(sources=habits_pack.Sources(registry=lambda: tmp_path / "nope.json",
+                                                         routines=lambda: path))
+    assert [r["id"] for r in only.rows] == ["habits:none", "routine:0630"]
+    names = [r.name for r in attach.plan_attachments("what do I usually ask at the open", set(), NIGHT)]
+    assert "habits_pack" in names
+
+
 def test_habits_pack_reads_the_nights_file_and_says_unknown_without_it(tmp_path, monkeypatch):
     assert "habits_pack" in registry.names()
     pack = habits_pack.fixture()

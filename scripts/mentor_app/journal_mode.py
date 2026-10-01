@@ -1,10 +1,12 @@
 """P18 journal mode: tell the trader's self talk from a question, tag its mood, and say "Noted" in one line.
 
 Pure and Qt-free. ``classify`` is deterministic: a message that opens like a question (wh-/how/should/is/can...,
-or a tool cue like "show me") or plan talk ("I stop after two losses", which plan inference reads) is a QUESTION; otherwise first-person self talk (I/I'm/feeling/annoyed/chased/
-fomo...) is a STATEMENT, kept as a ``journal_entries`` row; anything else is a QUESTION, as before P18. A
-statement that also asks ("?" or a tool cue inside) is stored AND answered. ``/journal on`` makes every
-message a statement. Mood tags are the desk's ``trader_state_tags`` codes, matched by fixed words.
+or a tool cue like "show me") or plan talk ("I stop after two losses", which plan inference reads) is a QUESTION;
+otherwise first-person self talk (I/I'm/feeling/annoyed/chased/fomo...) is a STATEMENT, kept as a
+``journal_entries`` row; anything else is a QUESTION, as before P18. A first-person sentence with a question inside
+("?", a wh-word, "should I", "talk me...") is a QUESTION, unless it carries a mood word: then it is stored AND
+answered. ``/journal on`` makes every message a statement. Mood tags are the desk's ``trader_state_tags`` codes,
+matched by fixed words.
 """
 
 from __future__ import annotations
@@ -69,17 +71,32 @@ class Kind:
     asks: bool
 
 
+#: A question inside a sentence: a wh-word anywhere, or "should I", "is that", "talk me", "walk me through"...
+_QUESTION_INSIDE = re.compile(
+    r"\b(?:what|what's|whats|when|where|which|why|how|who)\b"
+    r"|\b(?:should|can|could|would|will|do|did|does|is|are|was|were|am)\s+(?:i|we|it|that|this|there|you)\b"
+    r"|\b(?:talk me|walk me|help me|teach me)\b",
+    re.IGNORECASE,
+)
+_FEELING = re.compile(r"\b(?:feeling|feel|felt|nervous|anxious|impatient|greedy|scared|stressed)\b", re.IGNORECASE)
+
+
 def classify(text: str, *, forced: bool = False) -> Kind:
-    """Deterministic: QUESTION (answer only), STATEMENT (store, one-line reply) or both."""
+    """Deterministic: QUESTION (answer only), STATEMENT (store, one-line reply) or both.
+
+    A sentence with a question inside is a QUESTION unless it also carries a mood word: then it is self talk
+    with a question, stored AND answered."""
     words = " ".join(str(text or "").split())
-    asks = "?" in words or bool(_TOOL_CUE.search(words))
+    asks = "?" in words or bool(_TOOL_CUE.search(words) or _QUESTION_INSIDE.search(words))
     if forced:
         return Kind(statement=bool(words), asks=asks)
     if not words or _QUESTION_START.match(words) or _TOOL_START.match(words) or _PLAN_CUE.search(words):
         return Kind(statement=False, asks=True)
-    if _SELF_TALK.search(words):
-        return Kind(statement=True, asks=asks)
-    return Kind(statement=False, asks=True)
+    if not _SELF_TALK.search(words):
+        return Kind(statement=False, asks=True)
+    if asks and not (mood_tags(words) or _FEELING.search(words)):
+        return Kind(statement=False, asks=True)  # first person, but a question about trading, not self talk
+    return Kind(statement=True, asks=asks)
 
 
 def vocabulary_codes() -> tuple[tuple[str, ...], int | None]:
