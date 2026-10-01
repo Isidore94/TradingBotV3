@@ -30,6 +30,7 @@ PACK_MODULES: tuple[str, ...] = (
     "mentor_packs.fundamentals_pack",
     "mentor_packs.recaps_pack",
     "mentor_packs.rs_pack",
+    "mentor_packs.bars_pack",
 )
 
 
