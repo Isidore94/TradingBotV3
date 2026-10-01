@@ -19,17 +19,24 @@ from mentor_app import attach  # noqa: E402
 from mentor_packs import alerts_pack, registry  # noqa: E402
 
 NOW = alerts_pack.FIXTURE_NOW
+UNK = "; follow-through unknown (no cached M5 bars around the alert)"
 
 
 def test_golden_pack_both_kinds():
     pack = alerts_pack.fixture()
     by_id = {row["id"]: row["text"] for row in pack.rows}
-    assert list(by_id) == ["alert:2026-09-30:summary", "alert:2026-09-30:m5:1", "alert:2026-09-30:m5:2",
+    assert list(by_id) == ["alert:2026-09-30:summary", "alert:2026-09-30:m5:followthrough",
+                           "alert:2026-09-30:m5:1", "alert:2026-09-30:m5:2",
                            "alert:2026-09-30:d1:1", "alert:2026-09-30:d1:2"]
     assert by_id["alert:2026-09-30:summary"] == ("Alerts on 2026-09-30: M5 2 (1 long, 1 short); D1 2 (0 long, 2 short); "
                                                  "in your book: ALL; liked: CE")
-    assert by_id["alert:2026-09-30:m5:1"] == "detected 12:02 ET (bar time earlier) NVDA LONG M5 bounce eod_vwap"
-    assert by_id["alert:2026-09-30:m5:2"] == "detected 10:15 ET (bar time earlier) ALL SHORT M5 bounce ema_21, tier B (0.129R) [book SHORT]"
+    assert by_id["alert:2026-09-30:m5:1"] == "detected 12:02 ET (bar time earlier) NVDA LONG M5 bounce eod_vwap" + UNK
+    assert by_id["alert:2026-09-30:m5:2"] == ("detected 10:15 ET (bar time earlier) ALL SHORT M5 bounce ema_21, tier B "
+                                              "(alert score 0.129: the setup's past average R, not this move) "
+                                              "[book SHORT]" + UNK)
+    assert by_id["alert:2026-09-30:m5:followthrough"] == (
+        "M5 alerts ranked by the move since the alert in its favour (cached M5 bars; not the alert score): "
+        "none measurable; 2 of 2 unknown (no cached bars)")
     assert by_id["alert:2026-09-30:d1:1"] == ("D1 scan CE SHORT D1 bucket upgrade to near_favorite_zone "
                                               "(Trendline break) @ 45.12 [liked]")
     assert by_id["alert:2026-09-30:d1:2"] == "detected 09:31 ET (bar time earlier) CL SHORT d1 event fired: D1 15EMA rejection (short)"
@@ -39,12 +46,64 @@ def test_golden_pack_both_kinds():
 def test_symbol_kind_and_day_filters():
     src = alerts_pack.fixture_sources()
     only_all = alerts_pack.build(symbol="all", now=NOW, sources=src)
-    assert [row["id"] for row in only_all.rows] == ["alert:2026-09-30:summary", "alert:2026-09-30:m5:1"]
+    assert [row["id"] for row in only_all.rows] == ["alert:2026-09-30:summary", "alert:2026-09-30:m5:followthrough",
+                                                    "alert:2026-09-30:m5:1"]
     assert only_all.rows[0]["text"].startswith("Alerts for ALL on 2026-09-30: M5 1 (0 long, 1 short); D1 0")
     d1 = alerts_pack.build(kind="d1", now=NOW, sources=src)
     assert not any(":m5:" in row_id for row_id in d1.ids) and "M5" not in d1.rows[0]["text"]
     yesterday = alerts_pack.build(day="yesterday", now=NOW, sources=src)
     assert yesterday.ids == ("alert:2026-09-29:none",)
+
+
+def _bars(symbol, closes, start="2026-10-01T09:30:00-04:00", vwap=None):
+    from mentor_packs import bars_pack
+
+    first = datetime.fromisoformat(start)
+    return [{"symbol": symbol, "start": (first + i * bars_pack.BAR).isoformat(), "open": close,
+             "interval_start": (first + i * bars_pack.BAR).isoformat(),
+             "high": close + 0.05, "low": close - 0.05, "close": close, "volume": 1000, "vwap": vwap}
+            for i, close in enumerate(closes)]
+
+
+def test_follow_through_ranks_by_the_real_move_not_the_alert_score():
+    """2026-10-01: DUK (tier A, score 0.151) was called the top short while it was back above VWAP."""
+    now = datetime(2026, 10, 1, 15, 0, tzinfo=timezone.utc)  # 11:00 ET
+    m5 = [
+        {"time_local": "07:00:30", "trade_date": "2026-10-01", "symbol": "DUK", "direction": "short",
+         "bounce_types": "lrsi_cross_50", "tier": "A", "composite_r": "0.151"},
+        {"time_local": "07:00:30", "trade_date": "2026-10-01", "symbol": "CIFR", "direction": "short",
+         "bounce_types": "lrsi_cross_20", "tier": "B", "composite_r": "0.090"},
+        {"time_local": "07:00:30", "trade_date": "2026-10-01", "symbol": "NOBARS", "direction": "short",
+         "bounce_types": "ema_15", "tier": "A", "composite_r": "0.300"},
+    ]
+    # 18 bars 09:30-10:55 ET; the alert is detected 10:00:30 ET, so its entry is the 09:55 bar's close.
+    duk = _bars("DUK", [114.0, 113.8, 113.6, 113.4, 113.2, 113.0] + [113.2 + 0.2 * i for i in range(12)], vwap=113.5)
+    cifr = _bars("CIFR", [10.0] * 6 + [9.9 - 0.05 * i for i in range(12)], vwap=10.0)
+    cached = {"DUK": duk, "CIFR": cifr}
+    src = replace(alerts_pack.fixture_sources(), m5_rows=lambda day: m5, d1_events=lambda day: [],
+                  upgrades=lambda: {}, book=dict,
+                  bars=lambda symbols, day: {s: cached[s] for s in symbols if s in cached})
+    pack = alerts_pack.build(day="today", kind="m5", now=now, sources=src)
+    rows = {row["id"]: row for row in pack.rows}
+    ranked = rows["alert:2026-10-01:m5:followthrough"]
+    assert ranked["ranked"] == ["CIFR", "DUK"], "the move since the alert ranks, never the tier or score"
+    assert "CIFR SHORT at 10:00 ET: now +6.50%" in ranked["text"]
+    assert "DUK SHORT at 10:00 ET: now -2.12%" in ranked["text"] and "back through VWAP" in ranked["text"]
+    assert "1 of 3 unknown (no cached bars)" in ranked["text"]
+    duk_row = next(row["text"] for row in pack.rows if row.get("symbol") == "DUK")
+    assert "alert score 0.151" in duk_row and "(0.151R)" not in duk_row
+    assert "entry 113.00" in duk_row and "now above session VWAP 113.50 (back through VWAP, against the alert)" in duk_row
+    nobars = next(row["text"] for row in pack.rows if row.get("symbol") == "NOBARS")
+    assert nobars.endswith(UNK), "missing bars are unknown, never confirmed"
+
+
+def test_read_day_bars_reads_one_file_once_for_many_symbols(tmp_path):
+    path = tmp_path / "2026-10-01.jsonl"
+    path.write_text("\n".join(json.dumps(row) for row in _bars("DUK", [1.0, 2.0]) + _bars("X", [3.0]))
+                    + "\n{torn", encoding="utf-8")
+    got = alerts_pack.read_day_bars({"DUK"}, path)
+    assert list(got) == ["DUK"] and len(got["DUK"]) == 2
+    assert alerts_pack.read_day_bars({"DUK"}, tmp_path / "missing.jsonl") == {}
 
 
 def _write_desk(base: Path) -> dict[str, Path]:

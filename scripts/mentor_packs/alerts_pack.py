@@ -5,12 +5,18 @@ desk machine's wall clock). D1 alerts: the Alert Center's fired events in the re
 log (``ALERT_REVIEW_EVENTS_DIR`` + the legacy ``ALERT_REVIEW_EVENTS_FILE``; actions
 ``d1_event_fired`` / ``level_fired`` / ``watch_fired``) and the Master AVWAP bucket upgrades
 (``MASTER_AVWAP_D1_UPGRADE_ALERTS_FILE``). Never the 650 MB M5 outcome store.
+
+Follow-through per M5 alert (2026-10-01): from the desk publisher's cached M5 bars only (never IB),
+the alert's entry is the close of the last completed bar at its detection; then the best move and
+the move now in the alert's favour, and its side of session VWAP. No cached bars = unknown. The
+CSV's ``composite_r`` is the alert's score (the setup's past average R), never today's move.
 """
 
 from __future__ import annotations
 
 import csv
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -54,6 +60,8 @@ class Sources:
     #: The zone naive desk wall-clock times are in.
     local_tz: Callable[[], Any]
     book: Callable[[], Mapping[str, str]]
+    #: ``bars(symbols, day)`` -> {symbol: raw cached M5 bar dicts}; None = follow-through unknown.
+    bars: Callable[[set[str], str], Mapping[str, list[Mapping[str, Any]]]] | None = None
 
 
 def _live_m5_rows(day: str) -> list[dict[str, Any]]:
@@ -117,6 +125,30 @@ def _live_book() -> dict[str, str]:
     return rs_pack._live_book()
 
 
+def read_day_bars(symbols: set[str], path: Path) -> dict[str, list[dict[str, Any]]]:
+    """One pass over a publisher day file: the rows of ``symbols`` (a torn line is skipped)."""
+    out: dict[str, list[dict[str, Any]]] = {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                sym = row.get("symbol") if isinstance(row, dict) else None
+                if sym in symbols:
+                    out.setdefault(sym, []).append({**row, "interval_start": row.get("start")})
+    except OSError:
+        return {}
+    return out
+
+
+def _live_bars(symbols: set[str], day: str) -> dict[str, list[dict[str, Any]]]:
+    from project_paths import M5_BARS_DIR
+
+    return read_day_bars(symbols, Path(M5_BARS_DIR) / f"{day}.jsonl")
+
+
 def live_sources() -> Sources:
     return Sources(
         m5_rows=_live_m5_rows,
@@ -124,6 +156,7 @@ def live_sources() -> Sources:
         upgrades=_live_upgrades,
         local_tz=_live_local_tz,
         book=_live_book,
+        bars=_live_bars,
     )
 
 
@@ -160,6 +193,58 @@ def _et_time(day: str, clock: str, local_tz: Any) -> str:
     return f"{stamp.astimezone(ET):%H:%M}"
 
 
+def _local_moment(day: str, clock: str, local_tz: Any) -> datetime | None:
+    raw = str(clock or "").strip()
+    try:
+        stamp = datetime.fromisoformat(raw) if "T" in raw else datetime.fromisoformat(f"{day}T{raw}")
+    except ValueError:
+        return None
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=local_tz)
+
+
+def follow_through(raw_bars: Iterable[Mapping[str, Any]], side: str, detected: datetime | None, now: datetime,
+                   market_tz: Any) -> dict[str, Any] | None:
+    """The move since one alert from completed cached M5 bars, in the alert's favour (%); None = unknown."""
+    from mentor_packs import bars_pack
+
+    if detected is None or side not in ("LONG", "SHORT"):
+        return None
+    bars: dict[datetime, dict[str, Any]] = {}
+    for raw in raw_bars or ():
+        start = bars_pack.bar_start(raw, market_tz)
+        values = [bars_pack._float(raw.get(key)) for key in ("open", "high", "low", "close")]
+        if start is None or None in values or start + bars_pack.BAR > now:
+            continue
+        bars[start] = {"start": start, "high": values[1], "low": values[2], "close": values[3],
+                       "volume": bars_pack._float(raw.get("volume")) or 0.0, "vwap": bars_pack._float(raw.get("vwap"))}
+    ordered = [bars[key] for key in sorted(bars)]
+    before = [bar for bar in ordered if bar["start"] + bars_pack.BAR <= detected]
+    after = [bar for bar in ordered if bar["start"] + bars_pack.BAR > detected]
+    if not before or not after or before[-1]["close"] <= 0:
+        return None
+    entry, last = before[-1]["close"], after[-1]
+    sign = 1.0 if side == "LONG" else -1.0
+    best = max(sign * ((bar["high"] if side == "LONG" else bar["low"]) - entry) for bar in after) / entry * 100
+    now_pct = sign * (last["close"] - entry) / entry * 100
+    until = f"{(last['start'] + bars_pack.BAR).astimezone(ET):%H:%M}"
+    day = last["start"].astimezone(ET).date()
+    session = [bar for bar in ordered if bar["start"].astimezone(ET).date() == day
+               and bars_pack.RTH_OPEN <= bar["start"].astimezone(ET).time() < bars_pack.RTH_CLOSE]
+    vwap = bars_pack.session_vwap(session)[0] if session else None
+    against = None
+    if vwap is None:
+        vwap_text = "VWAP side unknown"
+    else:
+        above = last["close"] > vwap
+        against = above if side == "SHORT" else not above
+        vwap_text = (f"now {'above' if above else 'below'} session VWAP {vwap:.2f}"
+                     + (" (back through VWAP, against the alert)" if against else ""))
+    return {"entry": entry, "best_pct": best, "now_pct": now_pct, "last": last["close"], "vwap": vwap,
+            "back_through_vwap": against, "until": until,
+            "text": (f"since the alert (entry {entry:.2f} = close of the last bar before it): best {best:+.2f}%, "
+                     f"now {now_pct:+.2f}% at {last['close']:.2f} ({until} ET), {vwap_text}")}
+
+
 def _clean(symbol: Any) -> str:
     return str(symbol or "").strip().upper().lstrip("$")
 
@@ -188,8 +273,10 @@ def _gather(src: Sources, session: str, kind: str, sym_filter: str, local_tz: An
             found["m5"].append({
                 "et": _et_time(session, str(row.get("time_local") or ""), local_tz), "symbol": sym,
                 "side": _side(row.get("direction")),
+                "detected": _local_moment(session, str(row.get("time_local") or ""), local_tz),
                 "what": f"M5 bounce {row.get('bounce_types') or '?'}"
-                        + (f", tier {tier}" if tier else "") + (f" ({composite}R)" if composite else ""),
+                        + (f", tier {tier}" if tier else "")
+                        + (f" (alert score {composite}: the setup's past average R, not this move)" if composite else ""),
                 "price": "",
             })
     if kind in ("all", "d1"):
@@ -293,6 +380,8 @@ def build(symbol: str = "", day: str = "today", kind: str = "all", liked: Any = 
         "text": (f"Alerts{scope} on {session}: " + "; ".join(parts)
                  + f"; in your book: {', '.join(in_book) or 'none'}; liked: {', '.join(in_likes) or 'none'}"),
     })
+    if found["m5"]:
+        rows.append(_follow_through(src, session, found["m5"], moment, local_tz))
     for which in ("m5", "d1"):
         items = sorted(found[which], key=lambda item: item["et"], reverse=True)
         for n, item in enumerate(items[:MAX_PER_KIND], 1):
@@ -301,12 +390,47 @@ def build(symbol: str = "", day: str = "today", kind: str = "all", liked: Any = 
             rows.append({
                 "id": f"alert:{session}:{which}:{n}", "kind": f"alert_{which}", "symbol": item["symbol"],
                 "text": (f"{when} {item['symbol']} {item['side'] or '?'} {item['what']}{item['price']}"
-                         f"{_yours(item['symbol'], book, likes)}"),
+                         f"{_yours(item['symbol'], book, likes)}"
+                         + (f"; {_ft_text(item)}" if which == "m5" else "")),
             })
         if len(items) > MAX_PER_KIND:
             rows.append({"id": f"alert:{session}:{which}:more", "kind": "more",
                          "text": f"{len(items) - MAX_PER_KIND} older {which.upper()} alerts not listed"})
     return make_pack(NAME, rows)
+
+
+#: The follow-through ranking row lists this many alerts.
+FT_TOP = 5
+
+
+def _ft_text(item: Mapping[str, Any]) -> str:
+    ft = item.get("ft")
+    return ft["text"] if ft else "follow-through unknown (no cached M5 bars around the alert)"
+
+
+def _follow_through(src: Sources, session: str, items: list[dict[str, Any]], moment: datetime,
+                    local_tz: Any) -> dict[str, Any]:
+    """Stamp each M5 item with its follow-through; one row ranking them by the move now, not the alert score."""
+    symbols = {item["symbol"] for item in items}
+    try:
+        cached = src.bars(symbols, session) if src.bars is not None else {}
+    except Exception:  # noqa: BLE001 - unreadable bars: every follow-through is unknown
+        logging.info("Trade Mentor: alert follow-through bars unreadable", exc_info=True)
+        cached = {}
+    for item in items:
+        item["ft"] = follow_through(cached.get(item["symbol"]) or (), item["side"], item.get("detected"), moment,
+                                    local_tz)
+    known = [item for item in items if item["ft"]]
+    ranked = sorted(known, key=lambda item: (item["ft"]["now_pct"], item["ft"]["best_pct"]), reverse=True)
+    parts = [f"{n}. {item['symbol']} {item['side']} at {item['et']} ET: now {item['ft']['now_pct']:+.2f}%, best "
+             f"{item['ft']['best_pct']:+.2f}%" + (", back through VWAP" if item["ft"]["back_through_vwap"] else "")
+             for n, item in enumerate(ranked[:FT_TOP], 1)]
+    unknown = len(items) - len(known)
+    text = ("M5 alerts ranked by the move since the alert in its favour (cached M5 bars; not the alert score): "
+            + ("; ".join(parts) if parts else "none measurable")
+            + (f"; {unknown} of {len(items)} unknown (no cached bars)" if unknown else ""))
+    return {"id": f"alert:{session}:m5:followthrough", "kind": "followthrough",
+            "ranked": [item["symbol"] for item in ranked], "text": text}
 
 
 FIXTURE_NOW = datetime(2026, 9, 30, 20, 0, tzinfo=timezone.utc)
