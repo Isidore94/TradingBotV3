@@ -56,10 +56,14 @@ _MONTHS = (
     "january", "february", "march", "april", "may", "june",
     "july", "august", "september", "october", "november", "december",
 )
+#: Abbreviations too ("Sep 29", "Sept 30", "Sept. 30"): the trader's Claude briefs write them (2026-09-29/30).
+_MONTH_WORDS = (*_MONTHS, "sept", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
 _MONTH_DATE = re.compile(
-    r"(" + "|".join(_MONTHS) + r")\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s*(\d{4})",
+    r"\b(" + "|".join(_MONTH_WORDS) + r")\.?\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s*(\d{4})",
     re.IGNORECASE,
 )
+#: A bold first line is a title too ("**Market Morning Brief: Wednesday, Sept 30, 2026**").
+_BOLD_TITLE = re.compile(r"^\s*\*\*(.+?)\*\*")
 _ISO_DATE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 
 #: The ranked-signals line: the one bold line with arrows in it.
@@ -188,7 +192,16 @@ def _title_date(body: str) -> str:
     From the document, never from the clock: the trader may paste Thursday's
     brief on Thursday evening or Friday morning, and the brief itself is the
     only thing that knows which day it is about.
+
+    A brief whose first non-empty line opens in bold (the trader's Claude briefs) takes its date from
+    that bold text; otherwise the first Markdown heading's, as before.
     """
+    first = next((line for line in body.splitlines() if line.strip()), "")
+    bold = _BOLD_TITLE.match(first)
+    if bold is not None and not _HEADING.match(first):
+        dated = _iso_date(bold.group(1))
+        if dated:
+            return dated
     for line in body.splitlines():
         match = _HEADING.match(line)
         if match is None:
@@ -204,7 +217,8 @@ def _iso_date(text: str) -> str:
     named = _MONTH_DATE.search(text)
     if named is None:
         return ""
-    month = _MONTHS.index(named.group(1).casefold()) + 1
+    word = named.group(1).casefold()
+    month = next(index for index, name in enumerate(_MONTHS, start=1) if name.startswith(word[:3]))
     try:
         day = int(named.group(2))
         year = int(named.group(3))

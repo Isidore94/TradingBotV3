@@ -14,7 +14,13 @@ HELP_TEXT = (
     "- `/remember <text>` keep a note about you that I will recall later (start it with `rule:` for a rule)\n"
     "- `/plan` your trading plan by section, with ids; lines ending in [ai date] I added from your words\n"
     "- `/drop <id>` take back a line I added (e.g. `/drop plan:rules:3`); your own lines are never touched\n"
-    "- `/memory` what I loaded at start (night digests and your notes), with ids\n"
+    "- `/memory` what I loaded at start (the night's brief, digests, ideas, reviews and your notes), with ids\n"
+    "- `/brief` the night's coach brief for today: what to watch, what you may be missing, recurring issues\n"
+    "- `/issues` the recurring issues the night sees, with the date each was first seen\n"
+    "- `/paste` paste the morning brief (or `/paste <text>`); it is filed under its own title date, else the last"
+    " closed session, like the desk; `/paste for 2026-09-30 ...` picks the session\n"
+    "- `/recaps [n]` your last n day recaps (10 unless you say; `all`) and the issues that keep coming back\n"
+    "- `/feel <SYM|trade id> <words>` how a trade felt, kept with that trade\n"
     "- `/recall <text>` search what we said before (plain text search when the brain is off)\n"
     "- `/forget <id>` retire a note (it is kept, never deleted); `/keep <id>` says it is still true\n"
     "- `/tape` the tape: Auto mode, D1, last night's read, econ, sectors (read aloud when the brain is up)\n"
@@ -76,6 +82,13 @@ def handle(text: str) -> CommandResult | None:
     stripped = str(text or "").strip()
     if not stripped.startswith("/"):
         return None
+    pasted = re.fullmatch(r"/paste(?:\s+for\s+(\S+))?(?:\s+(.*))?", stripped, re.IGNORECASE | re.DOTALL)
+    if pasted:
+        # The brief is many lines: everything after the command (and an optional `for <date>`) is the text.
+        session = pasted.group(1) or ""
+        if session and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", session):
+            return CommandResult("error", "Try `/paste`, `/paste <text>` or `/paste for 2026-09-30 <text>`.")
+        return CommandResult("paste", "", ((pasted.group(2) or "").strip(), session))
     head, _, rest = stripped.partition(" ")
     name, rest = head[1:].lower(), rest.strip()
     if name in ("help", "?"):
@@ -99,6 +112,19 @@ def handle(text: str) -> CommandResult | None:
         return CommandResult(name, "", note_id)
     if name == "memory":
         return CommandResult("memory")
+    if name in ("brief", "issues"):
+        if rest:
+            return CommandResult("error", f"Try `/{name}` (no arguments).")
+        return CommandResult(name)
+    if name in ("recaps", "recap"):
+        if rest and not (rest.isdigit() and 1 <= int(rest) <= 60) and rest.lower() != "all":
+            return CommandResult("error", "Try `/recaps`, `/recaps 5` (1 to 60 sessions) or `/recaps all`.")
+        return CommandResult("recaps", "", ("all" if rest.lower() == "all" else int(rest)) if rest else 10)
+    if name == "feel":
+        parts = rest.split(None, 1)
+        if len(parts) < 2:
+            return CommandResult("error", "Try `/feel SHOP rushed it` or `/feel <trade id> calm`.")
+        return CommandResult("feel", "", (parts[0], parts[1].strip()))
     if name == "plan":
         return CommandResult("plan")
     if name == "drop":

@@ -3,7 +3,7 @@
     .venv\\Scripts\\python.exe scripts\\mentor_eval.py            (offline, the default)
     .venv\\Scripts\\python.exe scripts\\mentor_eval.py --live     (the real brain; the trader runs it)
 
-The fixture ``tests/fixtures/mentor_eval_questions.json`` holds 50 questions written the way
+The fixture ``tests/fixtures/mentor_eval_questions.json`` holds 60 questions written the way
 the trader talks, each with ``expected_packs`` and ``must_mention``; ``simple: true`` marks the
 ones a reply should answer in a few sentences.
 

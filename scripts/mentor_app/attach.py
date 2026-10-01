@@ -28,9 +28,12 @@ PRIORITY = {
     "veto_pack": 3,
     "regime_pack": 4,
     "book_pack": 5,
+    "fundamentals_pack": 5,
     "news_pack": 6,
     "tilt_pack": 7,
     "mirror_pack": 8,
+    "night_pack": 8,
+    "recaps_pack": 8,
     "plan_lines": 9,
     "recall": 10,
 }
@@ -90,6 +93,24 @@ _STOP_DAY = re.compile(r"\bstop trading\b|\bcall it a day\b|\bwalk away\b|\bover
 _MIRROR = re.compile(r"\bmy record\b|\blately\b|\bmy stats\b|\bmy edge\b|\bhit rate\b|\bwin rate\b|\bpattern in my\b"
                      r"|\btrade best\b|\bbest time\b|\btime of day\b|\bwhen during the day\b")
 _PLAN = re.compile(r"\bmy plan\b|\bmy rules?\b|\btrading plan\b|\bbreak(?:ing)? (?:a|my) rule\b")
+#: P15a: the night's reads (day review verdicts, ideas, contrasts, week review, story, digest).
+_NIGHT = re.compile(r"\bwhat did the night say\b|\bovernight\b|\blast night\b|\bnight(?:'s)? read\b|\bideas?\b"
+                    r"|\bwhat (?:am|are) (?:i|we) missing\b|\bwhat did i get (?:wrong|right)\b|\bweek(?:ly)? review\b"
+                    r"|\bthe night\b")
+#: P15b: the morning brief the trader pastes (macro, Fed, yields, oil, the dollar, releases, the playbook).
+_FUND = re.compile(r"\bfundamentals?\b|\bbrief\b|\bmacro\b|\bthe paste\b|\bwhat did claude (?:say|flag|write)\b"
+                   r"|\bclaude\b|\bcatalysts?\b|\bfed\b|\byields?\b|\boil\b|\bcrude\b|\bdollar\b|\bdxy\b"
+                   r"|\bcpi\b|\bnfp\b|\bpce\b|\bfomc\b|\bpayrolls\b|\bbottom line\b|\bplaybook\b|\bscenarios?\b")
+#: P15b: his day recaps and the recurring issues computed from them. "lately" / "pattern" alone go to the
+#: mirror when the question is about his record or stats ("how has my record been lately").
+_RECAP = re.compile(r"\brecaps?\b|\breviews?\b|\b(?:doing|done|did) wrong\b|\bmy issues\b|\bissues\b"
+                    r"|\bwhat (?:am|are) (?:i|we) missing\b|\bkeep doing\b|\bsame mistakes?\b|\bmistakes?\b"
+                    r"|\bwhat should i (?:stop|keep)\b")
+_RECAP_SOFT = re.compile(r"\blately\b|\bpatterns?\b|\brecently\b")
+_RECORD = re.compile(r"\bmy record\b|\bmy stats\b|\bmy edge\b|\bhit rate\b|\bwin rate\b|\btrade best\b"
+                     r"|\bbest time\b|\btime of day\b")
+#: P15b: how a trade felt (a feelings note rides on its journal row).
+_FEEL = re.compile(r"\bfeel(?:ing|ings|s)?\b|\bfelt\b")
 _RECALL = re.compile(r"\byou said\b|\bwe (?:said|talked|discussed)\b|\bremember when\b|\blast time we\b")
 _GROUP = re.compile(r"\bmy (longs|shorts|focus|names|picks|watchlist|likes|liked|book|positions|holdings)\b"
                     r"|\bfocus (longs|shorts|names)\b|\bopen (longs|shorts|positions)\b|\b(?:i'm|im|i am) (holding)\b")
@@ -315,6 +336,17 @@ def plan_attachments(
         add("mirror_pack", "record words")
     if _PLAN.search(lowered):
         add("plan_lines", "plan words")
+    if _NIGHT.search(lowered):
+        add("night_pack", "night words")
+    if _RECAP.search(lowered) or (_RECAP_SOFT.search(lowered) and not _RECORD.search(lowered)):
+        add("recaps_pack", "recap words", days=10, section="all")
+    if _FEEL.search(lowered) and not any(request.name == "journal_pack" for request in wanted):
+        add("journal_pack", "feelings words", day=day or "week")
+    if _FUND.search(lowered):
+        add("fundamentals_pack", "fundamentals words", section="all")
+    elif any(request.name == "gate_pack" for request in wanted):
+        # P15b: a pre-trade check sees today's brief: the bottom line and the playbook (at most 8 rows).
+        add("fundamentals_pack", "pre-trade: today's brief", section="compact")
     if _RECALL.search(lowered):
         add("recall", "memory words", query=raw[:200])
     return sorted(wanted, key=lambda request: request.priority)
@@ -396,7 +428,8 @@ def recent_cited_ids(turns: Iterable[Any], last: int = 6) -> set[str]:
 
 
 _GENERIC_ID_PARTS = frozenset({"pick", "gate", "tape", "ctx", "jrn", "news", "book", "plan", "veto", "mirror", "tilt",
-                               "regime", "hyp", "mem", "none", "asof", "pos", "acct", "hint", "pack"})
+                               "regime", "hyp", "mem", "none", "asof", "pos", "acct", "hint", "pack",
+                               "night", "brief", "coach"})
 
 
 def names_subject(question: str, row_id: str) -> bool:

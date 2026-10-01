@@ -2,11 +2,11 @@
   "schema": "mentor_eval_questions_v1",
   "feature_version": "mentor_attach_v2",
   "raw_input_keys": ["known_symbols", "questions"],
-  "raw_input_sha256": "c0b66e991cdf8a846303c1d55d800ef24bee691b37b5df0d717e1b7d8ae49339",
+  "raw_input_sha256": "4b1d89cbb710bfafeabb6aace4b1a85c0cddda7ea28534c795f73461cfaec57d",
   "acquired_at": "2026-09-30T08:00:00-07:00",
   "as_of": "2026-09-30T08:00:00-07:00",
-  "universe_version": "trader_plain_questions_v2",
-  "provider_assumptions": "Hand-written questions in the trader's own style (2026-09-30), not a desk capture: 40 from P13 plus 10 from the P14 live eval. known_symbols stands in for his universe (Focus, likes, book, journal). expected_packs are what the app should fetch (P14: no regime without a market or pre-trade cue; earnings over the book via earnings_pack; a concept question needs none); must_mention are checklist sections (gate questions) or words the live reply should carry; simple marks the questions the style score holds to 600 characters.",
+  "universe_version": "trader_plain_questions_v3",
+  "provider_assumptions": "Hand-written questions in the trader's own style (2026-09-30), not a desk capture: 40 from P13, 10 from the P14 live eval and 10 for P15b (fundamentals x4, recaps/issues x5, feelings x1). known_symbols stands in for his universe (Focus, likes, book, journal). expected_packs are what the app should fetch (P14: no regime without a market or pre-trade cue; earnings over the book via earnings_pack; a concept question needs none); must_mention are checklist sections (gate questions) or words the live reply should carry; simple marks the questions the style score holds to 600 characters.",
   "expected_keys": ["checklist"],
   "numeric_tolerance": 0.0,
   "intentional_difference": "",
@@ -63,6 +63,16 @@
     {"q": "should I stop trading for today", "expected_packs": ["tilt_pack", "journal_pack"], "must_mention": ["today"], "simple": true},
     {"q": "what should I look at tomorrow morning", "expected_packs": ["regime_pack"], "must_mention": ["tomorrow"]},
     {"q": "explain what an anchored vwap band bounce is in one paragraph", "expected_packs": [], "must_mention": ["VWAP"], "concept": true},
-    {"q": "which of my vetoes this month would have worked", "expected_packs": ["veto_pack"], "must_mention": ["veto"]}
+    {"q": "which of my vetoes this month would have worked", "expected_packs": ["veto_pack"], "must_mention": ["veto"]},
+    {"q": "what's the macro brief say today", "expected_packs": ["fundamentals_pack"], "must_mention": ["brief"], "simple": true},
+    {"q": "what did claude flag as the catalyst", "expected_packs": ["fundamentals_pack"], "must_mention": ["catalyst"]},
+    {"q": "is the playbook bullish or bearish", "expected_packs": ["fundamentals_pack"], "must_mention": ["playbook"], "simple": true},
+    {"q": "anything about yields in the brief", "expected_packs": ["fundamentals_pack"], "must_mention": ["yield"], "simple": true},
+    {"q": "what are my most pertinent issues", "expected_packs": ["recaps_pack"], "must_mention": ["sessions"]},
+    {"q": "what have I been doing wrong lately", "expected_packs": ["recaps_pack"], "must_mention": ["sessions"]},
+    {"q": "what did yesterday's recap say", "expected_packs": ["recaps_pack"], "must_mention": ["recap"]},
+    {"q": "what am I missing", "expected_packs": ["recaps_pack", "night_pack"], "must_mention": ["miss"]},
+    {"q": "am I making the same mistake", "expected_packs": ["recaps_pack"], "must_mention": ["sessions"]},
+    {"q": "how did I feel about the SHOP trade", "expected_packs": ["journal_pack"], "must_mention": ["SHOP"], "simple": true}
   ]
 }

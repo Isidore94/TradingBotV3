@@ -204,6 +204,9 @@ class MentorWindow(QMainWindow):
         plan_path: Any = None,
         journal_path: Any = None,
         pack_builder: Callable[[str, Any], Any] | None = None,
+        forecast_service: Any = None,
+        paste_prompt: Callable[[], Any] | None = None,
+        fund_builder: Callable[[str], Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -243,6 +246,17 @@ class MentorWindow(QMainWindow):
         #: P11 /hypotheses: the permutation report paths (None = project_paths' live constants, read-only).
         self.permutation_history: Any = None
         self.permutation_report: Any = None
+        #: P15a: the night's artifacts (``night_pack.NightPaths``; None = the live ones, read-only).
+        self.night_paths: Any = None
+        #: P15b: the pasted brief (``fundamentals_pack.FundPaths``) and the recap stores (``recaps_pack.RecapPaths``);
+        #: None = the live ones, read-only.
+        self.fund_paths: Any = None
+        self.recap_paths: Any = None
+        #: /paste: the Market Journal writer (None = the desk's shared service) and the dialog (None = Qt's).
+        self._forecast_service = forecast_service
+        self._paste_prompt = paste_prompt
+        #: /tape: today's brief, compact (None = the live fundamentals pack).
+        self._fund_builder = fund_builder
         self._memory = memory.Memory()
         self._memory_block = ""
         self._memory_text = ""
@@ -403,6 +417,10 @@ class MentorWindow(QMainWindow):
         #: Observations waiting for the Inbox (quiet hours, a mute or the 30-min spacing), with their PT day.
         self._tilt_waiting: list[tuple[Any, dict]] = []
         self._tilt_last_post = ""
+        #: P15b: closed trades waiting for their one "how did it feel?" item, and the posted items' trades.
+        self._feel_waiting: list[tuple[Any, dict]] = []
+        self._inbox_feel: dict[int, dict] = {}
+        self._feel_asked: set[str] = set()
         self._bridge.tilt_ready.connect(self._on_tilt_ready)
         self._bridge.tilt_card.connect(self._on_tilt_card)
         self._tilt_timer = QTimer(self)
@@ -497,6 +515,11 @@ class MentorWindow(QMainWindow):
         self.ai_pause_button.changed.connect(self.check_ai_pause)
         header = QHBoxLayout()
         header.addStretch(1)
+        # P15b: paste the morning brief into the Market Journal (the desk's own writer).
+        self.paste_button = QPushButton("Paste brief")
+        self.paste_button.setToolTip("Paste today's morning brief; it is saved to the Market Journal for today")
+        self.paste_button.clicked.connect(self.open_paste_dialog)
+        header.addWidget(self.paste_button)
         # P11: shown only while the frontier switch is on; disabled with the reason when it cannot run.
         self.think_button = QPushButton("Think harder")
         self.think_button.setToolTip("Ask the frontier model the last question again (metered, capped per day)")
@@ -693,7 +716,8 @@ class MentorWindow(QMainWindow):
 
     def _load_memory(self) -> None:
         """IO thread: the night digests and live notes, rendered once into the byte-stable block."""
-        self._bridge.memory_ready.emit(memory.load(self.store, ai_root=self._memory_root))
+        self._bridge.memory_ready.emit(memory.load(self.store, ai_root=self._memory_root, night_paths=self.night_paths,
+                                                   now=self._now(), fund_paths=self.fund_paths))
 
     def _on_memory(self, loaded: Any) -> None:
         self._memory = loaded
@@ -984,7 +1008,7 @@ class MentorWindow(QMainWindow):
         """Queue thread: `/today` as a card from the journal pack (ids intact)."""
         from mentor_packs import journal_pack
 
-        pack = journal_pack.build(day, now=self._now(), journal=self._journal_path)
+        pack = journal_pack.build(day, now=self._now(), journal=self._journal_path, chat_db=self.store.path)
         return "**Journal**\n\n" + pack.as_text().replace("\n", "\n\n")
 
     def _liked(self) -> list[tuple[str, str]]:
@@ -1067,8 +1091,15 @@ class MentorWindow(QMainWindow):
         for item in self.inbox.items():
             if item.id == item_id:
                 card = self._inbox_cards.get(item_id)
+                trade = self._inbox_feel.get(item_id)
                 if card:
                     self._add_block(card)
+                elif trade:
+                    # P15b: the answer box starts with the trade's id; his words follow it.
+                    self._add_note(f"{item.text} Type it after the id and press Enter.")
+                    self.input.setPlainText(f"/feel {trade['trade_id']} ")
+                    self.input.moveCursor(QTextCursor.MoveOperation.End)
+                    self.input.setFocus()
                 else:
                     self._add_note(item.text)
         self.inbox.mark_read(item_id)
@@ -1157,6 +1188,9 @@ class MentorWindow(QMainWindow):
             from mentor_packs import book_pack
 
             return book_pack.build(now=self._now(), sources=self._book_pack_sources())
+        if name == "journal_pack":
+            # P15b: the feelings this app stored ride on their trades (its own chat store, read-only).
+            return brain._default_build(name, {**dict(args or {}), "chat_db": self.store.path})
         return brain._default_build(name, args)
 
     def _run_command(self, result: commands.CommandResult) -> None:
@@ -1200,6 +1234,44 @@ class MentorWindow(QMainWindow):
                 if self.store.check_note(note_id, stamp) else f"There is no note {note_id}. `/memory` shows the ids."))
         elif result.action == "memory":
             self._add_note(memory.as_listing(self._memory))
+        elif result.action == "feel":
+            self.record_feeling(*result.arg)
+        elif result.action == "paste":
+            text, session = result.arg
+            if text:
+                self.paste_brief(str(text), session=session)
+            else:
+                self.open_paste_dialog(session=session)
+        elif result.action == "brief":
+            # P15a: the night's coach brief, read on the IO thread (a file on the ai_store).
+            root, now = self._memory_root, self._now()
+            self._submit_io(lambda: self._bridge.note.emit(memory.coach_brief_text(memory.read_coach_brief(root, now))))
+        elif result.action == "issues":
+            # P15b: the night's issues, then the ones computed from the day recaps (2+ sessions).
+            root, now, recap_paths = self._memory_root, self._now(), self.recap_paths
+
+            def issues() -> None:
+                from mentor_packs import recaps_pack
+
+                text = memory.issues_text(memory.read_coach_brief(root, now))
+                try:
+                    recap = recaps_pack.issues_markdown(recaps_pack.build(10, "issues", now=now, paths=recap_paths).rows)
+                except Exception:  # noqa: BLE001 - unreadable recaps read as "none computed", never a crash
+                    logging.warning("Trade Mentor: the recap issues could not be read", exc_info=True)
+                    recap = ""
+                self._bridge.note.emit(text + (f"\n\n{recap}" if recap else ""))
+
+            self._submit_io(issues)
+        elif result.action == "recaps":
+            days, now, recap_paths = result.arg, self._now(), self.recap_paths
+
+            def recaps() -> None:
+                from mentor_packs import recaps_pack
+
+                pack = recaps_pack.build(days, now=now, paths=recap_paths)
+                self._bridge.note.emit(recaps_pack.card_markdown(pack))
+
+            self._submit_io(recaps)
         elif result.action == "recall":
             from mentor_packs import recall
 
@@ -1387,13 +1459,24 @@ class MentorWindow(QMainWindow):
         self.refresh_inbox()
 
     def _queue_memory_embeddings(self) -> None:
-        """Idle priority: embed night digests and notes the recall search has not seen yet."""
-        endpoint, items = self._endpoint, list(self._memory.items)
+        """Idle priority: embed night digests, the night's rows and ticker briefs (P15a) and notes not seen yet."""
+        endpoint, loaded, now, root, night_paths = (self._endpoint, self._memory, self._now(), self._memory_root,
+                                                    self.night_paths)
+        fund_paths, recap_paths = self.fund_paths, self.recap_paths
 
         def job() -> int:
             done = 0
+            paths = memory.night_paths_for(memory.digests_root(root), night_paths)
             have = self.store.embedded_refs("digest", settings.EMBED_MODEL)
-            todo = [(item.kind, item.ref_id, item.text) for item in items if item.kind == "digest" and item.ref_id not in have]
+            todo = [(item.kind, item.ref_id, item.text) for item in loaded.items
+                    if item.kind == "digest" and item.ref_id not in have]
+            try:
+                night = memory.embed_candidates(loaded, paths, now, fund_paths=fund_paths, recap_paths=recap_paths)
+            except Exception:  # noqa: BLE001 - an unreadable night read is embedded next time
+                logging.warning("Trade Mentor: the night rows could not be read for recall", exc_info=True)
+                night = []
+            seen = {kind: self.store.embedded_refs(kind, settings.EMBED_MODEL) for kind in memory.EMBED_KINDS}
+            todo += [(kind, ref, text) for kind, ref, text in night if ref not in seen[kind]]
             todo += [("note", int(row["id"]), str(row["text"])) for row in self.store.unembedded_notes(settings.EMBED_MODEL)]
             for kind, ref_id, text in todo:
                 if self.queue.should_yield():
@@ -1711,11 +1794,91 @@ class MentorWindow(QMainWindow):
 
     # ------------------------------------------------------------------ tape (P5)
     def _build_tape(self) -> Any:
-        if self._tape_builder is not None:
+        if self._tape_builder is not None and self._fund_builder is None:
             return self._tape_builder()
         from mentor_packs import regime_pack
 
-        return regime_pack.build()
+        pack = self._tape_builder() if self._tape_builder is not None else regime_pack.build()
+        # P15b: the tape also reads today's pasted brief (bottom line + playbook, at most 8 rows).
+        try:
+            fund = self._build_fund("compact")
+        except Exception:  # noqa: BLE001 - an unreadable brief never costs the tape
+            logging.warning("Trade Mentor: the pasted brief could not be read for the tape", exc_info=True)
+            fund = None
+        return tape.with_fundamentals(pack, fund)
+
+    def _build_fund(self, section: str) -> Any:
+        if self._fund_builder is not None:
+            return self._fund_builder(section)
+        from mentor_packs import fundamentals_pack
+
+        return fundamentals_pack.build("today", section, now=self._now(), paths=self.fund_paths)
+
+    # ------------------------------------------------------------------ /paste (P15b)
+    def open_paste_dialog(self, session: str = "") -> None:
+        """The "Paste brief" button and a bare ``/paste``: a plain-text box; OK saves it."""
+        if self._paste_prompt is not None:
+            text = self._paste_prompt()
+        else:
+            from PySide6.QtWidgets import QInputDialog
+
+            text, ok = QInputDialog.getMultiLineText(self, "Paste the morning brief",
+                                                     "Paste the brief. It is filed in the Market Journal under its "
+                                                     "own title date (else the last closed session), like the desk.")
+            text = text if ok else None
+        if text is None:
+            return
+        self.paste_brief(str(text), session=session)
+
+    def paste_brief(self, text: str, *, session: str = "") -> None:
+        """Save a pasted brief through the Market Journal's own writer, off the Qt thread, then reload memory.
+
+        The session is the desk's rule (``forecast_session``: the brief's title date, else the last closed
+        session) unless the trader named one with ``/paste for <date>``."""
+        body = str(text or "").strip()
+        if not body:
+            self._add_note("Nothing was pasted, so nothing was saved.")
+            return
+        from mentor_packs import fundamentals_pack
+        from ui.services.market_journal_service import forecast_session
+
+        service = self._forecast_service
+        if service is None:
+            from ui.services.market_journal_service import shared_journal_service
+
+            service = shared_journal_service()  # built here, on the Qt thread; it writes on the IO thread
+        now = self._now()
+        try:
+            session = str(session or "").strip() or forecast_session(body, now)
+        except Exception as exc:  # noqa: BLE001 - no calendar answer: the trader names the session
+            self._add_note(f"Brief NOT saved: no session could be picked ({exc}). Try `/paste for 2026-09-30 ...`.")
+            return
+        today = fundamentals_pack.market_day(now).isoformat()
+        fund_paths = self.fund_paths
+        self._add_note(f"Saving the brief for {session}...")
+
+        def job() -> None:
+            try:
+                result = service.import_daily_forecast(text=body, target_session=session, now=now)
+            except Exception as exc:  # noqa: BLE001 - the trader is told; the text is still in the box he pasted from
+                logging.warning("Trade Mentor: the pasted brief was not saved", exc_info=True)
+                result = {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
+            if not result.get("ok"):
+                self._bridge.note.emit(f"Brief NOT saved: {result.get('reason', 'unknown')}. Paste it again.")
+                return
+            line = ""
+            try:
+                built = fundamentals_pack.build(session, "bottom_line", now=now, paths=fund_paths)
+                line = fundamentals_pack.bottom_line_sentence(built)
+            except Exception:  # noqa: BLE001 - saved is saved; the confirmation just has no bottom line
+                logging.warning("Trade Mentor: the saved brief could not be read back", exc_info=True)
+            note = f"Brief saved for {session}: {line or 'no bottom line found by its headings'}"
+            if session != today:
+                note += f" (filed for {session}, not today {today}; `/paste for {today} ...` files it for today)"
+            self._bridge.note.emit(note)
+            self._load_memory()
+
+        self._submit_io(job)
 
     def _tape_narrator(self) -> Callable[[Any, str], Any] | None:
         """The narration call while the brain is up; None = the pack alone."""
@@ -2693,10 +2856,20 @@ class MentorWindow(QMainWindow):
         self._deliver_tilt()
         if self._shut or not self._tilt_schedule.due(now):
             return
-        store, signature = self.store, self._tilt_signature()
+        store, signature, closed = self.store, self._tilt_signature(), self._tilt_closed()
         self.news_queue.submit("tilt_watch", lambda: tilt_watch.run_watch(store, now, build=self._build_tilt,
-                                                                          signature=signature),
+                                                                          signature=signature, closed=closed),
                                priority=PRIORITY_REFRESH, key="tilt-watch", on_done=self._bridge.tilt_ready.emit)
+
+    def _tilt_closed(self) -> Callable[[str], list] | None:
+        """P15b: the day's closed trades from the journal the tilt watch reads (None = no journal to read)."""
+        if self._tilt_builder is not None and self._tilt_journal is None:
+            return None
+        from mentor_app import tilt_watch
+        from mentor_packs import tilt_pack
+
+        journal = self._tilt_journal if self._tilt_journal is not None else tilt_pack.live_journal()
+        return lambda day: tilt_watch.closed_today(journal, day)
 
     def _on_tilt_ready(self, result: dict) -> None:
         """New observations wait for the Inbox; they are posted as ONE item at most every 30 min."""
@@ -2705,26 +2878,94 @@ class MentorWindow(QMainWindow):
             self._tilt_last_post = stored
         day = self._now().astimezone(challenge.PT).date()
         self._tilt_waiting.extend((day, row) for row in result.get("new") or [])
+        # The watch returns every close still owed its question (held ones persist in app_state).
+        held = {row["trade_id"] for _d, row in self._feel_waiting}
+        self._feel_waiting.extend((day, row) for row in result.get("closed") or []
+                                  if row.get("trade_id") not in held and row.get("trade_id") not in self._feel_asked)
         self._deliver_tilt()
 
     def _deliver_tilt(self) -> None:
         """Post the waiting observations as one item once the 30 min, quiet hours or a mute allow it.
 
         A used daily cap or a new day drops them (``/tilt`` still shows them). Never pops, never moves
-        the transcript."""
+        the transcript. P15b: a closed trade's one feelings question shares the same spacing, after
+        any tilt item (one Inbox item per pass at most)."""
         from mentor_app import tilt_watch
 
         today = self._now().astimezone(challenge.PT).date()
         self._tilt_waiting = [(day, row) for day, row in self._tilt_waiting if day == today]
-        if not self._tilt_waiting or not tilt_watch.may_post(self._tilt_last_post or None, self._now()):
+        self._feel_waiting = [(day, row) for day, row in self._feel_waiting if day == today]
+        if not (self._tilt_waiting or self._feel_waiting) or not tilt_watch.may_post(self._tilt_last_post or None,
+                                                                                     self._now()):
+            return
+        if not self._tilt_waiting:
+            self._deliver_feeling()
             return
         item = self.inbox.add("tilt", tilt_watch.inbox_text([row for _, row in self._tilt_waiting]))
         if item is None:
             if "cap" in self.inbox.last_refusal:
                 logging.info("Trade Mentor: tilt observations stayed out of the Inbox (%s)", self.inbox.last_refusal)
                 self._tilt_waiting = []
+                self._mark_feel_asked([row for _d, row in self._feel_waiting])
+                self._feel_waiting = []
             return  # quiet hours or muted: try again at the next watch
         self._tilt_waiting = []
+        self._stamp_tilt_post()
+
+    def _deliver_feeling(self) -> None:
+        """One "how did it feel?" item for the oldest waiting close; the cap drops the rest for today."""
+        from mentor_app import tilt_watch
+
+        _day, trade = self._feel_waiting[0]
+        item = self.inbox.add("feeling", tilt_watch.feel_text(trade))
+        if item is None:
+            if "cap" in self.inbox.last_refusal:
+                logging.info("Trade Mentor: feelings questions stayed out of the Inbox (%s)", self.inbox.last_refusal)
+                self._mark_feel_asked([row for _d, row in self._feel_waiting])
+                self._feel_waiting = []
+            return  # quiet hours or muted: still held (in app_state too), asked at the next pass
+        self._feel_waiting.pop(0)
+        self._inbox_feel[item.id] = dict(trade)
+        self._mark_feel_asked([trade])
+        self._stamp_tilt_post()
+
+    def _mark_feel_asked(self, trades: list[dict]) -> None:
+        """Only an accepted (or cap-dropped) question is marked asked; IO thread writes app_state."""
+        from mentor_app import tilt_watch
+
+        self._feel_asked.update(str(row.get("trade_id")) for row in trades)
+        by_day: dict[str, list[str]] = {}
+        for row in trades:
+            by_day.setdefault(str(row.get("day") or ""), []).append(str(row.get("trade_id")))
+        for day, ids in by_day.items():
+            if day:
+                self._submit_io(lambda day=day, ids=ids: tilt_watch.mark_asked(self.store, day, ids))
+
+    def record_feeling(self, ref: str, words: str) -> None:
+        """``/feel <SYM|trade id> <words>``: one feelings note kept with its trade (IO thread; journal read-only)."""
+        from mentor_app import tilt_watch
+        from mentor_packs import tilt_pack
+
+        journal = self._tilt_journal if self._tilt_journal is not None else tilt_pack.live_journal()
+        now, stamp = self._now(), self._utc_stamp()
+
+        def job() -> None:
+            trade = tilt_watch.resolve_trade(journal, ref, now)
+            if trade is None or not trade["trade_id"]:
+                self._bridge.note.emit(f"I can't find a trade for `{ref}` in the last {tilt_watch.FEEL_LOOKBACK_DAYS} "
+                                       "days. Try its trade id (`/today` shows them).")
+                return
+            note_id = self.store.add_feeling(trade["trade_id"], tilt_watch.feeling_note(trade, words), ts_utc=stamp)
+            if note_id is None:
+                self._bridge.note.emit("That feeling was NOT saved (the chat store failed). Type it again.")
+                return
+            self._bridge.note.emit(f"Kept with {trade['symbol']} ({trade['trade_id']}): {words} [mem:note:{note_id}]")
+
+        self._submit_io(job)
+
+    def _stamp_tilt_post(self) -> None:
+        from mentor_app import tilt_watch
+
         stamp = self._now().astimezone(timezone.utc).isoformat(timespec="seconds")
         self._tilt_last_post = stamp
         self._submit_io(lambda: self.store.set_state(tilt_watch.LAST_POST_KEY, stamp))

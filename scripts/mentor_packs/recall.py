@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from mentor_packs.registry import Pack, make_pack
@@ -106,6 +107,21 @@ def _search_or_fall_back(search: Searcher, query: str, k: int) -> tuple[list[Map
     return hits, search is _fallback
 
 
+#: P15a: a night or brief embedding's text starts with its own id, e.g. ``[night:ideas:2026-09-29:1] ...``.
+_LEADING_ID = re.compile(r"^\[([a-z][a-z0-9_]*:[^\]\s]+)\] ")
+#: P15b: the pasted brief's paragraphs (``fund``) and the recap rows (``recap``) carry their own ids too.
+NIGHT_KINDS = ("night", "brief", "fund", "recap")
+
+
+def _hit_id(hit: Mapping[str, Any]) -> str:
+    """The night's own id for a night or brief hit (so it is cited as the night wrote it), else mem:<kind>:<ref>."""
+    kind = str(hit.get("kind") or "turn")
+    if hit.get("id"):
+        return str(hit["id"])
+    found = _LEADING_ID.match(str(hit.get("text") or "")) if kind in NIGHT_KINDS else None
+    return found.group(1) if found else f"mem:{kind}:{hit.get('ref_id')}"
+
+
 def build(query: str = "", k: int = DEFAULT_K, *, searcher: Searcher | None = None) -> Pack:
     search = searcher or _searcher
     empty = "nothing found"
@@ -123,7 +139,7 @@ def build(query: str = "", k: int = DEFAULT_K, *, searcher: Searcher | None = No
         empty = FALLBACK_EMPTY
     rows = [
         {
-            "id": f"mem:{hit.get('kind', 'turn')}:{hit.get('ref_id')}",
+            "id": _hit_id(hit),
             "kind": "memory",
             "text": str(hit.get("text") or "")[:400],
             "score": round(float(hit.get("score") or 0.0), 3),

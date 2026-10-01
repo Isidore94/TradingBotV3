@@ -642,6 +642,7 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
     # Trader 2026-09-30: the briefs are back on the weeknight slate
     # (Saturday-only 2026-09-24 to 2026-09-30) and, the same day, moved LAST so a
     # 100-minute brief run never delays a story; `mentor_review` took their place.
+    # P15a (2026-09-30): order unchanged, budget priority changed (right after the day review).
     assert slate[slate.index("exit_note_fields") + 1] == "mentor_review"
     assert slate[-1] == "ticker_briefs"
     # R1 (2026-09-26): the Day Review Show reads the story, so it follows it
@@ -706,7 +707,8 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
         # `EXPECTED_SLOT_ORDER` last in stage 2 and set aside here.
         "econ_brief",
         # Mentor app P4 (2026-09-30): `mentor_review`, pinned by `EXPECTED_SLOT_ORDER`
-        # directly after `exit_note_fields` and set aside here.
+        # directly after `exit_note_fields` and set aside here. P15a: order unchanged,
+        # budget priority changed.
         "mentor_review",
         # P1-7 7b (2026-09-25): `plan_review`, pinned by `EXPECTED_SLOT_ORDER`
         # in stage 3 and set aside here.

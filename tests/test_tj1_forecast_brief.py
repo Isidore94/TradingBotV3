@@ -203,6 +203,35 @@ def test_a_heading_with_no_date_leaves_the_title_date_empty():
     assert brief.title_date == ""
 
 
+#: The trader's two real Claude brief title lines (2026-09-29 and 2026-09-30), copied from the ledger.
+REAL_TITLE_0929 = "**Market Morning Brief: Tuesday, Sep 29, 2026** (as of about 5:45 AM PT)"
+REAL_TITLE_0930 = "**Market Morning Brief: Wednesday, Sept 30, 2026 (quarter-end)**"
+
+
+@pytest.mark.parametrize(("first", "expected"), [
+    (REAL_TITLE_0929, "2026-09-29"),
+    (REAL_TITLE_0930, "2026-09-30"),
+    ("**Market Morning Brief — Sept. 30, 2026**", "2026-09-30"),
+    ("**Market Morning Brief: Oct 1, 2026**", "2026-10-01"),
+    ("**Morning Brief: Thursday, October 1, 2026**", "2026-10-01"),
+])
+def test_a_bold_first_line_with_an_abbreviated_month_is_the_title(first, expected):
+    """P15b (lead 2026-09-30): the Claude briefs' bold title files them under their own day, desk and app."""
+    import forecast_brief
+
+    body = f"{first}\n*Written at 5:45 AM PT.*\n\n**The setup**\n\n- Rates lead.\n"
+    assert forecast_brief.parse(body).title_date == expected
+
+
+def test_an_untitled_brief_still_has_no_title_date():
+    import forecast_brief
+
+    for body in ("Rates lead today.\n\nOil is the risk on Sep 30, 2026.\n",
+                 "**The setup**\n\n- Futures flat.\n",
+                 "Some words first.\n**Market Morning Brief: Wednesday, Sept 30, 2026**\n"):
+        assert forecast_brief.parse(body).title_date == "", body
+
+
 def test_the_heading_match_is_case_insensitive():
     import forecast_brief
 

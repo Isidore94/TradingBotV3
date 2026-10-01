@@ -78,8 +78,10 @@ def _run(chat, tmp_path, **kwargs):
 
 
 # ---------------------------------------------------------------- registration
-def test_mentor_review_is_registered_after_exit_note_fields_and_cut_first():
+def test_mentor_review_is_registered_after_exit_note_fields_and_ranked_after_the_day_review():
     # Was directly after `ticker_briefs`; the briefs moved last on 2026-09-30 (trader).
+    # P15a (trader 2026-09-30): no longer cut first; the budget ranks it right after the day review
+    # (story, then show). Priority changed only: the run order below is unchanged.
     from ai_jobs import runner
 
     slots = runner.default_slots()
@@ -89,9 +91,12 @@ def test_mentor_review_is_registered_after_exit_note_fields_and_cut_first():
     slot = next(slot for slot in slots if slot.name == "mentor_review")
     assert slot.goal == "journal" and slot.goal in runner.SLOT_GOALS
     assert slot.uses_model and slot.model_free_kwargs == {"ask": False}
-    ranked = sorted(["mentor_review", "ticker_briefs", "observation_tags", "econ_brief", "daily_digest"],
+    ranked = sorted(["mentor_review", "ticker_briefs", "observation_tags", "econ_brief", "daily_digest",
+                     "day_review_narration", "day_review_show", "market_story_narration"],
                     key=runner.model_slot_priority)
-    assert ranked[-1] == "mentor_review", "the first model slot the budget cuts"
+    assert ranked == ["daily_digest", "day_review_narration", "day_review_show", "mentor_review",
+                      "market_story_narration", "observation_tags", "econ_brief", "ticker_briefs"]
+    assert "mentor_review" not in runner.CUT_FIRST_SLOTS
     assert "mentor_review" not in runner.WEEKEND_ONLY_SLOTS
 
 
@@ -155,9 +160,12 @@ def test_a_failed_probe_runs_the_facts_half_and_the_ledger_row_carries_goal(chat
 # ---------------------------------------------------------------- the model half
 def test_the_digest_drops_uncited_items_and_publishes(chat, tmp_path):
     seen = {}
+    calls = []
 
     def request(**kwargs):
-        seen.update(kwargs)
+        calls.append(kwargs)
+        if len(calls) == 1:  # P15a: the second call is the coach brief; the digest is the first
+            seen.update(kwargs)
         return {"model": "m", "summary": {
             "digest": [
                 {"text": "He asked about NVDA and read the pick pack.", "evidence_refs": ["turn:1", "fact:tools"]},
@@ -170,6 +178,7 @@ def test_the_digest_drops_uncited_items_and_publishes(chat, tmp_path):
     assert out["status"] == "ok", out["reason"]
     assert "fact:turns" in seen["evidence"]["allowed_evidence_ids"]
     assert seen["schema"] is mentor_review.DIGEST_JSON_SCHEMA
+    assert [call["schema"] for call in calls] == [mentor_review.DIGEST_JSON_SCHEMA, mentor_review.BRIEF_JSON_SCHEMA]
     digest = json.loads((tmp_path / "ai" / f"mentor_day_digest_{SESSION}.json").read_text(encoding="utf-8"))
     assert [item["text"] for item in digest["digest"]] == ["He asked about NVDA and read the pick pack."]
     assert digest["open_questions"][0]["evidence_refs"] == ["note:1"] and digest["dropped"] == 1
@@ -320,3 +329,263 @@ def test_no_permutation_report_leaves_the_vocabulary_empty(chat, tmp_path):
                permutation_report=tmp_path / "none.json")
     assert out["status"] == "ok" and seen["evidence"]["hypothesis_vocabulary"] == {}
     assert "hyp:report:asof" not in seen["evidence"]["allowed_evidence_ids"]
+
+
+# ---------------------------------------------------------------- P15a: the night feeds the day coach
+def _stamp(day: str, hour: int = 17) -> str:
+    return f"{day}T{hour:02d}:00:00.000+00:00"
+
+
+def _assessment(symbol: str, verdict: str, *, breaks: str = "") -> str:
+    flags = [{"plan_id": breaks, "breaks": True, "text": "over the limit"}] if breaks else []
+    return json.dumps({"symbol": symbol, "verdict": verdict, "pack_hash": "h",
+                       "bullets": [{"text": f"{symbol} held its AVWAP", "evidence_refs": [f"pick:{symbol}:cell"]}],
+                       "rule_flags": flags})
+
+
+@pytest.fixture
+def rich(chat, tmp_path):
+    """The chat day plus ten sessions of the app's own records and one night of artifacts."""
+    from mentor_packs import mirror_pack, night_pack
+
+    store = MentorChatStore(chat)
+    store.put_pack("pick_assessment", {"symbol": "NVDA", "hash": "a"}, _assessment("NVDA", "wait", breaks="plan:risk:1"),
+                   _stamp(SESSION))
+    store.put_pack("pick_assessment", {"symbol": "AMD", "hash": "b"}, _assessment("AMD", "pass", breaks="plan:risk:1"),
+                   _stamp("2026-09-25"))
+    for cid, day in (("veto:2026-09-22:X:1", "2026-09-22"), ("veto:2026-09-23:Y:1", "2026-09-23")):
+        store.add_challenge(cid, kind="veto", symbol=cid.split(":")[2], claim="vetoes like it won",
+                            issued_utc=_stamp(day), outcome={"status": "graded", "hit": True})
+    store.add_challenge("gate:2026-09-24:TSLA:d", kind="gate", symbol="TSLA", claim="wait: extended",
+                        issued_utc=_stamp("2026-09-24"), outcome={"status": "graded", "result": "taken", "r": 1.2,
+                                                                   "hit": True})
+    for cid, day in (("tilt:2026-09-25:t1", "2026-09-25"), ("tilt:2026-09-29:t2", SESSION)):
+        store.add_challenge(cid, kind="tilt", symbol="", claim="re-entry 4 min after a loss", issued_utc=_stamp(day),
+                            outcome={"status": "open", "day": day, "at": f"{day}T10:00:00-04:00",
+                                     "pattern": "fast_reentry"})
+    with sqlite3.connect(chat) as conn:
+        conn.execute("UPDATE challenges SET graded_utc = issued_utc WHERE kind IN ('veto', 'gate') AND id != ?",
+                     ("veto:2026-09-29:AAA:1",))
+    world = night_pack.write_fixture_world(tmp_path / "night")
+    return {"chat": chat, "night_paths": world, "mirror_builder": mirror_pack.fixture}
+
+
+def _rich_run(rich, tmp_path, **kwargs):
+    return _run(rich["chat"], tmp_path, night_paths=rich["night_paths"], mirror_builder=rich["mirror_builder"],
+                **kwargs)
+
+
+def _brief(tmp_path):
+    return json.loads((tmp_path / "ai" / f"mentor_coach_brief_{SESSION}.json").read_text(encoding="utf-8"))
+
+
+GOOD_DIGEST = {"digest": [{"text": "He asked about NVDA.", "evidence_refs": ["turn:1"]}], "open_questions": []}
+EMPTY_BRIEF = {"watch": [], "missing": [], "issues": [], "one_line": {"text": "", "evidence_refs": []}}
+
+
+def _two_calls(brief_reply):
+    calls = []
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        return {"model": "m", "summary": GOOD_DIGEST if len(calls) == 1 else brief_reply}
+
+    return request, calls
+
+
+def test_the_digest_inputs_carry_the_nights_reads_with_ids(rich, tmp_path):
+    request, calls = _two_calls(EMPTY_BRIEF)
+    out = _rich_run(rich, tmp_path, request=request)
+    assert out["status"] == "ok", out["reason"]
+    evidence = calls[0]["evidence"]
+    night, allowed = evidence["night_reads"], set(evidence["allowed_evidence_ids"])
+    assert [row["id"] for row in night["pick_assessments"]] == ["assess:NVDA"], "the day's assessments only"
+    assert "wait; NVDA held its AVWAP; breaks plan:risk:1" in night["pick_assessments"][0]["text"]
+    assert [row["id"] for row in night["gates"]] == ["challenge:gate:2026-09-24:TSLA:d"]
+    assert "graded: result taken, r 1.2, hit True" in night["gates"][0]["text"]
+    assert [row["id"] for row in night["tilt"]] == ["challenge:tilt:2026-09-29:t2"]
+    assert 0 < len(night["mirror"]) <= 5 and all(row["id"].startswith("mirror:") for row in night["mirror"])
+    assert 0 < len(night["digest_facts"]) <= 10
+    assert "night:miss:2026-09-29:1" in allowed and "night:prediction:2026-09-29:1" in allowed
+    assert "night:day_review:2026-09-29:2" in allowed and "night:ideas:2026-09-29:1" in allowed
+    assert len(night["ideas"]) <= 5 and "issue:tilt:fast_reentry" in allowed
+    assert all(row["id"] in allowed for rows in night.values() for row in rows)
+    assert len(evidence["allowed_evidence_ids"]) == len(allowed), "each id once"
+    assert out["extra"]["inputs"] == sum(out["extra"]["night_inputs"].values()) > 10
+    assert "night input(s)" in out["reason"]
+
+
+def test_the_facts_half_publishes_the_issue_candidates_without_a_model(rich, tmp_path):
+    out = _rich_run(rich, tmp_path, ask=False)
+    assert out["status"] == "ok" and "issue candidate(s)" in out["reason"]
+    brief = _brief(tmp_path)
+    assert brief["schema"] == "mentor_coach_brief_v1" and brief["worded"] is False
+    assert brief["watch"] == [] and brief["missing"] == [] and brief["one_line"] == {"text": "", "evidence_refs": []}
+    keys = [item["key"] for item in brief["issues"]]
+    assert {"veto_won", "tilt:fast_reentry", "rule:plan:risk:1", "miss:incoming_trendline"} <= set(keys)
+    assert len(keys) <= 5 and all(item["first_seen"] == SESSION for item in brief["issues"])
+    assert all(item["evidence_refs"] == [f"issue:{item['key']}"] for item in brief["issues"])
+
+
+def test_an_issue_keeps_its_first_seen_across_nights(rich, tmp_path):
+    root = tmp_path / "ai"
+    root.mkdir(parents=True, exist_ok=True)
+    earlier = {"session_date": "2026-09-25", "issues": [{"key": "tilt:fast_reentry", "first_seen": "2026-09-24"}]}
+    (root / "mentor_coach_brief_2026-09-25.json").write_text(json.dumps(earlier), encoding="utf-8")
+    _rich_run(rich, tmp_path, ask=False)
+    seen = {item["key"]: item["first_seen"] for item in _brief(tmp_path)["issues"]}
+    assert seen["tilt:fast_reentry"] == "2026-09-24" and seen["veto_won"] == SESSION
+
+
+def test_the_coach_brief_is_worded_cited_and_bounded(rich, tmp_path):
+    reply = {
+        "watch": [{"text": f"watch {i}", "evidence_refs": ["night:day_review:2026-09-29:1"]} for i in range(6)],
+        "missing": [{"text": "Trendline vetoes ran anyway", "evidence_refs": ["night:miss:2026-09-29:1"]},
+                    {"text": "uncited", "evidence_refs": []}],
+        "issues": [{"key": "tilt:fast_reentry", "text": "You re-enter fast after a loss",
+                    "evidence_refs": ["issue:tilt:fast_reentry"]},
+                   {"key": "made_up", "text": "An invented issue", "evidence_refs": ["issue:veto_won"]}],
+        "one_line": {"text": "Slow down after a loss today.", "evidence_refs": ["night:day_review:2026-09-29:1"]},
+    }
+    request, calls = _two_calls(reply)
+    out = _rich_run(rich, tmp_path, request=request)
+    assert out["status"] == "ok" and "coach brief 4 watch, 1 missing" in out["reason"]
+    assert calls[1]["schema"] is mentor_review.BRIEF_JSON_SCHEMA
+    brief = _brief(tmp_path)
+    assert brief["worded"] is True and brief["one_line"]["text"] == "Slow down after a loss today."
+    assert len(brief["watch"]) == 4 and [m["text"] for m in brief["missing"]] == ["Trendline vetoes ran anyway"]
+    assert brief["issues"][0] == {"key": "tilt:fast_reentry", "text": "You re-enter fast after a loss",
+                                  "evidence_refs": ["issue:tilt:fast_reentry"], "first_seen": SESSION, "count": 2}
+    keys = [item["key"] for item in brief["issues"]]
+    assert "made_up" not in keys and "veto_won" in keys, "the model ranks; an issue it skipped still stands"
+    assert brief["dropped"] == 4 and len(keys) <= 5
+
+
+def test_a_foreign_id_in_the_brief_keeps_the_facts_brief(rich, tmp_path):
+    request, _calls = _two_calls({**EMPTY_BRIEF, "watch": [{"text": "x", "evidence_refs": ["pick:TSLA:cell"]}]})
+    out = _rich_run(rich, tmp_path, request=request)
+    assert out["status"] == "ok" and "coach brief rejected" in out["reason"]
+    assert _brief(tmp_path)["worded"] is False
+
+
+def test_no_brief_call_when_the_digest_fails(rich, tmp_path):
+    calls = []
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        return {"model": "m", "summary": {"digest": [{"text": "x", "evidence_refs": ["pick:TSLA:cell"]}],
+                                          "open_questions": []}}
+
+    out = _rich_run(rich, tmp_path, request=request)
+    assert out["status"] == "failed" and len(calls) == 1
+    assert _brief(tmp_path)["worded"] is False, "the facts part is published regardless"
+
+
+def test_no_brief_call_without_time_left_in_the_reserve(rich, tmp_path, monkeypatch):
+    monkeypatch.setattr(mentor_review, "BRIEF_MIN_SECONDS_LEFT", mentor_review.RESERVE_MINUTES * 60 + 1)
+    request, calls = _two_calls(EMPTY_BRIEF)
+    out = _rich_run(rich, tmp_path, request=request)
+    assert out["status"] == "ok" and len(calls) == 1 and "no time left" in out["reason"]
+
+
+def test_a_later_facts_only_run_never_overwrites_a_worded_brief(rich, tmp_path):
+    request, _calls = _two_calls({**EMPTY_BRIEF, "one_line": {"text": "Worded.", "evidence_refs": ["night:day_review:2026-09-29:1"]}})
+    _rich_run(rich, tmp_path, request=request)
+    _rich_run(rich, tmp_path, ask=False)
+    assert _brief(tmp_path)["one_line"]["text"] == "Worded."
+
+
+def test_the_brief_call_is_capped_at_500_output_tokens(rich, tmp_path):
+    sent = []
+
+    def post(url, **kwargs):
+        sent.append(kwargs["json"]["max_tokens"])
+
+    def request(**kwargs):
+        kwargs["post"]("u", json={"max_tokens": 4000})
+        return {"model": "m", "summary": GOOD_DIGEST if len(sent) == 1 else EMPTY_BRIEF}
+
+    _rich_run(rich, tmp_path, request=request, post=post)
+    assert sent == [mentor_review.MAX_OUTPUT_TOKENS, mentor_review.MAX_BRIEF_TOKENS] == [600, 500]
+
+
+def test_the_brief_writes_nothing_to_the_chat_db(rich, tmp_path):
+    before = _dump(rich["chat"])
+    request, _calls = _two_calls({**EMPTY_BRIEF, "one_line": {"text": "x", "evidence_refs": ["night:day_review:2026-09-29:1"]}})
+    out = mentor_review.run_mentor_review(  # daytime: the app grades, so the night writes no grading column
+        session_date=SESSION, now=datetime(2026, 9, 29, 12, 0, tzinfo=PT), chat_db=rich["chat"],
+        ai_root=tmp_path / "ai", request=request, night_paths=rich["night_paths"],
+        mirror_builder=rich["mirror_builder"])
+    assert out["status"] == "ok" and _brief(tmp_path)["worded"] is True
+    assert _dump(rich["chat"]) == before
+
+
+def test_an_unreadable_night_input_never_costs_the_review(rich, tmp_path):
+    def broken():
+        raise PermissionError("locked")
+
+    out = _run(rich["chat"], tmp_path, ask=False, night_paths=rich["night_paths"], mirror_builder=broken)
+    assert out["status"] == "ok" and out["extra"]["night_inputs"]["mirror"] == 0
+    assert out["extra"]["unread"] == ["mirror (PermissionError)"]
+
+
+# ---------------------------------------------------------------- review fixes (2026-09-30)
+def test_the_night_inputs_and_issues_read_the_superseding_siblings(rich, tmp_path):
+    """Blocker: a rerun writes `<name>.1.json` (D6); the review reads the correction, never the first file."""
+    from mentor_packs import night_pack
+
+    night_pack.write_fixture_corrections(rich["night_paths"])
+    night = mentor_review.night_inputs(rich["chat"], SESSION, NIGHT, night_paths=rich["night_paths"],
+                                       mirror_builder=rich["mirror_builder"])
+    contrasts = " ".join(row["text"] for row in night["contrasts"])
+    assert "CORRECTED" in contrasts and "incoming_trendline" not in contrasts
+    assert "miss_contrast-2026-09-29.1:group:corrected_group" in contrasts
+    assert "close_r 9.99 (n=99)" in night["digest_facts"][0]["text"]
+    assert "facts/2026/2026-09-29.1.json" in night["digest_facts"][0]["text"]
+    keys = [item["key"] for item in mentor_review.issue_candidates(rich["chat"], SESSION,
+                                                                   night_paths=rich["night_paths"])]
+    assert "miss:corrected_group" in keys and "miss:incoming_trendline" not in keys
+
+
+def test_an_issue_left_out_of_the_brief_keeps_its_first_seen_in_the_registry(rich, tmp_path):
+    """Advisory 1: the registry remembers every candidate, also the sixth that never reaches the brief."""
+    store = MentorChatStore(rich["chat"])
+    for cid, day in (("tilt:2026-09-25:s1", "2026-09-25"), ("tilt:2026-09-29:s2", SESSION)):
+        store.add_challenge(cid, kind="tilt", symbol="", claim="size up after a win", issued_utc=_stamp(day),
+                            outcome={"status": "open", "day": day, "at": f"{day}T11:00:00-04:00",
+                                     "pattern": "size_up"})
+    _rich_run(rich, tmp_path, ask=False)
+    registry = json.loads((tmp_path / "ai" / "mentor_issue_registry.json").read_text(encoding="utf-8"))["issues"]
+    published = [item["key"] for item in _brief(tmp_path)["issues"]]
+    left_out = sorted(set(registry) - set(published))
+    assert len(published) == 5 and left_out, "six candidates, five in the brief"
+    assert all(registry[key]["first_seen"] == SESSION and registry[key]["nights_seen"] == 1 for key in left_out)
+    later = "2026-09-30"
+    mentor_review.run_mentor_review(session_date=later, now=datetime(2026, 9, 30, 23, 0, tzinfo=PT),
+                                    chat_db=rich["chat"], ai_root=tmp_path / "ai", ask=False,
+                                    night_paths=rich["night_paths"], mirror_builder=rich["mirror_builder"])
+    again = mentor_review.read_issue_registry(tmp_path / "ai")
+    assert all(again[key]["first_seen"] == SESSION and again[key]["last_seen"] == later for key in left_out)
+    candidates = mentor_review.issue_candidates(rich["chat"], later, night_paths=rich["night_paths"],
+                                                registry=again)
+    assert all(item["first_seen"] == SESSION for item in candidates if item["key"] in left_out)
+    mentor_review.run_mentor_review(session_date=later, now=datetime(2026, 9, 30, 23, 30, tzinfo=PT),
+                                    chat_db=rich["chat"], ai_root=tmp_path / "ai", ask=False,
+                                    night_paths=rich["night_paths"], mirror_builder=rich["mirror_builder"])
+    assert mentor_review.read_issue_registry(tmp_path / "ai")[left_out[0]]["nights_seen"] == 2, "a rerun counts once"
+
+
+def test_an_uncited_one_line_is_dropped_and_a_foreign_one_rejects_the_brief(rich, tmp_path):
+    """Advisory 3: the one line is model text loaded into memory, so it must cite like every other item."""
+    request, _calls = _two_calls({**EMPTY_BRIEF, "one_line": {"text": "Trust your gut today.", "evidence_refs": []},
+                                  "watch": [{"text": "SPY at its 50 SMA", "evidence_refs": ["night:day_review:2026-09-29:1"]}]})
+    out = _rich_run(rich, tmp_path, request=request)
+    brief = _brief(tmp_path)
+    assert out["status"] == "ok" and brief["worded"] is True
+    assert brief["one_line"] == {"text": "", "evidence_refs": []} and brief["dropped"] == 1
+    request, _calls = _two_calls({**EMPTY_BRIEF, "one_line": {"text": "x", "evidence_refs": ["pick:TSLA:cell"]}})
+    out = _rich_run(rich, tmp_path, request=request, force=True)
+    assert "coach brief rejected" in out["reason"] and _brief(tmp_path)["watch"], "the last good brief stays"
+    request, _calls = _two_calls({**EMPTY_BRIEF, "one_line": "a plain string"})
+    out = _rich_run(rich, tmp_path, request=request, force=True)
+    assert "coach brief rejected" in out["reason"]

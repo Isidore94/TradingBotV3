@@ -1814,7 +1814,7 @@ def _coverage_dict(coverage: Any) -> dict[str, Any]:
 
 
 def read_fact_pack_files(
-    root: Path, *, since: str = "", until: str = ""
+    root: Path, *, since: str = "", until: str = "", folder: str = "facts"
 ) -> list[tuple[Path, dict[str, Any]]]:
     """`(path, pack)` for every pack in the window, newest last.
 
@@ -1825,7 +1825,7 @@ def read_fact_pack_files(
     version 1 - beside values read from the newest sibling, which pointed a
     reader at the pack that had been corrected.
     """
-    base = Path(root) / "facts"
+    base = Path(root) / folder
     if not base.is_dir():
         return []
     entries: list[tuple[Path, dict[str, Any]]] = []
@@ -1930,6 +1930,16 @@ def latest_pack_files_by_session(root: Path) -> dict[str, tuple[Path, dict[str, 
         day = str(pack.get("session_date") or "")
         if day:
             latest[day] = (path, pack)
+    return latest
+
+
+def latest_narration_files_by_session(root: Path) -> dict[str, tuple[Path, dict[str, Any]]]:
+    """Newest `(path, narration)` per session date; a superseding sibling wins (D6), as for the facts."""
+    latest: dict[str, tuple[Path, dict[str, Any]]] = {}
+    for path, payload in read_fact_pack_files(root, folder="narration"):
+        day = str(payload.get("session_date") or "")
+        if day:
+            latest[day] = (path, payload)
     return latest
 
 

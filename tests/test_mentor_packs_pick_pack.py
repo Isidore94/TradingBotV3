@@ -41,7 +41,8 @@ NVDA_GOLDEN = """## pick_pack
 [pick:NVDA:cohort:d1:5] Cohort human_focus_swing_d1 LONG 5d: too few, n=15 (floor 30)
 [pick:NVDA:cohort:d1:10] Cohort human_focus_swing_d1 LONG 10d: too few, n=20 (floor 30)
 [pick:NVDA:news:12] Headline "Broadcom reports tomorrow; chips mixed" (finance.yahoo.com, Tue 09-29 05:10 PT) https://finance.yahoo.com/news/avgo
-[pick:NVDA:news:11] Headline "Nvidia adds $150 billion buyback" (nytimes.com, Mon 09-28 06:49 PT) https://www.nytimes.com/nvda-buyback"""
+[pick:NVDA:news:11] Headline "Nvidia adds $150 billion buyback" (nytimes.com, Mon 09-28 06:49 PT) https://www.nytimes.com/nvda-buyback
+[pick:NVDA:brief] Night brief (2026-09-28): NVDA held its AVWAP into the close. | Higher low on D1 above the anchor. (src: scan.tier_list)"""
 
 
 @pytest.fixture()
@@ -308,6 +309,57 @@ def test_the_650_mb_m5_outcome_store_is_never_opened(monkeypatch, tmp_path):
     for symbol in ("AMD", "NVDA", "TSLA"):
         pick_pack.build(symbol, now=NOW, paths=world)
     assert opened == []
+
+
+def test_the_pick_carries_the_newest_night_brief_with_its_date(world):
+    """P15a: <= 3 lines of the symbol's newest ticker brief, found through the manifests."""
+    brief = _rows(pick_pack.build("NVDA", now=NOW, paths=world))["pick:NVDA:brief"]
+    assert brief["session"] == "2026-09-28" and brief["evidence_refs"] == ["scan.tier_list"]
+    assert brief["text"].startswith("Night brief (2026-09-28): ") and brief["text"].count(" | ") <= 2
+
+
+def test_no_brief_is_a_none_row_never_silence(world):
+    rows = _rows(pick_pack.build("TSLA", now=NOW, paths=world))  # membership only that night: no brief
+    assert "pick:TSLA:brief" not in rows and "none for TSLA" in rows["pick:TSLA:brief:none"]["text"]
+    unread = _rows(pick_pack.build("NVDA", now=NOW, paths=replace(world, briefs=None)))
+    assert unread["pick:NVDA:brief:none"]["text"] == "Night brief: not read (no briefs store)"
+
+
+def test_a_brief_from_after_the_market_date_is_never_read(world):
+    folder = world.briefs / "2026" / "2026-10-01"
+    folder.mkdir(parents=True)
+    (folder / "ticker_briefs_manifest.jsonl").write_text(
+        '{"symbol": "NVDA", "status": "briefed", "result": {"summary": {"executive_summary": "from the future"}}}\n',
+        encoding="utf-8")
+    assert "future" not in _rows(pick_pack.build("NVDA", now=NOW, paths=world))["pick:NVDA:brief"]["text"]
+
+
+def test_a_reused_or_older_brief_is_still_shown_never_none(world):
+    """Review advisory 2: a reused brief writes no manifest row, and 10 sessions was too short a look-back."""
+    import json
+
+    from ai_jobs import week_names
+
+    def manifest(day, rows):
+        folder = world.briefs / "2026" / day
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "ticker_briefs_manifest.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows),
+                                                             encoding="utf-8")
+
+    brief = {"status": "briefed", "result": {"summary": {"executive_summary": "TSLA based above its anchor."}}}
+    manifest("2026-09-08", [{**brief, "symbol": "TSLA", "session_date": "2026-09-08"}])
+    for day in range(9, 26):  # 15+ later brief nights that did not re-brief TSLA or AMD
+        if datetime(2026, 9, day).weekday() < 5:
+            manifest(f"2026-09-{day:02d}", [{"symbol": "ZZZ", "status": "membership_only"}])
+    week_names.append_evidence_cache(week_names.evidence_cache_path(world.briefs), {
+        "symbol": "AMD", "session_date": "2026-09-10", "status": "briefed",
+        "result": {"summary": {"executive_summary": "AMD faded into its band."}}}, "hash-amd")
+    tsla = _rows(pick_pack.build("TSLA", now=NOW, paths=world))
+    assert tsla["pick:TSLA:brief"]["text"] == "Night brief (2026-09-08): TSLA based above its anchor."
+    amd = _rows(pick_pack.build("AMD", now=NOW, paths=world))
+    assert "pick:AMD:brief:none" not in amd
+    assert amd["pick:AMD:brief"]["text"] == "Night brief from 2026-09-10, evidence unchanged since: AMD faded into its band."
+    assert amd["pick:AMD:brief"]["reused"] is True
 
 
 def test_a_swing_or_claimed_pick_stays_on_the_d1_branch(world):

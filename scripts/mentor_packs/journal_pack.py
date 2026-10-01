@@ -158,8 +158,35 @@ def _unit_row(label: str, unit: journal_read.Unit, accounts: Mapping[str, str]) 
     }
 
 
-def build(day: Any = "today", *, now: datetime | None = None, journal: Path | str | None = None) -> Pack:
-    """Build the journal pack. Journal reads (``mode=ro``): call it on a worker."""
+def live_chat_db() -> Path:
+    from project_paths import MENTOR_CHAT_DB_FILE
+
+    return Path(MENTOR_CHAT_DB_FILE)
+
+
+def read_feelings(chat_db: Path | str | None) -> dict[str, str]:
+    """P15b: ``{trade_id: the newest feeling}`` from the mentor chat store (``mode=ro``); {} when none or unreadable."""
+    path = Path(chat_db) if chat_db is not None else live_chat_db()
+    conn = journal_read.connect_ro(path)
+    if conn is None:
+        return {}
+    try:
+        if "kind" not in journal_read._columns(conn, "profile_notes"):
+            return {}
+        rows = conn.execute("SELECT trade_id, text FROM profile_notes WHERE kind = 'feeling' AND retired_utc IS NULL "
+                            "ORDER BY id").fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+    return {str(row["trade_id"]): " ".join(str(row["text"] or "").split()) for row in rows if row["trade_id"]}
+
+
+def build(day: Any = "today", *, now: datetime | None = None, journal: Path | str | None = None,
+          chat_db: Path | str | None = None) -> Pack:
+    """Build the journal pack. Journal reads (``mode=ro``): call it on a worker.
+
+    P15b: a trade the trader said how it felt gets a ``jrn:<day>:<trade_id>:feel`` row right after it."""
     moment = _now(now)
     today = moment.astimezone(ET).date()
     span = resolve(day, today)
@@ -182,8 +209,14 @@ def build(day: Any = "today", *, now: datetime | None = None, journal: Path | st
         unit for unit in journal_read.units(trades)
         if _in(unit.closed, first, last) or _in(unit.opened, first, last)
     ]
+    feelings = read_feelings(chat_db)
     for unit in closed_units:
         rows.append(_unit_row(label, unit, accounts))
+        for trade_id in unit.ids:
+            if trade_id in feelings:
+                words = feelings[trade_id].split(" felt: ", 1)[-1]  # the note's own label is dropped here
+                rows.append({"id": f"jrn:{label}:{trade_id}:feel", "kind": "feeling", "symbol": unit.symbol,
+                             "text": f"How {unit.symbol} ({trade_id}) felt, in your words: {words}"})
     opened_in_span = [t for t in open_trades if _in(journal_read.parse_time(t.get("opened_at")), first, last)]
     values = [unit.pnl for unit in closed_units]
     known_values = [v for v in values if v is not None]
@@ -295,4 +328,5 @@ def write_fixture_journal(path: Path | str) -> Path:
 
 def fixture() -> Pack:
     with tempfile.TemporaryDirectory() as tmp:
-        return build("today", now=FIXTURE_NOW, journal=write_fixture_journal(Path(tmp) / "trade_journal.sqlite3"))
+        return build("today", now=FIXTURE_NOW, journal=write_fixture_journal(Path(tmp) / "trade_journal.sqlite3"),
+                     chat_db=Path(tmp) / "no_mentor_chat.sqlite3")

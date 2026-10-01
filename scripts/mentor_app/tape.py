@@ -57,9 +57,20 @@ TASK = (
     "Read the tape for the trader in at most 4 short 'read' lines (what the market is doing) and at "
     "most 4 'watch' lines (what to keep an eye on today). Every line cites the source_id of each row "
     "it uses in evidence_refs; a line with no source_id is thrown away. A 'night read' row is last "
-    "night's model text: say so when you use it. Never size or place an order; never suggest changing "
+    "night's model text: say so when you use it. A 'fund' row is the morning brief the trader pasted "
+    "(outside commentary): say so when you use it. Never size or place an order; never suggest changing "
     "a detector, a score, an alert or the plan."
 )
+
+
+def with_fundamentals(pack: Pack, fund: Pack | None) -> Pack:
+    """The regime pack plus today's pasted brief (compact rows); a missing brief adds its none row."""
+    from mentor_packs.registry import make_pack
+
+    extra = [dict(row) for row in (fund.rows if fund is not None else ()) if row.get("id")]
+    if not extra:
+        return pack
+    return make_pack(pack.name, [*pack.rows, *extra], empty_text=pack.empty_text)
 
 
 def pack_hash(pack: Pack) -> str:

@@ -241,3 +241,174 @@ def test_still_true_uses_the_windows_clock_on_any_date(window, app, monkeypatch,
     window.send("/help")
     _drain(window, app)
     assert len([item for item in window.inbox.items() if item.kind == "memory"]) == 2
+
+
+# ---------------------------------------------------------------- P15a: the memory stands on the night
+COACH = {"schema": "mentor_coach_brief_v1", "session_date": "2026-09-28", "worded": True,
+         "one_line": {"text": "Bounces in a bear channel have been early for you.",
+                      "evidence_refs": ["night:day_review:2026-09-28:2"]},
+         "watch": [{"text": "SPY at its 50 SMA", "evidence_refs": ["night:story:2026-09-28:0"]}],
+         "missing": [{"text": "Trendline vetoes ran 21% of the time", "evidence_refs": ["night:miss:2026-09-28:1"]}],
+         "issues": [{"key": "wrong_reads", "text": "Two reads graded wrong", "first_seen": "2026-09-24", "count": 3,
+                     "evidence_refs": ["night:day_review:2026-09-28:2"]}]}
+
+
+def _night_world(tmp_path):
+    from mentor_packs import night_pack
+
+    world = night_pack.write_fixture_world(tmp_path / "night")
+    root = tmp_path / "ai"
+    _digest(root, "2026-09-28", ["Asked about NVDA twice."])
+    (root / "mentor_coach_brief_2026-09-28.json").write_text(json.dumps(COACH), encoding="utf-8")
+    return world, root
+
+
+def test_the_memory_loads_the_night_in_priority_order_with_its_ids(tmp_path):
+    world, root = _night_world(tmp_path)
+    store = MentorChatStore(tmp_path / "chat.sqlite3")
+    _note(store, "rule: I stop after two losses")
+    one = memory.load(store, ai_root=root, night_paths=world, now=NOW)
+    two = memory.load(store, ai_root=root, night_paths=world, now=NOW)
+    assert one.text.encode() == two.text.encode(), "byte-stable"
+    ids = [item.id for item in one.items]
+    tiers = [item.priority for item in one.items]
+    assert tiers == sorted(tiers), "coach brief, digest, ideas, day review, week, notes"
+    assert ids[0] == "night:coach:2026-09-28:0" and "night:coach:2026-09-28:i1" in ids
+    assert ids.index("mem:digest:2026092800") < ids.index("night:ideas:2026-09-29:1")
+    assert len([i for i in ids if i.startswith("night:ideas:")]) == memory.IDEA_LIMIT
+    assert "night:day_review:2026-09-29:2" in ids and ids[-1] == "mem:note:1"
+    assert len([i for i in ids if i.startswith("night:week:")]) == memory.WEEK_LINES
+    assert "[night:day_review:2026-09-29:2] (2026-09-29) You said" in one.text
+    assert "recurring issue (since 2026-09-24): Two reads graded wrong" in one.text
+    assert memory.MEMORY_BUDGET_TOKENS == 3000 and memory.estimate_tokens(one.text) <= 3000
+
+
+def test_the_budget_drops_the_lowest_tier_first_then_the_oldest():
+    night = [memory.MemoryItem(f"night:ideas:2026-09-{i:02d}:1", "night", i, f"2026-09-{i:02d}", "y" * 200,
+                               memory.PRIORITY_IDEA) for i in range(1, 6)]
+    notes = [memory.MemoryItem(f"mem:note:{i}", "note", i, "2026-09-29", "x" * 200) for i in range(1, 6)]
+    kept = memory.render([*notes, *night], budget_tokens=400)
+    ids = [item.id for item in kept.items]
+    assert all(item.id in ids for item in night), "the notes tier goes before any idea"
+    left = [i for i in ids if i.startswith("mem:note:")]
+    assert left == [f"mem:note:{i}" for i in range(6 - len(left), 6)] and len(left) < 5, "oldest notes go first"
+    assert kept.dropped and memory.estimate_tokens(kept.text) <= 400
+    tight = memory.render([*notes, *night], budget_tokens=200)
+    assert all(not i.id.startswith("mem:note:") for i in tight.items) and tight.items[-1].id.endswith("09-05:1")
+
+
+def test_no_night_on_file_leaves_digests_and_notes_as_before(tmp_path):
+    from mentor_packs import night_pack
+
+    root = tmp_path / "ai"
+    _digest(root, "2026-09-28", ["Asked about NVDA twice."])
+    loaded = memory.load(MentorChatStore(tmp_path / "chat.sqlite3"), ai_root=root,
+                         night_paths=night_pack.NightPaths(), now=NOW)
+    assert [item.id for item in loaded.items] == ["mem:digest:2026092800"], "a none row is never memory"
+
+
+@pytest.mark.parametrize("one_line", [{"text": "Trust your gut.", "evidence_refs": []}, "Trust your gut.", None])
+def test_without_a_cited_one_line_the_first_watch_item_leads(tmp_path, one_line):
+    """Review advisory 3: uncited model text never leads the memory; the first watch item does, once."""
+    root = tmp_path / "ai"
+    root.mkdir(parents=True)
+    payload = {**COACH, "one_line": one_line}
+    (root / "mentor_coach_brief_2026-09-28.json").write_text(json.dumps(payload), encoding="utf-8")
+    from mentor_packs import night_pack
+
+    loaded = memory.load(MentorChatStore(tmp_path / "c.sqlite3"), ai_root=root,
+                         night_paths=night_pack.NightPaths(), now=NOW)
+    assert loaded.items[0].id == "night:coach:2026-09-28:0"
+    assert loaded.items[0].text == "coach brief: watch: SPY at its 50 SMA (cites night:story:2026-09-28:0)"
+    assert "Trust your gut" not in loaded.text
+    assert "night:coach:2026-09-28:w1" not in [item.id for item in loaded.items], "not shown twice"
+
+
+def test_a_coach_brief_dated_after_today_is_not_loaded(tmp_path):
+    world, root = _night_world(tmp_path)
+    (root / "mentor_coach_brief_2026-09-30.json").write_text(json.dumps({**COACH, "session_date": "2026-09-30"}),
+                                                            encoding="utf-8")
+    ids = [item.id for item in memory.load(MentorChatStore(tmp_path / "c.sqlite3"), ai_root=root,
+                                           night_paths=world, now=NOW).items]
+    assert "night:coach:2026-09-28:0" in ids and not any("2026-09-30" in i for i in ids)
+
+
+def test_embed_candidates_cover_night_rows_and_briefs_once_per_version(tmp_path):
+    from mentor_packs import night_pack
+
+    world, root = _night_world(tmp_path)
+    loaded = memory.load(MentorChatStore(tmp_path / "c.sqlite3"), ai_root=root, night_paths=world, now=NOW)
+    first = memory.embed_candidates(loaded, world, NOW)
+    assert {kind for kind, _ref, _text in first} == {"night", "brief"}
+    assert any(text.startswith("[night:ideas:2026-09-29:1] ") for _k, _r, text in first)
+    assert any(text.startswith("[brief:NVDA:2026-09-29] ") for _k, _r, text in first)
+    assert first == memory.embed_candidates(loaded, world, NOW), "same artifacts, same refs"
+    (world.day_review / "narration" / "2026-09-29.json").write_text(json.dumps({"narration": {
+        "headline": "Rewritten.", "were_you_right": []}}), encoding="utf-8")
+    again = {ref for _k, ref, _t in memory.embed_candidates(loaded, world, NOW)}
+    changed = night_pack.stable_ref("night:day_review:2026-09-29:0",
+                                    "Day review 2026-09-29: Rewritten. (src: day_review:2026-09-29)")
+    assert changed in again, "a changed artifact is a new ref, embedded once more"
+
+
+def test_recall_cites_a_night_hit_by_its_own_id():
+    from mentor_packs import recall
+
+    stored = [{"kind": "night", "ref_id": 7, "vector": [1.0, 0.0],
+               "text": "[night:ideas:2026-09-29:1] Idea (process): ask why liked names ran."},
+              {"kind": "brief", "ref_id": 8, "vector": [0.9, 0.1], "text": "[brief:NVDA:2026-09-29] NVDA held."},
+              {"kind": "note", "ref_id": 2, "vector": [0.0, 1.0], "text": "[x:y] a note"}]
+    searcher = recall.make_searcher(lambda texts: [[1.0, 0.0] for _ in texts], lambda: stored)
+    ids = recall.build("liked names", searcher=searcher).ids
+    assert ids == ("night:ideas:2026-09-29:1", "brief:NVDA:2026-09-29", "mem:note:2")
+
+
+def test_memory_brief_and_issues_commands_show_the_night(window, app, tmp_path):
+    from mentor_packs import night_pack
+
+    window.night_paths = night_pack.write_fixture_world(tmp_path / "night")
+    window._memory_root.mkdir(parents=True, exist_ok=True)
+    (window._memory_root / "mentor_coach_brief_2026-09-28.json").write_text(json.dumps(COACH), encoding="utf-8")
+    window._submit_io(window._open_session)
+    _drain(window, app)
+    window.send("/memory")
+    window.send("/brief")
+    window.send("/issues")
+    _drain(window, app)
+    text = _text(window)
+    assert "[night:coach:2026-09-28:0]" in text and "[night:day_review:2026-09-29:1]" in text
+    assert "Coach brief from the night of 2026-09-28" in text
+    assert "you may be missing: Trendline vetoes ran 21% of the time" in text
+    assert "first seen 2026-09-24, 3 times: Two reads graded wrong" in text
+
+
+def test_brief_with_no_night_says_so(window, app):
+    window.send("/brief")
+    window.send("/issues")
+    _drain(window, app)
+    text = _text(window)
+    assert "No coach brief from the night yet" in text and "No recurring issues" in text
+
+
+def test_the_idle_embed_queue_adds_night_and_brief_kinds_once(window, app, tmp_path):
+    from mentor_app import settings
+    from mentor_packs import night_pack
+
+    calls = []
+
+    def post(url, payload, timeout):
+        calls.append(url)
+        return {"embeddings": [[1.0, 0.0]]} if url.endswith("/api/embed") else {}
+
+    window._post = post
+    window._endpoint = "http://h"
+    window.night_paths = night_pack.write_fixture_world(tmp_path / "night")
+    window._queue_memory_embeddings()
+    _drain(window, app)
+    assert window.store.embedded_refs("night", settings.EMBED_MODEL)
+    assert window.store.embedded_refs("brief", settings.EMBED_MODEL)
+    first = len(calls)
+    assert first
+    window._queue_memory_embeddings()
+    _drain(window, app)
+    assert len(calls) == first, "nothing new: every night row and brief is embedded once per version"

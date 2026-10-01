@@ -197,6 +197,32 @@ def test_the_forecast_dialog_is_non_modal_and_prefills_no_source(panel, app, mon
     assert imported[0]["source_model"] == ""
 
 
+def test_the_desk_dialog_files_the_brief_by_the_shared_forecast_session_rule(panel, app, monkeypatch):
+    """P15b: the desk and the Mentor's /paste use ONE rule: the brief's title date, else the page's session."""
+    from PySide6.QtWidgets import QDialog, QDialogButtonBox
+    from ui.services import market_journal_service
+
+    calls: list = []
+    real = market_journal_service.forecast_session
+    monkeypatch.setattr(market_journal_service, "forecast_session",
+                        lambda text, now=None, **kw: calls.append(kw) or real(text, now, **kw))
+    imported: list[dict] = []
+    monkeypatch.setattr(panel, "_import_forecast", lambda values: imported.append(values) or {})
+    monkeypatch.setattr(QDialog, "exec", lambda *_a: pytest.fail("the forecast dialog blocked the desk"))
+    panel._paste_daily_forecast()
+    dialog = panel._forecast_dialog
+    page = panel.session_date()
+    dialog.text_box.setPlainText("# Morning Brief — September 17, 2026\n\nbody")
+    assert dialog.session_box.text() == "2026-09-17", "the brief's own title date"
+    dialog.text_box.setPlainText("**Market Morning Brief: Wednesday, Sept 30, 2026 (quarter-end)**\n\nbody")
+    assert dialog.session_box.text() == "2026-09-30", "a bold Claude title prefills its own date"
+    dialog.text_box.setPlainText("no dated heading here")
+    assert dialog.session_box.text() == page, "else the page's session, never the paste moment"
+    assert calls and all(kw.get("fallback") == page for kw in calls), "the shared rule, with the page as fallback"
+    dialog.buttons.button(QDialogButtonBox.Ok).click()
+    assert imported[0]["target_session"] == page
+
+
 # -- shared fixtures for items 2-6 ---------------------------------------------
 def _row(symbol, *, ran=5.0, real="run", time=None):
     from walkaway_day import WalkawayRow
