@@ -589,3 +589,39 @@ def test_an_uncited_one_line_is_dropped_and_a_foreign_one_rejects_the_brief(rich
     request, _calls = _two_calls({**EMPTY_BRIEF, "one_line": "a plain string"})
     out = _rich_run(rich, tmp_path, request=request, force=True)
     assert "coach brief rejected" in out["reason"]
+
+
+def test_a_foreign_id_is_retried_once_with_the_rejection_quoted_and_the_second_reply_kept(chat, tmp_path):
+    """2026-09-30: the digest cited 'assess:ALL' once and the whole slot failed; one fed-back retry fixes that."""
+    calls = []
+    bad = {"digest": [{"text": "Invented.", "evidence_refs": ["assess:ALL"]}], "open_questions": []}
+    good = {"digest": [{"text": "Kept.", "evidence_refs": ["fact:turns"]}], "open_questions": []}
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        digest_calls = [call for call in calls if call["schema"] is mentor_review.DIGEST_JSON_SCHEMA]
+        return {"model": "m", "summary": bad if len(digest_calls) == 1 else good}
+
+    out = _run(chat, tmp_path, request=request)
+    assert out["status"] == "ok", out["reason"]
+    digest_calls = [call for call in calls if call["schema"] is mentor_review.DIGEST_JSON_SCHEMA]
+    assert len(digest_calls) == 2
+    assert "assess:ALL" not in digest_calls[0]["evidence"]["instructions"]
+    assert "assess:ALL" in digest_calls[1]["evidence"]["instructions"]
+    assert "retried after" in out["reason"] and "assess:ALL" in out["reason"]
+    digest = json.loads((tmp_path / "ai" / f"mentor_day_digest_{SESSION}.json").read_text(encoding="utf-8"))
+    assert [item["text"] for item in digest["digest"]] == ["Kept."]
+
+
+def test_a_foreign_id_on_both_attempts_still_fails_after_the_one_retry(chat, tmp_path):
+    calls = []
+    bad = {"digest": [{"text": "Invented.", "evidence_refs": ["assess:ALL"]}], "open_questions": []}
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        return {"model": "m", "summary": bad}
+
+    out = _run(chat, tmp_path, request=request)
+    assert out["status"] == "failed" and "rejected" in out["reason"] and "assess:ALL" in out["reason"]
+    assert len(calls) == 2  # one retry, never more; no brief call after a failed digest
+    assert not (tmp_path / "ai" / f"mentor_day_digest_{SESSION}.json").exists()
