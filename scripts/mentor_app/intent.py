@@ -103,6 +103,8 @@ TAKE_INTO = frozenset({"get", "getting"})
 CLAUSE_WORDS = frozenset({"and", "but", "then"})
 #: Words that join coordinated tickers ("AMD, NVDA, or TSLA").
 COORDINATORS = frozenset({"or", "and", "&", ","})
+#: A contrast word ends a coordinated chain like punctuation ("sell AMD and NVDA but TSLA is fine").
+CHAIN_END = frozenset({"but", "though", "although", "while", "whereas", "except"})
 _TOKEN = re.compile(r"\$?[A-Za-z][A-Za-z'\-]*|[,;:?—]|\.(?=\s|$)")
 SEPARATORS = (",", ";", ":", "?", "—", ".")
 _QUOTED = re.compile(r'"[^"]*"|“[^”]*”')
@@ -125,15 +127,21 @@ def _tokens(text: str) -> list[str]:
     return [tok.lstrip("$") if tok[0] == "$" else tok for tok in _TOKEN.findall(text or "")]
 
 
-def _tick_mask(toks: list[str], upper: set[str] | list[str]) -> list[bool]:
-    """Which tokens are tickers: upper case as typed ("AMD"), or lowercase after a trade verb - directly, over up to
-    three filler words ("sell my amd", "sell half of amd") or after another lowercase ticker ("sell amd nvda")."""
+def _dollar_at(text: str) -> set[int]:
+    """Indices of the tokens typed with a ``$`` ("buy $cat"): a ticker on purpose, any case."""
+    return {n for n, tok in enumerate(_TOKEN.findall(text or "")) if tok[0] == "$"}
+
+
+def _tick_mask(toks: list[str], upper: set[str] | list[str], dollar: set[int] = frozenset()) -> list[bool]:
+    """Which tokens are tickers: upper case as typed ("AMD") or ``$``-typed, or lowercase after a trade verb -
+    directly, over up to three filler words ("sell my amd", "sell half of amd") or after another lowercase ticker
+    ("sell amd nvda", "sell amd, nvda and tsla")."""
     from mentor_app.attach import COMMON_WORDS  # one source of "a word, not a ticker"
 
     names = {str(t).upper() for t in upper}
     out: list[bool] = []
     for n, tok in enumerate(toks):
-        hit = tok.upper() in names and (tok.isupper() or (
+        hit = tok.upper() in names and (tok.isupper() or n in dollar or (
             tok.lower() not in LOWER_NOT_TICKER and tok.lower() not in COMMON_WORDS and _after_verb(toks, out, n)))
         out.append(bool(hit))
     return out
@@ -143,14 +151,20 @@ def _after_verb(toks: list[str], done: list[bool], n: int) -> bool:
     m, skipped = n - 1, 0
     while m >= 0 and toks[m].lower() in FILLER and skipped < 3:
         m, skipped = m - 1, skipped + 1
-    return m >= 0 and (toks[m].lower() in VERB_WORDS or (m == n - 1 and done[m]))
+    if m >= 0 and toks[m].lower() in VERB_WORDS:
+        return True
+    # Right after a ticker, or after coordinators that follow one ("amd, nvda", "amd and nvda", "amd, and nvda").
+    c = n - 1
+    while c >= 0 and toks[c].lower() in COORDINATORS:
+        c -= 1
+    return c >= 0 and done[c]
 
 
 def lower_ticker_hits(text: str, known: Iterable[str]) -> list[tuple[int, str]]:
     """(char offset, SYMBOL) of every lowercase ticker the mask accepts - the planner's finder reads these."""
     matches = list(_TOKEN.finditer(text or ""))
     toks = [m.group(0).lstrip("$") for m in matches]
-    mask = _tick_mask(toks, list(known))
+    mask = _tick_mask(toks, list(known), _dollar_at(text))
     return [(matches[n].start(), toks[n].upper()) for n in range(len(toks)) if mask[n] and not toks[n].isupper()]
 
 
@@ -254,7 +268,7 @@ def spans(text: str, tickers: Iterable[str]) -> list[tuple[int, int, str]]:
     upper = {str(t).upper() for t in tickers}
     starts = _clause_starts(toks)
 
-    mask = _tick_mask(toks, upper)
+    mask = _tick_mask(toks, upper, _dollar_at(text))
 
     def is_ticker(j: int) -> bool:
         return 0 <= j < len(toks) and mask[j]
@@ -401,7 +415,7 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
             return (lowered[i + 2] if i + 2 < len(toks) else "") in SIDE_NEVER_NEXT
         return nxt in ADJ_NOUNS
 
-    mask = _tick_mask(toks, upper)
+    mask = _tick_mask(toks, upper, _dollar_at(text))
     places = [(i, tok.upper()) for i, tok in enumerate(toks) if mask[i] and not adjective(i)]
     ticker_at = dict(places)
     # The objectless fallback may land on a ticker used as an adjective ("QCOM buyback - buy?").
@@ -477,7 +491,7 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
                 while n < len(toks) and lowered[n] in COORDINATORS:
                     n += 1
                 tail = lowered[n] if n < len(toks) else ""
-                if after == "" or after in ("?", ".", ";", ":", "—") or (
+                if after == "" or after in ("?", ".", ";", ":", "—") or after in CHAIN_END or (
                         after in COORDINATORS and tail in VERB_WORDS):
                     for t in chain:
                         out[ticker_at[t]].add(kind)
