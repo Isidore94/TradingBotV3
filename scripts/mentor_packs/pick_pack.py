@@ -61,7 +61,8 @@ PEER_MAX_ROWS = 12
 COHORT_HORIZONS = (1, 3, 5, 10)
 NEWS_DAYS = 3
 NEWS_MAX_ROWS = 5
-_VOLATILE_KINDS = frozenset({"asof"})
+#: Rows left out of the card hash: the as-of stamp, and the intraday move vs peers (it changes every bar).
+_VOLATILE_KINDS = frozenset({"asof", "vs_peers"})
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,8 @@ class PickPaths:
     m5_grades: Path | None = None
     #: P15a: the ai_store ``briefs/`` root (``<year>/<session>/ticker_briefs_manifest.jsonl``); None = not read.
     briefs: Path | None = None
+    #: ``(symbols, day)`` -> {symbol: cached M5 bar dicts} (``alerts_pack.read_day_bars``); None = no row.
+    day_bars: Callable[[set[str], str], Mapping[str, Any]] | None = field(default=None, compare=False)
 
 
 def live_paths() -> PickPaths:
@@ -126,7 +129,14 @@ def live_paths() -> PickPaths:
         m5_alerts=Path(pp.INTRADAY_BOUNCES_FILE),
         m5_grades=Path(pp.LOCAL_SETTINGS_DIR) / "working_lately" / "setup_grades_latest.json",
         briefs=_live_briefs_root(),
+        day_bars=_live_day_bars,
     )
+
+
+def _live_day_bars(symbols: set[str], day: str) -> Mapping[str, Any]:
+    from mentor_packs import alerts_pack
+
+    return alerts_pack._live_bars(symbols, day)
 
 
 def _live_briefs_root() -> Path | None:
@@ -492,6 +502,65 @@ def _own_earnings(symbol: str, today: date, dates: dict[str, list[date]]) -> dic
     }
 
 
+#: Peers listed by name in the vs-peers row (weakest first).
+VS_PEERS_LISTED = 6
+
+
+def _since_open(raw_bars: Any, day: date, now: datetime) -> tuple[float, str] | None:
+    """(% from today's 09:30 ET open to the last completed bar's close, that bar's end HH:MM ET); None = unknown."""
+    from mentor_packs import bars_pack
+
+    bars: dict[datetime, Mapping[str, Any]] = {}
+    for raw in raw_bars or ():
+        start = bars_pack.bar_start(raw, ET)
+        if start is None or start + bars_pack.BAR > now or start.astimezone(ET).date() != day:
+            continue
+        if not bars_pack.RTH_OPEN <= start.astimezone(ET).time() < bars_pack.RTH_CLOSE:
+            continue
+        bars[start] = raw
+    if not bars:
+        return None
+    first, last = min(bars), max(bars)
+    opened, closed = bars_pack._float(bars[first].get("open")), bars_pack._float(bars[last].get("close"))
+    if first.astimezone(ET).time() != bars_pack.RTH_OPEN or not opened or closed is None:
+        return None
+    return (closed / opened - 1) * 100, f"{(last + bars_pack.BAR).astimezone(ET):%H:%M}"
+
+
+def _vs_peers_row(symbol: str, now: datetime, paths: PickPaths) -> list[dict[str, Any]]:
+    """The name's move since today's open vs its industry peers' median, from cached M5 bars only."""
+    import statistics
+
+    if paths.day_bars is None:
+        return []
+    loader = paths.industry_map
+    if loader is None:
+        from industry_context import load_industry_context_map as loader
+    context = (loader() or {}).get(symbol) or {}
+    industry = str(context.get("industry") or "").strip()
+    members = sorted({_sym(p) for p in context.get("industry_member_symbols") or () if _sym(p)} - {symbol})
+    row_id = f"pick:{symbol}:vspeers"
+    if not industry or not members:
+        return [{"id": row_id, "kind": "vs_peers", "text": "Move vs industry peers today: industry unknown"}]
+    day = now.astimezone(ET).date()
+    cached = paths.day_bars({symbol, *members}, day.isoformat()) or {}
+    own = _since_open(cached.get(symbol), day, now)
+    peers = {peer: move for peer in members if (move := _since_open(cached.get(peer), day, now)) is not None}
+    if own is None or not peers:
+        why = "no cached M5 bars from today's open for it" if own is None else "no peer has cached M5 bars from the open"
+        return [{"id": row_id, "kind": "vs_peers", "text": f"Move vs {industry} peers today: unknown ({why})"}]
+    median = statistics.median(peers[p][0] for p in peers)
+    gap = own[0] - median
+    word = "stronger than" if gap > 0.005 else "weaker than" if gap < -0.005 else "in line with"
+    listed = ", ".join(f"{p} {peers[p][0]:+.2f}%" for p in sorted(peers, key=lambda p: peers[p][0])[:VS_PEERS_LISTED])
+    return [{
+        "id": row_id, "kind": "vs_peers", "own_pct": own[0], "peer_median_pct": median, "peers_n": len(peers),
+        "text": (f"{symbol} since today's open {own[0]:+.2f}% (cached M5 bars to {own[1]} ET) vs the median "
+                 f"{median:+.2f}% of {len(peers)} of {len(members)} {industry} peers with cached bars: {word} the "
+                 f"median by {abs(gap):.2f} pts. Weakest first: {listed}"),
+    }]
+
+
 def _peer_rows(symbol: str, today: date, dates: dict[str, list[date]], paths: PickPaths) -> list[dict[str, Any]]:
     loader = paths.industry_map
     if loader is None:
@@ -715,6 +784,10 @@ def build(symbol: str = "", side: str = "", origin: str = "", *, now: datetime |
         rows.extend(_peer_rows(sym, today, dates, src))
     except Exception as exc:  # noqa: BLE001
         rows.append(_unknown(f"pick:{sym}:peers", "Peer earnings", exc))
+    try:
+        rows.extend(_vs_peers_row(sym, moment, src))
+    except Exception as exc:  # noqa: BLE001
+        rows.append(_unknown(f"pick:{sym}:vspeers", "Move vs industry peers", exc))
     try:
         rows.extend(_plan_rows(sym, src))
     except Exception as exc:  # noqa: BLE001
