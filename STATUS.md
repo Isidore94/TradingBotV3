@@ -12,7 +12,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 - **GUI:** 4K design live; selftests 105/105; long Qt runs still crash workers.
 - **Merged 2026-09-30, live at the next desk + app restart:** Trade Mentor app P0-P15 (`e9c77690`, `e864ddb9`, `b2402479`, `19b837d3`) + Pause AI (`8f7664fc`): chat on gemma4:12b with native tools, auto-attach from plain language, `/pick /vetoes /tape /check /news /book /mirror /tilt /debate /hypotheses /brief /issues /recaps /paste /feel /night /scorecard`; memory stands on the night; `mentor_app_enabled` on by default; frontier OFF (trader). Gates #311-#318, #321-#326, #329, #332-#334.
 - **Merged 2026-09-30:** P16 eval gaps (#335), P17 `/rs`, `/alerts`, spool M5 bars (#336).
-- **In flight:** P18 (`claude/mentor-app-p18-journal-reads-routines-2026-10-01`): journal, habits, reads, routines, M5 publisher; gates #337-#340; review, live eval, trader's word. Next: the four night-rejection fixes.
+- **In flight:** P18 (`claude/mentor-app-p18-journal-reads-routines-2026-10-01`): journal, habits, reads, routines, M5 publisher; gates #341-#344; review, live eval, trader's word. Next: the four night-rejection fixes.
 - **Desk:** next launch uses main; live checks are in GATES.
 - **Night throughput (2026-09-30):** slot retries x3, budget 360, every care name briefed nightly and last on the slate (#331), nightly permutation report + per-setup sentences (#330, shadow only). Parked: Mentor recall index (worktree only). Next: morning pre-brief queue; rule audit once plan lines exist.
 - **gpt-oss:20b vs gemma4:12b:** effort `high`, 8k think tokens live. Probe 2 10-01 02:05 runs both, then flip `ai_local_model_medium`.
