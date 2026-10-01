@@ -52,6 +52,34 @@ def test_totals_and_open_positions(journal):
     assert "Open LONG MSFT 10 @ 400.00, stop 395.00" in rows["jrn:2026-09-30:open:W5"]["text"]
 
 
+def test_a_short_closed_lower_is_a_win_with_its_side_and_points(journal):
+    """2026-10-01: RIOT short 18.83 -> 18.80 was called "a small loss" by the model."""
+    import sqlite3
+
+    conn = sqlite3.connect(journal)
+    conn.execute("INSERT INTO trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                 ("R1", "M1", "Margin", "RIOT", "STK", "SHORT", "CLOSED", "2026-09-30T12:10:00-04:00",
+                  "2026-09-30T12:40:00-04:00", 100, 100, 18.83, 18.80, None, None))
+    conn.commit()
+    conn.close()
+    rows = _rows(journal_pack.build("today", now=NOW, journal=journal))
+    riot = rows["jrn:2026-09-30:R1"]["text"]
+    assert riot.startswith("SHORT RIOT")
+    assert "WIN, short 18.83 -> 18.80 = +0.03 pts in your favour (short: exit below entry is a win)" in riot
+    amd = rows["jrn:2026-09-30:W2"]["text"]
+    assert "LOSS, short 150.00 -> 152.40 = -2.40 pts in your favour" in amd
+    assert "WIN, long 120.00 -> 121.00 = +1.00 pts" in rows["jrn:2026-09-30:W1"]["text"]
+    assert rows["jrn:2026-09-30:W3+W4"]["text"].count("WIN") == 1, "a spread's word comes from its $ alone"
+    assert "Worst trade: SHORT AMD LOSS" in rows["jrn:2026-09-30:worst"]["text"]
+    assert journal_pack.result_word(None, None) == "result unknown" and journal_pack.result_word(0.0) == "FLAT"
+
+
+def test_the_prompt_says_a_short_exit_below_entry_is_a_win():
+    from mentor_app.chat_model import SYSTEM_PROMPT
+
+    assert "For a SHORT, an exit below the entry is a win" in SYSTEM_PROMPT
+
+
 def test_yesterday_weekday_week_and_last_week(journal):
     assert "jrn:2026-09-29:Y1" in _rows(journal_pack.build("yesterday", now=NOW, journal=journal))
     assert "jrn:2026-09-29:Y1" in _rows(journal_pack.build("tuesday", now=NOW, journal=journal))
