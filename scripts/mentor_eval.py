@@ -89,7 +89,8 @@ def style_summary(rows: list[Mapping[str, Any]], fixture: Mapping[str, Any]) -> 
     for row in answered:
         reply = str(row.get("reply") or "")
         row["style"] = style.measure(reply, row["q"])
-        row["style_after_app"] = style.measure(style.guard(reply)[0], row["q"])
+        # P20: the guard the live run's turn used (plain on a simple or summary turn); an older report has no flag.
+        row["style_after_app"] = style.measure(style.guard(reply, plain=bool(row.get("plain")))[0], row["q"])
         row["simple"] = row["q"] in simple
         row["style_pass"] = style.passes(row["style"], simple=row["simple"])
         row["style_pass_after_app"] = style.passes(row["style_after_app"], simple=row["simple"])
@@ -159,10 +160,12 @@ def live_report(fixture: Mapping[str, Any], *, out_dir: Path) -> dict[str, Any]:
         chat.add("user", item["q"])
         messages = chat.messages(context_text=context.as_text(), budget_tokens=settings.context_tokens())
         requests = attach.plan_attachments(item["q"], known, now, book=attach.book_symbols(context.rows))
+        shape = attach.turn_shape(item["q"], requests, known)
         try:
             result = brain.run_turn(messages, model=model, endpoint=endpoint, keep_alive=settings.keep_alive(),
                                     num_ctx=settings.context_tokens(), tools=registry.tool_schemas(),
-                                    native_tools=native, attachments=requests, question=item["q"])
+                                    native_tools=native, attachments=requests, question=item["q"],
+                                    **shape)
         except Exception as exc:  # noqa: BLE001 - one failed question is reported, the run goes on
             rows.append({"q": item["q"], "error": f"{type(exc).__name__}: {exc}"})
             continue
@@ -177,6 +180,7 @@ def live_report(fixture: Mapping[str, Any], *, out_dir: Path) -> dict[str, Any]:
             "total_ms": result.get("total_ms"), "attach_ms": result.get("attach_ms"),
             "prompt_tokens": result.get("prompt_tokens"), "reply": text,
             "mentions": [w for w in item.get("must_mention") or () if w.lower() in text.lower()],
+            "turn_instruction": shape.get("turn_instruction", ""), "plain": bool(shape.get("plain")),
         }
         if GATE in expected:
             by_model = checklist.covered(text)

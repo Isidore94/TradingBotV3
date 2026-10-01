@@ -20,7 +20,7 @@ from mentor_app import attach, intent  # noqa: E402
 NOW = datetime(2026, 9, 30, 15, 0, tzinfo=timezone.utc)
 #: The default book: AMD and NVDA held long, TSLA held short. ALL and MSFT are watched, not held.
 BOOK = {"AMD": "LONG", "NVDA": "LONG", "TSLA": "SHORT"}
-KNOWN = {**BOOK, "ALL": "SHORT", "MSFT": "", "QCOM": "", "HOOD": ""}
+KNOWN = {**BOOK, "ALL": "SHORT", "MSFT": "", "QCOM": "", "HOOD": "", "CAT": ""}
 NOT_HELD: dict[str, str] = {}
 
 EXIT_L = ("exit", "LONG")
@@ -330,6 +330,16 @@ TABLE = [
     ("sell AMD, NVDA and HOOD are fine", BOOK, {"AMD": EXIT_L}),
     ("sell AMD, NVDA, TSLA?", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L, "TSLA": WHICH}),
     ("should I sell AMD, NVDA, or TSLA?", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L, "TSLA": WHICH}),
+    # P20 (live eval 2026-10-01): a `$` ticker is typed on purpose; lowercase chains; "but" ends a chain
+    ("buy $cat", BOOK, {"CAT": NEW_L}),
+    ("sell amd, nvda, tsla?", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L, "TSLA": WHICH}),
+    ("sell amd and nvda", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L}),
+    ("sell amd, nvda still strong", BOOK, {"AMD": EXIT_L}),
+    ("sell AMD and NVDA but TSLA is fine", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L}),
+    ("sell AMD, NVDA but TSLA is fine", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L}),
+    ("sell AMD but NVDA is fine", BOOK, {"AMD": EXIT_L}),
+    ("sell AMD and NVDA though TSLA looks fine", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L}),
+    ("sell AMD, NVDA except TSLA", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L}),
     # pure questions, no verb
     ("how is AMD trading right now", BOOK, {}),
     ("what's the news on NVDA", BOOK, {}),
@@ -366,7 +376,7 @@ def _gates(text, book):
 
 
 def test_the_table_size_is_pinned():
-    assert len(TABLE) == 264 and len(GUARD) == 20
+    assert len(TABLE) == 273 and len(GUARD) == 20
 
 
 @pytest.mark.parametrize("text,book,want", TABLE, ids=[f"{n}:{row[0][:40]}" for n, row in enumerate(TABLE)])

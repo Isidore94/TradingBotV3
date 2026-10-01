@@ -271,8 +271,15 @@ def run_turn(
     seen_ids: Iterable[str] = (),
     question: str | None = None,
     attach_budget_tokens: int = ATTACH_BUDGET_TOKENS,
+    turn_instruction: str = "",
+    max_tokens: int | None = None,
+    plain: bool = False,
 ) -> dict[str, Any]:
     """One chat turn, tools included. Returns the result dict ``done`` carries.
+
+    ``turn_instruction`` (P20, ``attach.turn_shape``) is appended to the newest user message for this turn only;
+    ``max_tokens`` caps its replies (``num_predict``), never on a thinking model whose reasoning would eat it.
+    ``plain`` (a simple turn) rides on the result so the caller's guard strips bullets, bold and headers.
 
     ``native_tools`` is the probed capability (:func:`native_tools_for`); None (unknown) = the fallback.
     ``attachments`` (``attach.AttachRequest``) are built here and injected as tool results after the
@@ -332,6 +339,14 @@ def run_turn(
             result["cancelled"] = True
             result["total_ms"] = int((clock() - started) * 1000)
             return result
+    cap = int(max_tokens) if max_tokens and not is_thinking_model(model) else None
+    result["turn_instruction"], result["max_tokens"] = str(turn_instruction or ""), cap
+    result["plain"] = bool(plain or turn_instruction)
+    if turn_instruction:
+        last_user = max((n for n, m in enumerate(convo) if m.get("role") == "user"), default=None)
+        if last_user is not None:
+            content = str(convo[last_user].get("content") or "").rstrip()
+            convo[last_user] = {**convo[last_user], "content": f"{content}\n\n{turn_instruction}"}
     if kept and native:
         convo.append({"role": "assistant", "content": "", "tool_calls": [
             {"function": {"name": request.name, "arguments": dict(request.args)}} for request, _ in kept]})
@@ -366,7 +381,7 @@ def run_turn(
 
     while True:
         offer = tools if native and len(result["tool_calls"]) < MAX_TOOL_CALLS else None
-        payload = chat_payload(model, convo, tools=offer, keep_alive=keep_alive, num_ctx=num_ctx)
+        payload = chat_payload(model, convo, tools=offer, keep_alive=keep_alive, num_ctx=num_ctx, max_tokens=cap)
         parts: list[str] = []
         calls: list[Mapping[str, Any]] = []
         for chunk in iter_ndjson(stream_post(url, payload, cancelled)):
@@ -401,7 +416,7 @@ def run_turn(
     if not result["cancelled"]:
         _fetch_check(result, convo, attachments, build_pack, note_pack, question, attach_budget_tokens,
                      on_tool_call, on_token, cancelled, model=model, url=url, keep_alive=keep_alive,
-                     num_ctx=num_ctx, stream_post=stream_post)
+                     num_ctx=num_ctx, stream_post=stream_post, max_tokens=cap)
     if not result["cancelled"] and not result["text"].strip():
         # P16: an empty reply never renders empty: the data the app sent, under one plain line.
         logging.warning("Trade Mentor: the model returned no text; showing the %d pack(s) sent",
@@ -436,7 +451,8 @@ def _fetch_check(result: dict[str, Any], convo: list[dict[str, Any]], attachment
                  build_pack: Callable[[str, Mapping[str, Any]], Any], note_pack: Callable[..., None],
                  question: str | None, budget: int, on_tool_call: Callable[[dict], None],
                  on_token: Callable[[str], None], cancelled: Callable[[], bool], *, model: str, url: str,
-                 keep_alive: Any, num_ctx: int | None, stream_post: StreamPost) -> None:
+                 keep_alive: Any, num_ctx: int | None, stream_post: StreamPost,
+                 max_tokens: int | None = None) -> None:
     """P16: a reply that ends announcing a fetch with no tool call made gets ONE re-ask with the planner's packs
     built again (no dedupe); with no packs to fetch, or still announcing, it gets ``style.NO_FETCH_NOTE``."""
     from mentor_app import style
@@ -457,7 +473,8 @@ def _fetch_check(result: dict[str, Any], convo: list[dict[str, Any]], attachment
         ]
         parts: list[str] = []
         on_token("\n\n")
-        for chunk in iter_ndjson(stream_post(url, chat_payload(model, ask, keep_alive=keep_alive, num_ctx=num_ctx),
+        for chunk in iter_ndjson(stream_post(url, chat_payload(model, ask, keep_alive=keep_alive, num_ctx=num_ctx,
+                                                                    max_tokens=max_tokens),
                                              cancelled)):
             if cancelled():
                 result["cancelled"] = True

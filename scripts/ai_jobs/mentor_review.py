@@ -114,7 +114,8 @@ INSTRUCTIONS = (
     "rather than something the evidence does not carry. You may also propose at most three "
     "hypotheses: each is a query into the shadow permutation grid (population, horizon, family, "
     "side and one to three facets as 'name=value', using only names and values listed in "
-    "hypothesis_vocabulary), with why and the ids it rests on. The desk looks each one up; "
+    "hypothesis_vocabulary; families are listed without a side, so LONG or SHORT goes in side, never "
+    "in family), with why and the ids it rests on. The desk looks each one up; "
     "you never state its numbers. Leave hypotheses empty when the vocabulary is empty."
 )
 
@@ -838,6 +839,20 @@ def check_reply(reply: Any, inputs: Mapping[str, Any]) -> tuple[dict[str, list[d
     return kept, dropped
 
 
+def split_family_side(query: Any) -> tuple[Any, bool]:
+    """(query, normalised): a family ending in " LONG"/" SHORT" loses the side word, which becomes ``side`` when
+    side is empty or the same; any other query is returned unchanged."""
+    if not isinstance(query, Mapping):
+        return query, False
+    family = str(query.get("family") or "").strip()
+    head, _, tail = family.rpartition(" ")
+    word = tail.upper()
+    side = str(query.get("side") or "").strip().upper()
+    if not head.strip() or word not in ("LONG", "SHORT") or side not in ("", word):
+        return query, False
+    return {**query, "family": head.strip(), "side": word}, True
+
+
 def look_up_hypotheses(
     hypotheses: Sequence[Mapping[str, Any]],
     report: Any,
@@ -852,21 +867,22 @@ def look_up_hypotheses(
     out: list[dict[str, Any]] = []
     for index, item in enumerate(hypotheses, start=1):
         hyp_id = f"hyp:{session}:{index}"
-        clean, _why = hypothesis_pack.normalise(item.get("query"))
-        query = clean or dict(item.get("query") or {})
+        raw, normalised = split_family_side(item.get("query"))
+        clean, _why = hypothesis_pack.normalise(raw)
+        query = clean or dict(raw or {})
         record = hypothesis_pack.lookup_record(query, report)
         recorded = False
         if night_store is not None:
             recorded = night_store.add_challenge(
                 hyp_id, kind=hypothesis_pack.KIND, claim=_text(item.get("why")),
                 evidence_ids=list(item.get("evidence_refs") or ()), issued_utc=issued_utc,
-                outcome={"status": "open", "query": query, "lookup": record},
+                outcome={"status": "open", "query": query, "lookup": record, "normalised": normalised},
             )
         text = hypothesis_pack.record_text(record)
         out.append({
             "id": hyp_id, "query": query, "why": _text(item.get("why")),
             "evidence_refs": list(item.get("evidence_refs") or ()), "lookup": record, "recorded": recorded,
-            "line": f"[{hyp_id}] {hypothesis_pack.query_label(query)} -> {text}",
+            "normalised": normalised, "line": f"[{hyp_id}] {hypothesis_pack.query_label(query)} -> {text}",
         })
     return out
 

@@ -329,6 +329,35 @@ def test_a_daytime_run_publishes_the_lookup_but_records_nothing(chat, tmp_path):
     assert digest["hypotheses"][0]["recorded"] is False and "n=64" in digest["hyp_lines"][0]
 
 
+def test_a_side_written_into_the_family_is_moved_to_side_before_the_lookup(monkeypatch):
+    # 2026-09-30 night: family "avwap_band_bounce SHORT" + side "SHORT" missed as "family ... SHORT SHORT".
+    from mentor_packs import hypothesis_pack
+
+    seen = []
+    monkeypatch.setattr(hypothesis_pack, "lookup_record", lambda query, report: seen.append(dict(query)) or {})
+    item = {"query": {"population": "swing", "horizon": "5", "family": "avwap_band_bounce SHORT", "side": "SHORT",
+                      "facets": ["spy_trend=up"]}, "why": "w", "evidence_refs": ["turn:1"]}
+    plain = {**item, "query": {**item["query"], "family": "avwap_breakout", "side": "LONG"}}
+    clash = {**item, "query": {**item["query"], "family": "avwap_breakout long", "side": "SHORT"}}
+    out = mentor_review.look_up_hypotheses([item, plain, clash], None, session=SESSION, issued_utc=DAY_STAMP,
+                                           night_store=None)
+    assert (seen[0]["family"], seen[0]["side"]) == ("avwap_band_bounce", "SHORT")
+    assert [row["normalised"] for row in out] == [True, False, False]
+    assert (seen[1]["family"], seen[1]["side"]) == ("avwap_breakout", "LONG")
+    assert seen[2]["family"] == "avwap_breakout long", "a side that disagrees is left for the lookup to miss"
+    assert "families are listed without a side" in mentor_review.INSTRUCTIONS
+
+
+def test_a_side_in_the_family_still_finds_its_published_cell(chat, tmp_path):
+    sided = {**HYP, "query": {**HYP["query"], "family": "avwap_breakout LONG"}}
+    _run(chat, tmp_path, request=lambda **_: {"summary": _hyp_reply(sided), "model": "m"},
+         permutation_history=_perm_history(tmp_path), permutation_report=tmp_path / "none.json")
+    digest = json.loads((tmp_path / "ai" / f"mentor_day_digest_{SESSION}.json").read_text(encoding="utf-8"))
+    assert "n=64" in digest["hyp_lines"][0] and digest["hypotheses"][0]["normalised"] is True
+    row = MentorChatStore(chat).challenges(kind="hypothesis")[0]
+    assert json.loads(row["outcome_json"])["normalised"] is True
+
+
 def test_no_permutation_report_leaves_the_vocabulary_empty(chat, tmp_path):
     seen = {}
 
