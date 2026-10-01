@@ -622,8 +622,10 @@ _GENERIC_ID_PARTS = frozenset({"pick", "gate", "tape", "ctx", "jrn", "news", "bo
 #: P20: a brief / tape summary ask (live eval 2026-10-01: 700-1800 chars of bold headers and bullets).
 SUMMARY_PACKS = frozenset({"fundamentals_pack", "night_pack", "regime_pack"})
 _SUMMARY_CUE = re.compile(r"\bwhat(?:'s|s| does| did| do)\b.*\bsay\b|\bbrief\b|\bplaybook\b|\bmarket like\b")
-SUMMARY_INSTRUCTION = ("Answer in at most three short sentences, under 500 characters in all: the bottom line, "
-                       "the playbook, one risk. Prose only: no bullets, no bold, no headers. Cite ids inline.")
+SUMMARY_INSTRUCTION = ("Answer in at most three short sentences, under 500 characters in all. "
+                       "Prose only: no bullets, no bold, no headers. Cite ids inline.")
+#: Added to the summary instruction only when the plan reads the morning brief (fundamentals_pack).
+BRIEF_RECIPE = "Lead with the bottom line, then the playbook, then one risk."
 #: The summary turn's num_predict (three cited sentences fit well inside it).
 SUMMARY_MAX_TOKENS = 260
 #: A calendar / events question is a list, not a brief: never the summary shape.
@@ -683,7 +685,9 @@ def turn_shape(text: str, requests: Iterable[Any],
     summary or simple turn ``plain`` (the guard strips bullets, bold and headers)."""
     requests = list(requests or ())
     if summary_turn(text, requests, known_symbols):
-        return {"turn_instruction": SUMMARY_INSTRUCTION, "max_tokens": SUMMARY_MAX_TOKENS, "plain": True}
+        brief = any(getattr(request, "name", "") == "fundamentals_pack" for request in requests)
+        instruction = f"{SUMMARY_INSTRUCTION} {BRIEF_RECIPE}" if brief else SUMMARY_INSTRUCTION
+        return {"turn_instruction": instruction, "max_tokens": SUMMARY_MAX_TOKENS, "plain": True}
     if simple_turn(text, requests):
         return {"plain": True}
     return {}

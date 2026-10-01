@@ -57,10 +57,21 @@ def _shape(text):
 
 @pytest.mark.parametrize("text", SIX)
 def test_the_six_summary_asks_get_the_three_sentence_instruction_and_a_token_cap(text):
-    assert _shape(text) == {"turn_instruction": attach.SUMMARY_INSTRUCTION, "max_tokens": attach.SUMMARY_MAX_TOKENS,
-                            "plain": True}
-    assert "at most three short sentences, under 500 characters in all" in attach.SUMMARY_INSTRUCTION
+    shape = _shape(text)
+    assert shape.pop("turn_instruction").startswith(attach.SUMMARY_INSTRUCTION)
+    assert shape == {"max_tokens": attach.SUMMARY_MAX_TOKENS, "plain": True}
+    assert attach.SUMMARY_INSTRUCTION == ("Answer in at most three short sentences, under 500 characters in all. "
+                                          "Prose only: no bullets, no bold, no headers. Cite ids inline.")
+    assert attach.BRIEF_RECIPE == "Lead with the bottom line, then the playbook, then one risk."
     assert attach.SUMMARY_MAX_TOKENS == 260
+
+
+def test_the_brief_recipe_rides_only_with_the_fundamentals_pack():
+    brief = _shape("is the playbook bullish or bearish")["turn_instruction"]
+    assert brief == f"{attach.SUMMARY_INSTRUCTION} {attach.BRIEF_RECIPE}"
+    for night_only in ("what did the night say I'm missing", "what changed in the tape since yesterday",
+                       "whats the market like this morning"):
+        assert _shape(night_only)["turn_instruction"] == attach.SUMMARY_INSTRUCTION, night_only
 
 
 @pytest.mark.parametrize("text", NOT_SUMMARY)
@@ -194,7 +205,7 @@ def test_the_live_eval_stores_the_turn_shape_on_its_row(monkeypatch, tmp_path):
                              {"q": "how did I do last week", "expected_packs": [], "simple": True}]}
     report = mentor_eval.live_report(fixture, out_dir=tmp_path)
     assert [row["plain"] for row in report["rows"]] == [True, False, True]
-    assert seen[0]["turn_instruction"] == attach.SUMMARY_INSTRUCTION and "turn_instruction" not in seen[1]
+    assert seen[0]["turn_instruction"].startswith(attach.SUMMARY_INSTRUCTION) and "turn_instruction" not in seen[1]
     assert "turn_instruction" not in seen[2] and "max_tokens" not in seen[2] and seen[2]["plain"] is True
 
 
@@ -228,7 +239,7 @@ def test_a_summary_turn_shows_plain_text_and_stores_the_raw_reply(tmp_path, monk
         win._io.submit(lambda: None).result(5)
         assert sent[0]["options"]["num_predict"] == attach.SUMMARY_MAX_TOKENS
         assert [m for m in sent[0]["messages"] if m["role"] == "user"][-1]["content"].endswith(
-            attach.SUMMARY_INSTRUCTION)
+            f"{attach.SUMMARY_INSTRUCTION} {attach.BRIEF_RECIPE}")
         shown = win._blocks[-1]
         assert "**Bottom line" not in shown and "- Buy pullbacks" not in shown and "Bottom line: risk-on" in shown
         assert win.store.turns()[-1]["text"] == LONG_REPLY, "the turn log keeps the model's raw words"
