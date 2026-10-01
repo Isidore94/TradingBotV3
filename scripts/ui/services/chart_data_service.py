@@ -32,6 +32,8 @@ import itertools
 import logging
 import threading
 from collections import OrderedDict
+
+import numpy as np
 from typing import Any, Iterable, Mapping, Sequence
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
@@ -110,6 +112,19 @@ class _SnapshotTask(QRunnable):
         service._finish(self._request_id, self._symbol, d1, m5, meta)
 
 
+def _same_bars(cached: BarSeries, fresh: BarSeries) -> bool:
+    """True when two series hold the same bars: equal stamps, closes and volumes."""
+    try:
+        return (
+            len(cached) == len(fresh)
+            and np.array_equal(cached.dt, fresh.dt)
+            and np.array_equal(cached.close, fresh.close)
+            and np.array_equal(cached.volume, fresh.volume)
+        )
+    except Exception:
+        return False
+
+
 class _PrefetchTask(QRunnable):
     def __init__(self, service: "ChartDataService", symbols: Sequence[str]) -> None:
         super().__init__()
@@ -123,6 +138,9 @@ class _PrefetchTask(QRunnable):
             warmed = self._service.store.prefetch(self._symbols)
             for symbol in self._symbols:
                 self._service._cache_earnings_anchor_from_source(symbol)
+                # Materialize the bar dicts here, on the worker, so the Alert
+                # Center's 60 s poll finds them ready instead of building them.
+                self._service.cached_bar_dicts(symbol)
         except Exception:
             _log.debug("Chart prefetch failed.", exc_info=True)
             return
@@ -451,7 +469,11 @@ class ChartDataService(QObject):
             return []
         with self._lock:
             cached = self._bar_dicts.get(key)
-            if cached is not None and cached[0] is series:
+            if cached is not None and (cached[0] is series or _same_bars(cached[0], series)):
+                # A refreshed series with the same bars (the usual 60 s case)
+                # keeps the dicts; the memo rebinds to the new object.
+                if cached[0] is not series:
+                    self._bar_dicts[key] = (series, cached[1])
                 self._bar_dicts.move_to_end(key)
                 return cached[1]
         bars = series.as_bar_dicts()

@@ -573,8 +573,10 @@ class JournalStore:
         if pre_existing and prior_version is not None and int(prior_version) < JOURNAL_SCHEMA_VERSION:
             report.backup_path = str(backup_database(self.db_path, prior_version))
 
+        # Tables, columns, indexes and triggers are checked on every open; the
+        # two full scans of raw_executions run only when the stamp is behind.
         with self.connection() as conn:
-            migrate_to_v3(conn, report=report)
+            migrate_to_v3(conn, report=report, rescan_executions=needs_migration)
 
         if needs_migration:
             self.last_migration = report

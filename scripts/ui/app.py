@@ -2017,6 +2017,11 @@ def main(argv: list[str] | None = None) -> int:
         state.save()
 
     theme.configure_platform()
+    # Every Python-painted cell takes the interpreter lock once; a short switch
+    # interval bounds how long each of those hops waits behind a busy worker.
+    from ui.interpreter_tuning import configure_switch_interval
+
+    configure_switch_interval()
     install_qt_message_rate_limit()
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_DontShowIconsInMenus, False)
     app = QApplication(sys.argv[:1])

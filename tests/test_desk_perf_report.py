@@ -181,3 +181,14 @@ def test_module_imports_nothing_from_scripts_at_module_top():
             if (SCRIPTS_DIR / f"{head}.py").exists() or (SCRIPTS_DIR / head).is_dir():
                 offenders.append(name)
     assert offenders == []
+
+
+def test_the_headline_splits_blocked_time_into_event_loop_and_python(logs):
+    report = _report(logs)
+    assert report["python_s"] == pytest.approx(0.9)
+    assert report["python_s"] + report["event_loop_s"] == pytest.approx(report["blocked_s"])
+    stalls, gauge = logs
+    out = io.StringIO()
+    rep.main(["--day", DAY, "--stalls", str(stalls), "--gauge", str(gauge)], stream=out)
+    text = out.getvalue()
+    assert "event loop s (Qt/GIL)" in text and "python frames s" in text
