@@ -157,9 +157,10 @@ def request(
         {"role": "user", "content": json.dumps(dict(inputs), sort_keys=True)},
     ]
     payload = brain.chat_payload(model, messages, stream=False, keep_alive=keep_alive, num_ctx=num_ctx,
-                                 fmt=SCHEMA, max_tokens=MAX_OUTPUT_TOKENS)
+                                 fmt=SCHEMA, max_tokens=MAX_OUTPUT_TOKENS,
+                                 think=False if brain.thinks_unless_told(model) else None)
     reply = post(f"{endpoint.rstrip('/')}/api/chat", payload, TIMEOUT_SECONDS)
-    return json.loads(str((reply.get("message") or {}).get("content") or ""))
+    return brain.json_reply(reply)
 
 
 # ---------------------------------------------------------------- the citation check

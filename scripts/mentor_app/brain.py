@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -125,7 +126,9 @@ def chat_payload(
     num_ctx: int | None = None,
     fmt: Any = None,
     max_tokens: int | None = None,
+    think: bool | None = None,
 ) -> dict[str, Any]:
+    """One /api/chat body. ``think=False`` turns reasoning off (gemma4 reasons unless told not to)."""
     options: dict[str, Any] = {}
     if num_ctx:
         options["num_ctx"] = int(num_ctx)
@@ -146,7 +149,38 @@ def chat_payload(
         # Same shape as the night's gpt-oss call; `think` is the native API's name for it.
         payload["reasoning_effort"] = CHAT_REASONING_EFFORT
         payload["think"] = CHAT_REASONING_EFFORT
+    elif think is not None:
+        payload["think"] = bool(think)
     return payload
+
+
+def thinks_unless_told(model: str) -> bool:
+    """True for a tag that reasons unless asked not to (gemma4): its reasoning eats ``num_predict``."""
+    import ai_summary
+
+    return ai_summary.model_thinking_off(model)
+
+
+def json_reply(reply: Mapping[str, Any]) -> Any:
+    """The JSON in an Ollama chat reply's content: bare, in a code fence, or after a line of prose.
+
+    An empty content raises ValueError naming why (reasoning used the token cap, or nothing came back).
+    """
+    message = (reply or {}).get("message") or {}
+    text = str(message.get("content") or "").strip()
+    if not text:
+        why = "the reasoning used the token cap" if str(message.get("thinking") or "").strip() else "no content"
+        raise ValueError(f"empty reply ({why}, done_reason={(reply or {}).get('done_reason')!r})")
+    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    if fence:
+        text = fence.group(1).strip()
+    try:
+        return json.loads(text)
+    except ValueError:
+        start = text.find("{")
+        if start < 0:
+            raise
+        return json.JSONDecoder().raw_decode(text[start:])[0]
 
 
 def iter_ndjson(lines: Iterable[Any]) -> Iterator[dict[str, Any]]:
