@@ -181,8 +181,6 @@ _EARNINGS_ALONE = re.compile(
     r"^\W*(?:any\s+)?earnings\b|\b(?:earnings|reports?|reporting)\s+(?:this|next)\s+week\b"
     r"|\b(?:earnings|reports?|reporting)\s+(?:today|tomorrow)\b|\b(?:anything|anyone|who|who's|whos)\s+(?:is\s+)?"
     r"report(?:s|ing)?\b")
-_SHORT_WORD = re.compile(r"\bshort(?:ing|s|ed)?\b|\bsell(?:ing)?\b(?!-)|\bput(?:s)?\b")
-_LONG_WORD = re.compile(r"\blong\b|\bbuy(?:ing)?\b|\bgo long\b|\bcalls?\b")
 
 
 @dataclass(frozen=True)
@@ -281,16 +279,6 @@ def find_symbols(text: str, known_symbols: Mapping[str, Any] | Iterable[str]) ->
     return ordered
 
 
-def _side_words(lowered: str) -> str:
-    short, long_ = _SHORT_WORD.search(lowered), _LONG_WORD.search(lowered)
-    if short and not long_:
-        return "SHORT"
-    if long_ and not short:
-        return "LONG"
-    if short and long_:
-        return "SHORT" if short.start() < long_.start() else "LONG"
-    return ""
-
 
 def market_cue(text: str) -> bool:
     """True when the question is about the market or a trade about to be taken: then tape context is wanted."""
@@ -337,11 +325,17 @@ def plan_attachments(
         # P18 review: one table-driven resolver (mentor_app/intent.py) - each verb binds to its ticker by clause
         # and is read against the book first (exit / add of a held position, or a new trade).
         held = {sym: known.get(sym, "") for sym in symbols if sym in held_names and known.get(sym, "")}
-        resolved = intent_mod.resolve(raw, symbols, held)
+        resolved = intent_mod.resolve(raw, symbols, held, known)
         for item in resolved:
             if item.kind == "none_to_exit":
                 add("pick_pack", f"no position in {item.symbol} to exit", symbol=item.symbol,
                     note=f"No position in {item.symbol} to exit: it is not in the open book")
+                noted.add(item.symbol)
+                continue
+            if item.kind == "status":
+                # "I'm long AMD, how does it look?": his own position, not a trade - the pick and the book.
+                add("pick_pack", f"status of a held {item.symbol}", symbol=item.symbol)
+                add("book_pack", f"status of a held {item.symbol}")
                 noted.add(item.symbol)
                 continue
             if item.kind == "history":
@@ -357,15 +351,6 @@ def plan_attachments(
                 add("journal_pack", f"exit of a held {item.symbol}: today's trades", day="today")
                 add("pick_pack", f"exit of a held {item.symbol}", symbol=item.symbol)
             gated.add(item.symbol)
-        if not intent_mod.has_verb(raw, symbols) and _INTENT.search(lowered):
-            # No trade verb at all ("thinking of taking ALL", "entering TSLA"): the old intent words, for names
-            # not held, with the side words or the known side. A held name with no verb is context only.
-            side = _side_words(lowered)
-            for sym in symbols:
-                chosen = (side if len(symbols) == 1 else "") or known.get(sym, "")
-                if sym not in held_names and chosen:
-                    add("gate_pack", f"trade intent on {sym}", side=chosen, symbol=sym)
-                    gated.add(sym)
     for sym in symbols:
         if sym not in gated and sym not in noted:
             add("pick_pack", f"ticker {sym}", symbol=sym)

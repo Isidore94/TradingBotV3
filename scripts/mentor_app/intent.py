@@ -33,6 +33,8 @@ from typing import Iterable, Mapping
 
 EXIT, COVER, SELL, ADD, BUY, GO_LONG, GO_SHORT, CLOSE, PAST = (
     "exit", "cover", "sell", "add", "buy", "go_long", "go_short", "close", "past")
+#: "I'm long AMD" / "I'm short TSLA": a status about his own side; TAKE: "take/enter/get into X" (no side said).
+STATUS_LONG, STATUS_SHORT, TAKE = "status_long", "status_short", "take"
 
 #: (token sequence, class), longest first at each position.
 PHRASES: tuple[tuple[tuple[str, ...], str], ...] = tuple(sorted((
@@ -57,6 +59,7 @@ PHRASES: tuple[tuple[tuple[str, ...], str], ...] = tuple(sorted((
     (("taking", "profits"), EXIT), (("take", "some", "profit"), EXIT), (("take", "some", "profits"), EXIT),
     (("take", "some", "off"), EXIT), (("taking", "some", "off"), EXIT), (("go", "flat"), EXIT),
     (("scale", "out"), EXIT), (("scaling", "out"), EXIT), (("get", "out"), EXIT), (("getting", "out"), EXIT),
+    (("size", "down"), EXIT), (("sizing", "down"), EXIT),
     (("trim",), EXIT), (("trimming",), EXIT), (("dump",), EXIT), (("dumping",), EXIT), (("cut",), EXIT),
     (("lighten",), EXIT), (("lightening",), EXIT), (("exit",), EXIT), (("exiting",), EXIT),
     # adds
@@ -78,8 +81,12 @@ SIDE_NEVER_NEXT = frozenset({"interest", "squeeze", "squeezes", "idea", "ideas",
 HELD_NOUN_PREV = frozenset({"the", "my", "our", "your", "his", "her", "their", "this", "that", "how"})
 #: "buy back" before one of these is a company's buyback, not a cover.
 BUYBACK_NOUN_NEXT = frozenset({"program", "programs", "plan", "authorization", "announcement"})
-#: "flat"/"cut"/"take X off": only with a ticker as object.
+#: "flat"/"cut"/"take X off": only with a ticker as object ("cut my losses on AMD": these words may sit between).
 OBJECT_ONLY = frozenset({"flat", "cut"})
+OBJECT_FILLER = frozenset({"my", "the", "some", "half", "all", "losses", "loss", "on", "in", "of", "position", "out"})
+#: "take/enter/get into X": a trade with no side said; it takes the known side (only with a ticker right after).
+TAKE_WORDS = frozenset({"take", "taking", "enter", "entering"})
+TAKE_INTO = frozenset({"get", "getting", "got"})
 CLAUSE_WORDS = frozenset({"and", "but", "then"})
 _TOKEN = re.compile(r"\$?[A-Za-z][A-Za-z'\-]*|[,;?—]")
 
@@ -139,6 +146,15 @@ def verbs(text: str, tickers: Iterable[str]) -> list[tuple[int, str]]:
             i += 1
             continue
         if word in ("short", "long"):
+            if prev == "a" and nxt in ("on", "in", "for") and is_ticker(i + 2):
+                found.append((i, GO_SHORT if word == "short" else GO_LONG))  # "a long on TGT"
+                i += 1
+                continue
+            status = prev in ("i'm", "im") or (prev == "am" and i >= 2 and lowered[i - 2] == "i")
+            if status and (is_ticker(i + 1) or nxt in SIDE_OBJECT_NEXT):
+                found.append((i, STATUS_SHORT if word == "short" else STATUS_LONG))  # "I'm long AMD"
+                i += 1
+                continue
             framed = (i in starts or prev in SIDE_FRAME_PREV) and prev not in SIDE_NEVER_PREV
             # "a QCOM long at 230", "size up TSLA short": the side right after its ticker, at the end or before
             # at/here/now - never "the TSLA short", "my AMD long".
@@ -149,9 +165,20 @@ def verbs(text: str, tickers: Iterable[str]) -> list[tuple[int, str]]:
             i += 1
             continue
         if word in OBJECT_ONLY:
-            if is_ticker(i + 1):
+            j = i + 1
+            while j < len(toks) and j <= i + 4 and lowered[j] in OBJECT_FILLER:
+                j += 1
+            if is_ticker(j):
                 found.append((i, EXIT))
             i += 1
+            continue
+        if word in TAKE_WORDS and is_ticker(i + 1) and (lowered[i + 2] if i + 2 < len(toks) else "") != "off":
+            found.append((i, TAKE))  # "should I take TSLA", "entering TSLA"
+            i += 1
+            continue
+        if word in TAKE_INTO and nxt in ("into", "in") and is_ticker(i + 2):
+            found.append((i, TAKE))  # "getting into ALL"
+            i += 2
             continue
         if word in ("take", "taking") and is_ticker(i + 1) and i + 2 < len(toks) and lowered[i + 2] == "off":
             found.append((i, EXIT))  # "take NVDA off"
@@ -199,9 +226,31 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
     return out
 
 
-def _one(sym: str, kinds: set[str], side: str) -> list[Intent]:
-    if PAST in kinds:
+def _one(sym: str, kinds: set[str], side: str, known_side: str = "") -> list[Intent]:
+    """Past tense wins ("sold AMD") unless an add follows it ("I bought NVDA yesterday, add?")."""
+    if PAST in kinds and ADD not in kinds:
         return [Intent(sym, "history")]
+    out = _decide(sym, set(kinds) - {PAST}, side, known_side)
+    return out or ([Intent(sym, "history")] if PAST in kinds else [])
+
+
+def _decide(sym: str, kinds: set[str], side: str, known_side: str) -> list[Intent]:
+    # "I'm long AMD": about a held name on that side it is a status (no gate); otherwise it says what he wants.
+    for status, go, own in ((STATUS_LONG, GO_LONG, "LONG"), (STATUS_SHORT, GO_SHORT, "SHORT")):
+        if status in kinds:
+            kinds.discard(status)
+            if side != own:
+                kinds.add(go)
+    if TAKE in kinds:
+        kinds.discard(TAKE)
+        if not kinds:
+            if side:
+                return [Intent(sym, "add", side)]
+            if known_side in ("LONG", "SHORT"):
+                return [Intent(sym, "new", known_side)]
+            return []
+    if not kinds:
+        return [Intent(sym, "status", side)] if side else []
     exits = kinds & {EXIT, COVER, CLOSE}
     if side == "LONG":
         if GO_SHORT in kinds:
@@ -231,13 +280,15 @@ def _one(sym: str, kinds: set[str], side: str) -> list[Intent]:
     return []
 
 
-def resolve(text: str, tickers: Iterable[str], held: Mapping[str, str]) -> list[Intent]:
-    """The ``Intent``s for every ticker a verb acts on, read against ``held`` (``{SYM: LONG|SHORT}``)."""
+def resolve(text: str, tickers: Iterable[str], held: Mapping[str, str],
+            known: Mapping[str, str] | None = None) -> list[Intent]:
+    """The ``Intent``s for every ticker a verb acts on, read against ``held`` (``{SYM: LONG|SHORT}``); ``known``
+    sides (Focus, likes) only side a TAKE verb ("entering TSLA") on a name not held."""
     names = [str(t).upper() for t in tickers]
     out: list[Intent] = []
     for sym, kinds in bind(text, names).items():
         if kinds:
-            out += _one(sym, kinds, str(held.get(sym) or "").upper())
+            out += _one(sym, kinds, str(held.get(sym) or "").upper(), str((known or {}).get(sym) or "").upper())
     order = {sym: n for n, sym in enumerate(names)}
     return sorted(out, key=lambda item: order.get(item.symbol, 0))
 

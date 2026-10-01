@@ -28,6 +28,7 @@ ADD_S = ("add", "SHORT")
 NEW_L = ("new", "LONG")
 NEW_S = ("new", "SHORT")
 HISTORY = ("history", "")
+STATUS = ("status", "")
 NONE = ("none_to_exit", "")
 FLIP_TO_LONG = [("exit", "SHORT"), ("new", "LONG")]
 FLIP_TO_SHORT = [("exit", "LONG"), ("new", "SHORT")]
@@ -123,6 +124,39 @@ TABLE = [
     ("AMD buy back program announced", BOOK, {}),
     ("does TSLA have a buyback", BOOK, {}),
     ("should I buy back TSLA", BOOK, {"TSLA": EXIT_S}),
+    # round 7: no resolver verb never opens a gate (QCOM not held)
+    ("should I worry about the short interest on QCOM", BOOK, {}),
+    ("how long should I hold QCOM", BOOK, {}),
+    ("QCOM buy back program", BOOK, {}),
+    ("is QCOM a long term hold", BOOK, {}),
+    ("QCOM short squeeze coming?", BOOK, {}),
+    ("any long setups like QCOM", BOOK, {}),
+    ("what's the QCOM buyback size", BOOK, {}),
+    # round 7: the legacy phrasings are resolver rows now
+    ("thinking of taking ALL", BOOK, {"ALL": NEW_S}),
+    ("thinking about getting into ALL on the open", BOOK, {"ALL": NEW_S}),
+    ("should I take ALL here", BOOK, {"ALL": NEW_S}),
+    ("thinking of taking AMD", BOOK, {"AMD": ADD_L}),
+    ("size up ALL short", BOOK, {"ALL": NEW_S}),
+    ("what should my stop be on a QCOM long at 230", BOOK, {"QCOM": NEW_L}),
+    ("what should my stop be on a AMD long at 150", BOOK, {"AMD": ADD_L}),
+    ("walk me through a pre-trade checklist for a long on QCOM", BOOK, {"QCOM": NEW_L}),
+    # round 7: a first-person status about a held name is not an add
+    ("I'm long AMD, how does it look?", BOOK, {"AMD": STATUS}),
+    ("I'm short TSLA here, thoughts?", BOOK, {"TSLA": STATUS}),
+    ("I'm short TSLA, cover?", BOOK, {"TSLA": EXIT_S}),
+    ("I'm long QCOM here", BOOK, {"QCOM": NEW_L}),
+    ("I'm short ALL, thoughts?", BOOK, {"ALL": NEW_S}),
+    ("I'm long TSLA now", BOOK, {"TSLA": FLIP_TO_LONG}),
+    # round 7: cut / size down / an add after history
+    ("cut my losses on AMD?", BOOK, {"AMD": EXIT_L}),
+    ("cut my losses on QCOM?", BOOK, {"QCOM": NONE}),
+    ("size down AMD", BOOK, {"AMD": EXIT_L}),
+    ("size down QCOM", BOOK, {"QCOM": NONE}),
+    ("size down TSLA", BOOK, {"TSLA": EXIT_S}),
+    ("I bought NVDA yesterday, add?", BOOK, {"NVDA": ADD_L}),
+    ("I bought QCOM yesterday, add?", BOOK, {"QCOM": HISTORY}),
+    ("I bought NVDA yesterday", BOOK, {"NVDA": HISTORY}),
     # pure questions, no verb
     ("how is AMD trading right now", BOOK, {}),
     ("what's the news on NVDA", BOOK, {}),
@@ -150,6 +184,8 @@ def _gates(text, book):
             out[r.args["symbol"]] = NONE
         elif r.name == "pick_pack" and r.reason.startswith("history on "):
             out[r.args["symbol"]] = HISTORY
+        elif r.name == "pick_pack" and r.reason.startswith("status of a held "):
+            out[r.args["symbol"]] = STATUS
     return out
 
 
@@ -206,3 +242,12 @@ def test_a_flip_names_both_halves_in_its_request_rows(tmp_path):
 def test_history_attaches_the_journal_and_the_pick_never_a_gate():
     names = [r.name for r in attach.plan_attachments("sold AMD at 150", KNOWN, NOW, book=list(BOOK))]
     assert "journal_pack" in names and "pick_pack" in names and "gate_pack" not in names
+
+
+def test_a_status_attaches_the_pick_and_the_book_and_no_gate():
+    names = [r.name for r in attach.plan_attachments("I'm long AMD, how does it look?", KNOWN, NOW, book=list(BOOK))]
+    assert "pick_pack" in names and "book_pack" in names and "gate_pack" not in names
+
+
+def test_the_legacy_side_words_are_gone_from_attach():
+    assert not hasattr(attach, "_side_words") and not hasattr(attach, "_SHORT_WORD")
