@@ -35,6 +35,9 @@ EXIT, COVER, SELL, ADD, BUY, GO_LONG, GO_SHORT, CLOSE, PAST = (
     "exit", "cover", "sell", "add", "buy", "go_long", "go_short", "close", "past")
 #: "I'm long AMD" / "I'm short TSLA": a status about his own side; TAKE: "take/enter/get into X" (no side said).
 STATUS_LONG, STATUS_SHORT, TAKE = "status_long", "status_short", "take"
+#: "I'm flat AMD": he holds nothing in it now (whatever the book file says); never a gate.
+STATUS_FLAT = "status_flat"
+STATUSES = (STATUS_LONG, STATUS_SHORT, STATUS_FLAT)
 
 #: (token sequence, class), longest first at each position.
 PHRASES: tuple[tuple[tuple[str, ...], str], ...] = tuple(sorted((
@@ -42,7 +45,8 @@ PHRASES: tuple[tuple[tuple[str, ...], str], ...] = tuple(sorted((
     (("sold",), PAST), (("covered",), PAST), (("bought",), PAST), (("trimmed",), PAST),
     (("exited",), PAST), (("got", "out"), PAST), (("stopped", "out"), PAST), (("stop", "out"), PAST),
     (("i'm", "out"), PAST), (("im", "out"), PAST), (("i", "am", "out"), PAST),
-    (("got", "into"), PAST), (("got", "in"), PAST),
+    (("got", "into"), PAST), (("got", "in"), PAST), (("went", "flat"), PAST),
+    (("buy", "back", "in"), BUY), (("buying", "back", "in"), BUY),
     (("get", "me", "out"), EXIT), (("getting", "me", "out"), EXIT),
     # covering a short
     (("buy", "back"), COVER), (("buying", "back"), COVER), (("buy", "it", "back"), COVER),
@@ -137,7 +141,20 @@ ADJ_NOUNS = frozenset({"noise", "chart", "charts", "setup", "setups", "news", "e
                        "interest", "buyback", "buybacks", "move", "levels", "level", "thesis", "puts", "dip", "dips",
                        "pop", "bounce", "breakout", "breakdown", "rip", "run", "gap", "flush", "weakness", "strength"})
 PAST_MARKER = re.compile(r"\b(?:yesterday|earlier|ago|this morning|last (?:week|night|month|friday|monday|tuesday|"
-                         r"wednesday|thursday|session)|at the open|on (?:monday|tuesday|wednesday|thursday|friday))\b")
+                         r"wednesday|thursday|session)|on (?:monday|tuesday|wednesday|thursday|friday))\b")
+#: "at the open" is past only with no future word in the sentence ("add AMD at the open tomorrow").
+AT_THE_OPEN = re.compile(r"\bat the open\b")
+FUTURE_WORDS = re.compile(r"\b(?:tomorrow|next|will|should i|gonna|going to)\b|\?")
+#: Past frames: "I was buying", "I was going to buy", "I wanted to sell" are history, not a live intent.
+PAST_FRAME = re.compile(r"\b(?:i was|i were|was going to|was gonna|i wanted|wanted to|i had|i meant|i did)\b")
+#: Condition (e): the clause must ASK (or the verb is imperative, first in its clause).
+ASK_CUE = re.compile(r"\b(?:should|shall|can|could|would|do|does|is it|time|ok|okay) (?:i|we|my|to)\b|\bwhat should\b"
+                     r"|\bthinking (?:of|about)\b|\babout to\b|\b(?:want|wanna|looking|going|need|like|ready|"
+                     r"planning|plan) to\b|\bwanna\b|\bgonna\b|\bthoughts\b|\bcheck(?:list)?\b|\bpre-trade\b"
+                     r"|\bwalk me through\b|\bworth\b")
+IMPERATIVE_LEAD = frozenset({"just", "please", "ok", "okay", "so", "now", "then", "maybe", "should"})
+#: A verb word after one of these is a noun ("a buy", "my exit", "the sell").
+NOUN_PREV = frozenset({"a", "an", "my", "the", "or", "your", "his", "her", "our", "their"})
 #: "TSLA shorts covering": a market phrase - the verb's subject is the crowd, not him.
 MARKET_SUBJECTS = frozenset({"shorts", "longs", "bears", "bulls", "buyers", "sellers", "funds", "people",
                              "everyone", "traders"})
@@ -145,6 +162,10 @@ MARKET_SUBJECTS = frozenset({"shorts", "longs", "bears", "bulls", "buyers", "sel
 NEW_SUBJECT = frozenset({"i", "it", "it's", "its", "he", "she", "we", "they", "you", "this", "that", "what",
                          "how", "should", "is", "does", "do", "can"})
 WATCHLIST_WORDS = frozenset({"watchlist", "list", "radar", "screen", "focus"})
+
+
+#: Every single-word verb in the table ("a buy or sell": the word after "or").
+VERB_WORDS = frozenset(phrase[0] for phrase, _kind in PHRASES) | {"close", "short", "long", "hold"}
 
 
 def spans(text: str, tickers: Iterable[str]) -> list[tuple[int, int, str]]:
@@ -182,6 +203,16 @@ def spans(text: str, tickers: Iterable[str]) -> list[tuple[int, int, str]]:
             found.append((i, i, EXIT))  # "..., out?"
             i += 1
             continue
+        if word == "flat":
+            # "I'm flat AMD", "I'm already flat on NVDA", "I am flat AMD": a status, never an exit.
+            back = at(i - 2) if prev in ("already", "now", "totally", "fully") else prev
+            frame = back in ("i'm", "im") or (back == "am" and at(i - 3 if prev != back else i - 2) == "i")
+            if (frame or (carry and i in starts)) and (is_ticker(i + 1) or (nxt == "on" and is_ticker(i + 2))
+                                                      or nxt in ("", "now", "here", ",", "?")):
+                found.append((i, i, STATUS_FLAT))
+                carry = STATUS_FLAT
+                i += 1
+                continue
         if word in ("short", "long"):
             side_status = STATUS_SHORT if word == "short" else STATUS_LONG
             obj = is_ticker(i + 1) or nxt in SIDE_OBJECT_NEXT or (nxt == "on" and is_ticker(i + 2))
@@ -237,6 +268,9 @@ def spans(text: str, tickers: Iterable[str]) -> list[tuple[int, int, str]]:
                 break  # a buyback program, not a cover
             if prev in MARKET_SUBJECTS and kind != PAST:
                 break  # "TSLA shorts covering": the crowd, not him
+            if kind != PAST and (prev in NOUN_PREV or (is_ticker(i - 1) and at(i - 2) in NOUN_PREV)
+                                 or (after == "or" and at(i + len(phrase) + 1) in VERB_WORDS)):
+                break  # a noun: "is NVDA a buy or sell", "what's my AMD exit"
             found.append((i, i + len(phrase) - 1, kind))
             i += len(phrase) - 1
             break
@@ -263,7 +297,21 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
     words_of: dict[int, list[str]] = {}
     for n, c in enumerate(clause):
         words_of.setdefault(c, []).append(lowered[n])
-    past_clauses = {c for c, words in words_of.items() if PAST_MARKER.search(" ".join(words))}
+    sentence = " ".join(lowered)
+    future = bool(FUTURE_WORDS.search(sentence))
+    past_clauses = {c for c, words in words_of.items()
+                    if PAST_MARKER.search(" ".join(words)) or PAST_FRAME.search(" ".join(words))
+                    or (AT_THE_OPEN.search(" ".join(words)) and not future)}
+    # (e): a clause asks when it carries a cue or ends with "?"; or its verb is first in it (an imperative).
+    asked = {c for c, words in words_of.items() if ASK_CUE.search(" ".join(words))}
+    for n, tok in enumerate(toks):
+        if tok == "?" and n:
+            asked.add(clause[n - 1])
+    clause_start: dict[int, int] = {}
+    for n, c in enumerate(clause):
+        if toks[n] in (",", ";", "?", "\u2014") or lowered[n] in CLAUSE_WORDS:
+            continue
+        clause_start.setdefault(c, n)
     # A ticker followed by a noun ("the AMD noise", "QCOM short interest") is an adjective: never an object.
     def adjective(i: int) -> bool:
         nxt = lowered[i + 1] if i + 1 < len(toks) else ""
@@ -275,10 +323,17 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
     ticker_at = dict(places)
     names_in_sentence = {sym for _, sym in places}
     found = spans(text, upper)
+    imperative = set()
+    for first, _last, _kind in found:
+        lead = clause_start.get(clause[first], -1)
+        if first == lead or (first == lead + 1 and lowered[lead] in IMPERATIVE_LEAD):
+            imperative.add(clause[first])
     for first, last, kind in found:
         c = clause[first]
-        if kind not in (PAST, STATUS_LONG, STATUS_SHORT) and c in past_clauses:
+        if kind not in (PAST, *STATUSES) and c in past_clauses:
             kind = PAST  # "I cut half my AMD this morning" is what he did
+        if kind not in (PAST, *STATUSES) and c not in asked and c not in imperative:
+            kind = PAST  # (e) plain narration with no ask cue ("I cut AMD at 155") is history, never a gate
         j, skipped = last + 1, 0
         while j < len(toks) and lowered[j] in FILLER and toks[j].upper() not in upper and skipped < OBJECT_WINDOW:
             j, skipped = j + 1, skipped + 1
@@ -307,7 +362,7 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
     verb_clauses = {clause[first]: kind for first, _last, kind in found}
     for c in sorted(words_of):
         kind = verb_clauses.get(c)
-        if kind in (STATUS_LONG, STATUS_SHORT):
+        if kind in STATUSES:
             status_kind, status_clause = kind, c
             continue
         if kind is not None or not status_kind or (words_of[c] and words_of[c][0] in NEW_SUBJECT):
@@ -328,6 +383,12 @@ def _one(sym: str, kinds: set[str], side: str, known_side: str = "") -> list[Int
 
 
 def _decide(sym: str, kinds: set[str], side: str, known_side: str) -> list[Intent]:
+    if STATUS_FLAT in kinds:
+        # "I'm flat AMD": he holds none now - the book file is behind; what follows is about a name not held.
+        kinds.discard(STATUS_FLAT)
+        side = ""
+        if not kinds:
+            return [Intent(sym, "status", "FLAT")]
     # "I'm long AMD": about a held name on that side it is a status (no gate); otherwise it says what he wants.
     for status, go, own in ((STATUS_LONG, GO_LONG, "LONG"), (STATUS_SHORT, GO_SHORT, "SHORT")):
         if status in kinds:
