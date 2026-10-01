@@ -6,11 +6,11 @@
     "questions",
     "book"
   ],
-  "raw_input_sha256": "5f85a5ad0011faead25913cc4958632fb09e08b4cb9cb018123136436fb37955",
+  "raw_input_sha256": "56730330877fd1958fd17859737d721ecc38464532303badd6b3e2fe6b26149e",
   "acquired_at": "2026-09-30T19:31:39-07:00",
   "as_of": "2026-09-30T19:31:39-07:00",
-  "universe_version": "trader_plain_questions_v4",
-  "provider_assumptions": "Hand-written questions in the trader's own style (2026-09-30), not a desk capture: the 100 of the 2026-09-30 live eval (the first 60 from P13/P14/P15b, then 40 harder ones; the last 25 are the hard tier). known_symbols stands in for his universe (Focus, likes, book, journal); book is his open book (a subset), so a book question ('my longs', 'my open shorts') reads only those names (P16). expected_packs are what the app should fetch (P14: no regime without a market or pre-trade cue; P16: book scope, veto aggregates with the mirror, watch-tomorrow, regime-or-me, this week vs last week); concept questions need none; must_mention are checklist sections (gate questions) or words the live reply should carry; simple marks the questions the style score holds to 600 characters.",
+  "universe_version": "trader_plain_questions_v5",
+  "provider_assumptions": "Hand-written questions in the trader's own style (2026-09-30), not a desk capture: the 100 of the 2026-09-30 live eval (the first 60 from P13/P14/P15b, then 40 harder ones; the last 25 are the hard tier; P17 adds 8 tape questions: RS, bars, alerts). known_symbols stands in for his universe (Focus, likes, book, journal); book is his open book (a subset), so a book question ('my longs', 'my open shorts') reads only those names (P16). expected_packs are what the app should fetch (P14: no regime without a market or pre-trade cue; P16: book scope, veto aggregates with the mirror, watch-tomorrow, regime-or-me, this week vs last week); concept questions need none; must_mention are checklist sections (gate questions) or words the live reply should carry; simple marks the questions the style score holds to 600 characters.",
   "expected_keys": [
     "checklist"
   ],
@@ -1073,6 +1073,79 @@
         "week"
       ],
       "simple": true
+    },
+    {
+      "q": "where's the relative strength right now in industries",
+      "expected_packs": [
+        "rs_pack"
+      ],
+      "must_mention": [
+        "industr"
+      ]
+    },
+    {
+      "q": "what's leading today",
+      "expected_packs": [
+        "rs_pack"
+      ],
+      "must_mention": [
+        "lead"
+      ]
+    },
+    {
+      "q": "am I positioned with the strong groups",
+      "expected_packs": [
+        "rs_pack",
+        "book_pack"
+      ],
+      "must_mention": [
+        "rank"
+      ]
+    },
+    {
+      "q": "where is NVDA trading right now",
+      "expected_packs": [
+        "bars_pack"
+      ],
+      "must_mention": [
+        "NVDA"
+      ]
+    },
+    {
+      "q": "is ALL above vwap",
+      "expected_packs": [
+        "bars_pack"
+      ],
+      "must_mention": [
+        "VWAP"
+      ]
+    },
+    {
+      "q": "how's TSLA acting intraday",
+      "expected_packs": [
+        "bars_pack"
+      ],
+      "must_mention": [
+        "TSLA"
+      ]
+    },
+    {
+      "q": "what alerts fired today",
+      "expected_packs": [
+        "alerts_pack"
+      ],
+      "must_mention": [
+        "alert"
+      ]
+    },
+    {
+      "q": "did ALL alert this morning",
+      "expected_packs": [
+        "alerts_pack"
+      ],
+      "must_mention": [
+        "ALL"
+      ]
     }
   ]
 }

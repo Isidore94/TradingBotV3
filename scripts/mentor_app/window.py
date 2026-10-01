@@ -1329,6 +1329,12 @@ class MentorWindow(QMainWindow):
                               on_done=self._bridge.note.emit)
         elif result.action == "tape":
             self.show_tape()
+        elif result.action == "pack":
+            # P17 /rs, /alerts: the pack's rows as a card, built off the Qt thread. No model.
+            pack_name, pack_args = result.arg
+            self.queue.submit(pack_name, lambda: self._pack_card(pack_name, dict(pack_args)),
+                              priority=PRIORITY_INTERACTIVE, key=f"{pack_name}:{sorted(pack_args.items())}",
+                              on_done=self._bridge.note.emit)
         elif result.action == "check":
             self._name_for_news(result.arg.symbol)
             self.show_check(result.arg)
@@ -2701,6 +2707,19 @@ class MentorWindow(QMainWindow):
         pack = hypothesis_pack.build(now=self._now(), chat_db=self.store.path, history_dir=self.permutation_history,
                                      report_file=self.permutation_report)
         return hypothesis_pack.card_markdown(pack)
+
+    def _pack_card(self, name: str, args: dict) -> str:
+        """P17 /rs and /alerts: one pack as a card with its ids (queue thread; file reads only)."""
+        from mentor_packs import registry
+
+        try:
+            args.setdefault("liked", [sym for sym, _side in self._liked()])
+        except Exception:  # noqa: BLE001 - no liked marks; the book still marks
+            pass
+        pack = registry.build(name, **args)
+        lines = [f"- [{row['id']}] {row.get('text', '')}" for row in pack.rows]
+        title = {"rs_pack": "Relative strength", "alerts_pack": "Alerts"}.get(name, name)
+        return f"**{title}**\n\n" + ("\n".join(lines) if lines else (pack.empty_text or "nothing"))
 
     # ------------------------------------------------------------------ /debate (P10)
     def _debate_runner(self, stop: threading.Event) -> Callable[[Any, str], Any] | None:

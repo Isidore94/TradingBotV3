@@ -86,5 +86,9 @@ def test_registered_and_attached():
                           ("how's TSLA acting intraday", "TSLA")):
         found = [r for r in attach.plan_attachments(question, known, now) if r.name == "bars_pack"]
         assert found and found[0].args["symbol"] == sym, question
-    gate = [r for r in attach.plan_attachments("thinking of shorting ALL here", known, now) if r.name == "bars_pack"]
-    assert gate and gate[0].args == {"symbol": "ALL", "n": 6}
+    # A pre-trade question attaches the gate, and the gate itself carries bars_pack(symbol, n=6).
+    names = [r.name for r in attach.plan_attachments("thinking of shorting ALL here", known, now)]
+    assert "gate_pack" in names and "bars_pack" not in names
+    from mentor_packs import gate_pack
+
+    assert isinstance(gate_pack.live_sources().bars_sources, bars_pack.Sources)

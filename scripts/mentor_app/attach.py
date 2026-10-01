@@ -428,9 +428,8 @@ def plan_attachments(
         add("rs_pack", "relative strength words", level="sector" if re.search(r"\bsectors?\b", lowered)
             and not re.search(r"\bindustr", lowered) else "industry")
     for sym in symbols:
-        if sym in gated:
-            add("bars_pack", f"pre-trade: where {sym} is now", symbol=sym, n=6)
-        elif _NOW.search(lowered) and not past:
+        # A pre-trade question's gate_pack already carries the name's last 6 cached M5 bars.
+        if sym not in gated and _NOW.search(lowered) and not past:
             add("bars_pack", f"{sym} right now", symbol=sym)
     if _ALERTS.search(lowered):
         iso_day = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", day))

@@ -48,6 +48,8 @@ class Sources:
     econ: Callable[[str], Mapping[str, Any]]
     #: P13: "Today so far: ..." from the journal (``journal_pack.today_summary``); None = not read.
     today: Callable[[datetime], str] | None = None
+    #: P17: "Tape now: ..." (top 2 leading / lagging industries, today's alert counts); None = not read.
+    tape_now: Callable[[datetime], str] | None = None
 
 
 def _journal_rows(sql: str) -> list[dict[str, Any]]:
@@ -113,6 +115,42 @@ def _live_today(moment: datetime) -> str:
     return journal_pack.today_summary(now=moment)
 
 
+#: P17: the tape-now line is rebuilt at most every 5 minutes (two board / alert file reads).
+TAPE_NOW_TTL_S = 300.0
+_tape_now_cache: dict[str, Any] = {}
+
+
+def tape_now_text(rs: Pack, alerts: Pack) -> str:
+    """One line from an rs_pack (top 2) and an alerts_pack: leaders, laggards and alert counts."""
+    lead = [str(row.get("group")) for row in rs.rows if row.get("kind") == "rs_lead"][:2]
+    lag = [str(row.get("group")) for row in rs.rows if row.get("kind") == "rs_lag"][:2]
+    if lead or lag:
+        board = f"leading {', '.join(lead) or 'n/a'}; lagging {', '.join(lag) or 'n/a'}"
+    else:
+        board = next((str(row.get("text")) for row in rs.rows if row.get("kind") == "none"), "industry board unknown")
+    summary = next((str(row.get("text")) for row in alerts.rows if row.get("kind") == "summary"), "")
+    if summary:
+        alerts_text = "alerts today " + summary.split(": ", 1)[-1].split("; in your book")[0]
+    elif alerts.rows:
+        alerts_text = "no alerts today yet"
+    else:
+        alerts_text = "alerts unknown"
+    return f"Tape now: {board}; {alerts_text}"
+
+
+def _live_tape_now(moment: datetime) -> str:
+    import time as _time
+
+    from mentor_packs import alerts_pack, rs_pack
+
+    cached = _tape_now_cache.get("value")
+    if cached is not None and _time.monotonic() - float(_tape_now_cache.get("at") or 0.0) < TAPE_NOW_TTL_S:
+        return str(cached)
+    text = tape_now_text(rs_pack.build(top=2, now=moment), alerts_pack.build(now=moment))
+    _tape_now_cache.update(value=text, at=_time.monotonic())
+    return text
+
+
 def live_sources() -> Sources:
     return Sources(
         auto_mode=_live_auto_mode,
@@ -122,6 +160,7 @@ def live_sources() -> Sources:
         focus=_live_focus,
         econ=_live_econ,
         today=_live_today,
+        tape_now=_live_tape_now,
     )
 
 
@@ -212,6 +251,11 @@ def build(*, now: datetime | None = None, sources: Sources | None = None) -> Pac
             rows.append({"id": "ctx:today", "kind": "today", "text": str(src.today(moment))})
         except Exception as exc:  # noqa: BLE001
             rows.append(_unknown("ctx:today", "Today so far", exc))
+    if src.tape_now is not None:
+        try:
+            rows.append({"id": "ctx:tape_now", "kind": "tape_now", "text": str(src.tape_now(moment))})
+        except Exception as exc:  # noqa: BLE001
+            rows.append(_unknown("ctx:tape_now", "Tape now", exc))
     try:
         focus = src.focus()
         for category in ("swing", "m5"):
@@ -272,6 +316,8 @@ def fixture_sources() -> Sources:
             "week": [{"id": "w1", "date": "2026-10-02", "time_et": "08:30", "label": "Nonfarm payrolls"}],
         },
         today=lambda moment: "Today so far: 2 closed trade(s), 1 win(s), net +40.00 $, 1 open",
+        tape_now=lambda moment: ("Tape now: leading Cybersecurity, Semiconductors; lagging Autos, Insurance; "
+                                 "alerts today M5 2 (1 long, 1 short); D1 2 (0 long, 2 short)"),
     )
 
 
