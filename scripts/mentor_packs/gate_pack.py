@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from mentor_packs import bars_pack, book_pack, pick_pack, plan_lines, regime_pack
+from mentor_packs import bars_pack, book_pack, pick_pack, plan_lines, reads_pack, regime_pack
 from mentor_packs.registry import Pack, make_pack
 
 NAME = "gate_pack"
@@ -79,6 +79,8 @@ class Sources:
     ibkr_book_status: Callable[[], Mapping[str, Any] | None] = field(default=lambda: None, compare=False)
     #: P17: the bot's cached M5 bars (``bars_pack.Sources``) for where price is now; None = not read.
     bars_sources: Any = field(default=None, compare=False)
+    #: P18: the trader's Market Journal reads (``reads_pack.Sources``); None = not read.
+    reads_sources: Any = field(default=None, compare=False)
 
 
 def _live_risk() -> Any:
@@ -129,7 +131,8 @@ def live_sources() -> Sources:
     return Sources(risk_setting=_live_risk, open_trades=_live_open_trades, industry_map=_live_industry_map,
                    book_snapshot=live_book.snapshot, book_status=live_book.status, accounts=live_book.accounts,
                    max_positions=live_book.max_positions, ibkr_book_snapshot=live_book.ibkr_snapshot,
-                   ibkr_book_status=live_book.ibkr_status, bars_sources=bars_pack.live_sources())
+                   ibkr_book_status=live_book.ibkr_status, bars_sources=bars_pack.live_sources(),
+                   reads_sources=reads_pack.live_sources())
 
 
 def book_sources(src: Sources) -> book_pack.Sources:
@@ -283,6 +286,19 @@ def _plan_rows(prefix: str, src: Sources) -> list[dict[str, Any]]:
              "text": f"Plan [{line['id']}]: {line.get('text', '')}"} for line in plan.rows]
 
 
+def _read_rows(prefix: str, side: str, moment: datetime, sources: Any) -> list[dict[str, Any]]:
+    """P18: today's read (``reads_pack(n=1)``) and, when its call opposes the side, one conflict line."""
+    pack = reads_pack.build(n=1, now=moment, sources=sources)
+    current = [row for row in pack.rows if row.get("kind") == "current"]
+    if not current:
+        return [{"id": f"{prefix}:read:none", "kind": "read_none", "text": "Your read today: none written yet"}]
+    rows = _embed(prefix, current)
+    conflict = reads_pack.conflict_text(pack, side, moment)
+    if conflict:
+        rows.append({"id": f"{prefix}:read:conflict", "kind": "read_conflict", "text": conflict})
+    return rows
+
+
 def _embed(prefix: str, rows: Any) -> list[dict[str, Any]]:
     return [{**dict(row), "id": f"{prefix}:{row['id']}", "source_id": str(row["id"])} for row in rows]
 
@@ -333,6 +349,11 @@ def build(side: str = "", symbol: str = "", size: Any = None, stop: Any = None, 
             rows.extend(_embed(prefix, bars_pack.build(sym, n=6, now=moment, sources=src.bars_sources).rows))
         except Exception as exc:  # noqa: BLE001
             rows.append(_unknown(f"{prefix}:bars:{sym}:none", "Cached M5 bars", exc))
+    if src.reads_sources is not None:
+        try:
+            rows.extend(_read_rows(prefix, chosen, moment, src.reads_sources))
+        except Exception as exc:  # noqa: BLE001
+            rows.append(_unknown(f"{prefix}:read:none", "Your read", exc))
     try:
         rows.extend(_book_rows(prefix, sym, chosen, src, moment))
     except Exception as exc:  # noqa: BLE001

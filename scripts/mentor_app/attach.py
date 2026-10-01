@@ -37,6 +37,7 @@ PRIORITY = {
     "rs_pack": 4,
     "bars_pack": 3,
     "alerts_pack": 4,
+    "reads_pack": 3,
     "plan_lines": 9,
     "hypothesis_pack": 9,
     "recall": 10,
@@ -140,6 +141,9 @@ _NOW = re.compile(r"\bnow\b|\bright now\b|\bcurrently\b|\bintraday\b|\btoday'?s 
                   r"|\bprice\b|\btrading at\b|\bwhere(?:'s| is) \w+ trading\b|\bacting\b|\bvwap\b")
 #: P17: what the bot alerted (D1 wick, M5 bounce).
 _ALERTS = re.compile(r"\balerts?\b|\balerted\b|\bwhat fired\b|\bfired today\b|\bwhat(?:'s| is) the bot flagging\b")
+#: P18: the trader's own Market Journal reads and how they graded.
+_READS = re.compile(r"\bmy (?:market )?reads?\b|\bwhat did i say the market would do\b|\bwas i right about\b"
+                    r"|\bmy call on\b|\bmy market calls?\b|\bmy predictions?\b|\bdid i (?:call|read) it\b")
 _PLAN = re.compile(r"\bmy plan\b|\bmy rules?\b|\btrading plan\b|\bbreak(?:ing)? (?:a|my) rule\b")
 #: P15a: the night's reads (day review verdicts, ideas, contrasts, week review, story, digest).
 _NIGHT = re.compile(r"\bwhat did the night say\b|\bovernight\b|\blast night\b|\bnight(?:'s)? read\b|\bideas?\b"
@@ -436,6 +440,8 @@ def plan_attachments(
         alert_day = ("yesterday" if day == previous_weekday(_market_day(now)).isoformat()
                      else day if (iso_day and day != today) or day == "week" else "today")
         add("alerts_pack", "alert words", day=alert_day, **({"symbol": symbols[0]} if symbols else {}))
+    if _READS.search(lowered):
+        add("reads_pack", "read words", n=10)
     if _RECALL.search(lowered):
         add("recall", "memory words", query=raw[:200])
     return sorted(wanted, key=lambda request: request.priority)
