@@ -566,8 +566,8 @@ class MentorWindow(QMainWindow):
         left_layout.addWidget(self.banner)
         left_layout.addWidget(self.transcript, 3)
         if self.card_host is not None:
-            # The Trade Mentor card sits in the conversation column, under the chat.
-            left_layout.addWidget(self.card_host.dock, 2)
+            # The Trade Mentor card sits in the conversation column, under the chat, sized to what is up.
+            left_layout.addWidget(self.card_host.dock, 0)
             self.card_host.cardShown.connect(self._on_card_shown)
             self.card_host.dock.mentor_card.set_ai_request_provider(self._brain_fill_request)
         left_layout.addLayout(self.chip_row)
