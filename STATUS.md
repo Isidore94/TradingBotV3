@@ -15,7 +15,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 - **Merged 2026-09-30 (P17 tape packs):** `/rs`, `/alerts`, M5 bars from the ~28-min spool tee (a desk-side 60 s M5 publisher is P18); live 108-question eval tool hit 100 %, 0 errors (gate #336). In flight: P18 journal/habits/reads/routines + M5 publisher.
 - **Desk:** next launch uses main; live checks are in GATES.
 - **Night (2026-09-30):** retries x3, budget 360, care names briefed nightly, last (#331), nightly permutation report (#330, shadow). In flight: P19 night rejections (#337): econ time needs its id, regime read 1 retry, day show fits, idea with unknown ids dropped. Next: morning pre-brief queue; rule audit.
-- **gpt-oss:20b vs gemma4:12b:** effort `high`, 8k think tokens live. Probe 2 10-01 02:05 runs both on `claude/night-fixes-mentor-digest-2026-10-01` (P19 + digest cap + mentor retry + gemma4 thinking allowance; gate #338); then flip `ai_local_model_medium` on the trader's word.
+- **gpt-oss:20b vs gemma4:12b:** effort `high`, 8k think tokens live. Probe 2 10-01 02:05 runs both on `claude/night-fixes-mentor-digest-2026-10-01` (P19 + digest cap + mentor retry + gemma4 thinking off + mentor caps; gate #338); then flip `ai_local_model_medium` on the trader's word.
 - **Night window:** starts 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435). No local
   models on the mini-PC (trader 2026-09-30): host down = facts only; rerun a missed night with
   `--session <date> --force`. One pass + one recheck, then shut down; last firing 05:30. No
