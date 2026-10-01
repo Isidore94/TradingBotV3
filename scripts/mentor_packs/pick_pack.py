@@ -90,6 +90,8 @@ class PickPaths:
     #: (``working_lately/setup_grades_latest.json``); None = not stored.
     m5_alerts: Path | None = None
     m5_grades: Path | None = None
+    #: P15a: the ai_store ``briefs/`` root (``<year>/<session>/ticker_briefs_manifest.jsonl``); None = not read.
+    briefs: Path | None = None
 
 
 def live_paths() -> PickPaths:
@@ -122,7 +124,17 @@ def live_paths() -> PickPaths:
         news_errors=news_pack.live_error_reader(),
         m5_alerts=Path(pp.INTRADAY_BOUNCES_FILE),
         m5_grades=Path(pp.LOCAL_SETTINGS_DIR) / "working_lately" / "setup_grades_latest.json",
+        briefs=_live_briefs_root(),
     )
+
+
+def _live_briefs_root() -> Path | None:
+    try:
+        from ai_jobs import store as ai_store
+
+        return ai_store.briefs_dir(create=False)
+    except Exception:  # noqa: BLE001 - no ai_store configured: the brief row says "not read"
+        return None
 
 
 # ---------------------------------------------------------------- small readers
@@ -600,6 +612,22 @@ def _news_rows(symbol: str, moment: datetime, paths: PickPaths) -> list[dict[str
     return rows
 
 
+def _brief_rows(symbol: str, today: date, paths: PickPaths) -> list[dict[str, Any]]:
+    """P15a: <= 3 lines of the symbol's newest night ticker brief (via the manifests), with its date."""
+    from mentor_packs import night_pack
+
+    if paths.briefs is None:
+        return [{"id": f"pick:{symbol}:brief:none", "kind": "brief_none", "text": "Night brief: not read (no briefs store)"}]
+    brief = night_pack.latest_briefs(paths.briefs, today).get(symbol)
+    if not brief:
+        return [{"id": f"pick:{symbol}:brief:none", "kind": "brief_none",
+                 "text": f"Night brief: none for {symbol} in the last {night_pack.BRIEF_SESSIONS} brief nights"}]
+    refs = list(brief["evidence_refs"])
+    text = f"Night brief ({brief['session']}): " + " | ".join(brief["lines"])
+    return [{"id": f"pick:{symbol}:brief", "kind": "brief", "session": brief["session"], "evidence_refs": refs,
+             "text": text + (f" (src: {', '.join(refs[:3])})" if refs else "")}]
+
+
 # ---------------------------------------------------------------- build
 def _now(now: datetime | None) -> datetime:
     moment = now or datetime.now(timezone.utc)
@@ -689,6 +717,10 @@ def build(symbol: str = "", side: str = "", *, now: datetime | None = None, path
         rows.extend(_news_rows(sym, moment, src))
     except Exception as exc:  # noqa: BLE001
         rows.append(_unknown(f"pick:{sym}:news", "News", exc))
+    try:
+        rows.extend(_brief_rows(sym, today, src))
+    except Exception as exc:  # noqa: BLE001
+        rows.append(_unknown(f"pick:{sym}:brief", "Night brief", exc))
     return make_pack(NAME, rows)
 
 
@@ -848,7 +880,23 @@ def write_fixture_world(root: Path | str, *, plan_text: str | None = None) -> Pi
         industry_map=lambda: industries,
         news=news_pack.fixture_reader(),
         news_stamps=news_pack.fixture_stamps,
+        briefs=_write_fixture_briefs(base),
     )
+
+
+def _write_fixture_briefs(base: Path) -> Path:
+    """One night brief manifest (2026-09-28): NVDA briefed, TSLA membership only."""
+    folder = base / "briefs" / "2026" / "2026-09-28"
+    folder.mkdir(parents=True, exist_ok=True)
+    summary = {"executive_summary": "NVDA held its AVWAP into the close.",
+               "what_is_working": [{"statement": "Higher low on D1 above the anchor.", "evidence_refs": ["scan.tier_list"]}]}
+    rows = ({"schema": "ai_ticker_brief_manifest_v2", "session_date": "2026-09-28", "symbol": "NVDA", "status": "briefed",
+             "result": {"summary": summary}},
+            {"schema": "ai_ticker_brief_manifest_v2", "session_date": "2026-09-28", "symbol": "TSLA",
+             "status": "membership_only"})
+    (folder / "ticker_briefs_manifest.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n",
+                                                          encoding="utf-8")
+    return base / "briefs"
 
 
 def fixture() -> Pack:

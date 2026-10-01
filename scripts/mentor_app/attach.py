@@ -31,6 +31,7 @@ PRIORITY = {
     "news_pack": 6,
     "tilt_pack": 7,
     "mirror_pack": 8,
+    "night_pack": 8,
     "plan_lines": 9,
     "recall": 10,
 }
@@ -90,6 +91,10 @@ _STOP_DAY = re.compile(r"\bstop trading\b|\bcall it a day\b|\bwalk away\b|\bover
 _MIRROR = re.compile(r"\bmy record\b|\blately\b|\bmy stats\b|\bmy edge\b|\bhit rate\b|\bwin rate\b|\bpattern in my\b"
                      r"|\btrade best\b|\bbest time\b|\btime of day\b|\bwhen during the day\b")
 _PLAN = re.compile(r"\bmy plan\b|\bmy rules?\b|\btrading plan\b|\bbreak(?:ing)? (?:a|my) rule\b")
+#: P15a: the night's reads (day review verdicts, ideas, contrasts, week review, story, digest).
+_NIGHT = re.compile(r"\bwhat did the night say\b|\bovernight\b|\blast night\b|\bnight(?:'s)? read\b|\bideas?\b"
+                    r"|\bwhat (?:am|are) (?:i|we) missing\b|\bwhat did i get (?:wrong|right)\b|\bweek(?:ly)? review\b"
+                    r"|\bthe night\b")
 _RECALL = re.compile(r"\byou said\b|\bwe (?:said|talked|discussed)\b|\bremember when\b|\blast time we\b")
 _GROUP = re.compile(r"\bmy (longs|shorts|focus|names|picks|watchlist|likes|liked|book|positions|holdings)\b"
                     r"|\bfocus (longs|shorts|names)\b|\bopen (longs|shorts|positions)\b|\b(?:i'm|im|i am) (holding)\b")
@@ -315,6 +320,8 @@ def plan_attachments(
         add("mirror_pack", "record words")
     if _PLAN.search(lowered):
         add("plan_lines", "plan words")
+    if _NIGHT.search(lowered):
+        add("night_pack", "night words")
     if _RECALL.search(lowered):
         add("recall", "memory words", query=raw[:200])
     return sorted(wanted, key=lambda request: request.priority)
@@ -396,7 +403,8 @@ def recent_cited_ids(turns: Iterable[Any], last: int = 6) -> set[str]:
 
 
 _GENERIC_ID_PARTS = frozenset({"pick", "gate", "tape", "ctx", "jrn", "news", "book", "plan", "veto", "mirror", "tilt",
-                               "regime", "hyp", "mem", "none", "asof", "pos", "acct", "hint", "pack"})
+                               "regime", "hyp", "mem", "none", "asof", "pos", "acct", "hint", "pack",
+                               "night", "brief", "coach"})
 
 
 def names_subject(question: str, row_id: str) -> bool:

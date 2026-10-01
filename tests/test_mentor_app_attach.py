@@ -384,3 +384,17 @@ def test_earnings_with_no_group_word_reads_the_book_and_the_likes_not_the_journa
         assert names == ["earnings_pack"], (question, names)
         assert got[0].args["symbols"] == ["QCOM", "FCEL", "K00", "K01"], question
     assert "earnings_pack" not in _only("what does my plan say about shorting into earnings")
+
+
+# ---------------------------------------------------------------- P15a: the night's reads
+def test_night_words_attach_the_night_pack():
+    for question in ("what did the night say?", "anything overnight I should know", "what did you find last night",
+                     "any ideas for me", "what am I missing", "what did I get wrong yesterday",
+                     "what did I get right", "show me the week review", "give me the night read"):
+        names = [request.name for request in attach.plan_attachments(question, KNOWN, NOW)]
+        assert "night_pack" in names, question
+
+
+def test_a_ticker_question_carries_the_brief_through_the_pick_pack_not_the_night_pack():
+    names = [request.name for request in attach.plan_attachments("how does NVDA look", KNOWN, NOW)]
+    assert "pick_pack" in names and "night_pack" not in names
