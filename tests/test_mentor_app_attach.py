@@ -314,7 +314,8 @@ def test_this_month_is_the_journal_month_not_the_mirror():
     assert attach.resolve_day("how was last month", NOW) == "last_month"
     assert _only("how has my record been lately") == ["mirror_pack"]
     assert _only("when during the day do I trade best") == ["mirror_pack"]
-    assert _only("which of my vetoes this month would have worked") == ["veto_pack"]
+    # P16: a month of vetoes is the aggregate by reason, with the mirror alongside.
+    assert _only("which of my vetoes this month would have worked") == ["mirror_pack", "veto_pack"]
 
 
 def test_stopping_for_the_day_reads_tilt_and_todays_journal():

@@ -134,3 +134,60 @@ def test_hold_and_best_questions_route_to_the_journal_month_and_the_mirror():
                      "best trade this month?"):
         got = [(r.name, r.args) for r in attach.plan_attachments(question, {}, NOW)]
         assert ("journal_pack", {"day": "month"}) in got and ("mirror_pack", {}) in got, (question, got)
+
+
+# ---------------------------------------------------------------- step 3: follow-your-vetoes aggregate
+def _veto_world():
+    from mentor_packs import veto_pack
+
+    return veto_pack, veto_pack.write_fixture_world(Path(tempfile.mkdtemp()) / "desk")
+
+
+def test_every_daily_slice_says_clears_baseline_and_which_lb_is_larger():
+    veto_pack, world = _veto_world()
+    slices = {row["id"]: row for row in veto_pack.build(now=veto_pack.FIXTURE_NOW, paths=world).rows
+              if row.get("kind") == "slice"}
+    assert all(row["clears_baseline"] in ("yes", "no") for row in slices.values())
+    aaa, bbb = slices["veto:2026-09-29:AAA:1:slice"], slices["veto:2026-09-29:BBB:1:slice"]
+    assert aaa["clears_baseline"] == "yes" and "LB=0.71 is ABOVE the LONG baseline LB=0.45" in aaa["text"]
+    assert bbb["clears_baseline"] == "no" and "LB=0.28 is BELOW the SHORT baseline LB=0.43" in bbb["text"]
+    assert slices["veto:2026-09-29:CCC:1:slice"]["clears_baseline"] == "no", "too few never clears"
+
+
+def test_a_month_of_vetoes_aggregates_by_reason_with_a_verdict():
+    veto_pack, world = _veto_world()
+    pack = veto_pack.build(scope="month", now=datetime(2026, 8, 25, 20, 0, tzinfo=timezone.utc), paths=world)
+    rows = {row["id"]: row for row in pack.rows}
+    long_ = rows["veto:agg:compressed:LONG"]
+    assert long_["vetoes"] == 40 and long_["h5"]["n"] == 32 and long_["h5"]["pending"] == 8
+    assert round(long_["h5"]["mean"], 4) == 0.03 and long_["h5"]["win_rate"] == 1.0 and long_["h10"]["n"] == 32
+    assert long_["verdict"] == "cost" and "cost a winning cohort" in long_["text"]
+    assert long_["clears_baseline"] == "yes" and "is ABOVE the LONG baseline" in long_["text"]
+    short = rows["veto:agg:too_extended_from_base:SHORT"]
+    assert short["verdict"] == "too_few" and short["clears_baseline"] == "no"
+    assert "is BELOW the SHORT baseline" in short["text"]
+    total = rows["veto:agg:total"]
+    assert total["vetoes"] == 85 and "as a whole" in total["text"]
+    assert pack.rows[1]["id"] == "veto:agg:compressed:LONG", "the reason that cost the most comes first"
+
+
+def test_a_losing_cohort_is_an_avoided_loss():
+    veto_pack, world = _veto_world()
+    lines = world.veto_outcomes.read_text(encoding="utf-8").splitlines()
+    world.veto_outcomes.write_text("\n".join([lines[0]] + [line.replace(",0.03,", ",-0.03,") for line in lines[1:]])
+                                   + "\n", encoding="utf-8")
+    pack = veto_pack.build(scope="month", now=datetime(2026, 8, 25, 20, 0, tzinfo=timezone.utc), paths=world)
+    row = next(r for r in pack.rows if r["id"] == "veto:agg:compressed:LONG")
+    assert row["verdict"] == "avoided" and "avoided a losing cohort" in row["text"]
+
+
+def test_veto_record_questions_route_to_the_aggregate_and_the_mirror():
+    cases = {"if I had followed my vetoes exactly this month how would I have done": "month",
+             "which veto reason of mine has the worst track record": "month",
+             "did my vetoes this week work out": "week",
+             "which of my vetoes this month would have worked": "month"}
+    for question, scope in cases.items():
+        got = [(r.name, r.args) for r in attach.plan_attachments(question, {}, NOW)]
+        assert ("veto_pack", {"scope": scope}) in got and ("mirror_pack", {}) in got, (question, got)
+    assert ("veto_pack", {"date": "2026-09-29"}) in [
+        (r.name, r.args) for r in attach.plan_attachments("what did I veto yesterday and was I right", {}, NOW)]

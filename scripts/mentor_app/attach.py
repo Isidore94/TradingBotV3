@@ -78,6 +78,10 @@ _JOURNAL = re.compile(
     r"|\bstop(?:ped)? me out\b|\bmy (?:entry|exit|stop) on\b"
 )
 _VETO = re.compile(r"\bveto(?:ed|es|s)?\b|\bpassed on\b|\bi passed\b|\bskip(?:ped|ping|s)?\b")
+#: P16: the record of his vetoes, not one session's list.
+_VETO_AGG = re.compile(r"\bfollowed my vetoes\b|\bwork(?:ed)? out\b|\btrack record\b|\b(?:worst|best) record\b"
+                       r"|\bveto reasons?\b|\bwould have worked\b|\bhow would i have done\b")
+_WINDOWS = ("week", "month", "last_week", "last_month")
 _TAPE = re.compile(r"\btape\b|\bmarkets?\b|\bspy\b|\bqqq\b|\biwm\b|\bregime\b|\bsectors?\b|\bbreadth\b|\bmacro\b"
                    r"|\bindex(?:es)?\b|\bfomc\b|\bcpi\b|\bjobs report\b|\bfed\b|\bfutures\b")
 #: Getting ready for a session: the tape is the answer ("what should I look at tomorrow morning").
@@ -307,7 +311,12 @@ def plan_attachments(
         add("journal_pack", "outcome words", day=day if day else "month")
         add("mirror_pack", "outcome words")
     if vetoes:
-        add("veto_pack", "veto words", date=day if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else "")
+        if day in _WINDOWS or (_VETO_AGG.search(lowered) and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day)):
+            # P16: a week's or month's vetoes, or their record, is the aggregate by reason; the mirror rides along.
+            add("veto_pack", "veto record words", scope=day if day in _WINDOWS else "month")
+            add("mirror_pack", "veto record words")
+        else:
+            add("veto_pack", "veto words", date=day if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else "")
     # P14: the tape only on market words, session prep, or trade intent the gate does not already carry.
     tape_words = bool(_TAPE.search(lowered) or _PREP.search(lowered)
                       or any(sym in INDEX_SYMBOLS for sym in find_symbols(raw, set(INDEX_SYMBOLS))))

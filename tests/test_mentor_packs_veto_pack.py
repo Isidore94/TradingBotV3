@@ -22,9 +22,9 @@ NOW = veto_pack.FIXTURE_NOW
 
 GOLDEN = """## veto_pack
 [veto:2026-09-29:AAA:1] VETO AAA LONG D1: Compressed (compressed); setup avwap_breakout; at 2026-09-29T09:05:00-07:00; note: coiled under the 50
-[veto:2026-09-29:AAA:1:slice] Slice avwap_breakout LONG vetoed for compressed (past vetoes, 5-session D1 outcomes known by 2026-09-29): n=40, wins 34 (85%), LB=0.71 vs the LONG baseline LB=0.45 (n=250): clears the baseline, candidate challenge; veto cohort side return 1d +1.00% (n=40), 3d +2.00% (n=40), 5d +3.00% (n=40), 10d +4.00% (n=40); weeks=9
+[veto:2026-09-29:AAA:1:slice] Slice avwap_breakout LONG vetoed for compressed (past vetoes, 5-session D1 outcomes known by 2026-09-29): n=40, wins 34 (85%), LB=0.71 is ABOVE the LONG baseline LB=0.45 (baseline win rate 52%, n=250): clears the baseline, candidate challenge; veto cohort side return 1d +1.00% (n=40), 3d +2.00% (n=40), 5d +3.00% (n=40), 10d +4.00% (n=40); weeks=9
 [veto:2026-09-29:BBB:1] VETO BBB SHORT D1: Too extended below base (too_extended_from_base); setup avwap_band_bounce; at 2026-09-29T09:10:00-07:00
-[veto:2026-09-29:BBB:1:slice] Slice avwap_band_bounce SHORT vetoed for too_extended_from_base (past vetoes, 5-session D1 outcomes known by 2026-09-29): n=35, wins 15 (43%), LB=0.28 vs the SHORT baseline LB=0.43 (n=235): does not clear the baseline, no challenge; veto cohort side return 1d too few (n=0), 3d too few (n=0), 5d too few (n=0), 10d too few (n=0); weeks=9
+[veto:2026-09-29:BBB:1:slice] Slice avwap_band_bounce SHORT vetoed for too_extended_from_base (past vetoes, 5-session D1 outcomes known by 2026-09-29): n=35, wins 15 (43%), LB=0.28 is BELOW the SHORT baseline LB=0.43 (baseline win rate 49%, n=235): does not clear the baseline, no challenge; veto cohort side return 1d too few (n=0), 3d too few (n=0), 5d too few (n=0), 10d too few (n=0); weeks=9
 [veto:2026-09-29:CCC:1] VETO CCC LONG D1: Volume dry (volume_dry); setup top_pattern; at 2026-09-29T09:20:00-07:00
 [veto:2026-09-29:CCC:1:slice] Slice top_pattern LONG vetoed for volume_dry (past vetoes, 5-session D1 outcomes known by 2026-09-29): too few (n=10, floor 30); never a challenge; veto cohort side return 1d too few (n=0), 3d too few (n=0), 5d too few (n=0), 10d too few (n=0); weeks=9
 [veto:2026-09-29:DDD:1] PASS DDD LONG M5: Low rvol; setup unknown; at 2026-09-29T10:00:00-07:00
