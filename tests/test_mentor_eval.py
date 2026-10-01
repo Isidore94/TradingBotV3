@@ -1,4 +1,4 @@
-"""P13/P14/P15b/P16 mentor eval: the 100 plain questions, offline attach recall pinned at >= 97.5 %, and the style score.
+"""P13-P17 mentor eval: the 108 plain questions, offline attach recall pinned at >= 97.5 %, and the style score.
 
 Never runs --live."""
 
@@ -16,10 +16,10 @@ import mentor_eval  # noqa: E402
 from mentor_packs import registry  # noqa: E402
 
 
-def test_the_fixture_has_the_hundred_live_eval_questions_with_real_pack_names():
+def test_the_fixture_has_the_108_eval_questions_with_real_pack_names():
     fixture = mentor_eval.load_fixture()
     questions = fixture["questions"]
-    assert len(questions) == 100 and len({q["q"] for q in questions}) == 100
+    assert len(questions) == 108 and len({q["q"] for q in questions}) == 108
     assert sum(1 for q in questions if q.get("concept")) == 2
     names = set(registry.names())
     for item in questions:
@@ -33,7 +33,7 @@ def test_the_fixture_has_the_hundred_live_eval_questions_with_real_pack_names():
 
 def test_offline_attach_recall_is_at_least_ninety_seven_and_a_half_percent():
     report = mentor_eval.offline_report(mentor_eval.load_fixture())
-    assert report["questions"] == 100
+    assert report["questions"] == 108
     assert report["attach_recall"] >= 0.975, [row for row in report["rows"] if row["missed"]]
     assert report["attach_recall"] == 1.0, [row for row in report["rows"] if row["missed"]]
 

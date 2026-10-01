@@ -24,6 +24,8 @@ HELP_TEXT = (
     "- `/recall <text>` search what we said before (plain text search when the brain is off)\n"
     "- `/forget <id>` retire a note (it is kept, never deleted); `/keep <id>` says it is still true\n"
     "- `/tape` the tape: Auto mode, D1, last night's read, econ, sectors (read aloud when the brain is up)\n"
+    "- `/rs [sectors]` where the relative strength is: the industry board's leaders and laggards, with your names\n"
+    "- `/alerts [SYM] [today|yesterday] [m5|d1]` what the bot alerted, with counts by kind and side\n"
     "- `/read` give a market read now (Trade Mentor card)\n"
     "- `/pause` no Trade Mentor questions for the rest of today\n"
     "- `/pick SYM` what the desk knows about a pick, narrated (or tap a Focus chip)\n"
@@ -207,6 +209,24 @@ def handle(text: str) -> CommandResult | None:
         if rest:
             return CommandResult("error", "Try `/latency` (no arguments).")
         return CommandResult("latency")
+    if name == "rs":
+        level = rest.lower() or "industry"
+        if level not in ("industry", "industries", "sector", "sectors"):
+            return CommandResult("error", "Try `/rs` or `/rs sectors`.")
+        return CommandResult("pack", "", ("rs_pack", {"level": "sector" if level.startswith("sector") else "industry"}))
+    if name == "alerts":
+        args: dict[str, Any] = {}
+        for word in rest.split():
+            lowered = word.lower()
+            if lowered in ("today", "yesterday") or re.fullmatch(r"\d{4}-\d{2}-\d{2}", lowered):
+                args["day"] = lowered
+            elif lowered in ("d1", "m5"):
+                args["kind"] = lowered
+            elif "symbol" not in args and word.lstrip("$").replace(".", "").replace("-", "").isalpha():
+                args["symbol"] = word.lstrip("$").upper()
+            else:
+                return CommandResult("error", "Try `/alerts`, `/alerts ALL`, `/alerts yesterday` or `/alerts m5`.")
+        return CommandResult("pack", "", ("alerts_pack", args))
     if name == "book":
         if rest:
             return CommandResult("error", "Try `/book` (no arguments).")

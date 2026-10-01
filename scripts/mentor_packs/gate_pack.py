@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from mentor_packs import book_pack, pick_pack, plan_lines, regime_pack
+from mentor_packs import bars_pack, book_pack, pick_pack, plan_lines, regime_pack
 from mentor_packs.registry import Pack, make_pack
 
 NAME = "gate_pack"
@@ -77,6 +77,8 @@ class Sources:
     #: The stored IBKR snapshot and its last failure (P12); both None = IBKR not read yet.
     ibkr_book_snapshot: Callable[[], Mapping[str, Any] | None] = field(default=lambda: None, compare=False)
     ibkr_book_status: Callable[[], Mapping[str, Any] | None] = field(default=lambda: None, compare=False)
+    #: P17: the bot's cached M5 bars (``bars_pack.Sources``) for where price is now; None = not read.
+    bars_sources: Any = field(default=None, compare=False)
 
 
 def _live_risk() -> Any:
@@ -127,7 +129,7 @@ def live_sources() -> Sources:
     return Sources(risk_setting=_live_risk, open_trades=_live_open_trades, industry_map=_live_industry_map,
                    book_snapshot=live_book.snapshot, book_status=live_book.status, accounts=live_book.accounts,
                    max_positions=live_book.max_positions, ibkr_book_snapshot=live_book.ibkr_snapshot,
-                   ibkr_book_status=live_book.ibkr_status)
+                   ibkr_book_status=live_book.ibkr_status, bars_sources=bars_pack.live_sources())
 
 
 def book_sources(src: Sources) -> book_pack.Sources:
@@ -325,6 +327,12 @@ def build(side: str = "", symbol: str = "", size: Any = None, stop: Any = None, 
                                     if row.get("kind") in TAPE_KINDS or str(row.get("id")) in TAPE_IDS]))
     except Exception as exc:  # noqa: BLE001
         rows.append(_unknown(f"{prefix}:tape:none", "Tape", exc))
+    if src.bars_sources is not None:
+        try:
+            # P17: where price is now (the last 6 completed M5 bars, the day's range) from the bot's cache.
+            rows.extend(_embed(prefix, bars_pack.build(sym, n=6, now=moment, sources=src.bars_sources).rows))
+        except Exception as exc:  # noqa: BLE001
+            rows.append(_unknown(f"{prefix}:bars:{sym}:none", "Cached M5 bars", exc))
     try:
         rows.extend(_book_rows(prefix, sym, chosen, src, moment))
     except Exception as exc:  # noqa: BLE001

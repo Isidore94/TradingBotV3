@@ -40,6 +40,9 @@ here.
   P16 eval gaps built (lead 2026-09-30, `claude/mentor-app-p16-eval-gaps-2026-09-30`, gate #335): book-only
   scope with row origins, hold by outcome + best/worst, veto aggregates with verdicts and `clears_baseline`, no
   announced fetch, tape diff, watch-tomorrow / regime-or-me / week-vs-week routes, the 100-question fixture.
+  P17 tape packs built (lead 2026-09-30, `claude/mentor-app-p17-tape-packs-2026-09-30`, gate #336): `rs_pack` +
+  `/rs`, `bars_pack` (research spool M5 tee; the gate carries it), `alerts_pack` + `/alerts`, `ctx:tape_now`,
+  the 108-question fixture.
   Next only by the trader's word: an alerts pack, a movers pack, more recall sources.
 
 ## Plan to 8/10, round 2 (trader's brief, 2026-09-25 evening)
