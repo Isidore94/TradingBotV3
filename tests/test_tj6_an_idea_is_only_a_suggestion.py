@@ -52,6 +52,10 @@ ALLOWED = {
     # Read-stamp registry (P8b B1): it names the improvement_ideas slot so the digest
     # can say its output went unread; it never reads, shows or acts on an idea.
     "slot_output_reads.py",
+    # P15a (trader 2026-09-30, "the coach fully engrossed with everything that runs overnight"):
+    # the Trade Mentor's read-only night pack shows the top ideas as cited text; it never keeps,
+    # dismisses or acts on one, and nothing it reads reaches a detector, score or alert.
+    "mentor_packs/night_pack.py",
 }
 
 #: The seams that MUST exist once TJ-6 lands, so this file cannot pass by the
