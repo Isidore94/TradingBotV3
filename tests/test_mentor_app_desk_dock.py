@@ -260,3 +260,35 @@ def test_the_dock_button_round_trips_and_is_remembered(mentor_windows):
     win.toggle_dock()
     _drain_io(win)
     assert not (win.windowFlags() & Qt.WindowType.FramelessWindowHint)
+
+
+def test_the_owner_is_set_again_when_windows_drops_it(app, tmp_path):
+    """Qt clears a Tool window's owner on show; the dock checks the real owner every poll."""
+    from mentor_app.desk_dock import DeskDock
+
+    world = _World(tmp_path)
+    real = {"owner": 0}
+
+    def set_owner(own, owner):
+        world.owners.append((own, owner))
+        real["owner"] = owner
+
+    win = QWidget()
+    win.show()
+    dock = DeskDock(
+        win, path=world.path, set_owner=set_owner, get_owner=lambda _own: real["owner"],
+        desk_alive=lambda _hwnd: True, clock=lambda: world.now,
+    )
+    try:
+        world.publish()
+        dock.dock()
+        assert real["owner"] == 4242
+        real["owner"] = 0  # a hide/show (tab switch) wiped it
+        dock.poll()
+        assert real["owner"] == 4242, "a lost owner leaves the Mentor behind the desk, out of reach"
+        sets = len(world.owners)
+        dock.poll()
+        assert len(world.owners) == sets, "an owner already right is not set again"
+    finally:
+        dock.shutdown()
+        win.close()
