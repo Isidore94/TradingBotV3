@@ -35,6 +35,7 @@ PRIORITY = {
     "night_pack": 8,
     "recaps_pack": 8,
     "plan_lines": 9,
+    "hypothesis_pack": 9,
     "recall": 10,
 }
 #: Index tickers are the tape, never a pick.
@@ -67,6 +68,8 @@ _INTENT = re.compile(
     r"\bthinking (?:of|about)\b|\bshould i\b|\btake\b|\btaking\b|\bgo(?:ing)? (?:long|short)\b|\benter(?:ing)?\b"
     r"|\badd(?:ing)? (?:to )?\b|\bsize\b|\bsizing\b|\bget(?:ting)? (?:in|into)\b|\bworth (?:a|the) (?:trade|shot)\b"
     r"|\bplanning (?:to|on)\b|\bwant to (?:short|buy|long)\b"
+    r"|\bpre-?trade\b|\bchecklist for\b|\bmy stop (?:be|go)\b|\bstop be on\b"
+    r"|\bwhere (?:do|should) i (?:put|place) (?:my|the) stop\b"
 )
 #: Past-tense trade talk is the journal, never a pre-trade check.
 _PAST = re.compile(r"\bdid i\b|\bi took\b|\btook\b|\bwhy did\b|\bhow did\b|\bwhat happened\b|\bwas i\b")
@@ -75,7 +78,7 @@ _JOURNAL = re.compile(
     r"|\bhow(?:'s| is| has) (?:today|the day|my day) (?:going|been)\b|\bmy trades\b|\btrades? did i\b"
     r"|\bdid i (?:take|trade|make|lose|win|do)\b|\bp&l\b|\bpnl\b|\blos[et] money\b|\bmade money\b"
     r"|\bmy (?:day|week|losses|wins|fills)\b|\bhow am i doing today\b|\bgreen or red\b|\bi took\b"
-    r"|\bstop(?:ped)? me out\b|\bmy (?:entry|exit|stop) on\b"
+    r"|\bstop(?:ped)? me out\b|\bmy (?:entry|exit|stop) on\b|\bhow many trades\b"
 )
 _VETO = re.compile(r"\bveto(?:ed|es|s)?\b|\bpassed on\b|\bi passed\b|\bskip(?:ped|ping|s)?\b")
 #: P16: the record of his vetoes, not one session's list.
@@ -83,13 +86,14 @@ _VETO_AGG = re.compile(r"\bfollowed my vetoes\b|\bwork(?:ed)? out\b|\btrack reco
                        r"|\bveto reasons?\b|\bwould have worked\b|\bhow would i have done\b")
 _WINDOWS = ("week", "month", "last_week", "last_month")
 _TAPE = re.compile(r"\btape\b|\bmarkets?\b|\bspy\b|\bqqq\b|\biwm\b|\bregime\b|\bsectors?\b|\bbreadth\b|\bmacro\b"
-                   r"|\bindex(?:es)?\b|\bfomc\b|\bcpi\b|\bjobs report\b|\bfed\b|\bfutures\b")
+                   r"|\bindex(?:es)?\b|\bfomc\b|\bcpi\b|\bjobs report\b|\bfed\b|\bfutures\b"
+                   r"|\becon(?:omic)? (?:calendar|data|events?|releases?)\b|\bnfp\b|\bpayrolls\b|\bpce\b")
 #: Getting ready for a session: the tape is the answer ("what should I look at tomorrow morning").
 _PREP = re.compile(r"\bwhat should i (?:look at|watch|focus on)\b|\bgame ?plan\b|\bpre-?market\b"
                    r"|\btomorrow\b.*\b(?:look at|watch|expect|prep)\b|\b(?:look at|watch|expect|prep)\b.*\btomorrow\b")
 _NEWS = re.compile(r"\bnews\b|\bearnings\b|\breporting\b|\breports?\b|\bheadlines?\b|\bcatalysts?\b")
 _BOOK = re.compile(r"\bmy book\b|\bpositions?\b|\bexposure\b|\b(?:am i|i'm|im|i am) holding\b|\bholdings\b"
-                   r"|\bwhat am i in\b|\bopen trades?\b|\b(?:any|my) (?:open )?(?:shorts|longs) on\b"
+                   r"|\bwhat am i in\b|\bopen trades?\b|\bpositioned\b|\boverexposed\b|\b(?:any|my) (?:open )?(?:shorts|longs) on\b"
                    r"|\bdo i have any (?:open )?(?:shorts|longs|positions)\b|\bmy open (?:shorts|longs)\b")
 #: P16: a group the trader HOLDS ("my shorts", "my open longs", "my book", "what I'm holding") is the open book only.
 _BOOK_SCOPE = re.compile(r"\bmy (?:open )?(?:shorts|longs|positions|book|holdings)\b|\bopen (?:shorts|longs|positions)\b"
@@ -115,6 +119,15 @@ _WEEK_VS = re.compile(r"\b(?:this|my) week\b.*\blast week\b|\blast week\b.*\bthi
 #: P16: what to watch for the next session: the brief's watch list, the next session's econ, the day review.
 _WATCH_NEXT = re.compile(r"\b(?:watch|look for|look at|focus on|important)\b.*\b(?:tomorrow|at the open|next session)\b"
                          r"|\b(?:tomorrow|at the open)\b.*\b(?:watch|look for)\b")
+#: P16: "what should my stop be": the plan's stop lines ride with the gate.
+_STOP_Q = re.compile(r"\bmy stop (?:be|go)\b|\bstop be on\b|\bwhere (?:do|should) i (?:put|place) (?:my|the) stop\b")
+#: P16: "my history" is the mirror; being up/down on the day and tempted is today's journal and the tilt read.
+_HISTORY = re.compile(r"\bmy history\b|\bhistory says?\b")
+_TEMPTED = re.compile(r"\btempted\b|\b(?:up|down) on the day\b|\badd(?:ing)? risk\b")
+_HYPOTHESES = re.compile(r"\bhypothes[ie]s\b")
+#: P16: what changed in the tape since the last session: the tape diff and the night's read.
+_TAPE_DIFF = re.compile(r"\bwhat(?:'s| has)? changed\b|\bchanged since\b|\banything different\b"
+                        r"|\bdid the (?:tape|market|regime) change\b|\bwhat'?s different\b")
 _PLAN = re.compile(r"\bmy plan\b|\bmy rules?\b|\btrading plan\b|\bbreak(?:ing)? (?:a|my) rule\b")
 #: P15a: the night's reads (day review verdicts, ideas, contrasts, week review, story, digest).
 _NIGHT = re.compile(r"\bwhat did the night say\b|\bovernight\b|\blast night\b|\bnight(?:'s)? read\b|\bideas?\b"
@@ -134,7 +147,7 @@ _RECORD = re.compile(r"\bmy record\b|\bmy stats\b|\bmy edge\b|\bhit rate\b|\bwin
                      r"|\bbest time\b|\btime of day\b")
 #: P15b: how a trade felt (a feelings note rides on its journal row).
 _FEEL = re.compile(r"\bfeel(?:ing|ings|s)?\b|\bfelt\b")
-_RECALL = re.compile(r"\byou said\b|\bwe (?:said|talked|discussed)\b|\bremember when\b|\blast time we\b")
+_RECALL = re.compile(r"\byou said\b|\bwhat i said\b|\bremind me what\b|\bwe (?:said|talked|discussed)\b|\bremember when\b|\blast time we\b")
 _GROUP = re.compile(r"\bmy (longs|shorts|focus|names|picks|watchlist|likes|liked|book|positions|holdings)\b"
                     r"|\bfocus (longs|shorts|names)\b|\bopen (longs|shorts|positions)\b|\b(?:i'm|im|i am) (holding)\b")
 _EARNINGS = re.compile(r"\bearnings\b|\breporting\b|\breports?\b")
@@ -314,7 +327,8 @@ def plan_attachments(
     # (or an earnings question over his book) reads its own pack, not the journal, unless it asks about trades.
     journal_day = bool(day) and (day != today or bool(_FIRST_PERSON.search(lowered)))
     week_vs = bool(_WEEK_VS.search(lowered))
-    if not week_vs and (journal_words or stop_day or (journal_day and not vetoes and not earnings_group
+    tape_diff = bool(_TAPE_DIFF.search(lowered)) and not journal_words
+    if not week_vs and not tape_diff and (journal_words or stop_day or (journal_day and not vetoes and not earnings_group
                                                       and not earnings_alone)):
         add("journal_pack", "journal words" if journal_words else "time words" if day else "stop words",
             day=day or today)
@@ -342,7 +356,10 @@ def plan_attachments(
     # P14: the tape only on market words, session prep, or trade intent the gate does not already carry.
     tape_words = bool(_TAPE.search(lowered) or _PREP.search(lowered)
                       or any(sym in INDEX_SYMBOLS for sym in find_symbols(raw, set(INDEX_SYMBOLS))))
-    if tape_words or (market_cue(raw) and not gated and not symbols) or (
+    if tape_diff:
+        add("regime_pack", "tape diff words", diff=True)
+        add("night_pack", "tape diff words")
+    elif tape_words or (market_cue(raw) and not gated and not symbols) or (
             symbols and not gated and _INTENT.search(lowered) and not past):
         add("regime_pack", "market words" if tape_words else "trade intent")
     held, likes = _names(book), _names(liked)
@@ -375,8 +392,15 @@ def plan_attachments(
     # A windowed win rate ("this month") is the journal's count, not the likes-vs-scan mirror.
     if _MIRROR.search(lowered) and not (day and re.search(r"\b(?:win|hit) rate\b", lowered)):
         add("mirror_pack", "record words")
-    if _PLAN.search(lowered):
+    if _PLAN.search(lowered) or _STOP_Q.search(lowered):
         add("plan_lines", "plan words")
+    if _HISTORY.search(lowered):
+        add("mirror_pack", "history words")
+    if _TEMPTED.search(lowered):
+        add("journal_pack", "tempted words", day=today)
+        add("tilt_pack", "tempted words")
+    if _HYPOTHESES.search(lowered):
+        add("hypothesis_pack", "hypothesis words")
     if _NIGHT.search(lowered):
         add("night_pack", "night words")
     if _RECAP.search(lowered) or (_RECAP_SOFT.search(lowered) and not _RECORD.search(lowered)):

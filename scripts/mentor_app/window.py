@@ -1191,7 +1191,25 @@ class MentorWindow(QMainWindow):
         if name == "journal_pack":
             # P15b: the feelings this app stored ride on their trades (its own chat store, read-only).
             return brain._default_build(name, {**dict(args or {}), "chat_db": self.store.path})
+        if name == "regime_pack":
+            # P16: the diff reads earlier snapshots from this app's store; the day's first tape is snapshotted.
+            pack = brain._default_build(name, {**dict(args or {}), "chat_db": self.store.path})
+            self._snapshot_tape(pack)
+            return pack
         return brain._default_build(name, args)
+
+    def _snapshot_tape(self, pack: Any) -> None:
+        """Store the PT day's first tape (rows only) under ``tape:snapshot:<day>``; never overwrites (worker)."""
+        from mentor_packs import regime_pack
+
+        try:
+            if getattr(pack, "name", "") != regime_pack.NAME or not getattr(pack, "rows", ()):
+                return
+            key = regime_pack.snapshot_key(self._now().astimezone(regime_pack.PT).date())
+            if self.store.get_state(key) is None:
+                self.store.set_state(key, regime_pack.snapshot_json(pack))
+        except Exception:  # noqa: BLE001 - a lost snapshot only costs tomorrow's diff
+            logging.warning("Trade Mentor: tape snapshot not stored", exc_info=True)
 
     def _run_command(self, result: commands.CommandResult) -> None:
         stamp = self._utc_stamp()
@@ -1799,6 +1817,7 @@ class MentorWindow(QMainWindow):
         from mentor_packs import regime_pack
 
         pack = self._tape_builder() if self._tape_builder is not None else regime_pack.build()
+        self._snapshot_tape(pack)
         # P15b: the tape also reads today's pasted brief (bottom line + playbook, at most 8 rows).
         try:
             fund = self._build_fund("compact")

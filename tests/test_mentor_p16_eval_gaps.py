@@ -311,3 +311,86 @@ def test_this_week_vs_last_week_reads_both_weeks_and_never_today():
     for question in ("compare this week to last week in one paragraph", "how is my week vs last week"):
         got = [(r.name, r.args) for r in attach.plan_attachments(question, {}, NOW) if r.name == "journal_pack"]
         assert got == [("journal_pack", {"day": "week"}), ("journal_pack", {"day": "last_week"})], (question, got)
+
+
+# ---------------------------------------------------------------- step 5: tape diff
+def _tape_store(tmp_path, snapshots):
+    import sqlite3
+
+    db = tmp_path / "mentor_chat.sqlite3"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE app_state (key TEXT PRIMARY KEY, value TEXT, updated_utc TEXT)")
+    for day, rows in snapshots.items():
+        conn.execute("INSERT INTO app_state VALUES (?, ?, '')", (f"tape:snapshot:{day}", __import__("json").dumps(rows)))
+    conn.commit()
+    conn.close()
+    return db
+
+
+def test_the_tape_diff_says_what_changed_since_the_previous_snapshot(tmp_path):
+    from dataclasses import replace
+
+    from mentor_packs import regime_pack
+
+    now = datetime(2026, 9, 30, 15, 0, tzinfo=timezone.utc)
+    yesterday = regime_pack.build(now=datetime(2026, 9, 29, 15, 0, tzinfo=timezone.utc),
+                                  sources=regime_pack.fixture_sources())
+    older = [dict(row, regime="strong since 2026-08-01") if row["id"] == "tape:regime" else row
+             for row in __import__("json").loads(regime_pack.snapshot_json(yesterday))]
+    db = _tape_store(tmp_path, {"2026-09-28": older, "2026-09-29": __import__("json").loads(
+        regime_pack.snapshot_json(yesterday))})
+    sources = replace(regime_pack.fixture_sources(), d1_env=lambda day: "bullish_trend", econ=lambda session: {
+        "today": [{"id": "t1", "date": session, "time_et": "10:00", "label": "ISM Manufacturing"},
+                  {"id": "t2", "date": session, "time_et": "09:45", "label": "Chicago PMI"}]})
+    pack = regime_pack.build(diff=True, now=now, sources=sources, chat_db=db)
+    rows = {row["id"]: row for row in pack.rows}
+    assert rows["tape:diff:d1env"]["changed"] is True
+    assert rows["tape:diff:d1env"]["text"] == "Since 2026-09-29: the D1 environment CHANGED from bearish_trend to bullish_trend"
+    assert rows["tape:diff:regime"]["changed"] is False, "compared with the newest earlier snapshot, not the 28th"
+    assert rows["tape:diff:leaders"]["changed"] is False and "Technology" in rows["tape:diff:leaders"]["text"]
+    assert rows["tape:diff:night"]["changed"] is False
+    econ = rows["tape:diff:econ"]["text"]
+    assert rows["tape:diff:econ"]["changed"] is True and "Chicago PMI" in econ and "ISM" not in econ, "only the new one"
+    assert not any(row["id"].startswith("tape:diff") for row in regime_pack.build(
+        now=now, sources=sources, chat_db=db).rows), "no diff unless asked"
+
+
+def test_no_snapshot_yesterday_is_one_first_day_row(tmp_path):
+    from mentor_packs import regime_pack
+
+    pack = regime_pack.build(diff=True, now=datetime(2026, 9, 30, 15, 0, tzinfo=timezone.utc),
+                             sources=regime_pack.fixture_sources(), chat_db=_tape_store(tmp_path, {}))
+    diff = [row for row in pack.rows if row["id"].startswith("tape:diff")]
+    assert [row["text"] for row in diff] == [
+        "Tape diff: no snapshot for 2026-09-29 (first day); what changed is unknown"]
+
+
+def test_tape_change_questions_attach_the_diff_and_the_night():
+    for question in ("what changed in the tape since yesterday", "anything different today?", "did the tape change"):
+        got = [(r.name, r.args) for r in attach.plan_attachments(question, {}, NOW)]
+        assert ("regime_pack", {"diff": True}) in got and ("night_pack", {}) in got, (question, got)
+        assert not any(name == "journal_pack" for name, _ in got), (question, got)
+
+
+def test_the_app_snapshots_the_first_tape_of_the_pt_day_and_never_overwrites(tmp_path):
+    import json
+    from types import SimpleNamespace
+
+    from mentor_app.store import MentorChatStore
+    from mentor_app.window import MentorWindow
+    from mentor_packs import regime_pack
+
+    store = MentorChatStore(tmp_path / "mentor_chat.sqlite3")
+    clock = {"now": datetime(2026, 9, 30, 13, 0, tzinfo=timezone.utc)}  # 06:00 PT
+    host = SimpleNamespace(store=store, _now=lambda: clock["now"])
+    first = regime_pack.build(now=clock["now"], sources=regime_pack.fixture_sources())
+    MentorWindow._snapshot_tape(host, first)
+    later = regime_pack.build(now=clock["now"], sources=__import__("dataclasses").replace(
+        regime_pack.fixture_sources(), d1_env=lambda day: "bullish_trend"))
+    MentorWindow._snapshot_tape(host, later)
+    stored = json.loads(store.get_state("tape:snapshot:2026-09-30"))
+    assert next(row for row in stored if row["id"] == "tape:d1env")["label"] == "bearish_trend", "first build wins"
+    assert not any(row["kind"] == "asof" for row in stored), "rows only"
+    pack = regime_pack.build(diff=True, now=datetime(2026, 10, 1, 15, 0, tzinfo=timezone.utc),
+                             sources=regime_pack.fixture_sources(), chat_db=store.path)
+    assert any(row["id"] == "tape:diff:d1env" and row["changed"] is False for row in pack.rows)
