@@ -124,11 +124,13 @@ LOCAL_EVIDENCE_BUDGET_SETTING_KEY = "ai_local_evidence_budget_chars"
 #: own model to 65536 on 2026-08-28 and set this to match.
 LOCAL_CONTEXT_SETTING_KEY = "ai_local_context_tokens"
 DEFAULT_LOCAL_CONTEXT_TOKENS = 12_288
-#: Model families that reason before they answer (gpt-oss on Ollama). The
-#: reasoning comes back apart from `message.content`, but its tokens count
+#: Model families that reason before they answer (gpt-oss and gemma4 on Ollama).
+#: The reasoning comes back apart from `message.content`, but its tokens count
 #: against `max_tokens`, so these tags get an effort level and an output
-#: allowance a plain-answer model such as gemma3 never receives.
-THINKING_MODEL_PREFIXES = ("gpt-oss",)
+#: allowance a plain-answer model such as gemma3 never receives. Measured
+#: 2026-09-30: gemma4:12b under a 600-token cap returned reasoning only and an
+#: empty answer; with the allowance it answered in ~1000 tokens.
+THINKING_MODEL_PREFIXES = ("gpt-oss", "gemma4")
 LOCAL_REASONING_EFFORT_SETTING_KEY = "ai_local_reasoning_effort"
 LOCAL_REASONING_EFFORTS = ("low", "medium", "high")
 DEFAULT_LOCAL_REASONING_EFFORT = "low"

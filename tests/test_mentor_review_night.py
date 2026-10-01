@@ -204,13 +204,22 @@ def test_a_model_that_fails_leaves_the_facts_and_is_degraded(chat, tmp_path):
     assert (tmp_path / "ai" / f"mentor_day_facts_{SESSION}.json").exists()
 
 
-def test_the_model_call_is_capped_at_600_output_tokens():
+def test_the_model_call_is_capped_at_600_output_tokens(monkeypatch):
+    import ai_summary
+
+    monkeypatch.setattr(ai_summary, "local_reasoning_tokens", lambda: 8000)
     sent = {}
     wrapped = mentor_review.capped_post(lambda url, **kw: sent.update(kw["json"]), model="gpt-oss:20b")
     wrapped("http://h/v1/chat/completions", json={"max_tokens": 4000})
-    assert sent == {"max_tokens": 600, "reasoning_effort": "high"}
+    # A thinking tag: the 600-token answer cap plus the reasoning allowance, since its reasoning
+    # counts against max_tokens (gemma4:12b under a bare 600 cap answered nothing, 2026-09-30).
+    assert sent == {"max_tokens": 8600, "reasoning_effort": "high"}
+    sent.clear()
+    mentor_review.capped_post(lambda url, **kw: sent.update(kw["json"]), model="gemma4:12b")("u", json={})
+    assert sent == {"max_tokens": 8600, "reasoning_effort": "high"}
+    sent.clear()
     mentor_review.capped_post(lambda url, **kw: sent.update(kw["json"]), model="gemma3:12b")("u", json={})
-    assert sent["max_tokens"] == 600
+    assert sent == {"max_tokens": 600}
 
 
 def test_no_chat_store_is_a_skip(tmp_path):

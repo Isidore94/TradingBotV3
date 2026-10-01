@@ -529,6 +529,7 @@ class ThinkingModelRequestTests(unittest.TestCase):
         self.assertTrue(ai_summary.model_thinks("gpt-oss:20b"))
         self.assertTrue(ai_summary.model_thinks("GPT-OSS:120b"))
         self.assertTrue(ai_summary.model_thinks("hf.co/x/gpt-oss-20b-GGUF:Q8"))
+        self.assertTrue(ai_summary.model_thinks("gemma4:12b"))
         self.assertFalse(ai_summary.model_thinks("gemma3:12b-tbv3ctx-64k"))
         self.assertFalse(ai_summary.model_thinks(""))
 
