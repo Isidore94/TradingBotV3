@@ -34,6 +34,9 @@ PRIORITY = {
     "mirror_pack": 8,
     "night_pack": 8,
     "recaps_pack": 8,
+    "rs_pack": 4,
+    "bars_pack": 3,
+    "alerts_pack": 4,
     "plan_lines": 9,
     "hypothesis_pack": 9,
     "recall": 10,
@@ -128,6 +131,15 @@ _HYPOTHESES = re.compile(r"\bhypothes[ie]s\b")
 #: P16: what changed in the tape since the last session: the tape diff and the night's read.
 _TAPE_DIFF = re.compile(r"\bwhat(?:'s| has)? changed\b|\bchanged since\b|\banything different\b"
                         r"|\bdid the (?:tape|market|regime) change\b|\bwhat'?s different\b")
+#: P17: relative strength across industries / sectors (the desk's industry board).
+_RS = re.compile(r"\brelative strength\b|\brr?s\b|\bleading\b|\blagging\b|\brotation\b|\bindustr(?:y|ies)\b"
+                 r"|\bsectors?\b|\bwhere(?:'s| is) the (?:strength|weakness)\b|\bwhat'?s working\b"
+                 r"|\bstrong groups\b|\bweak groups\b")
+#: P17: a ticker and "where is it now": the bot's cached M5 bars.
+_NOW = re.compile(r"\bnow\b|\bright now\b|\bcurrently\b|\bintraday\b|\btoday'?s action\b|\bwhere is \w+\b"
+                  r"|\bprice\b|\btrading at\b|\bwhere(?:'s| is) \w+ trading\b|\bacting\b|\bvwap\b")
+#: P17: what the bot alerted (D1 wick, M5 bounce).
+_ALERTS = re.compile(r"\balerts?\b|\balerted\b|\bwhat fired\b|\bfired today\b|\bwhat(?:'s| is) the bot flagging\b")
 _PLAN = re.compile(r"\bmy plan\b|\bmy rules?\b|\btrading plan\b|\bbreak(?:ing)? (?:a|my) rule\b")
 #: P15a: the night's reads (day review verdicts, ideas, contrasts, week review, story, digest).
 _NIGHT = re.compile(r"\bwhat did the night say\b|\bovernight\b|\blast night\b|\bnight(?:'s)? read\b|\bideas?\b"
@@ -412,6 +424,17 @@ def plan_attachments(
     elif any(request.name == "gate_pack" for request in wanted):
         # P15b: a pre-trade check sees today's brief: the bottom line and the playbook (at most 8 rows).
         add("fundamentals_pack", "pre-trade: today's brief", section="compact")
+    if _RS.search(lowered):
+        add("rs_pack", "relative strength words", level="sector" if re.search(r"\bsectors?\b", lowered)
+            and not re.search(r"\bindustr", lowered) else "industry")
+    for sym in symbols:
+        if sym in gated:
+            add("bars_pack", f"pre-trade: where {sym} is now", symbol=sym, n=6)
+        elif _NOW.search(lowered) and not past:
+            add("bars_pack", f"{sym} right now", symbol=sym)
+    if _ALERTS.search(lowered):
+        alert_day = "yesterday" if day and day != today and not re.fullmatch(r"[a-z_]+", day) else "today"
+        add("alerts_pack", "alert words", day=alert_day, **({"symbol": symbols[0]} if symbols else {}))
     if _RECALL.search(lowered):
         add("recall", "memory words", query=raw[:200])
     return sorted(wanted, key=lambda request: request.priority)
