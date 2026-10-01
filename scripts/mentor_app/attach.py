@@ -141,7 +141,8 @@ _RS = re.compile(r"\brelative strength\b|\brr?s\b|\bleading\b|\blagging\b|\brota
                  r"|\bstrong groups\b|\bweak groups\b")
 #: P17: a ticker and "where is it now": the bot's cached M5 bars.
 _NOW = re.compile(r"\bnow\b|\bright now\b|\bcurrently\b|\bintraday\b|\btoday'?s action\b|\bwhere is \w+\b"
-                  r"|\bprice\b|\btrading at\b|\bwhere(?:'s| is) \w+ trading\b|\bacting\b|\bvwap\b")
+                  r"|\bprice\b|\btrading at\b|\bwhere(?:'s| is) \w+ trading\b|\bacting\b|\bvwap\b"
+                  r"|\bclose today\b|\bclosing (?:strong|weak)\b")
 #: P17: what the bot alerted (D1 wick, M5 bounce).
 _ALERTS = re.compile(r"\balerts?\b|\balerted\b|\bwhat fired\b|\bfired today\b|\bwhat(?:'s| is) the bot flagging\b")
 #: P18: the trader's own Market Journal reads and how they graded.
@@ -181,11 +182,59 @@ _EARNINGS_ALONE = re.compile(
     r"|\b(?:earnings|reports?|reporting)\s+(?:today|tomorrow)\b|\b(?:anything|anyone|who|who's|whos)\s+(?:is\s+)?"
     r"report(?:s|ing)?\b")
 _SHORT_WORD = re.compile(r"\bshort(?:ing|s|ed)?\b|\bsell(?:ing)?\b(?!-)|\bput(?:s)?\b")
-#: Closing a held long / a held short (P18 review: read against the book before the verb's own side).
-_EXIT_LONG = re.compile(r"\bsell(?:ing)?\b(?!-)|\btrim(?:ming)?\b|\btak(?:e|ing) (?:some )?profits?\b"
-                        r"|\bclos(?:e|ing)\b|\bexit(?:ing)?\b|\bscal(?:e|ing) out\b")
-_EXIT_SHORT = re.compile(r"\bbuy(?:ing)?\b|\bcover(?:ing)?\b|\bbuy(?:ing)? (?:it )?back\b|\bclos(?:e|ing)\b"
-                         r"|\bexit(?:ing)?\b|\btak(?:e|ing) (?:some )?profits?\b|\btrim(?:ming)?\b")
+#: P18 re-review: verbs bound to the ticker they act on (nearest after, else before, within BIND_TOKENS).
+#: An exit verb is a first-person ACTION; "close" alone is a price word ("AMD closing strong", "the close").
+_VERB_KINDS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("exit", re.compile(r"\bsell(?:ing)?\b(?!-)|\btrim(?:ming)?\b|\btak(?:e|ing) (?:some )?profits?\b"
+                        r"|\bscal(?:e|ing) out\b|\bexit(?:ing)?\b|\bclos(?:e|ing) out\b"
+                        r"|\bclos(?:e|ing) (?:my|the|our)\b(?! (?:close|high|low|open)\b)")),
+    ("cover", re.compile(r"\bcover(?:ing)?\b|\bbuy(?:ing)? (?:it |them )?back\b")),
+    ("add", re.compile(r"\badd(?:ing)?\b")),
+    ("long", re.compile(r"\bbuy(?:ing)?\b|\blong\b|\bcalls?\b")),
+    ("short", re.compile(r"\bsell(?:ing)?\b(?!-)|\bshort(?:ing)?\b|\bputs?\b")),
+)
+BIND_TOKENS = 3
+_TOKEN = re.compile(r"\$?[A-Za-z][A-Za-z.\-']*")
+
+
+def verb_bindings(raw: str, symbols: Iterable[str]) -> dict[str, set[str]]:
+    """``{SYM: {verb kinds}}``: each verb binds to the nearest ticker after it, else before it, within 3 tokens."""
+    tokens = list(_TOKEN.finditer(raw or ""))
+    wanted = {str(sym).upper() for sym in symbols}
+    where = [(i, tok.group(0).lstrip("$").upper()) for i, tok in enumerate(tokens)
+             if tok.group(0).lstrip("$").upper() in wanted]
+    out: dict[str, set[str]] = {sym: set() for sym in wanted}
+    lowered = (raw or "").lower()
+
+    def index_of(pos: int) -> int:
+        return next((i for i, tok in enumerate(tokens) if tok.start() <= pos < tok.end()), -1)
+
+    for kind, pattern in _VERB_KINDS:
+        for match in pattern.finditer(lowered):
+            first, last = index_of(match.start()), index_of(match.end() - 1)
+            after = [(i - last, sym) for i, sym in where if 0 < i - last <= BIND_TOKENS]
+            before = [(first - i, sym) for i, sym in where if 0 < first - i <= BIND_TOKENS]
+            pick = min(after)[1] if after else (min(before)[1] if before else "")
+            if pick:
+                out[pick].add(kind)
+    return out
+
+
+def _exit_of(held_side: str, kinds: set[str]) -> bool:
+    """A held LONG is closed by sell/trim/take profit/scale out/exit/close out; a held SHORT by cover/buy (back)/
+    the same closing words. An add word bound to the name makes it an ADD, never an exit."""
+    if not held_side or "add" in kinds:
+        return False
+    if held_side == "LONG":
+        return "exit" in kinds
+    return bool(kinds & {"cover", "long"}) or ("exit" in kinds and "short" not in kinds)
+
+
+def _bound_side(kinds: set[str]) -> str:
+    longish, shortish = "long" in kinds, "short" in kinds  # "add to X" takes the held / known side
+    return "LONG" if longish and not shortish else "SHORT" if shortish and not longish else ""
+
+
 _LONG_WORD = re.compile(r"\blong\b|\bbuy(?:ing)?\b|\bgo long\b|\bcalls?\b")
 
 
@@ -336,11 +385,13 @@ def plan_attachments(
     held = {str(sym or "").strip().upper() for sym in book or ()}
     if symbols and not past:
         side = _side_words(lowered)
+        bound = verb_bindings(raw, symbols)
         for sym in symbols:
-            # P18 review: the verb is read against the book first - selling a held long or covering a held
-            # short is an EXIT of that position, never a new trade on the other side.
+            # P18 review: each verb acts on its own ticker, read against the book first - selling a held long
+            # or covering a held short is an EXIT of that position, never a new trade on the other side.
             held_side = known.get(sym, "") if sym in held else ""
-            if held_side and (_EXIT_LONG if held_side == "LONG" else _EXIT_SHORT).search(lowered):
+            kinds = bound.get(sym, set())
+            if _exit_of(held_side, kinds):
                 add("gate_pack", f"exit of a held {held_side} {sym}", side=held_side, symbol=sym, exit=True)
                 add("journal_pack", f"exit of a held {sym}: today's trades", day="today")
                 add("pick_pack", f"exit of a held {sym}", symbol=sym)
@@ -348,7 +399,7 @@ def plan_attachments(
                 continue
             if not _INTENT.search(lowered):
                 continue
-            chosen = side or known.get(sym, "")
+            chosen = _bound_side(kinds) or (side if len(symbols) == 1 else "") or known.get(sym, "")
             if chosen:
                 add("gate_pack", f"trade intent on {sym}", side=chosen, symbol=sym)
                 gated.add(sym)

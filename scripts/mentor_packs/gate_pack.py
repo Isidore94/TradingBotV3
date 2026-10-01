@@ -307,7 +307,31 @@ def _embed(prefix: str, rows: Any) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------- build
-def _intent_row(prefix: str, sym: str, side: str, src: Sources, rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _flag(value: Any) -> bool:
+    """A strict boolean: True, 1 or "true"/"1"/"yes" only ("false", "0", "" and None are False)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    return str(value or "").strip().lower() in ("true", "1", "yes")
+
+
+def _price_age(rows: list[dict[str, Any]], moment: datetime) -> str:
+    """ "at last cached price HH:MM ET, N min old" from the embedded bars asof row; "" when none."""
+    asof = next((r for r in rows if r.get("kind") == "asof" and ":bars:" in str(r.get("id")) and r.get("at_utc")),
+                None)
+    if asof is None:
+        return ""
+    try:
+        at = datetime.fromisoformat(str(asof["at_utc"]))
+    except ValueError:
+        return ""
+    minutes = max(0, int((moment - at).total_seconds() // 60))
+    return f"at last cached price {at.astimezone(regime_pack.ET):%H:%M} ET, {minutes} min old"
+
+
+def _intent_row(prefix: str, sym: str, side: str, src: Sources, rows: list[dict[str, Any]],
+                moment: datetime) -> dict[str, Any]:
     """P18: an exit of a held position - its size, average, stop and today's R from the last cached price."""
     held = [t for t in src.open_trades() if _sym(t.get("symbol")) == sym and _side(t.get("direction")) == side]
     head = f"Intent: EXIT of a held {side} {sym} (closing or trimming it), not a new trade"
@@ -326,15 +350,17 @@ def _intent_row(prefix: str, sym: str, side: str, src: Sources, rows: list[dict[
     else:
         risk = (avg - stops[0]) if side == "LONG" else (stops[0] - avg)
         move = (last - avg) if side == "LONG" else (avg - last)
-        r_text = f"{move / risk:+.2f}R at the last cached price {last:.2f}"
+        age = _price_age(rows, moment)
+        r_text = f"{move / risk:+.2f}R at {last:.2f}" + (f" ({age})" if age else " (price time unknown)")
     return {"id": f"{prefix}:intent", "kind": "intent", "exit": True,
             "text": (f"{head}: {qty:g} sh, avg {'unknown' if avg is None else f'{avg:.2f}'}, stop "
                      f"{f'{stops[0]:.2f}' if stops else 'none'}; {r_text}")}
 
 
 def build(side: str = "", symbol: str = "", size: Any = None, stop: Any = None, entry: Any = None, *,
-          now: datetime | None = None, sources: Sources | None = None, exit: bool = False) -> Pack:
+          now: datetime | None = None, sources: Sources | None = None, exit: Any = False) -> Pack:
     """Build the gate pack for one request. File and DB reads: call it on a worker."""
+    exit = _flag(exit)
     sym, chosen = _sym(symbol), _side(side)
     if not sym or not sym.replace(".", "").replace("-", "").isalnum():
         return make_pack(NAME, (), empty_text="gate_pack needs a ticker, e.g. /check short NVDA")
@@ -395,7 +421,7 @@ def build(side: str = "", symbol: str = "", size: Any = None, stop: Any = None, 
     if exit:
         # P18 review: an exit question (sell a held long, cover a held short) leads with its intent row.
         try:
-            rows.insert(1, _intent_row(prefix, sym, chosen, src, rows))
+            rows.insert(1, _intent_row(prefix, sym, chosen, src, rows, moment))
         except Exception as exc:  # noqa: BLE001
             rows.insert(1, _unknown(f"{prefix}:intent", "Exit intent", exc))
     return make_pack(NAME, rows)

@@ -473,3 +473,34 @@ def test_covering_a_held_short_is_an_exit_of_that_short():
 def test_selling_a_name_not_held_is_a_new_short():
     assert _gate_args("about to sell AMD", []) == [{"side": "SHORT", "symbol": "AMD"}]
     assert _gate_args("adding to AMD", ["AMD"]) == [{"side": "LONG", "symbol": "AMD"}]  # adding is not an exit
+
+
+#: P18 re-review 2: "close" is a price word unless it is an action on the name; each verb binds to its ticker.
+BOOK = ["AMD", "NVDA", "TSLA"]
+
+
+def _packs(text):
+    return [(r.name, dict(r.args)) for r in attach.plan_attachments(text, HELD, NOW, book=BOOK)]
+
+
+def test_close_as_a_price_word_is_never_an_exit():
+    assert [a for n, a in _packs("AMD closing strong, add more?") if n == "gate_pack"] == [
+        {"side": "LONG", "symbol": "AMD"}]  # an add, never an exit
+    for text in ("did AMD close above vwap", "what is the AMD close today", "where did AMD close yesterday?"):
+        packs = _packs(text)
+        assert not [a for n, a in packs if n == "gate_pack"], text
+        assert {"bars_pack", "journal_pack"} & {n for n, _a in packs}, text
+
+
+def test_close_out_and_close_my_are_exits():
+    assert [a for n, a in _packs("close out AMD") if n == "gate_pack"] == [
+        {"side": "LONG", "symbol": "AMD", "exit": True}]
+    assert [a for n, a in _packs("close my NVDA") if n == "gate_pack"] == [
+        {"side": "LONG", "symbol": "NVDA", "exit": True}]
+
+
+def test_each_verb_binds_to_its_own_ticker():
+    gates = [a for n, a in _packs("sell AMD and buy NVDA") if n == "gate_pack"]
+    assert gates == [{"side": "LONG", "symbol": "AMD", "exit": True}, {"side": "LONG", "symbol": "NVDA"}]
+    assert attach.verb_bindings("sell AMD and buy NVDA", ["AMD", "NVDA"]) == {
+        "AMD": {"exit", "short"}, "NVDA": {"long"}}
