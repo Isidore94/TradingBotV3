@@ -32,6 +32,7 @@ NEW_S = ("new", "SHORT")
 HISTORY = ("history", "")
 STATUS = ("status", "")
 WHICH = ("ask_side", "")
+TRIM_L = ("trim", "LONG")
 NONE = ("none_to_exit", "")
 FLIP_TO_LONG = [("exit", "SHORT"), ("new", "LONG")]
 FLIP_TO_SHORT = [("exit", "LONG"), ("new", "SHORT")]
@@ -303,6 +304,24 @@ TABLE = [
     ("sell more TSLA", BOOK, {"TSLA": ADD_S}),
     ("sell AMD and TSLA", BOOK, {"AMD": EXIT_L, "TSLA": WHICH}),
     ("sell more QCOM", BOOK, {"QCOM": NEW_S}),
+    # round 13: a coordinated ticker with its own predicate is not an object
+    ("sell AMD, NVDA still strong", BOOK, {"AMD": EXIT_L}),
+    ("sell AMD, NVDA holding up", BOOK, {"AMD": EXIT_L}),
+    ("sell AMD, NVDA fine", BOOK, {"AMD": EXIT_L}),
+    ("sell AMD, NVDA ok", BOOK, {"AMD": EXIT_L}),
+    ("sell AMD, NVDA not yet", BOOK, {"AMD": EXIT_L}),
+    ("sell AMD, NVDA keep", BOOK, {"AMD": EXIT_L}),
+    ("cut AMD, NVDA looking good", BOOK, {"AMD": EXIT_L}),
+    ("sell AMD and NVDA still strong", BOOK, {"AMD": EXIT_L}),
+    ("sell AMD, NVDA?", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L}),
+    ("sell AMD, NVDA and TSLA", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L, "TSLA": WHICH}),
+    # round 13 advisories
+    ("sell more AMD", BOOK, {"AMD": TRIM_L}),
+    ("they're buying NVDA. should I?", BOOK, {"NVDA": ADD_L}),
+    ("he sold AMD. should I too?", BOOK, {"AMD": EXIT_L}),
+    ("sell my amd", BOOK, {"AMD": EXIT_L}),
+    ("sell amd nvda", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L}),
+    ("sell half of amd", BOOK, {"AMD": EXIT_L}),
     # pure questions, no verb
     ("how is AMD trading right now", BOOK, {}),
     ("what's the news on NVDA", BOOK, {}),
@@ -320,7 +339,8 @@ def _gates(text, book):
     out: dict = {}
     for r in requests:
         if r.name == "gate_pack":
-            kind = "exit" if r.args.get("exit") else "add" if r.args.get("add") else "new"
+            kind = ("trim" if r.args.get("trim") else "exit" if r.args.get("exit") else "add" if r.args.get("add")
+                    else "new")
             got = (kind, r.args["side"])
             if r.args.get("flip"):
                 out.setdefault(r.args["symbol"], []).append(got)
@@ -338,7 +358,7 @@ def _gates(text, book):
 
 
 def test_the_table_size_is_pinned():
-    assert len(TABLE) == 241 and len(GUARD) == 20
+    assert len(TABLE) == 257 and len(GUARD) == 20
 
 
 @pytest.mark.parametrize("text,book,want", TABLE, ids=[f"{n}:{row[0][:40]}" for n, row in enumerate(TABLE)])
@@ -448,3 +468,12 @@ def test_a_lowercase_word_is_a_ticker_only_right_after_a_trade_verb():
     assert attach.find_symbols("sell amd", KNOWN) == ["AMD"]
     assert attach.find_symbols("amd looks weak", KNOWN) == []
     assert attach.find_symbols("sell all of my AMD", KNOWN) == ["AMD"]
+
+
+def test_a_trim_names_itself_in_the_request_row(tmp_path):
+    from mentor_packs import gate_pack
+
+    src = gate_pack.fixture_sources(tmp_path)
+    row = gate_pack.build("LONG", "ALL", sources=src, exit=True, trim=True).rows[0]
+    assert row["trim"] is True and row["text"].startswith("Request: TRIM (a partial exit) of a held LONG ALL")
+    assert gate_pack.build("LONG", "ALL", sources=src, trim=True).rows[0]["trim"] is False  # a trim is an exit

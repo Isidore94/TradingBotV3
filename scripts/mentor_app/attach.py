@@ -56,8 +56,6 @@ COMMON_WORDS = frozenset({
     "was", "we", "you", "big", "low", "high", "run", "see", "new", "key", "real", "fast", "good", "well", "one",
     "open", "next", "life", "love", "fun", "cash", "free", "any", "few", "true", "ever", "safe", "else",
 })
-_LOWER_AFTER_VERB = re.compile(r"\b(?:sell|selling|buy|buying|short|shorting|cover|covering|trim|trimming|add|"
-                               r"adding|exit|exiting|dump|cut|close|closing)\s+([a-z]{1,5})\b")
 _DOLLAR = re.compile(r"\$([A-Za-z]{1,5}(?:[.\-][A-Za-z]{1,2})?)(?![A-Za-z])")
 _PLAIN = re.compile(r"(?<![A-Za-z$.\-])([A-Z]{1,5}(?:[.\-][A-Z]{1,2})?)(?![A-Za-z])")
 _WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
@@ -275,10 +273,11 @@ def find_symbols(text: str, known_symbols: Mapping[str, Any] | Iterable[str]) ->
         if token in known and token not in NOT_TICKERS:
             hits.append((match.start(), token))
     # P18: a lowercase word right after a trade verb is a ticker when it is in the universe ("sell amd").
-    for match in _LOWER_AFTER_VERB.finditer(text or ""):
-        sym = match.group(1).upper()
-        if sym in known and sym not in NOT_TICKERS and match.group(1).lower() not in COMMON_WORDS:
-            hits.append((match.start(1), sym))
+    from mentor_app.intent import lower_ticker_hits
+
+    for offset, sym in lower_ticker_hits(text, known):
+        if sym not in NOT_TICKERS and sym.lower() not in COMMON_WORDS:
+            hits.append((offset, sym))
     ordered: list[str] = []
     for _, sym in sorted(hits):
         if sym not in ordered:
@@ -359,6 +358,8 @@ def plan_attachments(
                 noted.add(item.symbol)
                 continue
             flags = {"exit": True} if item.kind == "exit" else {"add": True} if item.kind == "add" else {}
+            if item.trim:
+                flags["trim"] = True
             add("gate_pack", f"{item.kind} {item.side} {item.symbol}", side=item.side, symbol=item.symbol,
                 **flags, **({"flip": True} if item.flip else {}))
             if item.kind == "exit":
