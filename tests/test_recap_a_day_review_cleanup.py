@@ -214,6 +214,8 @@ def test_the_desk_dialog_files_the_brief_by_the_shared_forecast_session_rule(pan
     page = panel.session_date()
     dialog.text_box.setPlainText("# Morning Brief — September 17, 2026\n\nbody")
     assert dialog.session_box.text() == "2026-09-17", "the brief's own title date"
+    dialog.text_box.setPlainText("**Market Morning Brief: Wednesday, Sept 30, 2026 (quarter-end)**\n\nbody")
+    assert dialog.session_box.text() == "2026-09-30", "a bold Claude title prefills its own date"
     dialog.text_box.setPlainText("no dated heading here")
     assert dialog.session_box.text() == page, "else the page's session, never the paste moment"
     assert calls and all(kw.get("fallback") == page for kw in calls), "the shared rule, with the page as fallback"
