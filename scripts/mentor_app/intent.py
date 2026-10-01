@@ -35,6 +35,10 @@ EXIT, COVER, SELL, ADD, BUY, GO_LONG, GO_SHORT, CLOSE, PAST = (
     "exit", "cover", "sell", "add", "buy", "go_long", "go_short", "close", "past")
 #: "I'm long AMD" / "I'm short TSLA": a status about his own side; TAKE: "take/enter/get into X" (no side said).
 STATUS_LONG, STATUS_SHORT, TAKE = "status_long", "status_short", "take"
+#: Narration (a verb in a clause that does not ask): history only when nothing live acts on the name.
+NARR = "narr"
+#: "sell more TSLA": more of the same side (an add on a held short; an exit of a held long; a new short).
+SELL_MORE = "sell_more"
 #: "I'm flat AMD": he holds nothing in it now (whatever the book file says); never a gate.
 STATUS_FLAT = "status_flat"
 STATUSES = (STATUS_LONG, STATUS_SHORT, STATUS_FLAT)
@@ -52,6 +56,7 @@ PHRASES: tuple[tuple[tuple[str, ...], str], ...] = tuple(sorted((
     (("buy", "back"), COVER), (("buying", "back"), COVER), (("buy", "it", "back"), COVER),
     (("cover",), COVER), (("covering",), COVER),
     # new or flipped sides
+    (("sell", "more"), SELL_MORE), (("selling", "more"), SELL_MORE),
     (("sell", "short"), GO_SHORT), (("selling", "short"), GO_SHORT), (("go", "short"), GO_SHORT),
     (("going", "short"), GO_SHORT), (("get", "short"), GO_SHORT), (("getting", "short"), GO_SHORT),
     (("take", "a", "short"), GO_SHORT), (("taking", "a", "short"), GO_SHORT), (("shorting",), GO_SHORT),
@@ -114,6 +119,17 @@ def _tokens(text: str) -> list[str]:
     return [tok.lstrip("$") if tok[0] == "$" else tok for tok in _TOKEN.findall(text or "")]
 
 
+def _tick_mask(toks: list[str], upper: set[str] | list[str]) -> list[bool]:
+    """Which tokens are tickers: upper case as typed ("AMD"), or lowercase right after a trade verb ("sell amd")."""
+    names = {str(t).upper() for t in upper}
+    out = []
+    for n, tok in enumerate(toks):
+        hit = tok.upper() in names and (tok.isupper() or (
+            n > 0 and toks[n - 1].lower() in VERB_WORDS and tok.lower() not in LOWER_NOT_TICKER))
+        out.append(hit)
+    return out
+
+
 def _quoted(text: str) -> set[int]:
     """Indices of the tokens inside quotation marks ('"sell AMD" he said')."""
     ranges = [(m.start(), m.end()) for m in _QUOTED.finditer(text or "")]
@@ -126,9 +142,13 @@ THIRD_PERSON = frozenset({"he", "she", "they", "him", "her", "them", "he's", "sh
                           "anyone", "someone", "somebody", "everyone", "everybody", "nobody", "people", "guys",
                           "analysts", "analyst", "who", "who's", "whos", "street", "guy", "twitter", "wife",
                           "husband", "brother", "sister", "friend", "buddy", "dad", "mom", "boss", "cathie",
-                          "funds", "traders", "experts", "everybody's"})
+                          "funds", "traders", "experts", "everybody's", "ceo", "cfo", "insider", "insiders",
+                          "management", "company", "buffett", "cramer"})
 SAY_WORDS = frozenset({"says", "said", "say", "told", "tells", "recommends", "recommended", "thinks", "wants",
                        "suggests", "suggested", "reckons"})
+#: A lowercase word after a trade verb may be a ticker ("sell amd"), never one of these.
+LOWER_NOT_TICKER = frozenset({"all", "it", "me", "my", "on", "or", "out", "so", "the", "up", "now", "any", "one",
+                              "some", "half", "more", "them", "back", "a", "an", "into", "in", "of", "to", "here"})
 FIRST_PERSON_WORDS = frozenset({"i", "i'm", "im", "i'd", "i've", "i'll", "id", "ive"})
 #: "I'm buying AMD" is a present intent; "... all morning / since the open" is narration.
 DURATION = re.compile(r"\b(?:all (?:morning|day|week|session|afternoon)|since|for (?:the )?(?:last|past)|"
@@ -210,8 +230,10 @@ def spans(text: str, tickers: Iterable[str]) -> list[tuple[int, int, str]]:
     upper = {str(t).upper() for t in tickers}
     starts = _clause_starts(toks)
 
+    mask = _tick_mask(toks, upper)
+
     def is_ticker(j: int) -> bool:
-        return 0 <= j < len(toks) and toks[j].upper() in upper
+        return 0 <= j < len(toks) and mask[j]
 
     def at(j: int) -> str:
         return lowered[j] if 0 <= j < len(toks) else ""
@@ -355,11 +377,12 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
             return (lowered[i + 2] if i + 2 < len(toks) else "") in SIDE_NEVER_NEXT
         return nxt in ADJ_NOUNS
 
-    places = [(i, tok.upper()) for i, tok in enumerate(toks) if tok.upper() in upper and not adjective(i)]
+    mask = _tick_mask(toks, upper)
+    places = [(i, tok.upper()) for i, tok in enumerate(toks) if mask[i] and not adjective(i)]
     ticker_at = dict(places)
     # The objectless fallback may land on a ticker used as an adjective ("QCOM buyback - buy?").
-    names_in_sentence = {tok.upper() for tok in toks if tok.upper() in upper}
-    every_place = [(i, tok.upper()) for i, tok in enumerate(toks) if tok.upper() in upper]
+    names_in_sentence = {tok.upper() for n, tok in enumerate(toks) if mask[n]}
+    every_place = [(i, tok.upper()) for i, tok in enumerate(toks) if mask[i]]
     found = spans(text, upper)
     quoted = _quoted(text)
 
@@ -370,14 +393,14 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
             return True
         tok = toks[n]
         return (tok[:1].isupper() and not tok.isupper() and word not in FIRST_PERSON_WORDS and word not in NOT_NAMES
-                and tok.upper() not in upper)
+                and not mask[n])
 
     # A ":" hands its LEFT side to the right clause as the speaker ("Cramer: short TSLA"): someone else's words.
     spoken_by_other: set[int] = set()
     for n, tok in enumerate(toks):
         if tok == ":" and n:
             left = [m for m in range(n) if clause[m] == clause[n - 1] and toks[m] not in SEPARATORS]
-            if left and not all(toks[m].upper() in upper for m in left) and (
+            if left and not all(mask[m] for m in left) and (
                     any(someone_else(m) or lowered[m] in SAY_WORDS for m in left)):
                 spoken_by_other.add(clause[n])
     imperative = set()
@@ -400,24 +423,25 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
         if kind not in (PAST, *STATUSES) and progressive and not DURATION.search(" ".join(words_of[c])):
             imperative.add(c)  # "I'm buying AMD": a present intent
         if kind not in (PAST, *STATUSES) and c in past_clauses:
-            kind = PAST  # "I cut half my AMD this morning" is what he did
-        if kind not in (PAST, *STATUSES) and c not in asked and c not in imperative:
+            # "I cut half my AMD this morning" is what he did; a habit ("I always sell too early") is narration.
+            kind = NARR if HABIT.search(" ".join(words_of[c])) else PAST
+        if kind not in (PAST, NARR, *STATUSES) and c not in asked and c not in imperative:
             if kind in (GO_LONG, GO_SHORT) and first - 1 in ticker_at:
                 continue  # "ALL short - take it?": a side tag after its ticker, not a verb of its own
-            kind = PAST  # (e) plain narration with no ask cue ("I cut AMD at 155") is history, never a gate
+            kind = NARR  # (e) plain narration with no ask cue ("I cut AMD at 155") is history, never a gate
         j, skipped = last + 1, 0
-        while j < len(toks) and lowered[j] in FILLER and toks[j].upper() not in upper and skipped < OBJECT_WINDOW:
+        while j < len(toks) and lowered[j] in FILLER and not mask[j] and skipped < OBJECT_WINDOW:
             j, skipped = j + 1, skipped + 1
         if j < len(toks) and j in ticker_at and clause[j] == c:
             out[ticker_at[j]].add(kind)  # the direct object
             k = j + 1
-            while (k + 1 < len(toks) and lowered[k] in ("or", "and", "&") and k + 1 in ticker_at
+            while (k + 1 < len(toks) and lowered[k] in ("or", "and", "&", ",") and k + 1 in ticker_at
                    and (lowered[k + 2] if k + 2 < len(toks) else "") not in PREDICATE | VERB_WORDS):
                 out[ticker_at[k + 1]].add(kind)  # "should I buy QCOM or AMD": coordinated objects
                 k += 2
             continue
         nxt = lowered[j] if j < len(toks) else ""
-        if j < len(toks) and toks[j].upper() in upper and j not in ticker_at:
+        if j < len(toks) and mask[j] and j not in ticker_at:
             continue  # the object is a ticker used as an adjective: no gate
         if j < len(toks) and nxt not in OBJECTLESS and clause[j] == c and not (
                 kind in (GO_LONG, GO_SHORT) and first > 0 and first - 1 in ticker_at):
@@ -427,6 +451,10 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
             # tag ("should I take it? AMD short" -> SHORT on AMD, never a long add).
             for near in (c, c - 1, c + 1):
                 names = [(i, sym) for i, sym in every_place if clause[i] == near]
+                if nxt == "them" and len({sym for _, sym in names}) > 1:
+                    for _i, sym in names:
+                        out[sym].add(kind)  # "sell them both? AMD NVDA"
+                    break
                 if len({sym for _, sym in names}) != 1:
                     continue
                 at_i, sym = names[0]
@@ -435,7 +463,16 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
                 out[sym].add(side_kind if side_kind and kind in (TAKE, GO_LONG, GO_SHORT) else kind)
                 break
             continue
-        # No object: the clause rules.
+        # No object: the clause rules. Narration and history bind only a ticker of their own clause.
+        if kind in (NARR, PAST):
+            here = {sym for i, sym in every_place if clause[i] == c}
+            if len(here) == 1:
+                out[next(iter(here))].add(kind)
+            continue
+        if "both" in lowered and len(names_in_sentence) == 2:
+            for sym in names_in_sentence:
+                out[sym].add(kind)  # "AMD and NVDA both look done, sell?"
+            continue
         if len(names_in_sentence) == 1:
             out[next(iter(names_in_sentence))].add(kind)
             continue
@@ -446,6 +483,14 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
         before = [(first - i, sym) for i, sym in here if i < first]
         if before:
             out[min(before)[1]].add(kind)
+    # Ellipsis: "AMD CEO is selling, should I?" - a bare ask clause repeats the previous clause's verb as his own.
+    for c, words in words_of.items():
+        bare = [w for w in words if w not in SEPARATORS]
+        if bare and re.fullmatch(r"(?:should|can|could|would|do) i(?: too| also)?", " ".join(bare)) and c - 1 in words_of:
+            prior = [kind for first, _last, kind in found if clause[first] == c - 1 and kind not in (*STATUSES, PAST)]
+            names = {sym for i, sym in every_place if clause[i] == c - 1} or set(names_in_sentence)
+            if prior and len(names) == 1:
+                out[next(iter(names))].add(prior[-1])
     # A carried status frame covers coordinated tickers with no verb of their own ("I'm long NVDA and AMD").
     status_kind, status_clause = "", -1
     verb_clauses = {clause[first]: kind for first, _last, kind in found}
@@ -464,7 +509,11 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
 
 
 def _one(sym: str, kinds: set[str], side: str, known_side: str = "") -> list[Intent]:
-    """Past tense wins ("sold AMD") unless an add follows it ("I bought NVDA yesterday, add?")."""
+    """Past tense wins ("sold AMD") unless an add follows it ("I bought NVDA yesterday, add?"); narration only when
+    nothing live acts on the name ("I usually sell AMD here, sell?" -> the ask)."""
+    live = kinds - {PAST, NARR, *STATUSES}
+    if NARR in kinds:
+        kinds = (kinds - {NARR}) if live else ((kinds - {NARR}) | {PAST})
     if PAST in kinds and ADD not in kinds:
         return [Intent(sym, "history")]
     out = _decide(sym, set(kinds) - {PAST}, side, known_side)
@@ -503,6 +552,10 @@ def _decide(sym: str, kinds: set[str], side: str, known_side: str) -> list[Inten
         if exits or SELL in kinds:
             return [Intent(sym, "exit", "LONG")]
         return []
+    if SELL_MORE in kinds:
+        kinds = (kinds - {SELL_MORE}) | ({ADD} if side == "SHORT" else {SELL})
+    if side == "SHORT" and kinds == {SELL}:
+        return [Intent(sym, "ask_side", "SHORT")]  # "sell TSLA" on a held short: add or cover? say which
     if side == "SHORT":
         if GO_LONG in kinds:
             return [Intent(sym, "exit", "SHORT", flip=True), Intent(sym, "new", "LONG", flip=True)]

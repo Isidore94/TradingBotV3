@@ -31,6 +31,7 @@ NEW_L = ("new", "LONG")
 NEW_S = ("new", "SHORT")
 HISTORY = ("history", "")
 STATUS = ("status", "")
+WHICH = ("ask_side", "")
 NONE = ("none_to_exit", "")
 FLIP_TO_LONG = [("exit", "SHORT"), ("new", "LONG")]
 FLIP_TO_SHORT = [("exit", "LONG"), ("new", "SHORT")]
@@ -284,6 +285,24 @@ TABLE = [
     ("I'm buying AMD every dip", BOOK, {"AMD": HISTORY}),
     ("I always trim NVDA into strength", BOOK, {"NVDA": HISTORY}),
     ("On Monday should I sell AMD?", BOOK, {"AMD": EXIT_L}),
+    # round 12: a habit or someone else's clause never turns his own ask in the next clause into history
+    ("I always sell too early, sell AMD now?", BOOK, {"AMD": EXIT_L}),
+    ("I usually sell AMD here, sell?", BOOK, {"AMD": EXIT_L}),
+    ("Buffett is buying, buy QCOM?", BOOK, {"QCOM": NEW_L}),
+    ("AMD CEO is selling, should I?", BOOK, {"AMD": EXIT_L}),
+    ("I usually sell AMD here", BOOK, {"AMD": HISTORY}),
+    # round 12: comma lists, plural pronouns, a lowercase ticker right after a trade verb
+    ("sell AMD, NVDA", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L}),
+    ("sell AMD, NVDA and buy QCOM", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L, "QCOM": NEW_L}),
+    ("sell them both? AMD NVDA", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L}),
+    ("AMD and NVDA both look done, sell?", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L}),
+    ("sell amd", BOOK, {"AMD": EXIT_L}),
+    ("should I sell all of my AMD", BOOK, {"AMD": EXIT_L}),
+    # round 12: a bare "sell" on a held short asks which side; "sell more" is an add
+    ("sell TSLA", BOOK, {"TSLA": WHICH}),
+    ("sell more TSLA", BOOK, {"TSLA": ADD_S}),
+    ("sell AMD and TSLA", BOOK, {"AMD": EXIT_L, "TSLA": WHICH}),
+    ("sell more QCOM", BOOK, {"QCOM": NEW_S}),
     # pure questions, no verb
     ("how is AMD trading right now", BOOK, {}),
     ("what's the news on NVDA", BOOK, {}),
@@ -313,11 +332,13 @@ def _gates(text, book):
             out[r.args["symbol"]] = HISTORY
         elif r.name == "pick_pack" and r.reason.startswith("status of a held "):
             out[r.args["symbol"]] = STATUS
+        elif r.name == "pick_pack" and r.reason.startswith("which side on a held short "):
+            out[r.args["symbol"]] = WHICH
     return out
 
 
 def test_the_table_size_is_pinned():
-    assert len(TABLE) == 226 and len(GUARD) == 20
+    assert len(TABLE) == 241 and len(GUARD) == 20
 
 
 @pytest.mark.parametrize("text,book,want", TABLE, ids=[f"{n}:{row[0][:40]}" for n, row in enumerate(TABLE)])
@@ -414,3 +435,16 @@ GUARD = [
 def test_the_final_guard_opens_no_gate(text, why):
     requests = attach.plan_attachments(text, KNOWN, NOW, book=list(BOOK))
     assert not [r for r in requests if r.name == "gate_pack"], why
+
+
+def test_a_bare_sell_on_a_held_short_attaches_the_book_and_says_which():
+    requests = attach.plan_attachments("sell TSLA", KNOWN, NOW, book=list(BOOK))
+    notes = [r.args.get("note") for r in requests if r.name == "pick_pack"]
+    assert "book_pack" in [r.name for r in requests] and not [r for r in requests if r.name == "gate_pack"]
+    assert notes == ["You are short TSLA: 'sell more' means add, 'cover' means exit - say which"]
+
+
+def test_a_lowercase_word_is_a_ticker_only_right_after_a_trade_verb():
+    assert attach.find_symbols("sell amd", KNOWN) == ["AMD"]
+    assert attach.find_symbols("amd looks weak", KNOWN) == []
+    assert attach.find_symbols("sell all of my AMD", KNOWN) == ["AMD"]

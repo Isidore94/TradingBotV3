@@ -56,6 +56,8 @@ COMMON_WORDS = frozenset({
     "was", "we", "you", "big", "low", "high", "run", "see", "new", "key", "real", "fast", "good", "well", "one",
     "open", "next", "life", "love", "fun", "cash", "free", "any", "few", "true", "ever", "safe", "else",
 })
+_LOWER_AFTER_VERB = re.compile(r"\b(?:sell|selling|buy|buying|short|shorting|cover|covering|trim|trimming|add|"
+                               r"adding|exit|exiting|dump|cut|close|closing)\s+([a-z]{1,5})\b")
 _DOLLAR = re.compile(r"\$([A-Za-z]{1,5}(?:[.\-][A-Za-z]{1,2})?)(?![A-Za-z])")
 _PLAIN = re.compile(r"(?<![A-Za-z$.\-])([A-Z]{1,5}(?:[.\-][A-Z]{1,2})?)(?![A-Za-z])")
 _WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
@@ -272,6 +274,11 @@ def find_symbols(text: str, known_symbols: Mapping[str, Any] | Iterable[str]) ->
         token = match.group(1)
         if token in known and token not in NOT_TICKERS:
             hits.append((match.start(), token))
+    # P18: a lowercase word right after a trade verb is a ticker when it is in the universe ("sell amd").
+    for match in _LOWER_AFTER_VERB.finditer(text or ""):
+        sym = match.group(1).upper()
+        if sym in known and sym not in NOT_TICKERS and match.group(1).lower() not in COMMON_WORDS:
+            hits.append((match.start(1), sym))
     ordered: list[str] = []
     for _, sym in sorted(hits):
         if sym not in ordered:
@@ -330,6 +337,13 @@ def plan_attachments(
             if item.kind == "none_to_exit":
                 add("pick_pack", f"no position in {item.symbol} to exit", symbol=item.symbol,
                     note=f"No position in {item.symbol} to exit: it is not in the open book")
+                noted.add(item.symbol)
+                continue
+            if item.kind == "ask_side":
+                # "sell TSLA" on a held short: more short or a cover? No gate until he says which.
+                add("pick_pack", f"which side on a held short {item.symbol}", symbol=item.symbol,
+                    note=(f"You are short {item.symbol}: 'sell more' means add, 'cover' means exit - say which"))
+                add("book_pack", f"held short {item.symbol}")
                 noted.add(item.symbol)
                 continue
             if item.kind == "status":
