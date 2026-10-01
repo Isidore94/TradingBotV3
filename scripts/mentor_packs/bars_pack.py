@@ -222,7 +222,7 @@ def build(symbol: str = "", n: int = 12, *, now: datetime | None = None, sources
     if session:
         high = max(bar["high"] for bar in session)
         low = min(bar["low"] for bar in session)
-        vwap_text = _session_vwap(session)
+        vwap, vwap_text = session_vwap(session)
         first = session[0]["start"].astimezone(ET)
         if first.time() == RTH_OPEN:
             span = f"regular session so far: open {session[0]['open']:.2f}, high {high:.2f}, low {low:.2f}"
@@ -231,31 +231,46 @@ def build(symbol: str = "", n: int = 12, *, now: datetime | None = None, sources
             span = (f"cached from {first:%H:%M} ET only (today's open not cached): high {high:.2f}, "
                     f"low {low:.2f} of the cached bars")
         rows.append({"id": f"bars:{sym}:day", "kind": "day",
-                     "text": f"{sym} {day} {span}, {len(session)} bars; {vwap_text}"})
+                     "text": (f"{sym} {day} {span}, {len(session)} bars; {vwap_text}; last "
+                              f"{last['close']:.2f} is {vwap_relation(last['close'], vwap)}")})
     else:
+        vwap = None
         rows.append({"id": f"bars:{sym}:day", "kind": "day",
                      "text": f"{sym} {day}: no regular-session bars cached (pre/after-hours only)"})
     rows.append({
         "id": f"bars:{sym}:last", "kind": "last", "symbol": sym, "price": last["close"],
         "text": (f"{sym} last {last['close']:.2f} at {last_end.astimezone(ET):%H:%M} ET (close of the last completed "
-                 f"bar)" + (f"; stale, {age_text(age_min)} old" if stale else "")),
+                 f"bar), {vwap_relation(last['close'], vwap)}" + (f"; stale, {age_text(age_min)} old" if stale else "")),
     })
+    if vwap is not None:
+        rows[-1]["vwap"] = round(vwap, 4)
     return make_pack(NAME, rows)
 
 
-def _session_vwap(session: list[dict[str, Any]]) -> str:
-    """The cache's own VWAP, else typical-price VWAP when the bars cover 09:30 on with no gap."""
+def session_vwap(session: list[dict[str, Any]]) -> tuple[float | None, str]:
+    """(value, text): the cache's own VWAP, else typical-price VWAP when the bars cover 09:30 on with no gap."""
     first = session[0]["start"].astimezone(ET)
     complete = first.time() == RTH_OPEN and all(
         later["start"] - earlier["start"] == BAR for earlier, later in zip(session, session[1:], strict=False))
     volume = sum(bar["volume"] for bar in session)
     if not complete or volume <= 0:
-        return "VWAP not in cache (the cached bars do not cover the whole session)"
+        return None, "VWAP not in cache (the cached bars do not cover the whole session)"
     if all(bar["vwap"] is not None for bar in session):
         value = sum(bar["vwap"] * bar["volume"] for bar in session) / volume
-        return f"session VWAP {value:.2f} (from the bars' own VWAP)"
+        return value, f"session VWAP {value:.2f} (from the bars' own VWAP)"
     value = sum((bar["high"] + bar["low"] + bar["close"]) / 3.0 * bar["volume"] for bar in session) / volume
-    return f"approx session VWAP {value:.2f} (typical price x volume of the cached bars; VWAP not in cache)"
+    return value, f"approx session VWAP {value:.2f} (typical price x volume of the cached bars; VWAP not in cache)"
+
+
+def vwap_relation(price: float, vwap: float | None) -> str:
+    """``below session VWAP 279.00 by 0.12 (0.04%)``, computed here so the model never guesses the side."""
+    if vwap is None or vwap <= 0:
+        return "above/below session VWAP unknown (VWAP not in cache)"
+    gap = price - vwap
+    if abs(gap) < 0.005:
+        return f"at session VWAP {vwap:.2f}"
+    side = "above" if gap > 0 else "below"
+    return f"{side} session VWAP {vwap:.2f} by {abs(gap):.2f} ({abs(gap) / vwap * 100:.2f}%)"
 
 
 FIXTURE_NOW = datetime(2026, 9, 30, 14, 3, tzinfo=timezone.utc)  # 10:03 ET
