@@ -65,9 +65,11 @@ COACH_SCHEMA = "mentor_coach_brief_v1"
 REGISTRY_FILE = "mentor_issue_registry.json"
 REGISTRY_SCHEMA = "mentor_issue_registry_v1"
 REGISTRY_SESSIONS = 60
-MAX_OUTPUT_TOKENS = 600
+#: Answer caps cover the schema's maximum, measured on gemma4:12b (2026-10-01, ~2.2 chars per
+#: token of schema JSON): a full digest is 5 + 3 items of 280 chars and 3 hypotheses with a query.
+MAX_OUTPUT_TOKENS = 2500
 #: P15a coach brief: a second call (<= 500 tokens) only after the digest call succeeded with time to spare.
-MAX_BRIEF_TOKENS = 500
+MAX_BRIEF_TOKENS = 1500
 BRIEF_MIN_SECONDS_LEFT = 240.0
 MAX_WATCH = 4
 MAX_MISSING = 3
@@ -974,11 +976,13 @@ def ask_brief(request: Callable[..., Mapping[str, Any]], *, model: str, post: Ca
 # the slot
 # ---------------------------------------------------------------------------
 def capped_post(post: Callable[..., Any], *, model: str, cap: int = MAX_OUTPUT_TOKENS) -> Callable[..., Any]:
-    """Wrap ``post``: at most ``cap`` answer tokens; a thinking tag (gpt-oss, gemma4) also gets high
-    reasoning effort and the reasoning allowance on top, since its reasoning counts against max_tokens."""
+    """Wrap ``post``: at most ``cap`` answer tokens. A thinking tag (gpt-oss) also gets high reasoning
+    effort and the reasoning allowance on top, since its reasoning counts against max_tokens; a tag
+    that thinks unless told not to (gemma4) is told not to."""
     import ai_summary
 
     thinks = ai_summary.model_thinks(model)
+    thinking_off = ai_summary.model_thinking_off(model)
 
     def wrapped(url: str, **kwargs: Any) -> Any:
         payload = dict(kwargs.get("json") or {})
@@ -986,6 +990,8 @@ def capped_post(post: Callable[..., Any], *, model: str, cap: int = MAX_OUTPUT_T
         if thinks:
             payload["reasoning_effort"] = EFFORT
             payload["max_tokens"] += ai_summary.local_reasoning_tokens()
+        elif thinking_off:
+            payload["reasoning_effort"] = ai_summary.THINKING_OFF_EFFORT
         kwargs["json"] = payload
         return post(url, **kwargs)
 

@@ -204,22 +204,24 @@ def test_a_model_that_fails_leaves_the_facts_and_is_degraded(chat, tmp_path):
     assert (tmp_path / "ai" / f"mentor_day_facts_{SESSION}.json").exists()
 
 
-def test_the_model_call_is_capped_at_600_output_tokens(monkeypatch):
+def test_the_model_call_is_capped_at_2500_output_tokens(monkeypatch):
     import ai_summary
 
     monkeypatch.setattr(ai_summary, "local_reasoning_tokens", lambda: 8000)
     sent = {}
     wrapped = mentor_review.capped_post(lambda url, **kw: sent.update(kw["json"]), model="gpt-oss:20b")
     wrapped("http://h/v1/chat/completions", json={"max_tokens": 4000})
-    # A thinking tag: the 600-token answer cap plus the reasoning allowance, since its reasoning
+    # A thinking tag: the 2500-token answer cap plus the reasoning allowance, since its reasoning
     # counts against max_tokens (gemma4:12b under a bare 600 cap answered nothing, 2026-09-30).
-    assert sent == {"max_tokens": 8600, "reasoning_effort": "high"}
+    assert sent == {"max_tokens": 10500, "reasoning_effort": "high"}
     sent.clear()
+    # gemma4 thinks unless told not to; the night tells it not to (it spent 11.5k tokens reasoning
+    # and answered nothing in 8 of 8 night calls, 2026-10-01).
     mentor_review.capped_post(lambda url, **kw: sent.update(kw["json"]), model="gemma4:12b")("u", json={})
-    assert sent == {"max_tokens": 8600, "reasoning_effort": "high"}
+    assert sent == {"max_tokens": 2500, "reasoning_effort": "none"}
     sent.clear()
     mentor_review.capped_post(lambda url, **kw: sent.update(kw["json"]), model="gemma3:12b")("u", json={})
-    assert sent == {"max_tokens": 600}
+    assert sent == {"max_tokens": 2500}
 
 
 def test_no_chat_store_is_a_skip(tmp_path):
@@ -506,7 +508,7 @@ def test_a_later_facts_only_run_never_overwrites_a_worded_brief(rich, tmp_path):
     assert _brief(tmp_path)["one_line"]["text"] == "Worded."
 
 
-def test_the_brief_call_is_capped_at_500_output_tokens(rich, tmp_path):
+def test_the_brief_call_is_capped_at_1500_output_tokens(rich, tmp_path):
     sent = []
 
     def post(url, **kwargs):
@@ -517,7 +519,7 @@ def test_the_brief_call_is_capped_at_500_output_tokens(rich, tmp_path):
         return {"model": "m", "summary": GOOD_DIGEST if len(sent) == 1 else EMPTY_BRIEF}
 
     _rich_run(rich, tmp_path, request=request, post=post)
-    assert sent == [mentor_review.MAX_OUTPUT_TOKENS, mentor_review.MAX_BRIEF_TOKENS] == [600, 500]
+    assert sent == [mentor_review.MAX_OUTPUT_TOKENS, mentor_review.MAX_BRIEF_TOKENS] == [2500, 1500]
 
 
 def test_the_brief_writes_nothing_to_the_chat_db(rich, tmp_path):
