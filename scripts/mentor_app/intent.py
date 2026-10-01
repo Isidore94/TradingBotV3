@@ -101,6 +101,8 @@ OBJECT_FILLER = frozenset({"my", "the", "some", "half", "all", "losses", "loss",
 TAKE_WORDS = frozenset({"take", "taking", "enter", "entering"})
 TAKE_INTO = frozenset({"get", "getting"})
 CLAUSE_WORDS = frozenset({"and", "but", "then"})
+#: Words that join coordinated tickers ("AMD, NVDA, or TSLA").
+COORDINATORS = frozenset({"or", "and", "&", ","})
 _TOKEN = re.compile(r"\$?[A-Za-z][A-Za-z'\-]*|[,;:?—]|\.(?=\s|$)")
 SEPARATORS = (",", ";", ":", "?", "—", ".")
 _QUOTED = re.compile(r'"[^"]*"|“[^”]*”')
@@ -126,10 +128,13 @@ def _tokens(text: str) -> list[str]:
 def _tick_mask(toks: list[str], upper: set[str] | list[str]) -> list[bool]:
     """Which tokens are tickers: upper case as typed ("AMD"), or lowercase after a trade verb - directly, over up to
     three filler words ("sell my amd", "sell half of amd") or after another lowercase ticker ("sell amd nvda")."""
+    from mentor_app.attach import COMMON_WORDS  # one source of "a word, not a ticker"
+
     names = {str(t).upper() for t in upper}
     out: list[bool] = []
     for n, tok in enumerate(toks):
-        hit = tok.upper() in names and (tok.isupper() or tok.lower() not in LOWER_NOT_TICKER and _after_verb(toks, out, n))
+        hit = tok.upper() in names and (tok.isupper() or (
+            tok.lower() not in LOWER_NOT_TICKER and tok.lower() not in COMMON_WORDS and _after_verb(toks, out, n)))
         out.append(bool(hit))
     return out
 
@@ -453,21 +458,29 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
             j, skipped = j + 1, skipped + 1
         if j < len(toks) and j in ticker_at and clause[j] == c:
             out[ticker_at[j]].add(kind)  # the direct object
-            k = j + 1
+            # "sell AMD, NVDA (, or) TSLA", "sell amd nvda": the coordinated chain, decided as a whole at its LAST
+            # ticker - bound only when that ticker ends the clause, is followed by punctuation, or by a
+            # coordinator + verb; any other word is the chain's own predicate ("sell AMD, NVDA and TSLA are fine").
+            chain, k = [], j + 1
             while k < len(toks):
-                # "sell AMD, NVDA", "sell amd nvda": the next ticker, bare or after or/and/&/",".
-                t = k + 1 if lowered[k] in ("or", "and", "&", ",") else k
+                t = k
+                while t < len(toks) and lowered[t] in COORDINATORS:
+                    t += 1
                 if t not in ticker_at or t == j:
                     break
-                after = lowered[t + 1] if t + 1 < len(toks) else ""
-                tail = lowered[t + 2] if t + 2 < len(toks) else ""
-                # Bound only when clause-final, followed by punctuation, or by another coordinator + ticker/verb;
-                # any other word is its own predicate ("sell AMD, NVDA still strong").
-                if not (after == "" or after in ("?", ".", ";", ":", "—") or (
-                        after in ("or", "and", "&", ",") and (t + 2 in ticker_at or tail in VERB_WORDS))):
-                    break
-                out[ticker_at[t]].add(kind)
+                chain.append(t)
                 k = t + 1
+            if chain:
+                last = chain[-1]
+                after = lowered[last + 1] if last + 1 < len(toks) else ""
+                n = last + 1
+                while n < len(toks) and lowered[n] in COORDINATORS:
+                    n += 1
+                tail = lowered[n] if n < len(toks) else ""
+                if after == "" or after in ("?", ".", ";", ":", "—") or (
+                        after in COORDINATORS and tail in VERB_WORDS):
+                    for t in chain:
+                        out[ticker_at[t]].add(kind)
             continue
         nxt = lowered[j] if j < len(toks) else ""
         if j < len(toks) and mask[j] and j not in ticker_at:

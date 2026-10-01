@@ -55,6 +55,8 @@ COMMON_WORDS = frozenset({
     "if", "in", "is", "it", "me", "my", "no", "not", "now", "of", "on", "or", "out", "so", "the", "to", "up", "us",
     "was", "we", "you", "big", "low", "high", "run", "see", "new", "key", "real", "fast", "good", "well", "one",
     "open", "next", "life", "love", "fun", "cash", "free", "any", "few", "true", "ever", "safe", "else",
+    # P18: words a trade verb takes that are also tickers ("buy the dip", "sell puts on AMD").
+    "dip", "dips", "puts", "put", "calls", "call", "cat", "food", "top", "bottom", "rip", "pop", "gap", "news",
 })
 _DOLLAR = re.compile(r"\$([A-Za-z]{1,5}(?:[.\-][A-Za-z]{1,2})?)(?![A-Za-z])")
 _PLAIN = re.compile(r"(?<![A-Za-z$.\-])([A-Z]{1,5}(?:[.\-][A-Z]{1,2})?)(?![A-Za-z])")

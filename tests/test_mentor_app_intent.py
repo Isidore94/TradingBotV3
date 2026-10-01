@@ -20,7 +20,7 @@ from mentor_app import attach, intent  # noqa: E402
 NOW = datetime(2026, 9, 30, 15, 0, tzinfo=timezone.utc)
 #: The default book: AMD and NVDA held long, TSLA held short. ALL and MSFT are watched, not held.
 BOOK = {"AMD": "LONG", "NVDA": "LONG", "TSLA": "SHORT"}
-KNOWN = {**BOOK, "ALL": "SHORT", "MSFT": "", "QCOM": ""}
+KNOWN = {**BOOK, "ALL": "SHORT", "MSFT": "", "QCOM": "", "HOOD": ""}
 NOT_HELD: dict[str, str] = {}
 
 EXIT_L = ("exit", "LONG")
@@ -322,6 +322,14 @@ TABLE = [
     ("sell my amd", BOOK, {"AMD": EXIT_L}),
     ("sell amd nvda", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L}),
     ("sell half of amd", BOOK, {"AMD": EXIT_L}),
+    # round 14: a coordinated chain is decided at its LAST ticker
+    ("sell AMD, NVDA and TSLA are both fine", BOOK, {"AMD": EXIT_L}),
+    ("sell AMD, NVDA, TSLA look fine", BOOK, {"AMD": EXIT_L}),
+    ("sell AMD and NVDA and TSLA strong", BOOK, {"AMD": EXIT_L}),
+    ("sell AMD, NVDA, TSLA strong", BOOK, {"AMD": EXIT_L}),
+    ("sell AMD, NVDA and HOOD are fine", BOOK, {"AMD": EXIT_L}),
+    ("sell AMD, NVDA, TSLA?", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L, "TSLA": WHICH}),
+    ("should I sell AMD, NVDA, or TSLA?", BOOK, {"AMD": EXIT_L, "NVDA": EXIT_L, "TSLA": WHICH}),
     # pure questions, no verb
     ("how is AMD trading right now", BOOK, {}),
     ("what's the news on NVDA", BOOK, {}),
@@ -358,7 +366,7 @@ def _gates(text, book):
 
 
 def test_the_table_size_is_pinned():
-    assert len(TABLE) == 257 and len(GUARD) == 20
+    assert len(TABLE) == 264 and len(GUARD) == 20
 
 
 @pytest.mark.parametrize("text,book,want", TABLE, ids=[f"{n}:{row[0][:40]}" for n, row in enumerate(TABLE)])
@@ -477,3 +485,16 @@ def test_a_trim_names_itself_in_the_request_row(tmp_path):
     row = gate_pack.build("LONG", "ALL", sources=src, exit=True, trim=True).rows[0]
     assert row["trim"] is True and row["text"].startswith("Request: TRIM (a partial exit) of a held LONG ALL")
     assert gate_pack.build("LONG", "ALL", sources=src, trim=True).rows[0]["trim"] is False  # a trim is an exit
+
+
+#: A universe holding tickers that are also everyday words.
+WORDY = {**KNOWN, "DIP": "", "PUTS": "", "CAT": "", "FOOD": ""}
+
+
+@pytest.mark.parametrize("text", ["buy the dip", "sell puts on AMD", "buy the dip on NVDA", "should I buy cat food",
+                                  "sell some puts"])
+def test_a_lowercase_word_that_is_also_a_ticker_never_gates_it(text):
+    requests = attach.plan_attachments(text, WORDY, NOW, book=list(BOOK))
+    gated = {r.args["symbol"] for r in requests if r.name == "gate_pack"}
+    assert not gated & {"DIP", "PUTS", "CAT", "FOOD"}, text
+    assert not {"DIP", "PUTS", "CAT", "FOOD"} & set(attach.find_symbols(text, WORDY)), text
