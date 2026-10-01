@@ -622,10 +622,36 @@ _GENERIC_ID_PARTS = frozenset({"pick", "gate", "tape", "ctx", "jrn", "news", "bo
 #: P20: a brief / tape summary ask (live eval 2026-10-01: 700-1800 chars of bold headers and bullets).
 SUMMARY_PACKS = frozenset({"fundamentals_pack", "night_pack", "regime_pack"})
 _SUMMARY_CUE = re.compile(r"\bwhat(?:'s|s| does| did| do)\b.*\bsay\b|\bbrief\b|\bplaybook\b|\bmarket like\b")
-SUMMARY_INSTRUCTION = ("Answer in at most three plain sentences: the bottom line, the playbook, one risk. "
-                       "Prose only: no bullets, no bold, no headers. Cite ids inline.")
+SUMMARY_INSTRUCTION = ("Answer in at most three short sentences, under 500 characters in all: the bottom line, "
+                       "the playbook, one risk. Prose only: no bullets, no bold, no headers. Cite ids inline.")
 #: The summary turn's num_predict (three cited sentences fit well inside it).
 SUMMARY_MAX_TOKENS = 260
+#: A calendar / events question is a list, not a brief: never the summary shape.
+_CALENDAR_CUE = re.compile(r"\bcalendar\b|\becon(?:omic)?\b|\bevents?\b|\breleases?\b|\bschedule\b")
+#: Packs whose answer is a list or a table: never a simple turn.
+LIST_PACKS = frozenset({"gate_pack", "earnings_pack", "book_pack", "alerts_pack", "rs_pack", "habits_pack",
+                        "recaps_pack", "hypothesis_pack", "veto_pack", "bars_pack", "mirror_pack"})
+#: Asks for a list, a comparison or an explanation: never a simple turn.
+_LONG_ASK = re.compile(r"\bcompare\b|\bexplain\b|\bwalk me through\b|\bwhich of\b|\bbull and bear\b|\blist\b"
+                       r"|\bchecklist\b|\bstep by step\b|\band why\b|\bevidence\b|\bvs\.?\b|\bversus\b|\bparagraph\b")
+#: Asks for a one-line answer: simple whatever its length.
+_ONE_LINE = re.compile(r"\bin one (?:line|sentence)\b|\bone[- ]liner\b|\bbriefly\b|\bshort answer\b")
+#: A simple question is short: at most this many words (the eval's simple questions are 3-9 words).
+SIMPLE_MAX_WORDS = 9
+
+
+def simple_turn(text: str, requests: Iterable[Any]) -> bool:
+    """True for a simple question: no pre-trade check, no list pack, no list / compare / explain ask, and at most
+    ``SIMPLE_MAX_WORDS`` words (or an explicit "in one line"). Its reply gets the plain guard (formatting only)."""
+    lowered = str(text or "").lower()
+    requests = list(requests or ())
+    if {getattr(request, "name", "") for request in requests} & LIST_PACKS or _LONG_ASK.search(lowered):
+        return False
+    if _ONE_LINE.search(lowered):
+        return True  # he asked for one line ("in one line, how should I feel about my week")
+    if any(getattr(request, "reason", "") == "trade intent" for request in requests):
+        return False  # a tickerless pre-trade question ("should I buy here?") keeps the default guard
+    return len(re.findall(r"[a-z0-9$'&]+", lowered)) <= SIMPLE_MAX_WORDS
 
 
 def summary_turn(text: str, requests: Iterable[Any], known_symbols: Mapping[str, Any] | Iterable[str] = ()) -> bool:
@@ -635,7 +661,7 @@ def summary_turn(text: str, requests: Iterable[Any], known_symbols: Mapping[str,
     lowered = raw.lower()
     requests = list(requests or ())
     names = {getattr(request, "name", "") for request in requests}
-    if not names <= SUMMARY_PACKS:
+    if not names <= SUMMARY_PACKS or _CALENDAR_CUE.search(lowered):
         return False
     # A tickerless pre-trade question ("should I buy here?") plans only regime_pack, for "trade intent".
     if (_INTENT.search(lowered) and not _PAST.search(lowered)) or any(
@@ -645,16 +671,21 @@ def summary_turn(text: str, requests: Iterable[Any], known_symbols: Mapping[str,
     if find_symbols(raw, {**known, **dict.fromkeys(INDEX_SYMBOLS, "")}):
         return False
     words = set(re.findall(r"[a-z][a-z.\-]*", lowered))
-    if any(sym.lower() in words for sym in known if sym.lower() not in COMMON_WORDS and sym not in NOT_TICKERS):
-        return False  # "what does the brief say about amd": a lowercase universe ticker
+    if any(sym.lower() in words for sym in (*known, *INDEX_SYMBOLS)
+           if sym.lower() not in COMMON_WORDS and sym not in NOT_TICKERS):
+        return False  # "what does the brief say about amd / spy": a lowercase universe or index ticker
     return bool(names) or bool(_SUMMARY_CUE.search(lowered))
 
 
 def turn_shape(text: str, requests: Iterable[Any],
                known_symbols: Mapping[str, Any] | Iterable[str] = ()) -> dict[str, Any]:
-    """The per-turn ``run_turn`` arguments: the three-sentence instruction and a token cap on a summary ask."""
+    """The per-turn ``run_turn`` arguments: on a summary ask the three-sentence instruction and a token cap; on any
+    summary or simple turn ``plain`` (the guard strips bullets, bold and headers)."""
+    requests = list(requests or ())
     if summary_turn(text, requests, known_symbols):
-        return {"turn_instruction": SUMMARY_INSTRUCTION, "max_tokens": SUMMARY_MAX_TOKENS}
+        return {"turn_instruction": SUMMARY_INSTRUCTION, "max_tokens": SUMMARY_MAX_TOKENS, "plain": True}
+    if simple_turn(text, requests):
+        return {"plain": True}
     return {}
 
 

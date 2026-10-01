@@ -1294,7 +1294,7 @@ class MentorWindow(QMainWindow):
             seen_ids=seen,
             question=text,
             build_pack=build_pack,
-            # P20: a brief / tape summary ask gets a three-sentence instruction and a token cap for this turn.
+            # P20: a summary ask gets a three-sentence instruction and a token cap; any simple turn a plain guard.
             **attach.turn_shape(text, attachments, known),
         )
         worker.token.connect(self._on_token)
@@ -1539,7 +1539,7 @@ class MentorWindow(QMainWindow):
         question = next((turn.text for turn in reversed(self.chat.turns) if turn.role == "user"), "")
         # P14 style guard: measure the model's wrapper, then drop headers and a closing offer; substance stays.
         style_numbers = style.measure(raw, question)
-        text, stripped = style.guard(raw, plain=bool(result.get("turn_instruction")))
+        text, stripped = style.guard(raw, plain=bool(result.get("plain")))
         style_numbers["stripped"] = stripped
         # The turn log keeps the model's raw words (plus the app's appendix); the transcript shows the guarded ones.
         stored = raw

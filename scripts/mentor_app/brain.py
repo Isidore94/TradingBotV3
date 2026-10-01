@@ -273,11 +273,13 @@ def run_turn(
     attach_budget_tokens: int = ATTACH_BUDGET_TOKENS,
     turn_instruction: str = "",
     max_tokens: int | None = None,
+    plain: bool = False,
 ) -> dict[str, Any]:
     """One chat turn, tools included. Returns the result dict ``done`` carries.
 
     ``turn_instruction`` (P20, ``attach.turn_shape``) is appended to the newest user message for this turn only;
     ``max_tokens`` caps its replies (``num_predict``), never on a thinking model whose reasoning would eat it.
+    ``plain`` (a simple turn) rides on the result so the caller's guard strips bullets, bold and headers.
 
     ``native_tools`` is the probed capability (:func:`native_tools_for`); None (unknown) = the fallback.
     ``attachments`` (``attach.AttachRequest``) are built here and injected as tool results after the
@@ -339,6 +341,7 @@ def run_turn(
             return result
     cap = int(max_tokens) if max_tokens and not is_thinking_model(model) else None
     result["turn_instruction"], result["max_tokens"] = str(turn_instruction or ""), cap
+    result["plain"] = bool(plain or turn_instruction)
     if turn_instruction:
         last_user = max((n for n, m in enumerate(convo) if m.get("role") == "user"), default=None)
         if last_user is not None:

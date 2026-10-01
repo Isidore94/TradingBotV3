@@ -89,7 +89,7 @@ def style_summary(rows: list[Mapping[str, Any]], fixture: Mapping[str, Any]) -> 
     for row in answered:
         reply = str(row.get("reply") or "")
         row["style"] = style.measure(reply, row["q"])
-        # P20: the guard the live run's turn used (plain on a summary ask); an older report has no flag.
+        # P20: the guard the live run's turn used (plain on a simple or summary turn); an older report has no flag.
         row["style_after_app"] = style.measure(style.guard(reply, plain=bool(row.get("plain")))[0], row["q"])
         row["simple"] = row["q"] in simple
         row["style_pass"] = style.passes(row["style"], simple=row["simple"])
@@ -180,7 +180,7 @@ def live_report(fixture: Mapping[str, Any], *, out_dir: Path) -> dict[str, Any]:
             "total_ms": result.get("total_ms"), "attach_ms": result.get("attach_ms"),
             "prompt_tokens": result.get("prompt_tokens"), "reply": text,
             "mentions": [w for w in item.get("must_mention") or () if w.lower() in text.lower()],
-            "turn_instruction": shape.get("turn_instruction", ""), "plain": bool(shape),
+            "turn_instruction": shape.get("turn_instruction", ""), "plain": bool(shape.get("plain")),
         }
         if GATE in expected:
             by_model = checklist.covered(text)

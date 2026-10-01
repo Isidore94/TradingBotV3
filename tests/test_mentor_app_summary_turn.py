@@ -35,8 +35,20 @@ NOT_SUMMARY = ["should I buy NVDA here", "im thinking of shorting TSLA thoughts?
                "should I buy here?", "about to short this, ok?", "should I take this trade",
                "should I enter now or wait", "should I short the open", "buying calls here?",
                "whats the market like, should I buy?",
-               # a lowercase universe ticker anywhere is a ticker question
-               "what does the brief say about amd"]
+               # a lowercase universe ticker anywhere is a ticker question; the indexes count too
+               "what does the brief say about amd", "what does the brief say about spy",
+               "whats qqq like this morning", "what about the vix in the brief",
+               # a calendar is a list, not a brief
+               "what's on the econ calendar tomorrow"]
+#: Re-review of dcf5a45a: every simple turn gets the plain guard (formatting only), never the instruction.
+SIMPLE_PLAIN = ["how did I do last week", "how did I do today", "whats SPY doing", "what's on the econ calendar tomorrow",
+                "am I tilting", "what are my rules on shorts", "any news on TSLA",
+                "in one line, how should I feel about my trading this week"]
+#: Not simple: a pre-trade check, a list, a comparison or an explanation keeps the default guard.
+DEFAULT_TURN = ["should I buy NVDA here", "im thinking of shorting TSLA thoughts?", "should I buy here?",
+                "compare NVDA and AMD for a long", "what am I holding", "anything reporting this week in my longs?",
+                "explain my win rate by setup and tell me which to stop trading", "what alerts fired today",
+                "is the playbook today bullish or bearish and does my book match it"]
 
 
 def _shape(text):
@@ -45,13 +57,36 @@ def _shape(text):
 
 @pytest.mark.parametrize("text", SIX)
 def test_the_six_summary_asks_get_the_three_sentence_instruction_and_a_token_cap(text):
-    assert _shape(text) == {"turn_instruction": attach.SUMMARY_INSTRUCTION, "max_tokens": attach.SUMMARY_MAX_TOKENS}
-    assert "at most three plain sentences" in attach.SUMMARY_INSTRUCTION and 200 <= attach.SUMMARY_MAX_TOKENS <= 300
+    assert _shape(text) == {"turn_instruction": attach.SUMMARY_INSTRUCTION, "max_tokens": attach.SUMMARY_MAX_TOKENS,
+                            "plain": True}
+    assert "at most three short sentences, under 500 characters in all" in attach.SUMMARY_INSTRUCTION
+    assert attach.SUMMARY_MAX_TOKENS == 260
 
 
 @pytest.mark.parametrize("text", NOT_SUMMARY)
-def test_a_pre_trade_or_ticker_question_keeps_the_default_turn(text):
+def test_a_pre_trade_ticker_or_calendar_question_never_gets_the_summary_instruction(text):
+    assert "turn_instruction" not in _shape(text) and "max_tokens" not in _shape(text)
+
+
+@pytest.mark.parametrize("text", SIMPLE_PLAIN)
+def test_a_simple_turn_gets_the_plain_guard_and_no_instruction(text):
+    assert _shape(text) == {"plain": True}
+
+
+@pytest.mark.parametrize("text", DEFAULT_TURN)
+def test_a_question_that_is_not_simple_keeps_the_default_turn(text):
     assert _shape(text) == {}
+
+
+def test_the_simple_rule_never_marks_a_pre_trade_fixture_question_simple():
+    import mentor_eval
+
+    fixture = mentor_eval.load_fixture()
+    now = datetime.fromisoformat(fixture["now"])
+    for item in fixture["questions"]:
+        plan = attach.plan_attachments(item["q"], fixture["known_symbols"], now, book=fixture["book"])
+        if "gate_pack" in item["expected_packs"]:
+            assert attach.turn_shape(item["q"], plan, fixture["known_symbols"]) == {}, item["q"]
 
 
 def _answer(text):
@@ -126,7 +161,7 @@ def test_the_eval_guards_a_row_the_way_the_live_run_turned_it():
     import mentor_eval
 
     rows = [{"q": "is the playbook bullish or bearish", "reply": LONG_REPLY, "plain": True},
-            {"q": "how am i doing today", "reply": LONG_REPLY},
+            {"q": "what am I holding", "reply": LONG_REPLY},
             {"q": "is the playbook bullish or bearish", "reply": LONG_REPLY}]
     mentor_eval.style_summary(rows, mentor_eval.load_fixture())
     assert rows[0]["style"]["bullets"] == 3 and rows[0]["style_after_app"]["bullets"] == 0
@@ -155,10 +190,12 @@ def test_the_live_eval_stores_the_turn_shape_on_its_row(monkeypatch, tmp_path):
     monkeypatch.setattr(checklist, "covered", lambda text: set())
     fixture = {"now": NOW.isoformat(), "known_symbols": KNOWN, "book": BOOK,
                "questions": [{"q": "is the playbook bullish or bearish", "expected_packs": [], "simple": True},
-                             {"q": "should I buy here?", "expected_packs": []}]}
+                             {"q": "should I buy here?", "expected_packs": []},
+                             {"q": "how did I do last week", "expected_packs": [], "simple": True}]}
     report = mentor_eval.live_report(fixture, out_dir=tmp_path)
-    assert [row["plain"] for row in report["rows"]] == [True, False]
+    assert [row["plain"] for row in report["rows"]] == [True, False, True]
     assert seen[0]["turn_instruction"] == attach.SUMMARY_INSTRUCTION and "turn_instruction" not in seen[1]
+    assert "turn_instruction" not in seen[2] and "max_tokens" not in seen[2] and seen[2]["plain"] is True
 
 
 def test_a_summary_turn_shows_plain_text_and_stores_the_raw_reply(tmp_path, monkeypatch):
@@ -195,6 +232,41 @@ def test_a_summary_turn_shows_plain_text_and_stores_the_raw_reply(tmp_path, monk
         shown = win._blocks[-1]
         assert "**Bottom line" not in shown and "- Buy pullbacks" not in shown and "Bottom line: risk-on" in shown
         assert win.store.turns()[-1]["text"] == LONG_REPLY, "the turn log keeps the model's raw words"
+    finally:
+        win.shutdown()
+        win.deleteLater()
+
+
+def test_a_simple_journal_turn_shows_plain_text_with_no_instruction_or_cap(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    from mentor_app import settings
+    from mentor_app.prefetch import PrefetchQueue
+    from mentor_app.store import MentorChatStore
+    from mentor_app.window import MentorWindow
+    from mentor_packs.registry import make_pack
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings, "gpu_block_reason", lambda now=None: "")
+    monkeypatch.setattr(settings, "context_tokens", lambda: 8192)
+    sent: list = []
+    reply = "- **Net:** green week [jrn:week:totals]\n- **Best:** the NVDA long [jrn:week:best]"
+    win = MentorWindow(store=MentorChatStore(tmp_path / "mentor_chat.sqlite3"), queue=PrefetchQueue(),
+                       stream_post=lambda url, payload, cancelled: sent.append(payload) or _answer(reply),
+                       post=lambda url, payload, timeout: {}, pack_builder=lambda name, args: make_pack(name, []))
+    try:
+        win._brain_ok, win._endpoint, win._model, win._native_tools = True, "http://x", "gemma4:12b", True
+        win.send("how did I do last week")
+        assert win._worker is not None and win._worker.wait(5000)
+        deadline = time.monotonic() + 5
+        while win._worker is not None and time.monotonic() < deadline:
+            app.processEvents()
+        win._io.submit(lambda: None).result(5)
+        assert "num_predict" not in sent[0]["options"]
+        assert [m for m in sent[0]["messages"] if m["role"] == "user"][-1]["content"] == "how did I do last week"
+        shown = win._blocks[-1]
+        assert "Net: green week [jrn:week:totals]" in shown and "**Net" not in shown and "- " not in shown
+        assert win.store.turns()[-1]["text"] == reply
     finally:
         win.shutdown()
         win.deleteLater()
