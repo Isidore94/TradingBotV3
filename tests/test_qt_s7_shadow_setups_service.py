@@ -68,3 +68,21 @@ def test_the_slot_hands_the_cache_to_the_worker_and_shutdown_retires_it(tmp_path
     service.shutdown()
     worker = capture._worker
     assert worker is None or not worker.is_alive()
+
+
+def test_the_local_switch_keeps_the_worker_from_starting(monkeypatch):
+    import project_paths
+    from ui.services import bounce_service as module
+    from ui.services.bounce_service import BounceService
+
+    monkeypatch.setattr(
+        project_paths,
+        "get_local_setting",
+        lambda key, default=None: False if key == module.SETTING_SHADOW_SETUPS else default,
+    )
+    service = BounceService()
+    service._bot = _FakeBot()
+    service.capture_shadow_setups()
+    assert service._shadow_setups is None
+    service._bot = None
+    service.shutdown()

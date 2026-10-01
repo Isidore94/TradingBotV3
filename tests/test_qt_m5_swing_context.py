@@ -171,7 +171,10 @@ def test_the_desk_hands_the_setups_table_to_the_bar():
 
         key = setup_grades.swing_key("LONG", "favorite_setup", "avwap_bounce")
         model._grades = {key: {"grade": "A"}}
-        model.set_rows(model.rows())  # a claim/scan refresh resets the model
+        # A grade refresh resets the model (`set_setup_grades` does); handing
+        # the SAME rows back no longer does (2026-09-30, desk hitches).
+        model.beginResetModel()
+        model.endResetModel()
         nvda = desk.m5_alert_bar.list.item(_symbols(desk.m5_alert_bar).index("NVDA"))
         assert nvda.text().endswith("· D1 A")
         desk.m5_alert_bar.post(_m5("AMD", "LONG", at="07:15:00"))

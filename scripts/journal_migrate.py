@@ -588,8 +588,19 @@ def backup_database(db_path: Path, from_version: int | None) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def migrate_to_v3(conn: sqlite3.Connection, *, report: MigrationReport | None = None) -> MigrationReport:
-    """Bring an open journal database to schema v3. Idempotent."""
+def migrate_to_v3(
+    conn: sqlite3.Connection,
+    *,
+    report: MigrationReport | None = None,
+    rescan_executions: bool = True,
+) -> MigrationReport:
+    """Bring an open journal database to schema v3. Idempotent.
+
+    ``rescan_executions=False`` keeps the schema checks (tables, columns,
+    indexes, triggers, tax-status seed, orphan count) and skips the two passes
+    that read every row of ``raw_executions``; a store that is already stamped
+    v3 passes False, so reopening the journal costs milliseconds, not seconds.
+    """
     report = report or MigrationReport()
     report.from_version = read_schema_version(conn)
 
@@ -613,8 +624,9 @@ def migrate_to_v3(conn: sqlite3.Connection, *, report: MigrationReport | None = 
     for statement in NEW_TRIGGERS_V3:
         conn.execute(statement)
 
-    _collapse_execution_uids(conn, report)
-    _backfill_sources_and_multipliers(conn, report)
+    if rescan_executions:
+        _collapse_execution_uids(conn, report)
+        _backfill_sources_and_multipliers(conn, report)
     _seed_tax_status(conn, report)
     _count_annotation_orphans(conn, report)
 

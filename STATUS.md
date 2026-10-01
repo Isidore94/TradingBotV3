@@ -4,12 +4,12 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 
 **Updated:** 2026-09-30 night PT (Mentor P0-P17 merged; restart desk + app; first full night with the coach brief is 2026-10-01)
 
-- **Live on `main`:** rounds 1-2 (`81272d42`, `2d59aace`, `3802c0d7`), p9 phases 1-4
-  (`849390a2`, `55bbeb26`, `d382986e`, `79e8d658`), p10 research lake + auto regimes
-  (`1b56f34f`, research only); rolling RRS, cutoff 1.0 (`TRADINGBOTV3_RRS_ENGINE=desk` =
+- **Live on `main`:** rounds 1-2, p9 phases 1-4, p10 research lake + auto regimes (research only); rolling RRS, cutoff 1.0 (`TRADINGBOTV3_RRS_ENGINE=desk` =
   old); Movers tint + SMA gate (`13b2e2cb`), Yahoo guard (`56ce3965`), Movers boxes, Dip
   anchors, focus preview, idle-probe skip (`1751c338`); gates #257-#306.
-- **GUI:** 4K design live; selftests 105/105; long Qt runs still crash workers.
+- **GUI:** 4K design live; selftests 105/105; long Qt runs still crash workers. Hitches: 09-30
+  blocked 2,643 s, two thirds GIL waits under the Setup Tracker paint; fix branch
+  `claude/desk-hitch-2026-09-30` built, merge on the trader's word, gate #337.
 - **Merged 2026-09-30, live at the next desk + app restart:** Trade Mentor app P0-P15 (`e9c77690`, `e864ddb9`, `b2402479`, `19b837d3`) + Pause AI (`8f7664fc`): chat on gemma4:12b with native tools, auto-attach from plain language, `/pick /vetoes /tape /check /news /book /mirror /tilt /debate /hypotheses /brief /issues /recaps /paste /feel /night /scorecard`; memory stands on the night; `mentor_app_enabled` on by default; frontier OFF (trader). Gates #311-#318, #321-#326, #329, #332-#334.
 - **Merged 2026-09-30 (P16 eval gaps):** live eval tool hit 100 %, checklist 100 %; gate #335 owed.
 - **Merged 2026-09-30 (P17 tape packs):** `/rs`, `/alerts`, M5 bars from the ~28-min spool tee (a desk-side 60 s M5 publisher is P18); live 108-question eval tool hit 100 %, 0 errors (gate #336). Next: P18 journal/habits/reads/routines + M5 publisher (02:10 PT start), the four night-rejection fixes.

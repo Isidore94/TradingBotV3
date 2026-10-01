@@ -222,8 +222,16 @@ class SetupTableModel(QAbstractTableModel):
         return self.COLUMNS[section][1]
 
     def set_rows(self, rows: list[SetupRow]) -> None:
+        rows = list(rows)
+        # The same row objects in the same order (a re-sort that changed
+        # nothing) would only cost a full view reset: every row re-filtered,
+        # re-sorted and repainted. Rows are replaced, never edited in place.
+        if len(rows) == len(self._rows) and all(
+            new is old for new, old in zip(rows, self._rows, strict=True)
+        ):
+            return
         self.beginResetModel()
-        self._rows = list(rows)
+        self._rows = rows
         self._plans = {}
         self._swing_presence = None
         self.endResetModel()
@@ -683,8 +691,13 @@ class SetupFilterProxyModel(QSortFilterProxyModel):
         model = self.sourceModel()
         if model is None:
             return True
-        index = model.index(source_row, 0, source_parent)
-        row = model.data(index, ROW_ROLE)
+        # Straight to the row: `model.index()` + `model.data()` are two more
+        # trips through Qt per row, and this runs for every row on every reset.
+        row_at = getattr(model, "row_at", None)
+        if row_at is not None:
+            row = row_at(source_row)
+        else:
+            row = model.data(model.index(source_row, 0, source_parent), ROW_ROLE)
         if not isinstance(row, SetupRow):
             return True
 
