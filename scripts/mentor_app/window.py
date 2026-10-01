@@ -417,6 +417,9 @@ class MentorWindow(QMainWindow):
         #: Observations waiting for the Inbox (quiet hours, a mute or the 30-min spacing), with their PT day.
         self._tilt_waiting: list[tuple[Any, dict]] = []
         self._tilt_last_post = ""
+        #: P15b: closed trades waiting for their one "how did it feel?" item, and the posted items' trades.
+        self._feel_waiting: list[tuple[Any, dict]] = []
+        self._inbox_feel: dict[int, dict] = {}
         self._bridge.tilt_ready.connect(self._on_tilt_ready)
         self._bridge.tilt_card.connect(self._on_tilt_card)
         self._tilt_timer = QTimer(self)
@@ -1004,7 +1007,7 @@ class MentorWindow(QMainWindow):
         """Queue thread: `/today` as a card from the journal pack (ids intact)."""
         from mentor_packs import journal_pack
 
-        pack = journal_pack.build(day, now=self._now(), journal=self._journal_path)
+        pack = journal_pack.build(day, now=self._now(), journal=self._journal_path, chat_db=self.store.path)
         return "**Journal**\n\n" + pack.as_text().replace("\n", "\n\n")
 
     def _liked(self) -> list[tuple[str, str]]:
@@ -1087,8 +1090,15 @@ class MentorWindow(QMainWindow):
         for item in self.inbox.items():
             if item.id == item_id:
                 card = self._inbox_cards.get(item_id)
+                trade = self._inbox_feel.get(item_id)
                 if card:
                     self._add_block(card)
+                elif trade:
+                    # P15b: the answer box starts with the trade's id; his words follow it.
+                    self._add_note(f"{item.text} Type it after the id and press Enter.")
+                    self.input.setPlainText(f"/feel {trade['trade_id']} ")
+                    self.input.moveCursor(QTextCursor.MoveOperation.End)
+                    self.input.setFocus()
                 else:
                     self._add_note(item.text)
         self.inbox.mark_read(item_id)
@@ -1177,6 +1187,9 @@ class MentorWindow(QMainWindow):
             from mentor_packs import book_pack
 
             return book_pack.build(now=self._now(), sources=self._book_pack_sources())
+        if name == "journal_pack":
+            # P15b: the feelings this app stored ride on their trades (its own chat store, read-only).
+            return brain._default_build(name, {**dict(args or {}), "chat_db": self.store.path})
         return brain._default_build(name, args)
 
     def _run_command(self, result: commands.CommandResult) -> None:
@@ -1220,6 +1233,8 @@ class MentorWindow(QMainWindow):
                 if self.store.check_note(note_id, stamp) else f"There is no note {note_id}. `/memory` shows the ids."))
         elif result.action == "memory":
             self._add_note(memory.as_listing(self._memory))
+        elif result.action == "feel":
+            self.record_feeling(*result.arg)
         elif result.action == "paste":
             if result.arg:
                 self.paste_brief(str(result.arg))
@@ -2827,10 +2842,20 @@ class MentorWindow(QMainWindow):
         self._deliver_tilt()
         if self._shut or not self._tilt_schedule.due(now):
             return
-        store, signature = self.store, self._tilt_signature()
+        store, signature, closed = self.store, self._tilt_signature(), self._tilt_closed()
         self.news_queue.submit("tilt_watch", lambda: tilt_watch.run_watch(store, now, build=self._build_tilt,
-                                                                          signature=signature),
+                                                                          signature=signature, closed=closed),
                                priority=PRIORITY_REFRESH, key="tilt-watch", on_done=self._bridge.tilt_ready.emit)
+
+    def _tilt_closed(self) -> Callable[[str], list] | None:
+        """P15b: the day's closed trades from the journal the tilt watch reads (None = no journal to read)."""
+        if self._tilt_builder is not None and self._tilt_journal is None:
+            return None
+        from mentor_app import tilt_watch
+        from mentor_packs import tilt_pack
+
+        journal = self._tilt_journal if self._tilt_journal is not None else tilt_pack.live_journal()
+        return lambda day: tilt_watch.closed_today(journal, day)
 
     def _on_tilt_ready(self, result: dict) -> None:
         """New observations wait for the Inbox; they are posted as ONE item at most every 30 min."""
@@ -2839,26 +2864,76 @@ class MentorWindow(QMainWindow):
             self._tilt_last_post = stored
         day = self._now().astimezone(challenge.PT).date()
         self._tilt_waiting.extend((day, row) for row in result.get("new") or [])
+        self._feel_waiting.extend((day, row) for row in result.get("closed") or [])
         self._deliver_tilt()
 
     def _deliver_tilt(self) -> None:
         """Post the waiting observations as one item once the 30 min, quiet hours or a mute allow it.
 
         A used daily cap or a new day drops them (``/tilt`` still shows them). Never pops, never moves
-        the transcript."""
+        the transcript. P15b: a closed trade's one feelings question shares the same spacing, after
+        any tilt item (one Inbox item per pass at most)."""
         from mentor_app import tilt_watch
 
         today = self._now().astimezone(challenge.PT).date()
         self._tilt_waiting = [(day, row) for day, row in self._tilt_waiting if day == today]
-        if not self._tilt_waiting or not tilt_watch.may_post(self._tilt_last_post or None, self._now()):
+        self._feel_waiting = [(day, row) for day, row in self._feel_waiting if day == today]
+        if not (self._tilt_waiting or self._feel_waiting) or not tilt_watch.may_post(self._tilt_last_post or None,
+                                                                                     self._now()):
+            return
+        if not self._tilt_waiting:
+            self._deliver_feeling()
             return
         item = self.inbox.add("tilt", tilt_watch.inbox_text([row for _, row in self._tilt_waiting]))
         if item is None:
             if "cap" in self.inbox.last_refusal:
                 logging.info("Trade Mentor: tilt observations stayed out of the Inbox (%s)", self.inbox.last_refusal)
                 self._tilt_waiting = []
+                self._feel_waiting = []
             return  # quiet hours or muted: try again at the next watch
         self._tilt_waiting = []
+        self._stamp_tilt_post()
+
+    def _deliver_feeling(self) -> None:
+        """One "how did it feel?" item for the oldest waiting close; the cap drops the rest for today."""
+        from mentor_app import tilt_watch
+
+        _day, trade = self._feel_waiting[0]
+        item = self.inbox.add("feeling", tilt_watch.feel_text(trade))
+        if item is None:
+            if "cap" in self.inbox.last_refusal:
+                logging.info("Trade Mentor: feelings questions stayed out of the Inbox (%s)", self.inbox.last_refusal)
+                self._feel_waiting = []
+            return
+        self._feel_waiting.pop(0)
+        self._inbox_feel[item.id] = dict(trade)
+        self._stamp_tilt_post()
+
+    def record_feeling(self, ref: str, words: str) -> None:
+        """``/feel <SYM|trade id> <words>``: one feelings note kept with its trade (IO thread; journal read-only)."""
+        from mentor_app import tilt_watch
+        from mentor_packs import tilt_pack
+
+        journal = self._tilt_journal if self._tilt_journal is not None else tilt_pack.live_journal()
+        now, stamp = self._now(), self._utc_stamp()
+
+        def job() -> None:
+            trade = tilt_watch.resolve_trade(journal, ref, now)
+            if trade is None or not trade["trade_id"]:
+                self._bridge.note.emit(f"I can't find a trade for `{ref}` in the last {tilt_watch.FEEL_LOOKBACK_DAYS} "
+                                       "days. Try its trade id (`/today` shows them).")
+                return
+            note_id = self.store.add_feeling(trade["trade_id"], tilt_watch.feeling_note(trade, words), ts_utc=stamp)
+            if note_id is None:
+                self._bridge.note.emit("That feeling was NOT saved (the chat store failed). Type it again.")
+                return
+            self._bridge.note.emit(f"Kept with {trade['symbol']} ({trade['trade_id']}): {words} [mem:note:{note_id}]")
+
+        self._submit_io(job)
+
+    def _stamp_tilt_post(self) -> None:
+        from mentor_app import tilt_watch
+
         stamp = self._now().astimezone(timezone.utc).isoformat(timespec="seconds")
         self._tilt_last_post = stamp
         self._submit_io(lambda: self.store.set_state(tilt_watch.LAST_POST_KEY, stamp))

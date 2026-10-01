@@ -108,6 +108,9 @@ CREATE INDEX IF NOT EXISTS frontier_usage_by_day ON frontier_usage(day_pt);
 BUSY_TIMEOUT_MS = 5000
 #: Columns added to ``profile_notes`` after Phase 3 (retire, "still true?" check and ask).
 NOTE_COLUMNS = ("retired_utc", "checked_utc", "asked_utc")
+#: P15b: a note's kind ("" = a /remember note, "feeling" = how a trade felt) and the trade it is about.
+NOTE_TAG_COLUMNS = ("kind", "trade_id")
+FEELING = "feeling"
 #: app_state key for one PT day's service counters (uncited numbers, brain-offline minutes).
 DAY_STATS_KEY = "stats:{day}"
 #: app_state key for one symbol's last successful news fetch (UTC ISO; at least one feed answered).
@@ -183,7 +186,7 @@ def _add_turn_columns(conn: sqlite3.Connection) -> None:
 def _add_note_columns(conn: sqlite3.Connection) -> None:
     """Add the Phase 4 note columns to an older ``profile_notes`` (nullable, rows kept)."""
     have = {row[1] for row in conn.execute("PRAGMA table_info(profile_notes)").fetchall()}
-    for name in NOTE_COLUMNS:
+    for name in NOTE_COLUMNS + NOTE_TAG_COLUMNS:
         if name not in have:
             conn.execute(f"ALTER TABLE profile_notes ADD COLUMN {name} TEXT")
     conn.commit()
@@ -296,9 +299,23 @@ class MentorChatStore:
         )
 
     def profile_notes(self, *, limit: int = 50, include_retired: bool = False) -> list[dict[str, Any]]:
-        """The newest ``limit`` notes, oldest first; a retired note only when asked for."""
-        where = "" if include_retired else " WHERE retired_utc IS NULL"
+        """The newest ``limit`` notes, oldest first; a retired note only when asked for. Feelings are not
+        notes about him (they ride on their trade): :meth:`feelings` reads them."""
+        where = " WHERE COALESCE(kind, '') != 'feeling'" + ("" if include_retired else " AND retired_utc IS NULL")
         return self._read(f"SELECT * FROM profile_notes{where} ORDER BY id DESC LIMIT ?", (int(limit),))[::-1]
+
+    def add_feeling(self, trade_id: str, text: str, *, ts_utc: str = "") -> int | None:
+        """P15b: how one trade felt, in the trader's words, kept with its trade id."""
+        return self._write(
+            "feeling", "INSERT INTO profile_notes (ts_utc, text, source, kind, trade_id) VALUES (?, ?, ?, ?, ?)",
+            (ts_utc or utc_now(), text, FEELING, FEELING, str(trade_id)),
+        )
+
+    def feelings(self, trade_ids: Iterable[str] | None = None) -> list[dict[str, Any]]:
+        """Live feelings, oldest first; only those trades' when ``trade_ids`` is given."""
+        rows = self._read("SELECT * FROM profile_notes WHERE kind = 'feeling' AND retired_utc IS NULL ORDER BY id")
+        wanted = None if trade_ids is None else {str(item) for item in trade_ids}
+        return [row for row in rows if wanted is None or str(row.get("trade_id") or "") in wanted]
 
     def _note_stamp(self, what: str, column: str, note_id: int, when: str = "") -> bool:
         if column not in NOTE_COLUMNS:

@@ -649,10 +649,14 @@ def update_issue_registry(root: Path, session: str, candidates: Sequence[Mapping
 def build_inputs(path: Path, session: str, facts: Mapping[str, Any], *, report: Any = None,
                  night: Mapping[str, Sequence[Mapping[str, Any]]] | None = None) -> dict[str, Any]:
     """Everything the model may see, with ids; ``inputs_hash`` ignores the clock."""
-    notes = [
-        {"id": f"note:{row['id']}", "text": _text(row.get("text"))[:MAX_TURN_CHARS]}
-        for row in _day_rows(path, "profile_notes", "ts_utc", session)
-    ]
+    # P15b: a feeling is cited by its trade (``feel:<trade_id>``, the newest one per trade); a note by its id.
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in _day_rows(path, "profile_notes", "ts_utc", session):
+        feeling = _text(row.get("kind")) == "feeling" and _text(row.get("trade_id"))
+        key = f"feel:{_text(row.get('trade_id'))}" if feeling else f"note:{row['id']}"
+        by_id.pop(key, None)
+        by_id[key] = {"id": key, "text": _text(row.get("text"))[:MAX_TURN_CHARS]}
+    notes = list(by_id.values())
     # The day's gate and tilt rows ride in their own sections (``night``), so each id appears once.
     split = night is not None
     challenges = [

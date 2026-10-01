@@ -316,3 +316,131 @@ def test_recaps_and_issues_commands(window, app, recaps):
     assert "Recurring in your day recaps" in text and "[recap:issues:missed:compressed]" in text
     assert commands.handle("/recaps all").arg == "all" and commands.handle("/recaps").arg == 10
     assert commands.handle("/recaps 99").action == "error"
+
+
+# ---------------------------------------------------------------- step 4: one feelings question per closed trade
+@pytest.fixture()
+def journal(tmp_path):
+    from mentor_packs import journal_pack
+
+    # Wed 2026-09-30: NVDA long, AMD short, a two-leg ALL put spread closed; MSFT still open.
+    return journal_pack.write_fixture_journal(tmp_path / "trade_journal.sqlite3")
+
+
+def test_closed_trades_are_found_once_and_never_asked_twice(tmp_path, journal):
+    from mentor_app import tilt_watch
+
+    closed = tilt_watch.closed_today(journal, "2026-09-30")
+    assert [(row["trade_id"], row["symbol"], row["side"]) for row in closed] == [
+        ("W2", "AMD", "SHORT"), ("W1", "NVDA", "LONG"), ("W3", "ALL", "LONG"), ("W4", "ALL", "SHORT")]
+    store = MentorChatStore(tmp_path / "c.sqlite3")
+    assert [row["trade_id"] for row in tilt_watch.new_closes(store, "2026-09-30", closed)] == ["W2", "W1", "W3", "W4"]
+    assert tilt_watch.new_closes(store, "2026-09-30", closed) == [], "a restart never asks again"
+    assert tilt_watch.feel_text(closed[1]) == "How did the NVDA long feel? One word or a sentence."
+
+
+@pytest.fixture()
+def feel_window(app, tmp_path, monkeypatch, journal):
+    from mentor_app import settings
+    from mentor_app.inbox import Inbox
+    from mentor_app.prefetch import PrefetchQueue
+    from mentor_app.window import MentorWindow
+    from mentor_packs.registry import make_pack
+
+    monkeypatch.setattr(settings, "gpu_block_reason", lambda now=None: "")
+    clock = {"now": datetime(2026, 9, 30, 8, 0, tzinfo=PT)}
+    win = MentorWindow(
+        store=MentorChatStore(tmp_path / "mentor_chat.sqlite3"), queue=PrefetchQueue(), news_queue=PrefetchQueue(),
+        inbox=Inbox(per_day_cap=3, now=lambda: clock["now"]), stream_post=lambda *a, **k: [],
+        post=lambda *a, **k: {}, now=lambda: clock["now"], mentor_enabled=False,
+        tilt_builder=lambda: make_pack("tilt_pack", ()), tilt_journal=journal, journal_path=journal,
+    )
+    win.clock = clock
+    yield win
+    win.shutdown()
+    win.deleteLater()
+
+
+def _drain_all(win, app):
+    while win.queue.run_one() or win.news_queue.run_one():
+        pass
+    win._io.submit(lambda: None).result(5)
+    app.processEvents()
+
+
+def test_one_feelings_item_per_closed_trade_spaced_and_capped(feel_window, app):
+    from datetime import timedelta
+
+    win = feel_window
+    before = _text(win)
+    win.maybe_watch_tilt()
+    _drain_all(win, app)
+    items = win.inbox.items()
+    assert [item.kind for item in items] == ["feeling"], "one item, never a pop"
+    assert items[0].text == "How did the AMD short feel? One word or a sentence."
+    assert _text(win) == before, "the transcript never moves on its own"
+    win.maybe_watch_tilt()
+    _drain_all(win, app)
+    assert len(win.inbox.items()) == 1, "the 30-min spacing is shared with tilt"
+    for _step in (1, 2, 3):
+        win.clock["now"] += timedelta(minutes=31)
+        win.maybe_watch_tilt()
+        _drain_all(win, app)
+    assert [item.text.split(" feel")[0] for item in win.inbox.items()] == [
+        "How did the AMD short", "How did the NVDA long", "How did the ALL long"]
+    assert win._feel_waiting == [], "the daily cap (3) drops the rest; nothing pops later"
+
+
+def test_the_answer_is_a_feeling_note_with_its_trade_id_and_rides_on_the_journal_row(feel_window, app):
+    from mentor_packs import journal_pack
+
+    win = feel_window
+    win.maybe_watch_tilt()
+    _drain_all(win, app)
+    item = win.inbox.items()[0]
+    row = win.inbox_list.item(0)
+    win._open_inbox_item(row)
+    assert win.input.toPlainText() == "/feel W2 " and item.id in win._inbox_feel
+    win.input.setPlainText("/feel W2 rushed it, felt revenge-y")
+    win.send_current()
+    win.send("/feel NVDA calm and patient")
+    _drain_all(win, app)
+    feelings = win.store.feelings()
+    assert [(row["trade_id"], row["kind"]) for row in feelings] == [("W2", "feeling"), ("W1", "feeling")]
+    assert feelings[0]["text"] == "How the AMD short (W2) felt: rushed it, felt revenge-y"
+    assert "Kept with NVDA (W1): calm and patient" in _text(win)
+    assert win.store.profile_notes() == [], "a feeling is not a note about him; it rides on its trade"
+    assert win.store.unembedded_notes("m"), "feelings are embedded with the notes"
+    pack = journal_pack.build("today", now=datetime(2026, 9, 30, 8, 0, tzinfo=PT), journal=win._tilt_journal,
+                              chat_db=win.store.path)
+    rows = {row["id"]: row for row in pack.rows}
+    assert rows["jrn:2026-09-30:W2:feel"]["text"] == "How AMD (W2) felt, in your words: rushed it, felt revenge-y"
+    assert pack.ids.index("jrn:2026-09-30:W1:feel") == pack.ids.index("jrn:2026-09-30:W1") + 1
+    win.send("/feel ZZZZ whatever")
+    _drain_all(win, app)
+    assert "I can't find a trade for ZZZZ" in _text(win)
+
+
+def test_the_night_reads_a_feeling_by_its_trade_id(tmp_path):
+    import sqlite3
+
+    from ai_jobs import mentor_review
+
+    path = tmp_path / "mentor_chat.sqlite3"
+    store = MentorChatStore(path)
+    store.add_profile_note("rule: two losses and I stop")
+    store.add_feeling("W2", "How the AMD short (W2) felt: first try")
+    store.add_feeling("W2", "How the AMD short (W2) felt: rushed")
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE profile_notes SET ts_utc = ?", ("2026-09-29T17:00:00+00:00",))
+    facts = mentor_review.day_facts(path, "2026-09-29")
+    inputs = mentor_review.build_inputs(path, "2026-09-29", facts)
+    notes = {row["id"]: row["text"] for row in inputs["profile_notes"]}
+    assert notes["feel:W2"].endswith("rushed") and "note:1" in notes and len(notes) == 2
+    assert "feel:W2" in inputs["allowed_evidence_ids"]
+    assert facts["remember_notes"] == 1, "a feeling is not a /remember note"
+
+
+def test_feel_command_parsing():
+    assert commands.handle("/feel SHOP rushed it") == commands.CommandResult("feel", "", ("SHOP", "rushed it"))
+    assert commands.handle("/feel SHOP").action == "error"
