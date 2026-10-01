@@ -314,3 +314,159 @@ def test_the_slot_runs_directly_after_the_day_story():
     assert slot.uses_model and slot.reserve_minutes == 5.0 and slot.goal == "coaching"
     priority = runner.MODEL_SLOT_PRIORITY
     assert priority[priority.index("day_review_narration") + 1] == "day_review_show"
+
+
+# ---------------------------------------------------------------------------
+# P19: a heavy pack fits the call; the model is told its tickers (2026-09 rejections)
+_INTERNALS_LINE = (
+    "Breadth (RSP-SPY) -0.26%  ·  Fear VXX down / SPY down  (both the same way)  ·  "
+    "Rates (TLT) -0.58%  ·  Oil (USO) -2.05%\nLeaders XLK, XLU, XLI  ·  Laggards XLV, XLP, XLE  ·  "
+    "Offense-defense +0.85%  ·  Sectors above VWAP 2 of 11"
+)
+
+
+def _heavy_pack() -> dict:
+    """A pack shaped like the live 2026-09-29 one (~27k chars after the old trim)."""
+    pack = _pack()
+    words = "gap up that was instantly filled, now testing the downside and the level below us "
+    pack["trader_said"] = list(pack["trader_said"]) + [
+        {"at": f"2026-09-25T14:{i:02d}:58+00:00", "direction": "", "entry_id": f"mj-heavy-{i:02d}",
+         "horizon": "", "kind": "observation", "source_id": f"said:mj-heavy-{i:02d}:observation",
+         "text": words * 2, "timeframe": "M5"}
+        for i in range(16)
+    ]
+    pack["environment"] = list(pack["environment"]) + [
+        {"detail": "Bullish Weak", "event_at": f"2026-09-25T13:{i:02d}:55+00:00", "event_type": "regime_shift",
+         "from_regime": "bullish_strong", "kind": "regime_shift", "schema": "market_regime_shift_v1",
+         "session_date": SESSION, "source": "auto", "source_id": f"env:regime_shift:{i}",
+         "spy_day_pct": None, "to_regime": "bullish_weak", "writer_host": "NucBox_K8_Plus", "writer_pid": 16920}
+        for i in range(10)
+    ]
+    pack["measured"] = list(pack["measured"]) + [
+        {"atr": 6.519590712596484, "bars_through": SESSION, "bars_used": 60, "change_pct": -0.17110507747521198,
+         "close": 764.2999877929688, "completed_only": True, "kind": "measured",
+         "position_vs_sma20": {"distance_atr": -0.11135823763187615, "side": "below", "sma20": 765.0259979248046},
+         "range_atr": 0.705571380762604, "reason": "",
+         "rule_versions": {"change_pct": "close_over_prior_close_pct_v1",
+                           "position_vs_sma20": "close_minus_sma20_in_atr_v1",
+                           "range_atr": "session_range_over_wilder_atr14_v1"},
+         "source_id": f"measured:{symbol}", "status": "measured", "symbol": symbol}
+        for symbol in ("QQQ", "IWM", "TLT", "USO", "VXX")
+    ]
+    pack["internals"] = [
+        {"source_id": f"internals:mentor:2026-09-25T08:{i:02d}:15-07:00", "kind": "mentor",
+         "at": f"2026-09-25T08:{i:02d}:15-07:00", "context": {"common": {
+             "availability": "available", "internals": _INTERNALS_LINE, "reason": ""}}}
+        for i in range(10)
+    ]
+    pack["reads"] = list(pack["reads"]) + [
+        {"because": words, "benchmark": "SPY", "confidence": "medium", "direction": "range",
+         "entry_id": f"mj-heavy-{i:02d}", "flat_band_rule": "atr_0.25_v1", "grader_gap": "",
+         "horizon": "next_5_sessions", "move_atr": None, "observation": words * 2,
+         "read_id": f"rd-heavy-{i}", "schema": "market_read_v1", "session": SESSION, "source": "click",
+         "source_id": f"read:rd-heavy-{i}", "span": [], "stamp": "2026-09-25T08:03:15-07:00",
+         "timeframe": "D1", "verdict": "pending 2026-10-02",
+         "checkpoints": [{"close": None, "move": None, "move_atr": None, "session": "2026-09-26",
+                          "sessions": n, "status": "pending"} for n in (1, 3, 5)]}
+        for i in range(8)
+    ]
+    pack["forecast"] = {"entry_id": "mj-fc", "fields": {}, "text": ("- a brief line about the morning tape\n" * 160)}
+    pack["trades"] = {**pack["trades"], "rows": list(pack["trades"]["rows"]) + [
+        {"source_id": f"trade:h{i}", "trade_id": f"h{i}", "symbol": "WYNN", "direction": "LONG",
+         "status": "closed", "net_pnl": 12.5, "notes": words * 3}
+        for i in range(9)
+    ]}
+    pack["report_card"] = {**pack["report_card"], "lines": list(pack["report_card"]["lines"]) + [
+        {"key": f"extra_{i}", "text": words, "n": i, "source_id": f"report_card:extra_{i}"} for i in range(4)
+    ]}
+    return pack
+
+
+def _heavy_reply() -> dict:
+    return {
+        "title": "A slow range day",
+        "slides": [
+            _slide("open", "How it opened", "You watched the gap fill.", ["said:mj-heavy-00:observation"]),
+            _slide("tape", "SPY on the day", "SPY ended the day lower.", ["measured:SPY"],
+                   stat="measured:SPY", label="SPY on the day"),
+            _slide("read", "Your read", "You called a range.", ["read:rd-heavy-0"]),
+            _slide("trade", "TSLA long", "One long, closed.", ["trade:t1"]),
+            _slide("lesson", "Wait for the bounce", "You waited for proof first.", ["said:mj-heavy-01:observation"]),
+            _slide("close", "That was the day", "See you tomorrow.", ["measured:QQQ"]),
+        ],
+    }
+
+
+def _write_heavy(tmp_path, reply):
+    pack = _heavy_pack()
+    day_review_pack.write_pack(pack, root=tmp_path)
+    calls = []
+
+    def _request(**kwargs):
+        calls.append(kwargs)
+        return {"summary": copy.deepcopy(reply), "model": "gemma3:12b"}
+
+    return pack, calls, _request
+
+
+def test_the_heavy_pack_used_to_overflow_the_old_trim():
+    from ai_jobs import day_review_narration as story
+    from ai_jobs import day_review_show_night as night
+
+    pack = _heavy_pack()
+    view = story._model_pack(pack)
+    for part in story.DAY_TRIM_ORDER:
+        story._trim_part(view, part)
+    # Every part the day story may drop is gone and the evidence still does not fit.
+    assert len(json.dumps(view, default=str)) > night.MAX_EVIDENCE_CHARS
+
+
+def test_a_heavy_pack_now_fits_and_the_show_is_called_and_kept(tmp_path):
+    from ai_jobs import day_review_show_night as night
+
+    _pack_, calls, request = _write_heavy(tmp_path, _heavy_reply())
+    outcome = night.run_day_review_show(session_date=SESSION, root=tmp_path, request=request)
+    assert len(calls) == 1, outcome
+    assert outcome["status"] == "ok", outcome
+    evidence = calls[0]["evidence"]
+    assert night._chars(evidence) <= night.MAX_EVIDENCE_CHARS
+    # Caps come first; a capped or dropped section's ids leave allowed_source_ids.
+    assert evidence["pack_trimmed"][:2] == ["report_card_lines", "trades_rows"]
+    allowed = set(evidence["allowed_source_ids"])
+    assert "trade:t1" in allowed and "measured:SPY" in allowed
+    assert "report_card:extra_3" not in allowed
+
+
+def test_a_deck_citing_an_id_trimmed_away_is_still_rejected(tmp_path):
+    from ai_jobs import day_review_show_night as night
+
+    reply = _heavy_reply()
+    reply["slides"][5]["source_ids"] = ["report_card:extra_3"]
+    _pack_, calls, request = _write_heavy(tmp_path, reply)
+    outcome = night.run_day_review_show(session_date=SESSION, root=tmp_path, request=request)
+    assert len(calls) == 1
+    assert outcome["status"] == "degraded_no_narrative"
+    assert "dropped to fit the call" in outcome["reason"]
+
+
+def test_the_show_view_hides_no_id_before_trimming():
+    from ai_jobs import day_review_show_night as night
+
+    for pack in (_pack(), _heavy_pack()):
+        assert day_review_pack.allowed_source_ids(night._show_view(pack)) == day_review_pack.allowed_source_ids(pack)
+
+
+def test_the_model_is_handed_the_packs_tickers_and_xlk_still_rejects(tmp_path):
+    from ai_jobs import day_review_show_night as night
+
+    _pack_, calls, request = _write_heavy(tmp_path, _heavy_reply())
+    night.run_day_review_show(session_date=SESSION, root=tmp_path, request=request)
+    evidence = calls[0]["evidence"]
+    assert evidence["pack_tickers"] == sorted(show.pack_tickers(_heavy_pack()))
+    assert "XLK" not in evidence["pack_tickers"] and "SPY" in evidence["pack_tickers"]
+    assert "pack_tickers" in evidence["instructions"]
+    # The verifier is unchanged: XLK, written only in the internals text, still rejects.
+    reply = _good_reply()
+    reply["slides"][1]["body"] = "XLK led the day."
+    with pytest.raises(show.ShowRejected, match="XLK"):
+        show.verify_show(reply, _heavy_pack())
