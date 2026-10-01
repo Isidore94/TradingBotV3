@@ -72,9 +72,12 @@ def test_the_brief_paragraphs_are_embedded_once_per_paste(tmp_path, fund):
 
 
 def test_paste_is_a_command_that_keeps_every_line():
-    assert commands.handle("/paste") == commands.CommandResult("paste", "", "")
+    assert commands.handle("/paste") == commands.CommandResult("paste", "", ("", ""))
     got = commands.handle("/paste **Brief**\n\n- line one\n- line two")
-    assert got.action == "paste" and got.arg == "**Brief**\n\n- line one\n- line two"
+    assert got.action == "paste" and got.arg == ("**Brief**\n\n- line one\n- line two", "")
+    assert commands.handle("/paste for 2026-09-29 body\nmore").arg == ("body\nmore", "2026-09-29")
+    assert commands.handle("/paste for 2026-09-29").arg == ("", "2026-09-29")
+    assert commands.handle("/paste for tomorrow x").action == "error"
     assert "/paste" in commands.HELP_TEXT
 
 
@@ -120,7 +123,8 @@ class FakeForecastService:
         ledger = EvidenceLedger(stream=market_journal.STREAM, schema=market_journal.SCHEMA_MARKET_JOURNAL_ENTRY,
                                 directory=self.paths.ledger_dir)
         row = ledger.append({"entry_id": f"mj-paste-{len(self.calls)}", "event_type": "entry",
-                             "origin": "external_forecast", "text": text, "supersedes": "mj-2026-09-30-second",
+                             "origin": "external_forecast", "text": text,
+                             "supersedes": "mj-2026-09-30-second" if target_session == "2026-09-30" else "",
                              "created_at": now.astimezone(timezone.utc).isoformat(timespec="seconds")},
                             now=now, subject_session_date=target_session)
         return {"ok": True, "entry": row}
@@ -208,6 +212,51 @@ def test_a_refused_paste_says_not_saved(window, app):
     window.send("/paste " + NEW_BRIEF)
     _drain(window, app)
     assert "Brief NOT saved: the ledger is locked" in _text(window)
+
+
+# ---------------------------------------------------------------- review fix: the desk's session rule
+def test_paste_files_by_the_desks_rule_not_the_paste_moment(window, app):
+    """Wed 21:30 PT (Thu 00:30 ET): a Wednesday-titled brief files under Wednesday, exactly as the desk files it,
+    and /memory reads it back as today's brief."""
+    from ui.services.market_journal_service import forecast_session
+
+    window.clock["now"] = datetime(2026, 9, 30, 21, 30, tzinfo=PT)
+    assert forecast_session(NEW_BRIEF, window.clock["now"]) == "2026-09-30"
+    window.send("/paste " + NEW_BRIEF)
+    _drain(window, app)
+    assert window.service.calls[-1]["target_session"] == "2026-09-30"
+    assert "Brief saved for 2026-09-30: Oil leads today." in _text(window) and "not today" not in _text(window)
+    window.send("/memory")
+    assert "[fund:2026-09-30:bottom:1]" in _text(window)
+
+
+def test_an_untitled_paste_files_under_the_last_closed_session_and_says_so(window, app):
+    window.clock["now"] = datetime(2026, 9, 30, 5, 45, tzinfo=PT)  # before Wednesday's open
+    window.send("/paste Rates lead today.\n\nOil is the risk.")
+    _drain(window, app)
+    assert window.service.calls[-1]["target_session"] == "2026-09-29", "no title date: the last closed session"
+    assert "filed for 2026-09-29, not today 2026-09-30; /paste for 2026-09-30" in _text(window)
+    window.send("/paste for 2026-09-30 Rates lead today.")
+    _drain(window, app)
+    assert window.service.calls[-1]["target_session"] == "2026-09-30", "the trader can name the session"
+
+
+def test_a_saturday_paste_titled_friday_reads_as_the_last_brief_until_mondays(window, app, fund):
+    friday = "# Brief — October 2, 2026\n\n## Bottom line\n\nPayrolls hot. Yields up.\n"
+    window.clock["now"] = datetime(2026, 10, 3, 9, 0, tzinfo=PT)  # Saturday
+    window.send("/paste " + friday)
+    _drain(window, app)
+    assert window.service.calls[-1]["target_session"] == "2026-10-02"
+    for moment in (datetime(2026, 10, 3, 9, 0, tzinfo=PT), datetime(2026, 10, 5, 6, 0, tzinfo=PT)):
+        pack = fundamentals_pack.build("today", now=moment, paths=fund)
+        assert pack.ids[0] == "fund:2026-10-05:none", moment
+        assert "last brief: 2026-10-02" in pack.rows[1]["text"]
+        assert memory.fund_items(fund, moment) == [], "not today's brief: not in memory"
+    monday = "# Brief — October 5, 2026\n\n## Bottom line\n\nQuiet open.\n"
+    window.clock["now"] = datetime(2026, 10, 5, 6, 0, tzinfo=PT)
+    window.send("/paste " + monday)
+    _drain(window, app)
+    assert fundamentals_pack.build("today", now=window.clock["now"], paths=fund).ids[0] == "fund:2026-10-05:asof"
 
 
 def test_the_tape_build_carries_the_compact_brief(window):

@@ -115,9 +115,12 @@ def test_read_only_and_tz_aware(world):
     assert late.ids[0] == "fund:2026-09-30:asof", "23:00 ET is still the 30th in New York"
 
 
-def test_paste_session_is_today_or_the_next_session():
-    assert fundamentals_pack.paste_session(NOW) == "2026-09-30"
-    assert fundamentals_pack.paste_session(datetime(2026, 10, 3, 16, 0, tzinfo=timezone.utc)) == "2026-10-05"
+def test_today_is_the_traders_own_date_and_a_weekend_reads_ahead_to_monday():
+    assert fundamentals_pack.market_day(NOW).isoformat() == "2026-09-30"
+    late = datetime(2026, 10, 1, 4, 30, tzinfo=timezone.utc)  # Wed 21:30 PT = Thu 00:30 ET
+    assert fundamentals_pack.market_day(late).isoformat() == "2026-09-30", "his evening is still his day"
+    assert fundamentals_pack.market_day(datetime(2026, 10, 3, 16, 0, tzinfo=timezone.utc)).isoformat() == "2026-10-05"
+    assert not hasattr(fundamentals_pack, "paste_session"), "the filing rule lives in ONE place, the journal service"
 
 
 def test_embed_rows_are_one_per_paragraph_and_stable_per_entry(world):

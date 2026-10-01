@@ -3347,8 +3347,6 @@ class DayReviewPanel(QFrame):
             QLineEdit,
         )
 
-        import forecast_brief
-
         dialog = QDialog(self)
         dialog.setWindowTitle("Paste a daily forecast")
         dialog.setModal(False)
@@ -3366,8 +3364,9 @@ class DayReviewPanel(QFrame):
         def _follow_the_brief() -> None:
             if touched["session"]:
                 return
-            parsed = forecast_brief.parse(text_box.toPlainText()).title_date
-            session_box.setText(parsed or self.session_date())
+            from ui.services.market_journal_service import forecast_session
+
+            session_box.setText(forecast_session(text_box.toPlainText(), fallback=self.session_date()))
 
         text_box.textChanged.connect(_follow_the_brief)
 

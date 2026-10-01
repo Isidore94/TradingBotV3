@@ -17,7 +17,8 @@ HELP_TEXT = (
     "- `/memory` what I loaded at start (the night's brief, digests, ideas, reviews and your notes), with ids\n"
     "- `/brief` the night's coach brief for today: what to watch, what you may be missing, recurring issues\n"
     "- `/issues` the recurring issues the night sees, with the date each was first seen\n"
-    "- `/paste` paste today's morning brief (or `/paste <text>`); it is saved to the Market Journal for today\n"
+    "- `/paste` paste the morning brief (or `/paste <text>`); it is filed under its own title date, else the last"
+    " closed session, like the desk; `/paste for 2026-09-30 ...` picks the session\n"
     "- `/recaps [n]` your last n day recaps (10 unless you say; `all`) and the issues that keep coming back\n"
     "- `/feel <SYM|trade id> <words>` how a trade felt, kept with that trade\n"
     "- `/recall <text>` search what we said before (plain text search when the brain is off)\n"
@@ -81,10 +82,13 @@ def handle(text: str) -> CommandResult | None:
     stripped = str(text or "").strip()
     if not stripped.startswith("/"):
         return None
-    pasted = re.fullmatch(r"/paste(?:\s+(.*))?", stripped, re.IGNORECASE | re.DOTALL)
+    pasted = re.fullmatch(r"/paste(?:\s+for\s+(\S+))?(?:\s+(.*))?", stripped, re.IGNORECASE | re.DOTALL)
     if pasted:
-        # The brief is many lines: everything after the command is the text, kept as typed.
-        return CommandResult("paste", "", (pasted.group(1) or "").strip())
+        # The brief is many lines: everything after the command (and an optional `for <date>`) is the text.
+        session = pasted.group(1) or ""
+        if session and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", session):
+            return CommandResult("error", "Try `/paste`, `/paste <text>` or `/paste for 2026-09-30 <text>`.")
+        return CommandResult("paste", "", ((pasted.group(2) or "").strip(), session))
     head, _, rest = stripped.partition(" ")
     name, rest = head[1:].lower(), rest.strip()
     if name in ("help", "?"):

@@ -1236,10 +1236,11 @@ class MentorWindow(QMainWindow):
         elif result.action == "feel":
             self.record_feeling(*result.arg)
         elif result.action == "paste":
-            if result.arg:
-                self.paste_brief(str(result.arg))
+            text, session = result.arg
+            if text:
+                self.paste_brief(str(text), session=session)
             else:
-                self.open_paste_dialog()
+                self.open_paste_dialog(session=session)
         elif result.action == "brief":
             # P15a: the night's coach brief, read on the IO thread (a file on the ai_store).
             root, now = self._memory_root, self._now()
@@ -1813,28 +1814,32 @@ class MentorWindow(QMainWindow):
         return fundamentals_pack.build("today", section, now=self._now(), paths=self.fund_paths)
 
     # ------------------------------------------------------------------ /paste (P15b)
-    def open_paste_dialog(self) -> None:
-        """The "Paste brief" button and a bare ``/paste``: a plain-text box; OK saves it for today."""
+    def open_paste_dialog(self, session: str = "") -> None:
+        """The "Paste brief" button and a bare ``/paste``: a plain-text box; OK saves it."""
         if self._paste_prompt is not None:
             text = self._paste_prompt()
         else:
             from PySide6.QtWidgets import QInputDialog
 
             text, ok = QInputDialog.getMultiLineText(self, "Paste the morning brief",
-                                                     "Paste today's brief. It is saved to the Market Journal for "
-                                                     "today's session.")
+                                                     "Paste the brief. It is filed in the Market Journal under its "
+                                                     "own title date (else the last closed session), like the desk.")
             text = text if ok else None
         if text is None:
             return
-        self.paste_brief(str(text))
+        self.paste_brief(str(text), session=session)
 
-    def paste_brief(self, text: str) -> None:
-        """Save a pasted brief through the Market Journal's own writer, off the Qt thread, then reload memory."""
+    def paste_brief(self, text: str, *, session: str = "") -> None:
+        """Save a pasted brief through the Market Journal's own writer, off the Qt thread, then reload memory.
+
+        The session is the desk's rule (``forecast_session``: the brief's title date, else the last closed
+        session) unless the trader named one with ``/paste for <date>``."""
         body = str(text or "").strip()
         if not body:
             self._add_note("Nothing was pasted, so nothing was saved.")
             return
         from mentor_packs import fundamentals_pack
+        from ui.services.market_journal_service import forecast_session
 
         service = self._forecast_service
         if service is None:
@@ -1842,7 +1847,12 @@ class MentorWindow(QMainWindow):
 
             service = shared_journal_service()  # built here, on the Qt thread; it writes on the IO thread
         now = self._now()
-        session = fundamentals_pack.paste_session(now)
+        try:
+            session = str(session or "").strip() or forecast_session(body, now)
+        except Exception as exc:  # noqa: BLE001 - no calendar answer: the trader names the session
+            self._add_note(f"Brief NOT saved: no session could be picked ({exc}). Try `/paste for 2026-09-30 ...`.")
+            return
+        today = fundamentals_pack.market_day(now).isoformat()
         fund_paths = self.fund_paths
         self._add_note(f"Saving the brief for {session}...")
 
@@ -1861,7 +1871,10 @@ class MentorWindow(QMainWindow):
                 line = fundamentals_pack.bottom_line_sentence(built)
             except Exception:  # noqa: BLE001 - saved is saved; the confirmation just has no bottom line
                 logging.warning("Trade Mentor: the saved brief could not be read back", exc_info=True)
-            self._bridge.note.emit(f"Brief saved for {session}: {line or 'no bottom line found by its headings'}")
+            note = f"Brief saved for {session}: {line or 'no bottom line found by its headings'}"
+            if session != today:
+                note += f" (filed for {session}, not today {today}; `/paste for {today} ...` files it for today)"
+            self._bridge.note.emit(note)
             self._load_memory()
 
         self._submit_io(job)

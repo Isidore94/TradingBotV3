@@ -110,18 +110,15 @@ def _now(now: datetime | None) -> datetime:
 
 
 def market_day(now: datetime | None = None) -> date:
-    return _now(now).astimezone(ET).date()
-
-
-def paste_session(now: datetime | None = None) -> str:
-    """The session a brief pasted now is for: today's market date when it is a session, else the next one."""
-    day = market_day(now)
+    """The session "today" means for the trader: his own (PT) calendar date when it is a session, else the
+    next session (a weekend reads ahead to Monday, so Friday's brief is "last brief: Friday")."""
+    day = _now(now).astimezone(PT).date()
     try:
         import market_calendar
 
-        return day.isoformat() if market_calendar.is_session(day) else market_calendar.next_session(day).isoformat()
-    except Exception:  # noqa: BLE001 - outside the calendar: the market date itself
-        return day.isoformat()
+        return day if market_calendar.is_session(day) else market_calendar.next_session(day)
+    except Exception:  # noqa: BLE001 - outside the calendar: the calendar date itself
+        return day
 
 
 def _pt(stamp: Any) -> str:

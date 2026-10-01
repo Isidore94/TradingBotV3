@@ -34,6 +34,25 @@ def market_journal_lock_key(ledger) -> str:
     stream = str(getattr(ledger, "stream", "") or "market_journal")
     return lock_key_for_path(Path(directory) / f"{stream}.jsonl")
 
+def forecast_session(text: str, now: datetime | None = None, *, fallback: str = "") -> str:
+    """The ONE rule for which session a pasted brief is filed under (desk dialog and the Mentor's /paste).
+
+    The brief's own title date when `forecast_brief` can read one; else `fallback` (the desk page's
+    session); else the last completed session at `now`. Never the paste moment's calendar date.
+    """
+    import forecast_brief
+
+    titled = forecast_brief.parse(text).title_date
+    if titled:
+        return titled
+    if str(fallback or "").strip():
+        return str(fallback).strip()[:10]
+    import market_calendar
+
+    moment = now or datetime.now().astimezone()
+    return market_calendar.last_completed_session(moment if moment.tzinfo else moment.astimezone()).isoformat()
+
+
 def _forecast_origin() -> str:
     import market_journal
 
