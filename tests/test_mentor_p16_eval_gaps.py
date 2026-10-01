@@ -268,3 +268,46 @@ def test_the_persona_says_how_to_compare_and_never_to_announce_a_fetch():
     assert ("When comparing two numbers, write both and say which is larger; call something better or worse only "
             "when the pack row says so (`clears_baseline`, `verdict`).") in PERSONA_PROMPT
     assert "Never write 'I am checking...' or 'let me pull...': call the tool or answer." in PERSONA_PROMPT
+
+
+# ---------------------------------------------------------------- step 6: watch tomorrow
+def test_what_to_watch_tomorrow_reads_the_brief_watch_list_the_econ_and_the_day_review():
+    for question in ("what's the single most important thing to watch at the open tomorrow", "what to watch tomorrow",
+                     "most important thing to watch tomorrow?"):
+        got = [(r.name, r.args) for r in attach.plan_attachments(question, {}, NOW)]
+        assert ("fundamentals_pack", {"section": "watch"}) in got, (question, got)
+        assert ("regime_pack", {}) in got and ("night_pack", {"section": "day_review"}) in got, (question, got)
+
+
+def test_the_brief_watch_section_puts_scheduled_data_first():
+    from mentor_packs import fundamentals_pack
+
+    assert "watch" in fundamentals_pack.SCHEMA["function"]["parameters"]["properties"]["section"]["enum"]
+    pack = fundamentals_pack.build("today", "watch", now=fundamentals_pack.FIXTURE_NOW,
+                                   paths=fundamentals_pack.write_fixture_world(tempfile.mkdtemp()))
+    sections = [row["section"] for row in pack.rows]
+    assert sections[0] == "asof" and sections[1] == "events", "scheduled data first"
+    assert sections.index("signals") < sections.index("bottom_line"), "then the watch list, then the bottom line"
+    assert "Nonfarm Payrolls" in pack.as_text()
+    from mentor_app.chat_model import SYSTEM_PROMPT
+
+    assert ("rank by impact: scheduled high-impact data first, then the brief's watch list, then levels"
+            in SYSTEM_PROMPT)
+
+
+# ---------------------------------------------------------------- step 7: regime or me, this week vs last week
+def test_regime_or_me_reads_the_month_the_mirror_and_the_tape():
+    for question in ("I keep getting stopped out on longs in this regime, is that the regime or me",
+                     "am I the problem", "my fault or the market?"):
+        got = [(r.name, r.args) for r in attach.plan_attachments(question, {}, NOW)]
+        assert ("journal_pack", {"day": "month"}) in got, (question, got)
+        assert ("mirror_pack", {}) in got and ("regime_pack", {}) in got, (question, got)
+    from mentor_app.chat_model import SYSTEM_PROMPT
+
+    assert "cite the mirror's regime row and kind row and the journal totals" in SYSTEM_PROMPT
+
+
+def test_this_week_vs_last_week_reads_both_weeks_and_never_today():
+    for question in ("compare this week to last week in one paragraph", "how is my week vs last week"):
+        got = [(r.name, r.args) for r in attach.plan_attachments(question, {}, NOW) if r.name == "journal_pack"]
+        assert got == [("journal_pack", {"day": "week"}), ("journal_pack", {"day": "last_week"})], (question, got)

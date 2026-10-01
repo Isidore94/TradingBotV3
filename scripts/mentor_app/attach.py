@@ -106,6 +106,15 @@ _MIRROR = re.compile(r"\bmy record\b|\blately\b|\bmy stats\b|\bmy edge\b|\bhit r
 #: P16: hold time by outcome and the best / worst trade or setup: the journal's outcome rows plus the mirror.
 _OUTCOME = re.compile(r"\bhold(?:ing)? times?\b|\bhow long (?:do|did) i hold\b|\b(?:best|worst) (?:trades?|setups?)\b"
                       r"|\bwinners (?:vs\.?|versus|and) losers\b")
+#: P16: "is it the regime or me": his month, his mirror (regime and kind cuts) and the tape.
+_REGIME_OR_ME = re.compile(r"\bregime or me\b|\bme or the (?:regime|market|tape)\b|\b(?:market|tape) or me\b"
+                           r"|\bam i the problem\b|\bmy fault\b|\bis it (?:just )?me\b")
+#: P16: this week against last week reads both weeks, never today.
+_WEEK_VS = re.compile(r"\b(?:this|my) week\b.*\blast week\b|\blast week\b.*\bthis week\b"
+                      r"|\bweek over week\b|\bweek on week\b")
+#: P16: what to watch for the next session: the brief's watch list, the next session's econ, the day review.
+_WATCH_NEXT = re.compile(r"\b(?:watch|look for|look at|focus on|important)\b.*\b(?:tomorrow|at the open|next session)\b"
+                         r"|\b(?:tomorrow|at the open)\b.*\b(?:watch|look for)\b")
 _PLAN = re.compile(r"\bmy plan\b|\bmy rules?\b|\btrading plan\b|\bbreak(?:ing)? (?:a|my) rule\b")
 #: P15a: the night's reads (day review verdicts, ideas, contrasts, week review, story, digest).
 _NIGHT = re.compile(r"\bwhat did the night say\b|\bovernight\b|\blast night\b|\bnight(?:'s)? read\b|\bideas?\b"
@@ -304,9 +313,22 @@ def plan_attachments(
     # yesterday, a weekday, a week or a month is; so is any first-person time question. A veto question
     # (or an earnings question over his book) reads its own pack, not the journal, unless it asks about trades.
     journal_day = bool(day) and (day != today or bool(_FIRST_PERSON.search(lowered)))
-    if journal_words or stop_day or (journal_day and not vetoes and not earnings_group and not earnings_alone):
+    week_vs = bool(_WEEK_VS.search(lowered))
+    if not week_vs and (journal_words or stop_day or (journal_day and not vetoes and not earnings_group
+                                                      and not earnings_alone)):
         add("journal_pack", "journal words" if journal_words else "time words" if day else "stop words",
             day=day or today)
+    if _WEEK_VS.search(lowered):
+        add("journal_pack", "this week vs last week", day="week")
+        add("journal_pack", "this week vs last week", day="last_week")
+    if _REGIME_OR_ME.search(lowered):
+        add("journal_pack", "regime or me", day=day if day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else "month")
+        add("mirror_pack", "regime or me")
+        add("regime_pack", "regime or me")
+    if _WATCH_NEXT.search(lowered):
+        add("fundamentals_pack", "watch next session", section="watch")
+        add("regime_pack", "watch next session")
+        add("night_pack", "watch next session", section="day_review")
     if _OUTCOME.search(lowered):
         add("journal_pack", "outcome words", day=day if day else "month")
         add("mirror_pack", "outcome words")
@@ -361,7 +383,7 @@ def plan_attachments(
         add("recaps_pack", "recap words", days=10, section="all")
     if _FEEL.search(lowered) and not any(request.name == "journal_pack" for request in wanted):
         add("journal_pack", "feelings words", day=day or "week")
-    if _FUND.search(lowered):
+    if _FUND.search(lowered) and not _WATCH_NEXT.search(lowered):
         add("fundamentals_pack", "fundamentals words", section="all")
     elif any(request.name == "gate_pack" for request in wanted):
         # P15b: a pre-trade check sees today's brief: the bottom line and the playbook (at most 8 rows).

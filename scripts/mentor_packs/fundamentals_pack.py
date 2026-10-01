@@ -39,7 +39,9 @@ from mentor_packs.registry import Pack, make_pack
 NAME = "fundamentals_pack"
 SECTIONS = ("bottom_line", "signals", "playbook", "events", "text")
 #: ``compact`` = the as-of row, the bottom line and the playbook, at most COMPACT_ROWS (gate, /tape, memory).
-EXTRA_SECTIONS = ("compact",)
+#: ``compact``: the bottom line and playbook for a pre-trade check; ``watch`` (P16): what to watch next session,
+#: by impact: scheduled data first, then the brief's watch list and ranked signals, then the bottom line.
+EXTRA_SECTIONS = ("compact", "watch")
 SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -388,6 +390,12 @@ def build(day: Any = "today", section: str = "all", *, now: datetime | None = No
                            f"{entry['_session']}.")] if fallback else []
     if wanted == "compact":
         return make_pack(NAME, [*head, *compact(parts)])
+    if wanted == "watch":
+        ranked = [*parts["events"], *parts["signals"], *parts["bottom_line"]]
+        if not ranked:
+            ranked = [{"id": f"fund:{entry['_session']}:watch:none", "kind": "none", "section": "watch",
+                       "date": entry["_session"], "text": "The brief has no events, watch list or bottom line."}]
+        return make_pack(NAME, [*head, *parts["asof"], *ranked])
     body = [row for name in (SECTIONS if wanted == "all" else (wanted,)) for row in parts[name]]
     if not body:
         body = [{"id": f"fund:{entry['_session']}:{wanted}:none", "kind": "none", "section": wanted,
