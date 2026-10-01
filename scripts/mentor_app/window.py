@@ -253,6 +253,8 @@ class MentorWindow(QMainWindow):
         self._post = post or brain.default_post
         #: GET for /api/ps; a test that fakes ``post`` and not ``get`` has no host to list.
         self._get = get or (brain.default_get if post is None else None)
+        #: The previous user turn's planned packs (a topicless follow-up carries them).
+        self._last_attachments: list[Any] = []
         self._brain_ok = False
         self._brain_reason = "connecting to the GPU host..."
         self._connecting = False
@@ -1434,7 +1436,12 @@ class MentorWindow(QMainWindow):
         known = attach.known_symbols(context_rows, self._liked_names, self._journal_symbols)
         attachments = attach.plan_attachments(text, known, self._now(), book=attach.book_symbols(context_rows),
                                               liked=self._liked_names)
+        # A topicless follow-up ("what about just this morning?") re-reads the last question's packs.
+        attachments = attach.carry_follow_up(text, attachments, self._last_attachments, self._now())
+        self._last_attachments = list(attachments)
         seen = attach.recent_cited_ids(self.chat.turns[:-1], attach.DEDUPE_TURNS)
+        if any(str(request.reason).startswith("follow-up: ") for request in attachments):
+            seen = set()  # a follow-up asks about the same rows again: none is held back as already seen
         # P14: a book_pack built from the journal (no fresh broker snapshot) queues the broker read on the
         # news thread and says so; the next turn reads the fresh snapshot.
         from mentor_app import book_jobs

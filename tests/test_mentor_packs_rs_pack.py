@@ -26,15 +26,26 @@ def test_golden_industry_pack():
                            "rs:you:insurance", "rs:you:semiconductors"]
     assert by_id["rs:asof"] == ("Industry board built 2026-09-30 16:39 ET (20 min ago), "
                                 "5 industry groups ranked by RS (1 = strongest)")
-    assert by_id["rs:lead:1"] == ("lead industry #1: Cybersecurity, 11 members, 1d +2.1%, 5d +0.0%; "
+    assert by_id["rs:lead:1"] == ("lead industry #1: Cybersecurity, 11 members, today so far (as of 16:39 ET) +2.1%, 5d +0.0%; "
                                   "yours: CRWD (liked)")
-    assert by_id["rs:lead:2"] == ("lead industry #2: Semiconductors, 40 members, 1d +1.2%, 5d +3.4%; "
+    assert by_id["rs:lead:2"] == ("lead industry #2: Semiconductors, 40 members, today so far (as of 16:39 ET) +1.2%, 5d +3.4%; "
                                   "yours: NVDA (book LONG), AMD (Focus)")
     assert by_id["rs:lag:1"].startswith("lag industry #5: Autos") and by_id["rs:lag:1"].endswith("TSLA (Focus)")
     assert by_id["rs:lag:2"].endswith("ALL (book SHORT)")
-    assert by_id["rs:you:insurance"] == "Your Insurance (ALL SHORT): rank 4 of 5, 1d -0.8%, 5d -2.0%"
+    assert by_id["rs:you:insurance"] == "Your Insurance (ALL SHORT): rank 4 of 5, today so far (as of 16:39 ET) -0.8%, 5d -2.0%"
     assert len(pack.ids) == len(set(pack.ids))
     assert datetime.fromisoformat(pack.rows[0]["at_utc"]).tzinfo is not None
+
+
+def test_the_one_day_column_says_today_so_far_or_last_session():
+    """2026-10-01: "what about just this morning?" - the board's 1d is today's move so far when built in session."""
+    from datetime import date
+
+    session = date(2026, 10, 1)
+    assert rs_pack.day_label(datetime(2026, 10, 1, 15, 10, tzinfo=timezone.utc), session) == \
+        "today so far (as of 11:10 ET)"
+    assert rs_pack.day_label(datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc), session) == "1d (last session)"
+    assert rs_pack.day_label(datetime(2026, 9, 30, 20, 0, tzinfo=timezone.utc), session) == "1d (last session)"
 
 
 def test_sector_level_maps_yahoo_sector_names():
