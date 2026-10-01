@@ -1295,7 +1295,7 @@ class MentorWindow(QMainWindow):
             question=text,
             build_pack=build_pack,
             # P20: a brief / tape summary ask gets a three-sentence instruction and a token cap for this turn.
-            **attach.turn_shape(text, attachments),
+            **attach.turn_shape(text, attachments, known),
         )
         worker.token.connect(self._on_token)
         worker.tool_call.connect(self._on_tool_call)

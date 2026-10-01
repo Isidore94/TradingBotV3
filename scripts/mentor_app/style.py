@@ -123,8 +123,9 @@ def carries_substance(text: str) -> bool:
 _TICKER = re.compile(r"(?<![A-Za-z0-9])\$?([A-Z]{2,5})(?![A-Za-z0-9])")
 
 
-#: P20 plain turns: a leading bullet marker (``- ``, ``* ``, ``+ ``); numbered items keep their number.
-_BULLET_MARK = re.compile(r"^(\s*)[-*+]\s+(?=\S)")
+#: P20 plain turns: a leading bullet marker (``- ``, ``* ``, ``+ ``) before a letter, ``*``, ``[``, a backtick or a
+#: quote - never before a digit, ``.``, ``%`` or ``$`` ("- 0.8% SPY" keeps its sign); numbered items keep their number.
+_BULLET_MARK = re.compile(r"^(\s*)[-*+]\s+(?=[A-Za-z*\[`\"'“‘])")
 
 
 def _plain(line: str) -> str:

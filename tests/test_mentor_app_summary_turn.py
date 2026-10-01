@@ -30,11 +30,17 @@ SIX = ["what's the macro brief say today", "whats the macro brief say today", "i
        "anything about yields in the brief", "what did the night brief say", "whats the market like this morning"]
 NOT_SUMMARY = ["should I buy NVDA here", "im thinking of shorting TSLA thoughts?", "what does the brief say about NVDA",
                "anything about AMD in the brief", "is the playbook today bullish or bearish and does my book match it",
-               "how did I do today", "whats SPY doing"]
+               "how did I do today", "whats SPY doing",
+               # review of 91498f4a: a tickerless pre-trade question plans only regime_pack ("trade intent")
+               "should I buy here?", "about to short this, ok?", "should I take this trade",
+               "should I enter now or wait", "should I short the open", "buying calls here?",
+               "whats the market like, should I buy?",
+               # a lowercase universe ticker anywhere is a ticker question
+               "what does the brief say about amd"]
 
 
 def _shape(text):
-    return attach.turn_shape(text, attach.plan_attachments(text, KNOWN, NOW, book=BOOK))
+    return attach.turn_shape(text, attach.plan_attachments(text, KNOWN, NOW, book=BOOK), KNOWN)
 
 
 @pytest.mark.parametrize("text", SIX)
@@ -109,14 +115,50 @@ def test_the_default_guard_leaves_bold_and_bullets_alone():
     assert "**Bottom line:**" in text and "- Buy pullbacks" in text
 
 
-def test_the_eval_guards_a_summary_ask_the_way_the_app_does():
+def test_a_spaced_sign_is_never_read_as_a_bullet_marker():
+    for line in ("- 0.8% SPY [tape:breadth]", "+ 3 pts on QQQ [tape:qqq]", "- .5 ATR", "- $2 gap [news:AMD:1]"):
+        assert style.guard(line, plain=True)[0] == line
+    assert style.guard('- "risk-on" [fund:x:bl]', plain=True)[0] == '"risk-on" [fund:x:bl]'
+    assert style.guard("* [fund:x:bl] says risk-on", plain=True)[0] == "[fund:x:bl] says risk-on"
+
+
+def test_the_eval_guards_a_row_the_way_the_live_run_turned_it():
     import mentor_eval
 
-    rows = [{"q": "is the playbook bullish or bearish", "reply": LONG_REPLY},
-            {"q": "how am i doing today", "reply": LONG_REPLY}]
+    rows = [{"q": "is the playbook bullish or bearish", "reply": LONG_REPLY, "plain": True},
+            {"q": "how am i doing today", "reply": LONG_REPLY},
+            {"q": "is the playbook bullish or bearish", "reply": LONG_REPLY}]
     mentor_eval.style_summary(rows, mentor_eval.load_fixture())
     assert rows[0]["style"]["bullets"] == 3 and rows[0]["style_after_app"]["bullets"] == 0
     assert rows[1]["style_after_app"]["bullets"] == 3, "a non-summary question keeps the default guard"
+    assert rows[2]["style_after_app"]["bullets"] == 3, "an older report without the run's flag is not guessed"
+
+
+def test_the_live_eval_stores_the_turn_shape_on_its_row(monkeypatch, tmp_path):
+    import mentor_eval
+    from mentor_app import checklist, settings
+    from mentor_packs import context_pack, journal_pack, registry
+
+    seen = []
+
+    def fake_turn(messages, **kwargs):
+        seen.append(kwargs)
+        return {"text": "Risk-on [fund:x:bl].", "attached": [], "tool_calls": [], "first_token_ms": 5,
+                "turn_instruction": kwargs.get("turn_instruction", ""), "max_tokens": kwargs.get("max_tokens")}
+
+    monkeypatch.setattr(settings, "gpu_block_reason", lambda: "")
+    monkeypatch.setattr(settings, "mentor_model", lambda present: "gemma4:12b")
+    monkeypatch.setattr(brain, "model_capabilities", lambda *a, **k: ("tools",))
+    monkeypatch.setattr(brain, "run_turn", fake_turn)
+    monkeypatch.setattr(context_pack, "build", lambda: registry.make_pack("context_pack", []))
+    monkeypatch.setattr(journal_pack, "recent_symbols", lambda: [])
+    monkeypatch.setattr(checklist, "covered", lambda text: set())
+    fixture = {"now": NOW.isoformat(), "known_symbols": KNOWN, "book": BOOK,
+               "questions": [{"q": "is the playbook bullish or bearish", "expected_packs": [], "simple": True},
+                             {"q": "should I buy here?", "expected_packs": []}]}
+    report = mentor_eval.live_report(fixture, out_dir=tmp_path)
+    assert [row["plain"] for row in report["rows"]] == [True, False]
+    assert seen[0]["turn_instruction"] == attach.SUMMARY_INSTRUCTION and "turn_instruction" not in seen[1]
 
 
 def test_a_summary_turn_shows_plain_text_and_stores_the_raw_reply(tmp_path, monkeypatch):

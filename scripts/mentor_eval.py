@@ -82,18 +82,15 @@ def offline_report(fixture: Mapping[str, Any]) -> dict[str, Any]:
 
 def style_summary(rows: list[Mapping[str, Any]], fixture: Mapping[str, Any]) -> dict[str, Any]:
     """Adds ``style`` / ``style_after_app`` / ``style_pass`` to every answered row; returns the overall numbers."""
-    from mentor_app import attach, style
+    from mentor_app import style
 
     simple = {str(item["q"]) for item in fixture.get("questions") or () if item.get("simple")}
-    known, now = dict(fixture.get("known_symbols") or {}), _now(fixture)
-    book = [str(sym).upper() for sym in fixture.get("book") or ()]
     answered = [row for row in rows if "error" not in row]
     for row in answered:
         reply = str(row.get("reply") or "")
         row["style"] = style.measure(reply, row["q"])
-        # P20: a summary ask is guarded as the app guards it (plain: no bullets, no bold).
-        plain = attach.summary_turn(row["q"], attach.plan_attachments(row["q"], known, now, book=book))
-        row["style_after_app"] = style.measure(style.guard(reply, plain=plain)[0], row["q"])
+        # P20: the guard the live run's turn used (plain on a summary ask); an older report has no flag.
+        row["style_after_app"] = style.measure(style.guard(reply, plain=bool(row.get("plain")))[0], row["q"])
         row["simple"] = row["q"] in simple
         row["style_pass"] = style.passes(row["style"], simple=row["simple"])
         row["style_pass_after_app"] = style.passes(row["style_after_app"], simple=row["simple"])
@@ -163,11 +160,12 @@ def live_report(fixture: Mapping[str, Any], *, out_dir: Path) -> dict[str, Any]:
         chat.add("user", item["q"])
         messages = chat.messages(context_text=context.as_text(), budget_tokens=settings.context_tokens())
         requests = attach.plan_attachments(item["q"], known, now, book=attach.book_symbols(context.rows))
+        shape = attach.turn_shape(item["q"], requests, known)
         try:
             result = brain.run_turn(messages, model=model, endpoint=endpoint, keep_alive=settings.keep_alive(),
                                     num_ctx=settings.context_tokens(), tools=registry.tool_schemas(),
                                     native_tools=native, attachments=requests, question=item["q"],
-                                    **attach.turn_shape(item["q"], requests))
+                                    **shape)
         except Exception as exc:  # noqa: BLE001 - one failed question is reported, the run goes on
             rows.append({"q": item["q"], "error": f"{type(exc).__name__}: {exc}"})
             continue
@@ -182,6 +180,7 @@ def live_report(fixture: Mapping[str, Any], *, out_dir: Path) -> dict[str, Any]:
             "total_ms": result.get("total_ms"), "attach_ms": result.get("attach_ms"),
             "prompt_tokens": result.get("prompt_tokens"), "reply": text,
             "mentions": [w for w in item.get("must_mention") or () if w.lower() in text.lower()],
+            "turn_instruction": shape.get("turn_instruction", ""), "plain": bool(shape),
         }
         if GATE in expected:
             by_model = checklist.covered(text)

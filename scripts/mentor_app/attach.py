@@ -628,19 +628,32 @@ SUMMARY_INSTRUCTION = ("Answer in at most three plain sentences: the bottom line
 SUMMARY_MAX_TOKENS = 260
 
 
-def summary_turn(text: str, requests: Iterable[Any]) -> bool:
-    """True for a summary ask: no ticker (indexes included), no gate, every planned pack a brief / night / regime
-    pack, and at least one pack planned or a summary cue ("what does the brief say", "playbook", "market like")."""
+def summary_turn(text: str, requests: Iterable[Any], known_symbols: Mapping[str, Any] | Iterable[str] = ()) -> bool:
+    """True for a summary ask: no trade intent, no ticker (indexes and any lowercase universe word included), every
+    planned pack a brief / night / regime pack, and a pack planned or a summary cue ("what does the brief say")."""
     raw = str(text or "")
-    names = {getattr(request, "name", "") for request in requests or ()}
-    if not names <= SUMMARY_PACKS or find_symbols(raw, set(INDEX_SYMBOLS)):
+    lowered = raw.lower()
+    requests = list(requests or ())
+    names = {getattr(request, "name", "") for request in requests}
+    if not names <= SUMMARY_PACKS:
         return False
-    return bool(names) or bool(_SUMMARY_CUE.search(raw.lower()))
+    # A tickerless pre-trade question ("should I buy here?") plans only regime_pack, for "trade intent".
+    if (_INTENT.search(lowered) and not _PAST.search(lowered)) or any(
+            getattr(request, "reason", "") == "trade intent" for request in requests):
+        return False
+    known = _normalise_known(known_symbols)
+    if find_symbols(raw, {**known, **dict.fromkeys(INDEX_SYMBOLS, "")}):
+        return False
+    words = set(re.findall(r"[a-z][a-z.\-]*", lowered))
+    if any(sym.lower() in words for sym in known if sym.lower() not in COMMON_WORDS and sym not in NOT_TICKERS):
+        return False  # "what does the brief say about amd": a lowercase universe ticker
+    return bool(names) or bool(_SUMMARY_CUE.search(lowered))
 
 
-def turn_shape(text: str, requests: Iterable[Any]) -> dict[str, Any]:
+def turn_shape(text: str, requests: Iterable[Any],
+               known_symbols: Mapping[str, Any] | Iterable[str] = ()) -> dict[str, Any]:
     """The per-turn ``run_turn`` arguments: the three-sentence instruction and a token cap on a summary ask."""
-    if summary_turn(text, requests):
+    if summary_turn(text, requests, known_symbols):
         return {"turn_instruction": SUMMARY_INSTRUCTION, "max_tokens": SUMMARY_MAX_TOKENS}
     return {}
 
