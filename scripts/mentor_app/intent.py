@@ -133,6 +133,16 @@ FIRST_PERSON_WORDS = frozenset({"i", "i'm", "im", "i'd", "i've", "i'll", "id", "
 #: "I'm buying AMD" is a present intent; "... all morning / since the open" is narration.
 DURATION = re.compile(r"\b(?:all (?:morning|day|week|session|afternoon)|since|for (?:the )?(?:last|past)|"
                       r"every (?:day|morning)|lately|recently)\b")
+#: Habits ("I'm buying AMD every dip", "I always trim NVDA", "I keep selling TSLA") are narration, never a gate.
+HABIT = re.compile(r"\b(?:every (?:dip|pullback|day|time|morning|week|open|bounce|rip)|always|usually|keep \w+ing)\b")
+#: Capitalized words that are not a person's name.
+NOT_NAMES = frozenset({"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january",
+                       "february", "march", "april", "may", "june", "july", "august", "september", "october",
+                       "november", "december", "on", "at", "in", "ok", "okay", "should", "can", "is", "what", "how",
+                       "fed", "cpi", "fomc", "spy", "qqq", "me", "my"})
+#: After a coordinated ticker, one of these starts its own predicate ("QCOM and AMD looks weak"): not an object.
+PREDICATE = frozenset({"is", "looks", "look", "was", "were", "has", "had", "seems", "seem", "are", "isn't", "looked",
+                       "feels", "gets", "got", "keeps", "remains", "stays", "'s"})
 
 
 def _clause_starts(toks: list[str]) -> set[int]:
@@ -164,7 +174,9 @@ ADJ_NOUNS = frozenset({"noise", "chart", "charts", "setup", "setups", "news", "e
                        "interest", "buyback", "buybacks", "move", "levels", "level", "thesis", "puts", "dip", "dips",
                        "pop", "bounce", "breakout", "breakdown", "rip", "run", "gap", "flush", "weakness", "strength"})
 PAST_MARKER = re.compile(r"\b(?:yesterday|earlier|ago|this morning|last (?:week|night|month|friday|monday|tuesday|"
-                         r"wednesday|thursday|session)|on (?:monday|tuesday|wednesday|thursday|friday))\b")
+                         r"wednesday|thursday|session))\b")
+#: "on Monday" is past only with no future word ("On Monday should I sell AMD?" is a plan).
+ON_WEEKDAY = re.compile(r"\bon (?:monday|tuesday|wednesday|thursday|friday)\b")
 #: "at the open" is past only with no future word in the sentence ("add AMD at the open tomorrow").
 AT_THE_OPEN = re.compile(r"\bat the open\b")
 FUTURE_WORDS = re.compile(r"\b(?:tomorrow|next|will|should i|gonna|going to)\b|\?")
@@ -324,7 +336,8 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
     future = bool(FUTURE_WORDS.search(sentence))
     past_clauses = {c for c, words in words_of.items()
                     if PAST_MARKER.search(" ".join(words)) or PAST_FRAME.search(" ".join(words))
-                    or (AT_THE_OPEN.search(" ".join(words)) and not future)}
+                    or HABIT.search(" ".join(words))
+                    or ((AT_THE_OPEN.search(" ".join(words)) or ON_WEEKDAY.search(" ".join(words))) and not future)}
     # (e): a clause asks when it carries a cue or ends with "?"; or its verb is first in it (an imperative).
     asked = {c for c, words in words_of.items() if ASK_CUE.search(" ".join(words))}
     for n, tok in enumerate(toks):
@@ -349,6 +362,24 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
     every_place = [(i, tok.upper()) for i, tok in enumerate(toks) if tok.upper() in upper]
     found = spans(text, upper)
     quoted = _quoted(text)
+
+    def someone_else(n: int) -> bool:
+        """A third-person word, or a Capitalized name that is not a ticker, a weekday/month or a first-person word."""
+        word = lowered[n]
+        if word in THIRD_PERSON:
+            return True
+        tok = toks[n]
+        return (tok[:1].isupper() and not tok.isupper() and word not in FIRST_PERSON_WORDS and word not in NOT_NAMES
+                and tok.upper() not in upper)
+
+    # A ":" hands its LEFT side to the right clause as the speaker ("Cramer: short TSLA"): someone else's words.
+    spoken_by_other: set[int] = set()
+    for n, tok in enumerate(toks):
+        if tok == ":" and n:
+            left = [m for m in range(n) if clause[m] == clause[n - 1] and toks[m] not in SEPARATORS]
+            if left and not all(toks[m].upper() in upper for m in left) and (
+                    any(someone_else(m) or lowered[m] in SAY_WORDS for m in left)):
+                spoken_by_other.add(clause[n])
     imperative = set()
     for first, _last, _kind in found:
         lead = clause_start.get(clause[first], -1)
@@ -361,10 +392,8 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
         before = range(lead, first)
         # (f) someone else's verb: a third-person subject or a sayer before it, or inside quotation marks.
         sayer = any(lowered[n] in SAY_WORDS and not (n and lowered[n - 1] in FIRST_PERSON_WORDS) for n in before)
-        third = any(lowered[n] in THIRD_PERSON or (toks[n][0].isupper() and not toks[n].isupper() and n > 0
-                                                    and lowered[n] not in FIRST_PERSON_WORDS
-                                                    and toks[n].upper() not in upper) for n in before)
-        if kind not in STATUSES and (first in quoted or sayer or third):
+        third = any(lowered[n] in THIRD_PERSON or (n > 0 and someone_else(n)) for n in before)
+        if kind not in STATUSES and (first in quoted or sayer or third or c in spoken_by_other):
             continue
         progressive = (first >= 1 and lowered[first - 1] in ("i'm", "im") or (
             first >= 2 and lowered[first - 2:first] == ["i", "am"])) and lowered[first].endswith("ing")
@@ -382,7 +411,8 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
         if j < len(toks) and j in ticker_at and clause[j] == c:
             out[ticker_at[j]].add(kind)  # the direct object
             k = j + 1
-            while k + 1 < len(toks) and lowered[k] in ("or", "and", "&") and k + 1 in ticker_at:
+            while (k + 1 < len(toks) and lowered[k] in ("or", "and", "&") and k + 1 in ticker_at
+                   and (lowered[k + 2] if k + 2 < len(toks) else "") not in PREDICATE | VERB_WORDS):
                 out[ticker_at[k + 1]].add(kind)  # "should I buy QCOM or AMD": coordinated objects
                 k += 2
             continue
@@ -392,6 +422,19 @@ def bind(text: str, tickers: Iterable[str]) -> dict[str, set[str]]:
         if j < len(toks) and nxt not in OBJECTLESS and clause[j] == c and not (
                 kind in (GO_LONG, GO_SHORT) and first > 0 and first - 1 in ticker_at):
             continue  # a non-ticker object ("buy the dip"): no gate, a quiet miss
+        if nxt in ("it", "them"):
+            # "take it": its own clause's ticker, else the next or the previous clause's, with that clause's side
+            # tag ("should I take it? AMD short" -> SHORT on AMD, never a long add).
+            for near in (c, c - 1, c + 1):
+                names = [(i, sym) for i, sym in every_place if clause[i] == near]
+                if len({sym for _, sym in names}) != 1:
+                    continue
+                at_i, sym = names[0]
+                tag = lowered[at_i + 1] if at_i + 1 < len(toks) else ""
+                side_kind = GO_SHORT if tag == "short" else GO_LONG if tag == "long" else ""
+                out[sym].add(side_kind if side_kind and kind in (TAKE, GO_LONG, GO_SHORT) else kind)
+                break
+            continue
         # No object: the clause rules.
         if len(names_in_sentence) == 1:
             out[next(iter(names_in_sentence))].add(kind)

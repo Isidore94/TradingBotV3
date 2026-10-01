@@ -264,6 +264,26 @@ TABLE = [
     ("NVDA: short it", BOOK, {"NVDA": FLIP_TO_SHORT}),
     ("QCOM: short it", BOOK, {"QCOM": NEW_S}),
     ("ALL short \u2014 take it?", BOOK, {"ALL": NEW_S}),
+    # round 11: a ":" hands its left side to the right clause as the speaker
+    ("Tom: sell AMD", BOOK, {}),
+    ("my wife: sell AMD", BOOK, {}),
+    ("Cramer: short TSLA", BOOK, {}),
+    ("Jensen: buy NVDA", BOOK, {}),
+    ("Analysts: buy QCOM", BOOK, {}),
+    ("Goldman: buy QCOM", BOOK, {}),
+    ("me: sell AMD?", BOOK, {"AMD": EXIT_L}),
+    # round 11: a coordinated object never crosses into its own predicate
+    ("should I buy QCOM and AMD looks weak", BOOK, {"QCOM": NEW_L}),
+    ("buy QCOM and AMD is extended", BOOK, {"QCOM": NEW_L}),
+    ("should I sell NVDA or AMD is better", BOOK, {"NVDA": EXIT_L}),
+    # round 11: "it" binds its own, the next or the previous clause's ticker, with that clause's side tag
+    ("should I take it? AMD short", BOOK, {"AMD": FLIP_TO_SHORT}),
+    ("should I take it? QCOM short", BOOK, {"QCOM": NEW_S}),
+    ("QCOM long. take it?", BOOK, {"QCOM": NEW_L}),
+    # round 11: habits are narration; Capitalized weekdays are not names
+    ("I'm buying AMD every dip", BOOK, {"AMD": HISTORY}),
+    ("I always trim NVDA into strength", BOOK, {"NVDA": HISTORY}),
+    ("On Monday should I sell AMD?", BOOK, {"AMD": EXIT_L}),
     # pure questions, no verb
     ("how is AMD trading right now", BOOK, {}),
     ("what's the news on NVDA", BOOK, {}),
@@ -297,7 +317,7 @@ def _gates(text, book):
 
 
 def test_the_table_size_is_pinned():
-    assert len(TABLE) == 210 and len(GUARD) == 20
+    assert len(TABLE) == 226 and len(GUARD) == 20
 
 
 @pytest.mark.parametrize("text,book,want", TABLE, ids=[f"{n}:{row[0][:40]}" for n, row in enumerate(TABLE)])
