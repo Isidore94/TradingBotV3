@@ -433,7 +433,9 @@ def plan_attachments(
         elif _NOW.search(lowered) and not past:
             add("bars_pack", f"{sym} right now", symbol=sym)
     if _ALERTS.search(lowered):
-        alert_day = "yesterday" if day and day != today and not re.fullmatch(r"[a-z_]+", day) else "today"
+        iso_day = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", day))
+        alert_day = ("yesterday" if day == previous_weekday(_market_day(now)).isoformat()
+                     else day if iso_day and day != today else "today")
         add("alerts_pack", "alert words", day=alert_day, **({"symbol": symbols[0]} if symbols else {}))
     if _RECALL.search(lowered):
         add("recall", "memory words", query=raw[:200])
