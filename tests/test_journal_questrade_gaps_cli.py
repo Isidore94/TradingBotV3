@@ -103,3 +103,66 @@ def test_reimport_apply_refuses_the_live_folder_without_the_traders_flag(tmp_pat
 
     assert code == journal_questrade_gaps.EXIT_REFUSED_TO_START
     assert _sha(db) == before
+
+
+def _with_a_ghost_short(tmp_path: Path) -> Path:
+    """A journal short the broker reports flat, as last night's reconciliation saw it."""
+    db = tmp_path / "trade_journal.sqlite3"
+    store = JournalStore(db)
+    store.initialize_schema()
+    store.upsert_executions([{
+        "execution_uid": "QT:1:1", "broker": "QUESTRADE", "account_number": "29347316",
+        "account_label": "Margin", "account_type": "", "symbol": "AAL", "security_type": "STK",
+        "currency": "USD", "side": "SELL", "quantity": 50, "price": 12.0,
+        "timestamp": "2026-06-10T10:17:27-04:00", "trade_date": "2026-06-10", "commission": 0.0,
+        "fees": 0.0, "gross_amount": None, "net_amount": None, "order_id": "", "exchange_exec_id": "",
+        "raw_json": "{}",
+    }])
+    store.rebuild_trades(refresh_tags=False)
+    journal_reconcile.reconcile(store, [], brokers=["QUESTRADE"])
+    return db
+
+
+def _open_symbols(db: Path) -> list[str]:
+    with JournalStore(db).connection() as conn:
+        return [row[0] for row in conn.execute("SELECT symbol FROM trades WHERE status = 'OPEN'")]
+
+
+def test_confirm_closes_without_apply_lists_and_writes_nothing(tmp_path, capsys):
+    db = _with_a_ghost_short(tmp_path)
+    before = _sha(db)
+
+    assert journal_questrade_gaps.main(["--db", str(db), "--confirm-closes"], fetch=_never) == 0
+
+    assert _sha(db) == before
+    out = capsys.readouterr().out
+    assert "Suggested force-closes not yet confirmed: 1" in out and "AAL" in out
+
+
+def test_confirm_closes_apply_closes_once_and_backs_up(tmp_path, capsys):
+    db = _with_a_ghost_short(tmp_path)
+    assert _open_symbols(db) == ["AAL"]
+
+    assert journal_questrade_gaps.main(["--db", str(db), "--confirm-closes", "--apply"], fetch=_never) == 0
+
+    assert _open_symbols(db) == []
+    adjustments = JournalStore(db).list_adjustments()
+    assert [(a["action"], a["source"]) for a in adjustments] == [("FORCE_CLOSE", "cli")]
+    assert list(tmp_path.glob("*.pre-qt-confirm-closes-*.bak"))
+    capsys.readouterr()
+    assert journal_questrade_gaps.main(["--db", str(db), "--confirm-closes", "--apply"], fetch=_never) == 0
+    assert "not yet confirmed: 0" in capsys.readouterr().out
+    assert len(JournalStore(db).list_adjustments()) == 1
+
+
+def test_confirm_closes_apply_refuses_the_live_folder_without_the_traders_flag(tmp_path, monkeypatch):
+    db = _with_a_ghost_short(tmp_path)
+    import journal_reclassify
+
+    monkeypatch.setattr(journal_reclassify, "_is_live_store", lambda _path: True)
+    before = _sha(db)
+
+    code = journal_questrade_gaps.main(["--db", str(db), "--confirm-closes", "--apply"], fetch=_never)
+
+    assert code == journal_questrade_gaps.EXIT_REFUSED_TO_START
+    assert _sha(db) == before

@@ -11,6 +11,11 @@ rebuilds trades. It backs the journal up first. Close the desk before running
 it: the Questrade token chain is single-use, and two processes refreshing it
 at once can break it.
 
+``--confirm-closes`` lists the force-closes the last reconciliation suggests
+(journal open, broker flat) that are not yet confirmed; with ``--apply`` it
+records each one exactly as the Journal Health tab's confirm button does, then
+rebuilds trades. It backs the journal up first.
+
 ``--statement FILE`` fills the FAILED days from a Questrade activity statement
 downloaded from the portal (no API, no token). It shows which gap days the file
 has trades for; with ``--apply`` it imports ONLY those days through
@@ -22,6 +27,8 @@ Usage::
     python scripts/journal_questrade_gaps.py
     python scripts/journal_questrade_gaps.py --reimport
     python scripts/journal_questrade_gaps.py --reimport --apply --i-am-the-trader
+    python scripts/journal_questrade_gaps.py --confirm-closes
+    python scripts/journal_questrade_gaps.py --confirm-closes --apply --i-am-the-trader
     python scripts/journal_questrade_gaps.py --statement activity.xlsx
     python scripts/journal_questrade_gaps.py --statement activity.xlsx --apply --i-am-the-trader
 """
@@ -190,6 +197,44 @@ def import_gap_statement(db_path: Path, statement: Path, report: dict[str, Any])
     )
 
 
+def pending_closes(db_path: Path) -> list[dict[str, Any]]:
+    """The last reconciliation's force-close suggestions not yet recorded, read without writing."""
+    import journal_reconcile
+
+    with _read_only(db_path) as conn:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (journal_reconcile.REPORT_META_KEY,)
+        ).fetchone()
+        done = {
+            str(item[0]) for item in conn.execute(
+                "SELECT target_uid FROM trade_adjustments "
+                "WHERE UPPER(action) = 'FORCE_CLOSE' AND COALESCE(superseded_by, '') = ''"
+            )
+        }
+    try:
+        report = json.loads(row[0]) if row else {}
+    except json.JSONDecodeError:
+        report = {}
+    return [
+        dict(item) for item in (report.get("suggestions") if isinstance(report, dict) else None) or []
+        if str(item.get("target_uid") or "") and str(item.get("target_uid")) not in done
+    ]
+
+
+def confirm_closes(db_path: Path, suggestions: Sequence[dict[str, Any]]) -> int:
+    """Record each suggestion through the Health tab's own confirm path, then rebuild."""
+    import journal_reconcile
+    from journal_store import JournalStore
+
+    store = JournalStore(db_path)
+    for item in suggestions:
+        journal_reconcile.confirm_suggestion(
+            store, item, reason=str(item.get("reason") or "confirmed from reconciliation"), source="cli"
+        )
+    store.rebuild_trades()
+    return len(suggestions)
+
+
 def _backup_path(db_path: Path, label: str = "reimport") -> Path:
     # Microseconds plus a counter so a second run never overwrites the first backup.
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -211,7 +256,8 @@ def main(
     parser.add_argument("--reimport", action="store_true", help="show (or with --apply, run) the retry")
     parser.add_argument(
         "--apply", action="store_true",
-        help="with --reimport: contact Questrade and import; with --statement: import the file",
+        help="with --reimport: contact Questrade and import; with --statement: import the file; "
+        "with --confirm-closes: record the force-closes",
     )
     parser.add_argument(
         "--statement", default="",
@@ -220,6 +266,10 @@ def main(
     parser.add_argument(
         "--i-am-the-trader", action="store_true",
         help="required before --apply may touch a database under the live data folder",
+    )
+    parser.add_argument(
+        "--confirm-closes", action="store_true",
+        help="show (or with --apply, record) the last reconciliation's suggested force-closes",
     )
     parser.add_argument("--max-days", type=int, default=300, help="most account-days to retry in one run")
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
@@ -234,11 +284,11 @@ def main(
     if not db_path.is_file():
         print(f"No journal database at {db_path}", file=sys.stderr)
         return EXIT_REFUSED_TO_START
-    if args.apply and not (args.reimport or args.statement):
-        print("--apply only means something with --reimport or --statement.", file=sys.stderr)
+    if args.apply and not (args.reimport or args.statement or args.confirm_closes):
+        print("--apply only means something with --reimport, --statement or --confirm-closes.", file=sys.stderr)
         return EXIT_REFUSED_TO_START
-    if args.reimport and args.statement:
-        print("Use --reimport or --statement, not both in one run.", file=sys.stderr)
+    if sum(bool(flag) for flag in (args.reimport, args.statement, args.confirm_closes)) > 1:
+        print("Use one of --reimport, --statement or --confirm-closes per run.", file=sys.stderr)
         return EXIT_REFUSED_TO_START
     statement = Path(args.statement).expanduser() if args.statement else None
     if statement is not None and not statement.is_file():
@@ -247,6 +297,8 @@ def main(
 
     report = gap_report(db_path)
     print(json.dumps(report, indent=2, default=str) if args.json else render(report))
+    if args.confirm_closes:
+        return _run_confirm_closes(db_path, apply=args.apply, trader=args.i_am_the_trader)
     if statement is not None:
         return _run_statement(db_path, statement, report, apply=args.apply, trader=args.i_am_the_trader)
     if not args.reimport:
@@ -301,6 +353,33 @@ def _refuse_or_busy(db_path: Path, *, trader: bool) -> int | None:
             print(f"  {reason}", file=sys.stderr)
         return EXIT_BUSY
     return None
+
+
+def _run_confirm_closes(db_path: Path, *, apply: bool, trader: bool) -> int:
+    pending = pending_closes(db_path)
+    print(f"\nSuggested force-closes not yet confirmed: {len(pending)}")
+    for item in pending:
+        print(f"  {item.get('reason')}")
+    if not apply:
+        print("Nothing was written. Add --apply to record them.")
+        return EXIT_OK
+    if not pending:
+        print("Nothing to confirm.")
+        return EXIT_OK
+    refused = _refuse_or_busy(db_path, trader=trader)
+    if refused is not None:
+        return refused
+    backup = _backup_path(db_path, "confirm-closes")
+    shutil.copy2(db_path, backup)
+    try:
+        count = confirm_closes(db_path, pending)
+    except Exception as exc:  # noqa: BLE001 - the restore is the point
+        shutil.copy2(backup, db_path)
+        print(f"REFUSED - {type(exc).__name__}: {exc}. The journal was put back.", file=sys.stderr)
+        print(f"  the backup is still at {backup}", file=sys.stderr)
+        return EXIT_FAILED
+    print(f"\nConfirmed {count} force-close(s) and rebuilt trades. Backup: {backup}")
+    return EXIT_OK
 
 
 def _run_statement(db_path: Path, statement: Path, report: dict[str, Any], *, apply: bool, trader: bool) -> int:
