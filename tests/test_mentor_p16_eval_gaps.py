@@ -191,3 +191,80 @@ def test_veto_record_questions_route_to_the_aggregate_and_the_mirror():
         assert ("veto_pack", {"scope": scope}) in got and ("mirror_pack", {}) in got, (question, got)
     assert ("veto_pack", {"date": "2026-09-29"}) in [
         (r.name, r.args) for r in attach.plan_attachments("what did I veto yesterday and was I right", {}, NOW)]
+
+
+# ---------------------------------------------------------------- step 4: comparison discipline, no announced fetch
+REGIME_OR_ME = (
+    "The current regime is a bear channel with lower highs, which has been in place since 2026-09-28 [tape:regime]. "
+    "In this environment, the underlying tape is showing bearish weakness [tape:night:5].\n\n"
+    "To determine if the issue is the regime or your execution, we need to look at your recent performance.\n\n"
+    "I am checking your recent journal entries and vetoes to see if your long entries are aligning with the bear "
+    "channel reality.")
+
+
+def _lines(*chunks):
+    import json
+
+    return [json.dumps(chunk).encode() for chunk in chunks]
+
+
+def _answer(text):
+    return _lines({"message": {"content": text}, "done": False},
+                  {"message": {"content": ""}, "done": True, "prompt_eval_count": 10, "eval_count": 5})
+
+
+def _turn(replies, attachments):
+    from mentor_app import brain
+    from mentor_app.chat_model import ChatModel
+    from mentor_packs.registry import make_pack
+
+    chat = ChatModel()
+    question = "I keep getting stopped out on longs in this regime, is that the regime or me"
+    chat.add("user", question)
+    sent: list[dict] = []
+    queue = list(replies)
+    built: list[str] = []
+
+    def pack(name, args):
+        built.append(name)
+        return make_pack(name, [{"id": f"{name}:row", "text": f"{name} says 3 of 9 longs stopped"}])
+
+    result = brain.run_turn(chat.messages(context_text="[ctx:auto_mode] DESK"), model="gemma4:12b",
+                            endpoint="http://x", tools=[{"type": "function", "function": {"name": "journal_pack"}}],
+                            native_tools=True, build_pack=pack, attachments=attachments,
+                            stream_post=lambda u, p, c: sent.append(p) or _answer(queue.pop(0)), question=question)
+    return result, sent, built
+
+
+def test_the_regime_or_me_reply_that_announces_a_fetch_is_re_asked_once_with_the_packs():
+    from mentor_app import style
+
+    assert style.announces_fetch(REGIME_OR_ME)
+    assert not style.announces_fetch("Mostly you: 3 of 9 longs stopped [jrn:mo2026-09:totals].")
+    requests = attach.plan_attachments("I keep getting stopped out on longs in this regime, is that the regime or me",
+                                       {}, NOW)
+    result, sent, built = _turn([REGIME_OR_ME, "Mostly you: 3 of 9 longs stopped [journal_pack:row]."], requests)
+    assert len(sent) == 2, "one re-ask"
+    assert result["fetch_retry"] is True and result["text"] == "Mostly you: 3 of 9 longs stopped [journal_pack:row]."
+    assert result["first_reply"] == REGIME_OR_ME
+    last = sent[1]["messages"][-1]["content"]
+    assert last.startswith(style.FETCH_RETRY_PROMPT) and f"[{requests[0].name}:row]" in last
+    assert built.count(requests[0].name) == 2, "the planner's packs are built once more"
+
+
+def test_a_retry_that_still_announces_or_no_packs_gets_the_note():
+    from mentor_app import style
+
+    requests = attach.plan_attachments("is that the regime or me", {}, NOW)
+    result, sent, _ = _turn([REGIME_OR_ME, "Let me pull your journal."], requests)
+    assert len(sent) == 2 and result["text"].endswith(style.NO_FETCH_NOTE)
+    result, sent, _ = _turn([REGIME_OR_ME], [])
+    assert len(sent) == 1 and result["text"] == f"{REGIME_OR_ME} {style.NO_FETCH_NOTE}"
+
+
+def test_the_persona_says_how_to_compare_and_never_to_announce_a_fetch():
+    from mentor_app.chat_model import PERSONA_PROMPT
+
+    assert ("When comparing two numbers, write both and say which is larger; call something better or worse only "
+            "when the pack row says so (`clears_baseline`, `verdict`).") in PERSONA_PROMPT
+    assert "Never write 'I am checking...' or 'let me pull...': call the tool or answer." in PERSONA_PROMPT

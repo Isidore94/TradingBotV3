@@ -398,6 +398,10 @@ def run_turn(
             name, args = _arguments(call)
             convo.append({"role": "tool", "content": use_pack(name, args).as_text(), "tool_name": name})
     result["text"] = "".join(emitted)
+    if not result["cancelled"]:
+        _fetch_check(result, convo, attachments, build_pack, note_pack, question, attach_budget_tokens,
+                     on_tool_call, on_token, cancelled, model=model, url=url, keep_alive=keep_alive,
+                     num_ctx=num_ctx, stream_post=stream_post)
     if gate_packs and not result["cancelled"]:
         from mentor_app import checklist
 
@@ -415,6 +419,53 @@ def run_turn(
     }
     logging.info("Trade Mentor turn: %s", json.dumps(result["timings"], sort_keys=True))
     return result
+
+
+def _fetch_check(result: dict[str, Any], convo: list[dict[str, Any]], attachments: Sequence[Any],
+                 build_pack: Callable[[str, Mapping[str, Any]], Any], note_pack: Callable[..., None],
+                 question: str | None, budget: int, on_tool_call: Callable[[dict], None],
+                 on_token: Callable[[str], None], cancelled: Callable[[], bool], *, model: str, url: str,
+                 keep_alive: Any, num_ctx: int | None, stream_post: StreamPost) -> None:
+    """P16: a reply that ends announcing a fetch with no tool call made gets ONE re-ask with the planner's packs
+    built again (no dedupe); with no packs to fetch, or still announcing, it gets ``style.NO_FETCH_NOTE``."""
+    from mentor_app import style
+
+    if not style.announces_fetch(result["text"]) or result["tool_calls"]:
+        return
+    result["fetch_retry"] = False
+    asked = question if question is not None else next(
+        (str(m.get("content") or "") for m in reversed(convo) if m.get("role") == "user"), "")
+    kept = _attach(list(attachments), build_pack, note_pack, {"attached": []}, set(), asked, int(budget),
+                   on_tool_call, cancelled) if attachments else []
+    if kept and not cancelled():
+        result["fetch_retry"] = True
+        ask = convo + [
+            {"role": "assistant", "content": result["text"]},
+            {"role": "user", "content": style.FETCH_RETRY_PROMPT + "\n\n# Packs (attached by the app)\n"
+             + "\n\n".join(text for _, text in kept) + f"\n\nQuestion: {asked}"},
+        ]
+        parts: list[str] = []
+        on_token("\n\n")
+        for chunk in iter_ndjson(stream_post(url, chat_payload(model, ask, keep_alive=keep_alive, num_ctx=num_ctx),
+                                             cancelled)):
+            if cancelled():
+                result["cancelled"] = True
+                break
+            if chunk.get("error"):
+                raise BrainError(str(chunk["error"]))
+            piece = str((chunk.get("message") or {}).get("content") or "")
+            if piece:
+                parts.append(piece)
+                on_token(piece)
+            if chunk.get("done"):
+                result["prompt_tokens"] += int(chunk.get("prompt_eval_count") or 0)
+                result["completion_tokens"] += int(chunk.get("eval_count") or 0)
+        retried = "".join(parts).strip()
+        if retried:
+            result["first_reply"] = result["text"]
+            result["text"] = retried
+    if style.announces_fetch(result["text"]) and not result["cancelled"]:
+        result["text"] = f"{result['text'].rstrip()} {style.NO_FETCH_NOTE}"
 
 
 def _render(name: str, rows: Sequence[Mapping[str, Any]], empty_text: str, hidden: int) -> str:

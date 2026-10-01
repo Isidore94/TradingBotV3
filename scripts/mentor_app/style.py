@@ -32,6 +32,24 @@ _CONTEXT = re.compile(r"\bregime\b|\bbear channel\b|\bbull channel\b|\bbreadth\b
                       r"|\blower highs\b|\bhigher lows\b|\bauto mode\b|\[(?:ctx:regime|ctx:auto_mode|tape:[^\]]*)\]", re.I)
 
 
+#: P16: a reply that ends by announcing a fetch it never makes ("I am checking your journal...").
+_ANNOUNCE = re.compile(
+    r"\b(?:i am|i'm|im) (?:now )?(?:checking|pulling|looking|fetching|getting|reviewing|going to "
+    r"(?:check|pull|look|fetch|get|review))\b|\blet me (?:check|pull|look|fetch|get|see|review)\b"
+    r"|\bi(?: will|'ll) (?:now )?(?:check|pull|look|fetch|get|review)\b", re.I)
+#: Appended when a reply announced a fetch and the app had nothing more to fetch.
+NO_FETCH_NOTE = "(no further data was fetched)"
+#: The one re-ask after an announced fetch: the planner's packs again, and an order to answer.
+FETCH_RETRY_PROMPT = ("The app fetched the data for this question again (below). Answer the question now from it, "
+                      "citing ids. Do not announce a fetch or say you are checking; if a fact is missing, say it is "
+                      "unknown.")
+
+
+def announces_fetch(reply: str) -> bool:
+    """True when the reply's last sentence announces a fetch ("I am checking", "let me pull", "I will look")."""
+    return bool(_ANNOUNCE.search(_last_sentence(reply)))
+
+
 def _is_header(line: str) -> bool:
     return bool(_HEADER.match(line) or _BOLD_LABEL.match(line))
 
