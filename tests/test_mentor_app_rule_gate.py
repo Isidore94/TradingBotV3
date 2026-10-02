@@ -157,9 +157,43 @@ class _Popen:
         return proc
 
 
-def _server(popen, *, exists=lambda path: True, get=None):
+def _nothing_on_the_port(url, timeout):
+    raise ConnectionError("refused")
+
+
+def _server(popen, *, exists=lambda path: True, get=None, run=None, clock=None):
     return rule_gate.GateServer(Path("C:/x/llama-server.exe"), Path("C:/x/kev.gguf"), 11438, popen=popen,
-                                exists=exists, get=get or (lambda url, timeout: {"status": "ok"}))
+                                exists=exists, get=get or _nothing_on_the_port, run=run or _Runner(),
+                                clock=clock or (lambda: 0.0))
+
+
+class _Runner:
+    """Fake subprocess.run for netstat / tasklist / taskkill."""
+
+    NETSTAT = (
+        "\nActive Connections\n\n  Proto  Local Address          Foreign Address        State           PID\n"
+        "  TCP    127.0.0.1:11438        0.0.0.0:0              LISTENING       4242\n"
+        "  TCP    127.0.0.1:11436        0.0.0.0:0              LISTENING       777\n"
+        "  TCP    127.0.0.1:114380       0.0.0.0:0              LISTENING       888\n"
+        "  TCP    127.0.0.1:51000        127.0.0.1:11438        ESTABLISHED     999\n"
+    )
+
+    def __init__(self, image="llama-server.exe"):
+        self.image = image
+        self.calls: list[list[str]] = []
+
+    def __call__(self, cmd, **kwargs):
+        self.calls.append(list(cmd))
+        out = ""
+        if cmd[0] == "netstat":
+            out = self.NETSTAT
+        elif cmd[0] == "tasklist":
+            pid = cmd[2].split()[-1]
+            out = f'"{self.image}","{pid}","Console","1","5,000,000 K"\n'
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    def killed(self):
+        return [cmd for cmd in self.calls if cmd[0] == "taskkill"]
 
 
 def test_start_launches_the_tested_command_once_without_a_console_and_stop_terminates():
@@ -197,13 +231,69 @@ def test_a_failed_launch_never_raises():
 
 
 def test_ready_is_health_ok():
-    assert _server(_Popen()).ready() is True
+    assert _server(_Popen(), get=lambda url, timeout: {"status": "ok"}).ready() is True
     assert _server(_Popen(), get=lambda url, timeout: {"status": "loading"}).ready() is False
 
     def loading(url, timeout):
         raise RuntimeError("HTTP 503")
 
     assert _server(_Popen(), get=loading).ready() is False
+
+
+# ---------------------------------------------------------------- an orphan from a crashed app
+def _healthy(url, timeout):
+    return {"status": "ok"}
+
+
+def test_a_healthy_server_already_on_the_port_is_adopted_not_launched(caplog):
+    popen = _Popen()
+    server = _server(popen, get=_healthy)
+    with caplog.at_level(logging.INFO):
+        assert server.start() is True and server.start() is True
+    assert popen.calls == [], "a server already answering /health is never launched again"
+    assert server.ready() and server.adopted and server.active() and not server.running()
+    assert len([r for r in caplog.records if "using the llama-server already on port 11438" in r.getMessage()]) == 1
+
+
+def test_an_adopted_server_is_stopped_by_pid_only_when_it_is_llama_server():
+    runner = _Runner()
+    server = _server(_Popen(), get=_healthy, run=runner)
+    server.start()
+    server.stop()
+    assert runner.killed() == [["taskkill", "/PID", "4242", "/F"]], "only the listener on exactly 11438"
+    assert ["tasklist", "/FI", "PID eq 4242", "/FO", "CSV", "/NH"] in runner.calls
+    assert not server.adopted and not server.active()
+
+
+def test_an_adopted_port_held_by_anything_else_is_left_alone(caplog):
+    runner = _Runner(image="python.exe")
+    server = _server(_Popen(), get=_healthy, run=runner)
+    server.start()
+    with caplog.at_level(logging.INFO):
+        server.stop()
+    assert runner.killed() == []
+    assert any("left alone" in r.getMessage() for r in caplog.records)
+
+
+def test_a_launch_that_exits_at_once_is_not_retried_every_minute(caplog):
+    class _Exits(_Popen):
+        def __call__(self, cmd, **kwargs):
+            proc = super().__call__(cmd, **kwargs)
+            proc.alive = False  # port busy: the new server exits at once
+            return proc
+
+    popen, now = _Exits(), [0.0]
+    server = _server(popen, clock=lambda: now[0])
+    with caplog.at_level(logging.INFO):
+        server.start()
+        for minute in range(1, 15):
+            now[0] = minute * 60.0
+            assert server.start() is False
+    assert len(popen.calls) == 1, "no relaunch inside the back-off"
+    assert len([r for r in caplog.records if "exited on its own" in r.getMessage()]) == 1
+    now[0] = 60.0 + rule_gate.RETRY_SECONDS
+    server.start()
+    assert len(popen.calls) == 2, "one more try once the back-off is over"
 
 
 # ---------------------------------------------------------------- the window
@@ -221,6 +311,9 @@ class _FakeServer:
         self.score = score
 
     def running(self):
+        return self.alive
+
+    def active(self):
         return self.alive
 
     def start(self):
@@ -366,3 +459,38 @@ def test_shadow_record_is_kept_in_the_store_and_gemma_still_asked(window):
     assert record == {"turn_ids": [f"turn:{turn_id}"], "score": 0.2, "mode": "shadow", "cut": 0.5,
                       "would_skip": True, "skipped": False, "ops": 0}
     assert window.server.scored == ["I stop after two losses."] and len(window.calls) == 1
+
+
+def test_an_adopted_server_is_stopped_on_pause_and_on_shutdown(window):
+    import ai_pause
+
+    runner = _Runner()
+    window._rule_gate_server = _server(_Popen(), get=_healthy, run=runner)
+    window._sync_rule_gate()
+    _settle()
+    assert window._rule_gate_server.adopted
+    ai_pause.pause_for("until_resumed", NOW)
+    window.check_ai_pause()
+    _settle()
+    assert runner.killed() == [["taskkill", "/PID", "4242", "/F"]], "Pause AI stops the adopted server"
+    ai_pause.resume()
+    window.check_ai_pause()
+    _settle()
+    assert window._rule_gate_server.adopted, "resumed: the server on the port is adopted again"
+    window.shutdown()
+    assert len(runner.killed()) == 2, "closing the app stops it too"
+
+
+def test_a_launch_that_exits_at_once_is_not_relaunched_on_the_next_minute_tick(window):
+    popen = _Popen()
+
+    def exits(cmd, **kwargs):
+        proc = popen(cmd, **kwargs)
+        proc.alive = False
+        return proc
+
+    window._rule_gate_server = _server(exits, clock=lambda: 100.0)
+    for _ in range(3):
+        window.check_gpu_share()
+        _settle()
+    assert len(popen.calls) == 1

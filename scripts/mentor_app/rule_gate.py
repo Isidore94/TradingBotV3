@@ -7,10 +7,12 @@ Any failure is "no answer", and no answer means plan inference runs as before (f
 
 from __future__ import annotations
 
+import csv
 import logging
 import math
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -21,6 +23,10 @@ CUT = 0.5
 TIMEOUT_SECONDS = 10.0
 HEALTH_TIMEOUT_SECONDS = 2.0
 STOP_WAIT_SECONDS = 5.0
+#: After a launch that exited on its own (port busy), wait this long before launching again.
+RETRY_SECONDS = 15 * 60
+#: The only image an adopted (not launched) server may be stopped as.
+SERVER_IMAGE = "llama-server.exe"
 THREADS = 4
 CONTEXT_TOKENS = 4096
 
@@ -113,18 +119,25 @@ class GateServer:
         port: int,
         *,
         popen: Callable[..., Any] = subprocess.Popen,
+        run: Callable[..., Any] = subprocess.run,
         get: Callable[[str, float], Any] = brain.default_get,
         exists: Callable[[Path], bool] = Path.is_file,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.exe = Path(exe)
         self.model = Path(model)
         self.port = int(port)
         self._popen = popen
+        self._run = run
         self._get = get
         self._exists = exists
+        self._clock = clock
         self._lock = threading.Lock()
         self._proc: Any = None
         self._missing_logged = False
+        #: A healthy llama-server already on the port that this app did not launch (e.g. after a crash).
+        self.adopted = False
+        self._next_launch = 0.0
 
     @property
     def endpoint(self) -> str:
@@ -135,17 +148,38 @@ class GateServer:
                 "-c", str(CONTEXT_TOKENS), "-np", "1", "-t", str(THREADS)]
 
     def running(self) -> bool:
+        """The child this app launched is alive (an adopted server is not counted)."""
         proc = self._proc
         try:
             return proc is not None and proc.poll() is None
         except Exception:  # noqa: BLE001
             return False
 
+    def active(self) -> bool:
+        """A gate server is ours to stop: the launched child or an adopted one."""
+        return self.adopted or self.running()
+
     def start(self) -> bool:
-        """Launch the server once (no console window, no wait for load); False when it cannot."""
+        """Adopt a healthy server already on the port, else launch one (no console, no wait for load).
+
+        A launch that exited on its own is not retried for RETRY_SECONDS. False when nothing serves.
+        """
         with self._lock:
             if self.running():
                 return True
+            if self.ready():
+                if not self.adopted:
+                    self.adopted = True
+                    logging.info("Trade Mentor: rule gate: using the llama-server already on port %d", self.port)
+                return True
+            self.adopted = False
+            if self._proc is not None:
+                self._proc = None
+                self._next_launch = self._clock() + RETRY_SECONDS
+                logging.info("Trade Mentor: rule gate server exited on its own (port %d busy?); next try in %d min",
+                             self.port, RETRY_SECONDS // 60)
+            if self._clock() < self._next_launch:
+                return False
             missing = [str(path) for path in (self.exe, self.model) if not self._exists(path)]
             if missing:
                 if not self._missing_logged:
@@ -173,9 +207,13 @@ class GateServer:
             return False
 
     def stop(self) -> None:
-        """Terminate the child (kill when it does not exit within STOP_WAIT_SECONDS)."""
+        """Terminate the child (kill when it does not exit within STOP_WAIT_SECONDS); an adopted
+        server is stopped by its pid, only when the port's listener is llama-server.exe."""
         with self._lock:
             proc, self._proc = self._proc, None
+            adopted, self.adopted = self.adopted, False
+            if adopted:
+                self._stop_listener()
             if proc is None:
                 return
             try:
@@ -187,6 +225,44 @@ class GateServer:
                 except Exception:  # noqa: BLE001
                     pass
             logging.info("Trade Mentor: rule gate server stopped")
+
+    def _output(self, cmd: list[str]) -> str:
+        done = self._run(cmd, capture_output=True, text=True, timeout=15, creationflags=_NO_WINDOW)
+        return str(getattr(done, "stdout", "") or "")
+
+    def listener_pids(self) -> list[int]:
+        """Pids LISTENING on exactly this TCP port (``netstat -ano``)."""
+        pids: list[int] = []
+        for line in self._output(["netstat", "-ano", "-p", "TCP"]).splitlines():
+            parts = line.split()
+            if (len(parts) == 5 and parts[0].upper() == "TCP" and parts[3].upper() == "LISTENING"
+                    and parts[1].rsplit(":", 1)[-1] == str(self.port) and parts[4].isdigit()):
+                pid = int(parts[4])
+                if pid not in pids:
+                    pids.append(pid)
+        return pids
+
+    def image_name(self, pid: int) -> str:
+        """The process image for ``pid`` (``tasklist`` CSV), "" when unknown."""
+        for row in csv.reader(self._output(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"]).splitlines()):
+            if len(row) >= 2 and row[1].strip() == str(pid):
+                return row[0].strip()
+        return ""
+
+    def _stop_listener(self) -> None:
+        try:
+            pids = self.listener_pids()
+            confirmed = [pid for pid in pids if self.image_name(pid).lower() == SERVER_IMAGE]
+            if not confirmed or len(confirmed) != len(pids):
+                logging.info("Trade Mentor: rule gate: port %d listener not confirmed as %s (pids %s); left alone",
+                             self.port, SERVER_IMAGE, pids)
+                return
+            for pid in confirmed:
+                self._run(["taskkill", "/PID", str(pid), "/F"], capture_output=True, text=True, timeout=15,
+                          creationflags=_NO_WINDOW)
+            logging.info("Trade Mentor: rule gate: stopped the adopted llama-server (pid %s)", confirmed)
+        except Exception as exc:  # noqa: BLE001 - unconfirmed: leave it alone
+            logging.info("Trade Mentor: rule gate: the adopted server was not stopped (%s: %s)", type(exc).__name__, exc)
 
     def scorer(self, post: brain.Post = brain.default_post) -> Callable[[str], float | None]:
         return lambda text: score(text, endpoint=self.endpoint, post=post)

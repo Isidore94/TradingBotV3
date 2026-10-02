@@ -1039,10 +1039,10 @@ class MentorWindow(QMainWindow):
             want = not self._shut and rule_gate.mode() != "off" and not self._gpu_reason()
         except Exception:  # noqa: BLE001 - an unreadable setting keeps the gate off
             want = False
-        running = server.running()
-        if want and not running:
+        # start() adopts a healthy server already on the port and backs off after a launch that exits.
+        if want and not server.running():
             threading.Thread(target=server.start, name="mentor-rule-gate-start", daemon=True).start()
-        elif not want and running:
+        elif not want and server.active():
             threading.Thread(target=server.stop, name="mentor-rule-gate-stop", daemon=True).start()
 
     def _enter_pause(self) -> None:
@@ -1879,7 +1879,7 @@ class MentorWindow(QMainWindow):
                 return []
             after, self._plan_after = self._plan_after, int(turns[-1]["id"])
             # The gate is asked only when the app may use a model now (Pause AI, the night window).
-            gate = (server.scorer(post) if gate_mode != "off" and server.running() and not self._gpu_reason()
+            gate = (server.scorer(post) if gate_mode != "off" and server.active() and not self._gpu_reason()
                     else None)
             return plan_infer.infer(turns, after=after, endpoint=endpoint, model=model, post=post,
                                     keep_alive=settings.keep_alive(), num_ctx=settings.context_tokens(), path=path,
