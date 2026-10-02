@@ -757,6 +757,7 @@ def compact_bounce_candidates_csv(
     no-ops when the file is small or missing.
     """
     import d1_feature_history_archive as arc
+    import pyarrow as pa
 
     csv_path = Path(path)
     try:
@@ -767,8 +768,9 @@ def compact_bounce_candidates_csv(
         return {"compacted": False, "reason": "below size threshold", "bytes": size_before}
     try:
         header = arc.read_header(csv_path)
-    except arc.ArchiveRefused:
-        return {"compacted": False, "reason": "empty"}
+    except arc.ArchiveRefused as exc:
+        # e.g. an empty file, or one that starts with a byte-order mark.
+        return {"compacted": False, "reason": f"header not usable ({exc}); nothing removed", "bytes": size_before}
     if "trade_date" not in header or "event_type" not in header:
         return {"compacted": False, "reason": "missing trade_date/event_type column"}
 
@@ -790,6 +792,14 @@ def compact_bounce_candidates_csv(
             "Candidates clean-up removed nothing: the rows are not proven in the archive (%s).", exc
         )
         return {"compacted": False, "reason": f"not proven in the archive; nothing removed ({exc})",
+                "bytes": size_before}
+    except (pa.ArrowInvalid, UnicodeDecodeError) as exc:
+        # A row the strict CSV reader cannot read (e.g. fewer cells than the
+        # header). The old clean-up skipped past such rows; this one cannot
+        # pack them, so it removes nothing and the rest of startup maintenance
+        # (the learning refresh) still runs.
+        logging.warning("Candidates clean-up removed nothing: the file could not be read (%s).", exc)
+        return {"compacted": False, "reason": f"the file could not be read ({exc}); nothing removed",
                 "bytes": size_before}
 
     size_after = csv_path.stat().st_size

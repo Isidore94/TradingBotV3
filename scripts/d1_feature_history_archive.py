@@ -981,8 +981,23 @@ def _prefix_sha256(path: Path, size: int) -> str | None:
 
 
 def _removal_landed(pending: dict[str, Any], spec: StoreSpec) -> bool:
-    """Did a dead removal's replace reach the live file? The new file's bytes
-    were hashed before the replace; appends since only add bytes after them."""
+    """Did a dead removal's replace reach the live file?
+
+    Both files were hashed before the replace: the old one whole
+    (``old_size`` / ``old_sha256``) and the new one (``size`` / ``sha256``).
+    Appends since only add bytes after either. The removal landed only when
+    the live file is provably NOT the old one and does start with the new one.
+    "Not the old one" has to be checked first: when every removed row was at
+    the end, the new file is a byte prefix of the old, so the new-file test
+    alone also passes for the untouched old file (review 2026-10-02). A removal
+    always removes at least one record, so the new file is strictly shorter
+    and the two can never be equal.
+    """
+    old_size = pending.get("old_size")
+    if old_size is None:
+        return False  # an entry from before the old file was recorded: never assume it landed
+    if _prefix_sha256(spec.csv_path, int(old_size)) == pending.get("old_sha256"):
+        return False
     return _prefix_sha256(spec.csv_path, int(pending["size"])) == pending.get("sha256")
 
 
@@ -1759,7 +1774,13 @@ def _remove_positions_locked(
             raise VerifyFailed(f"cleaned copy does not equal the kept rows; nothing removed: {problem}")
         pending = {
             **manifest,
-            "pending_live_map": {**new_live.fields(), "size": temp.stat().st_size, "sha256": _sha256(temp)},
+            "pending_live_map": {
+                **new_live.fields(),
+                "size": temp.stat().st_size,
+                "sha256": _sha256(temp),
+                "old_size": csv_path.stat().st_size,
+                "old_sha256": _sha256(csv_path),
+            },
         }
         _write_manifest(manifest_path, pending)
         try:

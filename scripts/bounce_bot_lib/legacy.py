@@ -3006,6 +3006,61 @@ def _write_learning_backlog(header_for, path, backlog):
         backlog.pop(0)
 
 
+def _flush_learning_backlog(state, header_for, path, backlog, timeout):
+    """Write ``backlog`` under the file's writer lock. Returns True when rows stay parked.
+
+    * Lock held elsewhere (the candidates clean-up, the night pack): the rows
+      wait, and the FIRST park of each episode is a warning with the reason.
+    * No lock primitive on the box, or the lock machinery itself broken (its
+      file or folder in %TEMP% cannot be made): write unlocked as before this
+      change, with one warning, rather than park until the cap.
+    """
+    from contextlib import ExitStack
+
+    from local_writer_lock import LocalLockUnavailable, local_writer_lock, lock_key_for_path
+
+    warned = state.setdefault("_learning_row_warned", set())
+    stack = ExitStack()
+    try:
+        stack.enter_context(local_writer_lock(lock_key_for_path(path), timeout_seconds=timeout))
+    except LocalLockUnavailable as exc:
+        if "no machine-local exclusion primitive" not in str(exc):
+            if ("parked", str(path)) not in warned:
+                warned.add(("parked", str(path)))
+                logging.warning(
+                    f"Learning rows for {path.name} wait for its writer lock ({exc}); "
+                    f"{len(backlog)} queued, written with the next append that gets it"
+                )
+            return True
+        _write_learning_backlog(header_for, path, backlog)
+        return False
+    except Exception as exc:  # the lock machinery itself is broken
+        if ("broken", str(path)) not in warned:
+            warned.add(("broken", str(path)))
+            logging.warning(f"Writer lock for {path.name} unavailable ({exc}); writing learning rows unlocked")
+        _write_learning_backlog(header_for, path, backlog)
+        return False
+    with stack:
+        _write_learning_backlog(header_for, path, backlog)
+    warned.discard(("parked", str(path)))
+    return False
+
+
+def _flush_learning_backlogs_at_exit(state, header_for, guard):
+    """Interpreter exit: write every parked learning row (lock first, 5 s; then unlocked)."""
+    try:
+        with guard:
+            for name, backlog in list(state.get("_learning_row_backlog", {}).items()):
+                if not backlog:
+                    continue
+                path = Path(name)
+                if _flush_learning_backlog(state, header_for, path, backlog, 5.0) and backlog:
+                    logging.warning(f"Writing {len(backlog)} parked learning rows to {path.name} unlocked at exit")
+                    _write_learning_backlog(header_for, path, backlog)
+    except Exception as exc:
+        logging.warning(f"Parked learning rows could not be written at exit: {exc}")
+
+
 ##########################################
 # BounceBot Class with GUI callback
 ##########################################
@@ -3929,8 +3984,6 @@ class BounceBot(EWrapper, EClient):
         before.
         """
         try:
-            from local_writer_lock import LocalLockUnavailable, local_writer_lock, lock_key_for_path
-
             guard = self.__dict__.setdefault("_learning_row_guard", threading.Lock())
             backlogs = self.__dict__.setdefault("_learning_row_backlog", {})
             timeout = getattr(self, "LEARNING_ROW_LOCK_TIMEOUT_SECONDS", BounceBot.LEARNING_ROW_LOCK_TIMEOUT_SECONDS)
@@ -3942,14 +3995,18 @@ class BounceBot(EWrapper, EClient):
                     # Bounded: a file that stays unwritable must not eat memory.
                     backlog.pop(0)
                     logging.warning(f"Learning-row backlog for {path} is full; the oldest queued row was dropped")
-                try:
-                    with local_writer_lock(lock_key_for_path(path), timeout_seconds=timeout):
-                        _write_learning_backlog(self._learning_csv_header, path, backlog)
-                except LocalLockUnavailable as exc:
-                    if "no machine-local exclusion primitive" in str(exc):
-                        _write_learning_backlog(self._learning_csv_header, path, backlog)
-                    else:
-                        logging.debug(f"Learning row for {path} waits for the writer lock ({len(backlog)} queued)")
+                parked = _flush_learning_backlog(self.__dict__, self._learning_csv_header, path, backlog, timeout)
+                if parked and not self.__dict__.get("_learning_row_exit_flush"):
+                    # Rows that wait for the lock must not die with a normal exit.
+                    # `stop()` is outside what this change may touch, so the flush
+                    # hangs off interpreter exit instead (a killed process still
+                    # loses what is parked).
+                    import atexit
+
+                    self.__dict__["_learning_row_exit_flush"] = True
+                    atexit.register(
+                        _flush_learning_backlogs_at_exit, self.__dict__, self._learning_csv_header, guard
+                    )
         except Exception as exc:
             logging.debug(f"Failed writing learning row to {path}: {exc}")
 
