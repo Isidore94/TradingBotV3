@@ -48,19 +48,13 @@ def _shell_stub():
     return stub, service
 
 
-def test_cycle_walks_off_desk_away_evening_off():
-    stub, service = _shell_stub()
+def _menu_stub():
     from ui.app import MainWindow
 
-    assert service.auto_mode == "OFF"
-    MainWindow._cycle_auto_mode(stub)
-    assert service.auto_mode == "DESK" and ("enabled", True) in service.calls
-    MainWindow._cycle_auto_mode(stub)
-    assert service.auto_mode == "AWAY"
-    MainWindow._cycle_auto_mode(stub)
-    assert service.auto_mode == "EVENING"
-    MainWindow._cycle_auto_mode(stub)
-    assert service.auto_mode == "OFF" and ("enabled", False) in service.calls
+    stub, service = _shell_stub()
+    menu = MainWindow._build_auto_mode_menu(stub)
+    stub.auto_mode_button.setMenu(menu)
+    return stub, service, menu
 
 
 def test_button_text_reflects_mode():
@@ -73,3 +67,65 @@ def test_button_text_reflects_mode():
     service.profile = "AWAY"
     MainWindow._sync_auto_mode_button(stub)
     assert stub.auto_mode_button.text() == "Auto: AWAY"
+
+
+def test_menu_lists_every_mode_in_order():
+    stub, service, menu = _menu_stub()
+    from ui.app import AUTO_MODE_CHOICES
+
+    assert AUTO_MODE_CHOICES == ("OFF", "DESK", "AWAY", "EVENING")
+    assert stub.auto_mode_button.menu() is menu
+    assert stub.auto_mode_menu is menu
+    assert menu.objectName() == "AutoModeMenu"
+    assert [a.text() for a in menu.actions()] == [
+        "Auto: OFF",
+        "Auto: DESK",
+        "Auto: AWAY",
+        "Auto: EVENING",
+    ]
+    assert all(a.isCheckable() for a in menu.actions())
+
+
+def test_choosing_a_mode_sets_it_directly():
+    stub, service, menu = _menu_stub()
+    actions = stub._auto_mode_actions
+
+    actions["EVENING"].trigger()  # straight from OFF, no cycling through DESK/AWAY
+    assert service.auto_mode == "EVENING"
+    assert service.calls == [("profile", "EVENING"), ("enabled", True)]
+    assert stub.auto_mode_button.text() == "Auto: EVENING"
+
+    actions["DESK"].trigger()
+    assert service.auto_mode == "DESK"
+    assert stub.auto_mode_button.text() == "Auto: DESK"
+
+    service.calls.clear()
+    actions["OFF"].trigger()
+    assert service.auto_mode == "OFF"
+    assert service.calls == [("enabled", False)]
+    assert stub.auto_mode_button.text() == "Auto: OFF"
+
+
+def test_current_mode_is_checked():
+    stub, service, menu = _menu_stub()
+    from ui.app import MainWindow
+
+    def checked():
+        return [m for m, a in stub._auto_mode_actions.items() if a.isChecked()]
+
+    assert checked() == ["OFF"]
+    service.enabled = True
+    service.profile = "AWAY"
+    MainWindow._sync_auto_mode_button(stub)
+    assert checked() == ["AWAY"]
+    # An outside flip (Auto Pilot panel) is picked up when the menu is about to show.
+    service.profile = "EVENING"
+    menu.aboutToShow.emit()
+    assert checked() == ["EVENING"]
+
+
+def test_cycle_method_is_gone():
+    from ui.app import MainWindow
+
+    assert not hasattr(MainWindow, "_cycle_auto_mode")
+
