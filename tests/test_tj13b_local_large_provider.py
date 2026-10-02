@@ -418,6 +418,8 @@ def test_the_weeknight_slate_is_exactly_what_it_was_before_this_packet():
         "market_regime_daily",
         # Nightly permutation report (trader 2026-09-30), deterministic, stage 1.
         "permutation_report",
+        # D1 history packing (trader 2026-10-02), deterministic, stage 1, trim off.
+        "history_pack",
         "market_story_rollups",
         "measured_report",
         # AI-R3 refreshes the bounded facts before any story reads them.
