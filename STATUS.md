@@ -2,7 +2,7 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-10-01 16:20 PT (Mentor book fix merged; restart desk + app)
+**Updated:** 2026-10-01 18:35 PT (Mentor day-1 fixes merged; restart desk + app)
 
 - **Live on `main`:** rounds 1-2, p9 phases 1-4, p10 research lake + auto regimes (research
   only); rolling RRS, cutoff 1.0 (`TRADINGBOTV3_RRS_ENGINE=desk` = old); Movers tint + SMA
@@ -17,9 +17,8 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 - **Merged 2026-10-01 (P18 + P20, live at the next desk + app restart):** journal mode (self talk
   kept with mood tags, one-line reply), habits + routines counted by the night, `reads_pack`
   (your reads and grades), desk-side 60 s M5 publisher, one table-driven trade-intent gate (a
-  wrong gate is a blocker); live 125-question eval on gemma4: tool hit 99 %, 0 errors, first
-  token p50 1.4 s; gates #341-#344. P20: brief asks answer in 3 plain sentences, simple
-  replies plain; gate #345. Mentor UI: card box hides when done, Tape/Tilt/Mirror/Scorecard buttons, Dock into the desk Mentor tab; gate #346. Book: broker-flat journal opens are not positions.
+  wrong gate is a blocker); gates #341-#344. P20: brief asks answer in 3 plain sentences, simple
+  replies plain; gate #345. Mentor UI: card box hides when done, Tape/Tilt/Mirror/Scorecard buttons, Dock into the desk Mentor tab; gate #346. Book: broker-flat journal opens are not positions. Day-1 fixes: short WIN/LOSS, alert follow-through, VWAP side, plan infer, facets, pause, vs-peers, follow-up carry.
 - **Night (2026-09-30):** retries x3, budget 360, care names briefed nightly (#331), nightly
   permutation report (#330, shadow). Merged 10-01 (#338): P19 night rejections (econ time
   needs its id, regime read 1 retry, day show fits, idea with unknown ids dropped), digest
