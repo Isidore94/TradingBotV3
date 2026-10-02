@@ -131,7 +131,9 @@ class MentorDockPublisher(QObject):
             "pid": os.getpid(),
             "rect": {"x": origin.x(), "y": origin.y(), "w": placeholder.width(), "h": placeholder.height()},
             "dpr": float(placeholder.devicePixelRatioF()),
-            "tab_current": self._tabs.currentWidget() is placeholder,
+            # Current tab AND its desk page shown (another page like Journal hides the Mentor).
+            "tab_current": self._tabs.currentWidget() is placeholder
+            and (window is None or placeholder.isVisibleTo(window)),
             "desk_visible": desk_visible,
             "at": now,
             "at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
