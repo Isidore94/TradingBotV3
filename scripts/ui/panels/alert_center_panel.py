@@ -379,6 +379,17 @@ class AlertCenterPanel(
         #: What the filter withheld, newest per symbol, so the count is honest
         #: and one click can show exactly those names.
         self._hidden_inside_range: dict[str, BounceAlert] = {}
+        #: First-30 chart hold (trader 2026-10-02): charts received 09:30-10:00 ET
+        #: wait here, newest per (symbol, side), until the 10:00 check.
+        self._first30_held: dict[tuple[str, str], BounceAlert] = {}
+        #: Charts that did not hold their level at 10:00: (alert, verdict).
+        self._first30_failed: dict[tuple[str, str], tuple[BounceAlert, str]] = {}
+        self._first30_releasing = False
+        #: The one owner of the 10:00 check (single-shot; re-armed while the
+        #: 09:55 bar has not reached the cache yet).
+        self._first30_timer = QTimer(self)
+        self._first30_timer.setSingleShot(True)
+        self._first30_timer.timeout.connect(self._release_first30_holds)
         #: ST6.5. The day-trade verdict order off the desk's shared snapshot,
         #: `[(bounce_type, SIDE)]` best first. Empty until the Working-lately
         #: service hands one over, and honoured only while the switch is ON.
@@ -728,7 +739,10 @@ class AlertCenterPanel(
             "Hide M5 alerts from 9:30 to 10:00 ET (they win less and end red on "
             "average). Top-grade alerts (grade A; grade B while no A exists), Focus "
             "names, your typed names and armed watches always show. Hidden rows are "
-            "still recorded."
+            "still recorded.\n\nD1, Focus D1 and armed-watch charts that come in "
+            "9:30-10:00 wait. At 10:00 each shows only if its last 5-minute bar "
+            "closed past its alert level; the rest are counted and one click shows "
+            "them. Price alerts and the phone never wait."
         )
         self.first30_input.setChecked(alert_show_filter.first30_enabled())
         self.first30_input.toggled.connect(self._on_show_filter_changed)
@@ -842,6 +856,7 @@ class AlertCenterPanel(
         self.chart_review.anyBounceToggled.connect(self._toggle_any_bounce_watch)
         self.chart_review.externalChartRequested.connect(self._open_external_chart)
         self.chart_review.revealHiddenRequested.connect(self.reveal_hidden_reviews)
+        self.chart_review.revealFirst30Requested.connect(self.reveal_first30_failed)
         self.chart_review.scanReviewViewToggled.connect(self._toggle_d1_scan_review_view)
         self.chart_review.d1LevelAlertRequested.connect(self._arm_d1_level_from_chart)
         self.chart_review.symbolRequested.connect(self.chart_symbol)
@@ -1876,6 +1891,8 @@ class AlertCenterPanel(
         except Exception:  # noqa: BLE001 - a preference never costs the feed
             logging.debug("Show filter setting not saved.", exc_info=True)
         self._refresh_longs_off_banner()
+        if not self.first30_input.isChecked() and self._first30_held:
+            self._release_first30_unchecked()
         self._show_verdicts.clear()
         self._rebuild_feed()
         self.showFilterChanged.emit()
@@ -2494,6 +2511,139 @@ class AlertCenterPanel(
                 "Movers-only review filter is off for the rest of today."
             )
         return len(withheld)
+
+    # -- First-30 chart hold (trader 2026-10-02) -------------------------
+    #: How long after 10:00 the check waits for the 09:55 bar to reach the cache.
+    FIRST30_GRACE = timedelta(minutes=3)
+    FIRST30_RETRY_MS = 15_000
+
+    @staticmethod
+    def _first30_now() -> datetime:
+        return datetime.now(timezone.utc)
+
+    @staticmethod
+    def _first30_local_tz():
+        from market_session import get_market_local_timezone
+
+        return get_market_local_timezone()[0]
+
+    @staticmethod
+    def _first30_holdable(alert: BounceAlert) -> bool:
+        """D1 scan, Focus D1 and chart-watch charts; never price alerts or the trader's own charts."""
+        if str(alert.raw_text or "").lstrip().upper().startswith("PRICE ALERT"):
+            return False
+        tag = str(alert.tag or "")
+        if tag in (AUTO_PICK_TAG, MANUAL_CHART_TAG, FOCUS_REVIEW_TAG, FOCUS_FADED_TAG):
+            return False
+        return bool(alert.is_d1) or tag in (CHART_WATCH_TAG, FOCUS_D1_EVENT_TAG)
+
+    def _first30_should_hold(self, alert: BounceAlert) -> bool:
+        if self._first30_releasing or not self.first30_input.isChecked():
+            return False
+        if not self._first30_holdable(alert):
+            return False
+        when = alert_show_filter.alert_time(alert)
+        if not alert_show_filter.in_first30(when):
+            return False
+        # A desk that sees the alert after 10:00 (late start) holds nothing.
+        return self._first30_now() < alert_show_filter.first30_release_at(when)
+
+    def _hold_first30(self, alert: BounceAlert) -> None:
+        side = alert_show_filter.alert_direction(alert) or str(alert.side or "").upper()
+        key = (str(alert.symbol or "").upper(), side)
+        self._first30_held.pop(key, None)
+        self._first30_held[key] = alert
+        if not self._first30_timer.isActive():
+            release_at = alert_show_filter.first30_release_at(alert_show_filter.alert_time(alert))
+            wait = (release_at - self._first30_now()).total_seconds()
+            self._first30_timer.start(max(0, int(wait * 1000)) + 500)
+        self._refresh_first30_count()
+
+    def _refresh_first30_count(self) -> None:
+        verdicts = [verdict for _alert, verdict in self._first30_failed.values()]
+        unknown = sum(1 for verdict in verdicts if verdict != alert_show_filter.HOLD_FAILED)
+        tooltip = ""
+        if verdicts:
+            tooltip = (
+                f"{len(verdicts) - unknown} did not hold their alert level at 10:00 ET; "
+                f"{unknown} had no 5-minute bar, level or side to check (hidden too). "
+                "Nothing was deleted. Click to show them."
+            )
+        self.chart_review.set_first30_counts(len(self._first30_held), len(verdicts), tooltip)
+
+    def _requeue_first30(self, alerts) -> None:
+        """Send released charts through the normal door, skipping today's ignored names."""
+        self._first30_releasing = True
+        try:
+            for alert in alerts:
+                if alert.symbol in self._ignored_symbols:
+                    continue
+                self._enqueue_review_alert(alert)
+        finally:
+            self._first30_releasing = False
+
+    def _release_first30_unchecked(self) -> None:
+        """The switch went off: every waiting chart shows now, unchecked."""
+        self._first30_timer.stop()
+        waiting = list(self._first30_held.values())
+        self._first30_held.clear()
+        self._requeue_first30(waiting)
+        self._refresh_first30_count()
+
+    def _release_first30_holds(self) -> None:
+        """10:00 ET: show each waiting chart whose 09:55 M5 bar closed past its level."""
+        if not self._first30_held:
+            return
+        now = self._first30_now()
+        first = next(iter(self._first30_held.values()))
+        release_at = alert_show_filter.first30_release_at(alert_show_filter.alert_time(first))
+        if now < release_at:
+            self._first30_timer.start(int((release_at - now).total_seconds() * 1000) + 500)
+            return
+        grace_over = now >= release_at + self.FIRST30_GRACE
+        try:
+            local_tz = self._first30_local_tz()
+        except Exception:  # noqa: BLE001 - no clock zone = no data
+            local_tz = None
+        waiting: dict = {}
+        shown: list = []
+        for key, alert in self._first30_held.items():
+            bar = None
+            if local_tz is not None:
+                try:
+                    bar = alert_show_filter.first30_check_bar(
+                        self._m5_bars_for(alert.symbol), release_at, local_tz
+                    )
+                except Exception:  # noqa: BLE001 - unreadable bars = no data
+                    bar = None
+            final = local_tz is not None and alert_show_filter.first30_bar_is_final(
+                bar, release_at, local_tz
+            )
+            if not final and not grace_over:
+                waiting[key] = alert
+                continue
+            verdict = alert_show_filter.first30_verdict(
+                alert_show_filter.alert_direction(alert),
+                alert_show_filter.alert_level(alert),
+                bar,
+            )
+            if verdict == alert_show_filter.HOLD_HELD:
+                shown.append(alert)
+            else:
+                self._first30_failed[key] = (alert, verdict)
+        self._first30_held = waiting
+        if waiting:
+            self._first30_timer.start(self.FIRST30_RETRY_MS)
+        self._requeue_first30(shown)
+        self._refresh_first30_count()
+
+    def reveal_first30_failed(self) -> int:
+        """Show the charts that failed the 10:00 check."""
+        failed = [alert for alert, _verdict in self._first30_failed.values()]
+        self._first30_failed.clear()
+        self._requeue_first30(failed)
+        self._refresh_first30_count()
+        return len(failed)
 
     def _alert_has_focus_privilege(self, alert: BounceAlert) -> bool:
         """Focus membership AND the prev-day break on the alert's own side.
@@ -3171,6 +3321,19 @@ class AlertCenterPanel(
             self._refresh_d1_scan_review_view()
             if not self._show_all_d1_scan_reviews:
                 return
+        # First-30 chart hold: a chart received 09:30-10:00 ET waits for the
+        # 10:00 check instead of reaching (or refreshing) the review pane.
+        if self._first30_should_hold(alert):
+            self._hold_first30(alert)
+            return
+        # An M5 row the first-30 switch hides must not repaint the same
+        # symbol's chart either.
+        if (
+            is_m5
+            and self.first30_input.isChecked()
+            and self.show_filter_reason(alert) == alert_show_filter.REASON_FIRST30
+        ):
+            return
         if (
             self._current_review_alert is not None
             and self._current_review_alert.symbol == alert.symbol
@@ -5332,7 +5495,14 @@ class AlertCenterPanel(
                     tag=FOCUS_D1_EVENT_TAG,
                     raw_text=f"FOCUS D1 {symbol} ({side_label}): {hit.message}",
                     is_d1=True,
-                    payload={"focus_d1_kind": kind},
+                    payload={
+                        "focus_d1_kind": kind,
+                        alert_show_filter.PAYLOAD_LEVEL: getattr(hit, "price", None),
+                        alert_show_filter.PAYLOAD_SIDE: (
+                            str(getattr(hit, "resolved_side", "") or "").upper() or side_label
+                        ),
+                    },
+                    received_at=moment.astimezone(),
                 )
             )
 
@@ -5985,6 +6155,11 @@ class AlertCenterPanel(
             "source_text": getattr(watch, "source_text", "")
             or getattr(watch, "candle_date", ""),
         }
+        # First-30 chart hold: the level this hit is judged against at 10:00.
+        level = getattr(watch, "level", None)
+        payload[alert_show_filter.PAYLOAD_LEVEL] = (
+            level if level is not None else getattr(hit, "price", None)
+        )
         watch_id = str(getattr(watch, "watch_id", "") or "")
         if watch_id:
             payload["watch_id"] = watch_id
@@ -6013,6 +6188,7 @@ class AlertCenterPanel(
             tag=CHART_WATCH_TAG,
             raw_text=f"CHART WATCH {watch.symbol} ({side}): {trigger}",
             payload=payload,
+            received_at=moment.astimezone(),
         )
 
     def _tracker_note_for(self, watch, hit, moment: datetime) -> str:
@@ -7632,6 +7808,11 @@ class AlertCenterPanel(
         self._review_movers_only = True
         self._hidden_inside_range.clear()
         self.chart_review.set_hidden_count(0)
+        # The first-30 hold is one morning's: a new day starts empty.
+        self._first30_timer.stop()
+        self._first30_held.clear()
+        self._first30_failed.clear()
+        self._refresh_first30_count()
         # AR-2B's held scan rows are a day-local display cache.  Yesterday's
         # candidates must never make today's Show all count look nonzero.
         self._held_d1_scan_reviews.clear()

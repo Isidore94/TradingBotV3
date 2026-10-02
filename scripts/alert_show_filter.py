@@ -13,16 +13,24 @@ rows above still show; an alert with no timezone-aware time is unknown and shows
 Longs off (the trader 2026-09-26): with `longs_market_gate` on and the market
 not on a long's side, LONG rows hide (reason `longs_off`); the always-show rows
 and names with an open position still show, and an unknown market shows.
+
+First-30 chart hold (the trader 2026-10-02): with the same switch on, a D1 scan,
+Focus D1 or chart-watch chart received 09:30-10:00 ET waits; at 10:00 it shows
+only if the last completed M5 bar at/before 10:00 ET closed past its alert level
+on its side. No bars, level or side = failed (hidden, counted, one click shows).
+Price alerts, auto-picks, Focus reviews, manual charts and the phone never wait.
 """
 
 from __future__ import annotations
 
+import math
+import re
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, tzinfo
 from datetime import time as dt_time
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 import project_paths
 import setup_grades
@@ -119,6 +127,109 @@ def in_first30(when: datetime | None) -> bool:
 
     clock = when.astimezone(ZoneInfo(_ET_NAME)).time()
     return _FIRST30_START <= clock < _FIRST30_END
+
+
+#: First-30 chart hold verdicts (`first30_verdict`).
+HOLD_HELD = "held"
+HOLD_FAILED = "failed"
+HOLD_NO_DATA = "no_data"
+HOLD_NO_LEVEL = "no_level"
+HOLD_NO_SIDE = "no_side"
+#: The payload keys a chart's builder stamps with its alert level / side.
+PAYLOAD_LEVEL = "alert_level"
+PAYLOAD_SIDE = "alert_side"
+_M5_BAR = timedelta(minutes=5)
+_FIRST30_SPAN = timedelta(minutes=30)
+_D1_LEVEL_RE = re.compile(r"@(\d+(?:\.\d+)?)")
+
+
+def first30_release_at(when: datetime) -> datetime:
+    """10:00 ET on `when`'s ET day (timezone-aware)."""
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo(_ET_NAME)
+    day = when.astimezone(et).date()
+    return datetime.combine(day, _FIRST30_END, tzinfo=et)
+
+
+def alert_level(alert: Any) -> float | None:
+    """The price the chart's alert was about: payload `alert_level`, else a D1 scan's `@level`."""
+    payload = getattr(alert, "payload", None)
+    raw = payload.get(PAYLOAD_LEVEL) if isinstance(payload, dict) else None
+    if raw is None and getattr(alert, "is_d1", False):
+        match = _D1_LEVEL_RE.search(str(getattr(alert, "raw_text", "") or ""))
+        raw = match.group(1) if match else None
+    try:
+        level = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return level if math.isfinite(level) and level > 0 else None
+
+
+def alert_direction(alert: Any) -> str:
+    """LONG / SHORT from payload `alert_side`, else the alert's side; "" = unknown."""
+    payload = getattr(alert, "payload", None)
+    side = _side(payload.get(PAYLOAD_SIDE) if isinstance(payload, dict) else "")
+    if side not in ("LONG", "SHORT"):
+        side = _side(getattr(alert, "side", ""))
+    return side if side in ("LONG", "SHORT") else ""
+
+
+def first30_check_bar(
+    bars: Sequence[Mapping[str, Any]] | None, release_at: datetime, local_tz: tzinfo
+) -> Mapping[str, Any] | None:
+    """The last completed M5 bar from 09:30 ending at/before `release_at` (10:00 ET), or None.
+
+    Bars are naive market-local time (`local_tz`) stamped at their start.
+    """
+    end = release_at.astimezone(local_tz).replace(tzinfo=None)
+    start = end - _FIRST30_SPAN
+    best = None
+    for bar in bars or ():
+        try:
+            stamp = bar["dt"]
+        except (KeyError, TypeError):
+            continue
+        if not isinstance(stamp, datetime):
+            continue
+        if stamp.tzinfo is not None:
+            stamp = stamp.astimezone(local_tz).replace(tzinfo=None)
+        if start <= stamp and stamp + _M5_BAR <= end and (best is None or stamp > best[0]):
+            best = (stamp, bar)
+    return best[1] if best else None
+
+
+def first30_bar_is_final(bar: Mapping[str, Any] | None, release_at: datetime, local_tz: tzinfo) -> bool:
+    """True when `bar` is the 09:55 ET bar (the last one before 10:00)."""
+    if bar is None or not isinstance(bar.get("dt"), datetime):
+        return False
+    stamp = bar["dt"]
+    if stamp.tzinfo is not None:
+        stamp = stamp.astimezone(local_tz).replace(tzinfo=None)
+    return stamp + _M5_BAR == release_at.astimezone(local_tz).replace(tzinfo=None)
+
+
+def first30_verdict(side: str, level: float | None, bar: Mapping[str, Any] | None) -> str:
+    """Held = the check bar closed above (LONG) / below (SHORT) the level; else why not."""
+    side = _side(side)
+    if side not in ("LONG", "SHORT"):
+        return HOLD_NO_SIDE
+    if level is None:
+        return HOLD_NO_LEVEL
+    try:
+        close = float(bar["close"]) if bar is not None else None
+    except (KeyError, TypeError, ValueError):
+        close = None
+    if close is None or not math.isfinite(close):
+        return HOLD_NO_DATA
+    held = close > level if side == "LONG" else close < level
+    return HOLD_HELD if held else HOLD_FAILED
+
+
+def first30_failed_text(count: int) -> str:
+    """"N failed by 10:00 - show"; "" for none."""
+    count = int(count or 0)
+    return f"{count} failed by 10:00 - show" if count else ""
 
 
 def daytrade_grade(lookup: Mapping[str, Any] | None, alert: Any) -> str | None:
