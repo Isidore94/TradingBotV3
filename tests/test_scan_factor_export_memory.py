@@ -229,3 +229,91 @@ def test_exports_match_the_builders_fed_the_full_width_history(frozen, tmp_path)
         legacy._write_scan_factor_csv(path, rows, columns)
         assert hashlib.sha256(path.read_bytes()).hexdigest() == hashes[name], name
 
+
+# ---------------------------------------------------------------------------
+# The improvement, pinned without a megabyte number.
+# ---------------------------------------------------------------------------
+
+
+def test_leaderboard_builds_no_frame_from_one_dict_per_observation_factor_pair(frozen, monkeypatch):
+    """The spike's largest part: one merged dict per (observation, factor) pair.
+
+    On the live history that is millions of 30-key dicts. The builder may box
+    the observations themselves, never a dict per pair.
+    """
+    history_df = pd.read_csv(frozen, low_memory=False)
+    observations = legacy.build_scan_factor_observation_rows(history_df)
+    list_of_dict_sizes: list[int] = []
+    real_init = pd.DataFrame.__init__
+
+    def recording_init(self, data=None, *args, **kwargs):
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            list_of_dict_sizes.append(len(data))
+        real_init(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(pd.DataFrame, "__init__", recording_init)
+    rows = legacy.build_scan_factor_leaderboard_rows(history_df, observations)
+    assert rows
+    assert max(list_of_dict_sizes) <= len(observations), (
+        f"a frame was built from {max(list_of_dict_sizes)} dicts for {len(observations)} observations"
+    )
+
+
+def _spy_on_exports(monkeypatch):
+    calls = {"prepare": 0, "to_dict_records": []}
+    real_prepare = legacy._prepare_scan_factor_history_frame
+
+    def counting_prepare(*args, **kwargs):
+        calls["prepare"] += 1
+        return real_prepare(*args, **kwargs)
+
+    monkeypatch.setattr(legacy, "_prepare_scan_factor_history_frame", counting_prepare)
+    real_to_dict = pd.DataFrame.to_dict
+
+    def recording_to_dict(self, orient="dict", *args, **kwargs):
+        if orient == "records":
+            calls["to_dict_records"].append(self.shape)
+        return real_to_dict(self, orient, *args, **kwargs)
+
+    monkeypatch.setattr(pd.DataFrame, "to_dict", recording_to_dict)
+    return calls
+
+
+def test_each_export_prepares_the_history_once(frozen, tmp_path, monkeypatch):
+    calls = _spy_on_exports(monkeypatch)
+    paths = _paths(tmp_path / "once")
+    legacy.export_scan_factor_views(
+        frozen, paths["scan_factor_observations"], paths["scan_factor_leaderboard"]
+    )
+    assert calls["prepare"] == 1, "export_scan_factor_views prepared the history more than once"
+    calls["prepare"] = 0
+    legacy.export_bot_tier_tracker_views(
+        frozen,
+        paths["tier_list"],
+        paths["tier_outcomes"],
+        paths["tier_performance"],
+        paths["tier_catch_rate"],
+        session_horizon_path=paths["session_horizon_outcomes"],
+    )
+    assert calls["prepare"] == 1, "export_bot_tier_tracker_views prepared the history more than once"
+
+
+def test_no_full_width_history_is_boxed_or_kept(frozen, tmp_path, monkeypatch):
+    width = len(pd.read_csv(frozen, nrows=0).columns)
+    assert width == 300
+    calls = _spy_on_exports(monkeypatch)
+    hashes, _, _ = run_runner_sequence(frozen, tmp_path / "runner")
+    assert hashes  # the sequence ran
+    wide = [shape for shape in calls["to_dict_records"] if shape[1] >= width]
+    assert not wide, f"to_dict('records') boxed a full-width history frame: {wide}"
+
+    result = legacy.export_scan_factor_views(
+        frozen,
+        tmp_path / "again_obs.csv",
+        tmp_path / "again_lb.csv",
+        include_data=True,
+    )
+    kept = result["_history_df"]
+    assert kept.shape[1] < width / 3, (
+        f"the history handed to the tier step keeps {kept.shape[1]} of {width} columns"
+    )
