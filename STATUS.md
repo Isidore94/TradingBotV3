@@ -8,7 +8,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   only); rolling RRS, cutoff 1.0 (`TRADINGBOTV3_RRS_ENGINE=desk` = old); Movers tint + SMA
   gate, Yahoo guard, Movers boxes, Dip anchors, focus preview, idle-probe skip; gates #257-#306.
 - **GUI:** 4K design live; selftests 105/105; long Qt runs still crash workers. Desk hitch
-  fixes merged 09-30 night (GIL waits under the Setup Tracker paint); gate #337 on the first session.
+  fixes merged 09-30 (gate #337 on the first session).
 - **Trade Mentor app (merged 09-30, P0-P17 + Pause AI):** chat on gemma4:12b with native
   tools, auto-attach from plain language, `/pick /vetoes /tape /check /news /book /mirror
   /tilt /debate /hypotheses /brief /issues /recaps /paste /feel /night /scorecard /rs /alerts`;
