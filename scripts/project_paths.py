@@ -783,6 +783,9 @@ RUNNER_DIP_WATCH_FILE = RUNTIME_DATA_DIR / "runner_dip_watch.json"
 INTRADAY_BOUNCES_FILE = RUNTIME_DATA_DIR / "intraday_bounces.csv"
 INTRADAY_BOUNCE_CANDIDATES_FILE = RUNTIME_DATA_DIR / "intraday_bounce_candidates.csv"
 INTRADAY_BOUNCE_OUTCOMES_FILE = RUNTIME_DATA_DIR / "intraday_bounce_outcomes.csv"
+# Lossless monthly Parquet packing of the outcomes CSV (archive only: its
+# writer takes no lock, so it is never trimmed). See d1_feature_history_archive.
+INTRADAY_BOUNCE_OUTCOMES_ARCHIVE_DIR = RUNTIME_DATA_DIR / "intraday_bounce_outcomes_archive"
 INTRADAY_BOUNCE_OUTCOME_STATE_FILE = RUNTIME_DATA_DIR / "intraday_bounce_outcome_state.json"
 # P1-4 4a shadow sidecar: the setup key per M5 event_id; `m5_setup_key_stamp` is the only writer.
 M5_SETUP_KEY_STAMPS_FILE = RUNTIME_DATA_DIR / "m5_setup_key_stamps.jsonl"

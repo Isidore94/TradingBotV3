@@ -77,6 +77,7 @@ import shutil
 import sys
 import time
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -136,17 +137,100 @@ class VerifyFailed(ArchiveError):
 
 
 # ---------------------------------------------------------------------------
-# Paths, manifest, locks
+# Store specs: one append-only CSV and its archive
 # ---------------------------------------------------------------------------
 
+#: ``StoreSpec.writer_lock`` value: the writer takes
+#: ``local_writer_lock(lock_key_for_path(csv_path))`` around every write.
+WRITER_LOCK_PATH = "path"
+#: ``StoreSpec.writer_lock`` value: the writer takes no lock. Archive reads a
+#: length snapshot cut at the last complete record; trim always refuses.
+WRITER_LOCK_NONE = "none"
+D1_STORE = "d1_features_history"
 
-def _paths(csv_path: Any, archive_dir: Any) -> tuple[Path, Path]:
-    if csv_path is None or archive_dir is None:
-        import project_paths as pp
 
-        csv_path = csv_path if csv_path is not None else pp.D1_FEATURES_HISTORY_FILE
-        archive_dir = archive_dir if archive_dir is not None else pp.D1_FEATURES_HISTORY_ARCHIVE_DIR
-    return Path(csv_path), Path(archive_dir)
+@dataclass(frozen=True)
+class StoreSpec:
+    """One append-only CSV packed by this module.
+
+    ``writer_lock`` is ``WRITER_LOCK_PATH``, ``WRITER_LOCK_NONE`` or a literal
+    lock key the writer takes. ``trim_setting`` names the local setting that
+    lets the night trim (empty: the night never trims this store).
+    """
+
+    name: str
+    csv_path: Path
+    archive_dir: Path
+    date_column: str = DATE_COLUMN
+    key_columns: tuple[str, ...] = KEY_COLUMNS
+    writer_lock: str = WRITER_LOCK_PATH
+    keep_days: int = DEFAULT_TRIM_KEEP_DAYS
+    trim_setting: str = ""
+
+    @property
+    def writer_lock_key(self) -> str | None:
+        if self.writer_lock == WRITER_LOCK_NONE:
+            return None
+        if self.writer_lock == WRITER_LOCK_PATH:
+            return lock_key_for_path(self.csv_path)
+        return self.writer_lock
+
+    def with_paths(self, csv_path: Any = None, archive_dir: Any = None) -> StoreSpec:
+        return replace(
+            self,
+            csv_path=Path(csv_path) if csv_path is not None else Path(self.csv_path),
+            archive_dir=Path(archive_dir) if archive_dir is not None else Path(self.archive_dir),
+        )
+
+
+def registered_stores() -> dict[str, StoreSpec]:
+    """Every store the CLI and the night slot pack, by name (paths resolved now).
+
+    ``intraday_bounce_candidates.csv`` is deliberately NOT here: the bot's
+    startup ``compact_bounce_candidates_csv`` rewrites it and drops rows from
+    the middle (old near_miss rows), which a position-ordered archive cannot
+    follow. It needs that compaction changed first (ask-first file).
+    """
+    import project_paths as pp
+
+    return {
+        D1_STORE: StoreSpec(
+            name=D1_STORE,
+            csv_path=Path(pp.D1_FEATURES_HISTORY_FILE),
+            archive_dir=Path(pp.D1_FEATURES_HISTORY_ARCHIVE_DIR),
+            trim_setting="d1_history_trim_enabled",
+        ),
+        "intraday_bounce_outcomes": StoreSpec(
+            name="intraday_bounce_outcomes",
+            csv_path=Path(pp.INTRADAY_BOUNCE_OUTCOMES_FILE),
+            archive_dir=Path(pp.INTRADAY_BOUNCE_OUTCOMES_ARCHIVE_DIR),
+            date_column="trade_date",
+            # Measured 2026-10-02: event_id alone repeats 595,631 times in 628,945
+            # rows (one event, many milestone rows); with event_type and
+            # logged_at it repeats once. A key check needs a match, not uniqueness.
+            key_columns=("event_id", "event_type", "logged_at"),
+            # `bounce_bot_lib.legacy._append_learning_row` takes no lock.
+            writer_lock=WRITER_LOCK_NONE,
+        ),
+    }
+
+
+def _spec(store: Any = None, csv_path: Any = None, archive_dir: Any = None) -> StoreSpec:
+    """Resolve a store name or spec, then apply explicit path overrides."""
+    if isinstance(store, StoreSpec):
+        base = store
+    else:
+        name = store or D1_STORE
+        stores = registered_stores()
+        if name not in stores:
+            raise ArchiveRefused(f"unknown store {name!r}; registered: {sorted(stores)}")
+        base = stores[name]
+    return base.with_paths(csv_path, archive_dir)
+
+
+# ---------------------------------------------------------------------------
+# Paths, manifest, locks
+# ---------------------------------------------------------------------------
 
 
 def _empty_manifest() -> dict[str, Any]:
@@ -212,13 +296,14 @@ def _manifest_signature(manifest: dict[str, Any]) -> tuple:
 
 
 @contextmanager
-def _locks(csv_path: Path, archive_dir: Path, timeout: float):
-    """The writer's own lock first, then the archive's. Refuses, never waits forever."""
+def _locks(spec: StoreSpec, timeout: float):
+    """The writer's own lock first (when it has one), then the archive's. Refuses, never waits forever."""
     with ExitStack() as stack:
         try:
-            stack.enter_context(local_writer_lock(lock_key_for_path(csv_path), timeout_seconds=timeout))
+            if spec.writer_lock_key is not None:
+                stack.enter_context(local_writer_lock(spec.writer_lock_key, timeout_seconds=timeout))
             stack.enter_context(
-                local_writer_lock(lock_key_for_path(archive_dir / MANIFEST_NAME), timeout_seconds=timeout)
+                local_writer_lock(lock_key_for_path(spec.archive_dir / MANIFEST_NAME), timeout_seconds=timeout)
             )
         except LocalLockUnavailable as exc:
             raise ArchiveRefused(f"writer lock unavailable ({exc}); nothing changed") from exc
@@ -258,13 +343,85 @@ def read_header(csv_path: Path) -> list[str]:
     return header
 
 
+class _Bounded(io.RawIOBase):
+    """The first ``limit`` bytes of a file: what an archive run may read of a
+    file a no-lock writer is still appending to."""
+
+    def __init__(self, path: Path, limit: int):
+        self._handle = open(path, "rb")
+        self._left = int(limit)
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        if self._left <= 0:
+            return 0
+        view = memoryview(buffer)[: self._left]
+        got = self._handle.readinto(view)
+        self._left -= got or 0
+        return got or 0
+
+    def close(self) -> None:
+        self._handle.close()
+        super().close()
+
+
+def _snapshot_end(csv_path: Path, *, writer_locked: bool) -> int:
+    """The byte length an archive run reads: complete records only.
+
+    Holding the writer's lock, the file is still and the whole length is used.
+    With no writer lock, the length is snapshot ONCE and cut back to the end of
+    the last complete record (quote-aware), so a row the writer is halfway
+    through appending is never read - it is packed on a later night.
+    """
+    size = csv_path.stat().st_size
+    if writer_locked:
+        return size
+    end = 0
+    quotes = 0
+    offset = 0
+    with open(csv_path, "rb") as handle:
+        while offset < size:
+            chunk = handle.read(min(8 << 20, size - offset))
+            if not chunk:
+                break
+            position = chunk.rfind(b"\n")
+            while position >= 0:
+                if (quotes + chunk.count(b'"', 0, position + 1)) % 2 == 0:
+                    end = offset + position + 1
+                    break
+                position = chunk.rfind(b"\n", 0, position)
+            quotes += chunk.count(b'"')
+            offset += len(chunk)
+    return end
+
+
 def _iter_csv(
-    csv_path: Path, header: list[str], include: Iterable[str] | None = None, block_bytes: int = CSV_BLOCK_BYTES
+    csv_path: Path,
+    header: list[str],
+    include: Iterable[str] | None = None,
+    block_bytes: int = CSV_BLOCK_BYTES,
+    limit: int | None = None,
 ) -> Iterator[pa.RecordBatch]:
-    """Stream the CSV as all-string batches. Exact text: no inference, no NA."""
+    """Stream the CSV as all-string batches. Exact text: no inference, no NA.
+
+    ``limit``: read only the first ``limit`` bytes (a no-lock store's snapshot).
+    """
     include_list = [c for c in header if c in set(include)] if include is not None else None
+    if limit is not None and limit <= 0:
+        return
+    source = _Bounded(csv_path, limit) if limit is not None else None
+    try:
+        yield from _iter_source(source if source is not None else str(csv_path), header, include_list, block_bytes)
+    finally:
+        if source is not None:
+            source.close()
+
+
+def _iter_source(source: Any, header: list[str], include_list, block_bytes: int) -> Iterator[pa.RecordBatch]:
     reader = pacsv.open_csv(
-        str(csv_path),
+        source,
         read_options=pacsv.ReadOptions(block_size=int(block_bytes), use_threads=False),
         parse_options=pacsv.ParseOptions(newlines_in_values=True),
         convert_options=pacsv.ConvertOptions(
@@ -341,10 +498,10 @@ def _month_of(text: str) -> str:
     return f"{parsed.year:04d}-{parsed.month:02d}" if parsed else UNDATED
 
 
-def _month_keys(batch: pa.RecordBatch | pa.Table) -> list[str]:
-    if DATE_COLUMN not in batch.schema.names:
+def _month_keys(batch: pa.RecordBatch | pa.Table, date_column: str = DATE_COLUMN) -> list[str]:
+    if date_column not in batch.schema.names:
         return [UNDATED] * batch.num_rows
-    return [_month_of(text) for text in batch.column(DATE_COLUMN).to_pylist()]
+    return [_month_of(text) for text in batch.column(date_column).to_pylist()]
 
 
 def _split_by_month(table: pa.Table, keys: list[str]) -> dict[str, pa.Table]:
@@ -498,51 +655,53 @@ def _compare(live: pa.Table, arch: pa.Table, seqs: list[int], columns: list[str]
 
 
 def _check_live_against_archive(
-    csv_path: Path,
+    spec: StoreSpec,
     header: list[str],
     manifest: dict[str, Any],
-    archive_dir: Path,
     *,
     live_offset: int,
     mode: str,
     stop_row: int | None = None,
     block_bytes: int = CSV_BLOCK_BYTES,
+    limit: int | None = None,
 ) -> tuple[int, str | None]:
     """Walk the live file; compare its already-archived rows with the archive.
 
-    ``mode`` is ``keys`` (only KEY_COLUMNS, a narrow read), ``proof`` (every
-    column, allowing the writer's rewrite) or ``exact``. ``stop_row`` limits the
-    comparison to the first ``stop_row`` live rows. Returns (live row count,
-    first problem or None). Rows the archive does not cover are only counted.
+    ``mode`` is ``keys`` (only the store's key columns, a narrow read),
+    ``proof`` (every column, allowing the writer's rewrite) or ``exact``.
+    ``stop_row`` limits the comparison to the first ``stop_row`` live rows;
+    ``limit`` is the byte snapshot to read. Returns (live row count, first
+    problem or None). Rows the archive does not cover are only counted.
     """
     if mode == "keys":
-        columns = [c for c in KEY_COLUMNS if c in header]
-        include = set(columns) | ({DATE_COLUMN} if DATE_COLUMN in header else set())
+        columns = [c for c in spec.key_columns if c in header]
+        include = set(columns) | ({spec.date_column} if spec.date_column in header else set())
     else:
         columns = list(header)
         include = None
     with _closing_all({}) as cursors:
         return _walk_live(
-            csv_path, header, manifest, archive_dir, cursors, columns=columns, include=include,
-            live_offset=live_offset, mode=mode, stop_row=stop_row, block_bytes=block_bytes,
+            spec, header, manifest, cursors, columns=columns, include=include,
+            live_offset=live_offset, mode=mode, stop_row=stop_row, block_bytes=block_bytes, limit=limit,
         )
 
 
-def _walk_live(csv_path, header, manifest, archive_dir, cursors, *, columns, include, live_offset, mode,
-               stop_row, block_bytes) -> tuple[int, str | None]:
+def _walk_live(spec, header, manifest, cursors, *, columns, include, live_offset, mode,
+               stop_row, block_bytes, limit) -> tuple[int, str | None]:
+    archive_dir = spec.archive_dir
     archived = int(manifest.get("archived_rows", 0))
     files = manifest.get("files", {})
-    limit = archived if stop_row is None else min(archived, live_offset + stop_row)
+    upto = archived if stop_row is None else min(archived, live_offset + stop_row)
     count = 0
-    for batch in _iter_csv(csv_path, header, include=include, block_bytes=block_bytes):
+    for batch in _iter_csv(spec.csv_path, header, include=include, block_bytes=block_bytes, limit=limit):
         start = live_offset + count
         count += batch.num_rows
-        lo, hi = start, min(start + batch.num_rows, limit)
+        lo, hi = start, min(start + batch.num_rows, upto)
         if hi <= lo:
             continue
         table = pa.Table.from_batches([batch]).slice(0, hi - lo)
         seqs = list(range(lo, hi))
-        keys = _month_keys(table)
+        keys = _month_keys(table, spec.date_column)
         seq_by_month: dict[str, list[int]] = {}
         for seq, key in zip(seqs, keys, strict=True):
             seq_by_month.setdefault(key, []).append(seq)
@@ -570,10 +729,10 @@ def _walk_live(csv_path, header, manifest, archive_dir, cursors, *, columns, inc
     return count, None
 
 
-def _first_keys(csv_path: Path, header: list[str], n: int) -> list[tuple]:
-    columns = [c for c in KEY_COLUMNS if c in header]
+def _first_keys(spec: StoreSpec, header: list[str], n: int) -> list[tuple]:
+    columns = [c for c in spec.key_columns if c in header]
     rows: list[tuple] = []
-    for batch in _iter_csv(csv_path, header, include=columns, block_bytes=1 << 20):
+    for batch in _iter_csv(spec.csv_path, header, include=columns, block_bytes=1 << 20):
         table = batch.to_pydict()
         for i in range(batch.num_rows):
             rows.append(tuple(table[c][i] for c in columns))
@@ -582,8 +741,9 @@ def _first_keys(csv_path: Path, header: list[str], n: int) -> list[tuple]:
     return rows
 
 
-def _archived_keys(manifest: dict[str, Any], archive_dir: Path, header: list[str], lo: int, n: int) -> list[tuple]:
-    columns = [c for c in KEY_COLUMNS if c in header]
+def _archived_keys(manifest: dict[str, Any], spec: StoreSpec, header: list[str], lo: int, n: int) -> list[tuple]:
+    archive_dir = spec.archive_dir
+    columns = [c for c in spec.key_columns if c in header]
     hi = min(lo + n, int(manifest.get("archived_rows", 0)))
     if hi <= lo:
         return []
@@ -601,7 +761,7 @@ def _archived_keys(manifest: dict[str, Any], archive_dir: Path, header: list[str
     return [tuple(table[c][i] for c in columns) for i in range(len(table[SEQ_COLUMN]))]
 
 
-def _effective_live_offset(manifest: dict[str, Any], archive_dir: Path, csv_path: Path) -> int:
+def _effective_live_offset(manifest: dict[str, Any], spec: StoreSpec) -> int:
     """The live offset, settling a trim that may or may not have reached the file.
 
     A trim writes ``pending_live_offset`` first, replaces the CSV, then commits.
@@ -613,17 +773,17 @@ def _effective_live_offset(manifest: dict[str, Any], archive_dir: Path, csv_path
         return committed
     pending = int(pending)
     try:
-        header = read_header(csv_path)
+        header = read_header(spec.csv_path)
     except ArchiveRefused:
         return committed
     probe = 64
-    live = _first_keys(csv_path, header, probe)
+    live = _first_keys(spec, header, probe)
     if not live:
         # Empty live file: the trim removed everything it proved.
         return pending
 
     def matches(offset: int) -> bool:
-        archived = _archived_keys(manifest, archive_dir, header, offset, len(live))
+        archived = _archived_keys(manifest, spec, header, offset, len(live))
         return bool(archived) and live[: len(archived)] == archived
 
     # The pre-trim file starts with archived rows at the committed offset; if
@@ -637,14 +797,14 @@ def _effective_live_offset(manifest: dict[str, Any], archive_dir: Path, csv_path
     return pending
 
 
-def _settle_pending(manifest: dict[str, Any], archive_dir: Path, csv_path: Path) -> dict[str, Any]:
+def _settle_pending(manifest: dict[str, Any], spec: StoreSpec) -> dict[str, Any]:
     """Under the locks: write down which offset a dead trim left behind."""
     if manifest.get("pending_live_offset") is None:
         return manifest
     settled = dict(manifest)
-    settled["live_offset"] = _effective_live_offset(manifest, archive_dir, csv_path)
+    settled["live_offset"] = _effective_live_offset(manifest, spec)
     settled["pending_live_offset"] = None
-    _write_manifest(archive_dir / MANIFEST_NAME, settled)
+    _write_manifest(spec.archive_dir / MANIFEST_NAME, settled)
     _log.warning("d1 history archive: settled an interrupted trim at live offset %s", settled["live_offset"])
     return settled
 
@@ -658,20 +818,23 @@ def archive(
     csv_path: Any = None,
     archive_dir: Any = None,
     *,
+    store: Any = None,
     block_bytes: int = CSV_BLOCK_BYTES,
     lock_timeout: float = LOCK_TIMEOUT_SECONDS,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Pack the live rows not yet archived; verify them; commit the manifest.
 
-    Idempotent: with nothing new it writes nothing. Raises ArchiveRefused or
-    VerifyFailed (both ArchiveError) with nothing changed.
+    ``store``: a registered store name or a ``StoreSpec`` (default the D1
+    history); ``csv_path`` / ``archive_dir`` override its paths. Idempotent:
+    with nothing new it writes nothing. Raises ArchiveRefused or VerifyFailed
+    (both ArchiveError) with nothing changed.
     """
-    csv_path, archive_dir = _paths(csv_path, archive_dir)
+    spec = _spec(store, csv_path, archive_dir)
     started = time.monotonic()
     try:
-        with _locks(csv_path, archive_dir, lock_timeout):
-            result = _archive_locked(csv_path, archive_dir, block_bytes=block_bytes, now=now)
+        with _locks(spec, lock_timeout):
+            result = _archive_locked(spec, block_bytes=block_bytes, now=now)
     finally:
         _release_memory()
     result["seconds"] = round(time.monotonic() - started, 3)
@@ -686,9 +849,10 @@ def _release_memory() -> None:
         _log.debug("d1 history archive: release_unused failed (%s)", exc)
 
 
-def _archive_locked(csv_path: Path, archive_dir: Path, *, block_bytes: int, now: datetime | None) -> dict[str, Any]:
+def _archive_locked(spec: StoreSpec, *, block_bytes: int, now: datetime | None) -> dict[str, Any]:
+    csv_path, archive_dir = spec.csv_path, spec.archive_dir
     _sweep_stale_temps(csv_path, archive_dir)
-    manifest = _settle_pending(load_manifest(archive_dir), archive_dir, csv_path)
+    manifest = _settle_pending(load_manifest(archive_dir), spec)
     problems = _verify_files(manifest, archive_dir)
     if problems:
         raise VerifyFailed("archive does not verify; nothing packed: " + "; ".join(problems))
@@ -696,6 +860,9 @@ def _archive_locked(csv_path: Path, archive_dir: Path, *, block_bytes: int, now:
     base = {"ok": True, "archived_rows": 0, "total_archived": archived, "months": {}}
     if not csv_path.exists() or csv_path.stat().st_size == 0:
         return {**base, "reason": "no live history file"}
+    # One snapshot for every pass of this run (complete records only when the
+    # writer takes no lock), so a concurrent append is simply left for later.
+    limit = _snapshot_end(csv_path, writer_locked=spec.writer_lock_key is not None)
     header = read_header(csv_path)
     known = list(manifest.get("columns") or [])
     if header[: len(known)] != known:
@@ -705,7 +872,7 @@ def _archive_locked(csv_path: Path, archive_dir: Path, *, block_bytes: int, now:
         )
     live_offset = int(manifest["live_offset"])
     live_rows, problem = _check_live_against_archive(
-        csv_path, header, manifest, archive_dir, live_offset=live_offset, mode="keys", block_bytes=block_bytes
+        spec, header, manifest, live_offset=live_offset, mode="keys", block_bytes=block_bytes, limit=limit
     )
     if problem:
         raise VerifyFailed(f"live file does not match the archive; nothing packed: {problem}")
@@ -721,7 +888,7 @@ def _archive_locked(csv_path: Path, archive_dir: Path, *, block_bytes: int, now:
     added: dict[str, int] = {}
     finals: list[Path] = []
     schema = _archive_schema(header)
-    stream = _iter_csv(csv_path, header, block_bytes=block_bytes)
+    stream = _iter_csv(csv_path, header, block_bytes=block_bytes, limit=limit)
     try:
         # Pass 1: write. Old rows of a touched month are copied first.
         count = 0
@@ -733,7 +900,7 @@ def _archive_locked(csv_path: Path, archive_dir: Path, *, block_bytes: int, now:
                 continue
             table = pa.Table.from_batches([batch]).slice(skip)
             first = start + skip
-            keys = _month_keys(table)
+            keys = _month_keys(table, spec.date_column)
             seq_by_month: dict[str, list[int]] = {}
             for offset, key in enumerate(keys):
                 seq_by_month.setdefault(key, []).append(first + offset)
@@ -777,8 +944,8 @@ def _archive_locked(csv_path: Path, archive_dir: Path, *, block_bytes: int, now:
             "files": {month: {"file": temp.name} for month, temp in temps.items()},
         }
         _, problem = _check_live_against_archive_from(
-            csv_path, header, verify_manifest, archive_dir,
-            live_offset=live_offset, seq_from=archived, block_bytes=block_bytes,
+            spec, header, verify_manifest,
+            live_offset=live_offset, seq_from=archived, block_bytes=block_bytes, limit=limit,
         )
         if problem:
             raise VerifyFailed(f"packed rows do not read back as written: {problem}")
@@ -834,33 +1001,34 @@ def _archive_locked(csv_path: Path, archive_dir: Path, *, block_bytes: int, now:
 
 
 def _check_live_against_archive_from(
-    csv_path: Path,
+    spec: StoreSpec,
     header: list[str],
     manifest: dict[str, Any],
-    archive_dir: Path,
     *,
     live_offset: int,
     seq_from: int,
     block_bytes: int,
+    limit: int | None,
 ) -> tuple[int, str | None]:
     """Exact comparison of live rows at history positions >= ``seq_from``."""
     with _closing_all({}) as cursors:
-        return _walk_from(csv_path, header, manifest, archive_dir, cursors, live_offset=live_offset,
-                          seq_from=seq_from, block_bytes=block_bytes)
+        return _walk_from(spec, header, manifest, cursors, live_offset=live_offset,
+                          seq_from=seq_from, block_bytes=block_bytes, limit=limit)
 
 
-def _walk_from(csv_path, header, manifest, archive_dir, cursors, *, live_offset, seq_from, block_bytes):
+def _walk_from(spec, header, manifest, cursors, *, live_offset, seq_from, block_bytes, limit):
+    archive_dir = spec.archive_dir
     archived = int(manifest["archived_rows"])
     files = manifest["files"]
     count = 0
-    for batch in _iter_csv(csv_path, header, block_bytes=block_bytes):
+    for batch in _iter_csv(spec.csv_path, header, block_bytes=block_bytes, limit=limit):
         start = live_offset + count
         count += batch.num_rows
         lo, hi = max(start, seq_from), min(start + batch.num_rows, archived)
         if hi <= lo:
             continue
         table = pa.Table.from_batches([batch]).slice(lo - start, hi - lo)
-        keys = _month_keys(table)
+        keys = _month_keys(table, spec.date_column)
         seq_by_month: dict[str, list[int]] = {}
         for offset, key in enumerate(keys):
             seq_by_month.setdefault(key, []).append(lo + offset)
@@ -923,6 +1091,7 @@ def verify(
     csv_path: Any = None,
     archive_dir: Any = None,
     *,
+    store: Any = None,
     deep: bool = False,
     lock_timeout: float = LOCK_TIMEOUT_SECONDS,
     block_bytes: int = CSV_BLOCK_BYTES,
@@ -930,28 +1099,32 @@ def verify(
     """Check the archive files and the live file against them. Never raises.
 
     Always: every file's sha256, row count and positions. Then, holding the
-    writer's lock so a scan cannot replace the file mid-read, the key of every
-    live row the archive covers (``deep``: every cell, allowing the writer's
-    widening rewrite). Read-only.
+    writer's lock (where the store has one) so a scan cannot replace the file
+    mid-read, the key of every live row the archive covers (``deep``: every
+    cell, allowing the writer's widening rewrite), read up to a snapshot of
+    complete records. Read-only.
     """
-    csv_path, archive_dir = _paths(csv_path, archive_dir)
     report: dict[str, Any] = {"ok": False, "problems": [], "deep": bool(deep)}
     try:
-        manifest = load_manifest(archive_dir)
+        spec = _spec(store, csv_path, archive_dir)
+        manifest = load_manifest(spec.archive_dir)
     except ArchiveError as exc:
         report["problems"].append(str(exc))
         return report
+    csv_path, archive_dir = spec.csv_path, spec.archive_dir
+    report["store"] = spec.name
     report["archived_rows"] = int(manifest["archived_rows"])
     report["files"] = len(manifest.get("files", {}))
     report["problems"].extend(_verify_files(manifest, archive_dir))
     if not report["problems"] and csv_path.exists() and csv_path.stat().st_size:
         try:
-            with _locks(csv_path, archive_dir, lock_timeout):
+            with _locks(spec, lock_timeout):
+                limit = _snapshot_end(csv_path, writer_locked=spec.writer_lock_key is not None)
                 header = read_header(csv_path)
-                offset = _effective_live_offset(manifest, archive_dir, csv_path)
+                offset = _effective_live_offset(manifest, spec)
                 count, problem = _check_live_against_archive(
-                    csv_path, header, manifest, archive_dir, live_offset=offset,
-                    mode="proof" if deep else "keys", block_bytes=block_bytes,
+                    spec, header, manifest, live_offset=offset,
+                    mode="proof" if deep else "keys", block_bytes=block_bytes, limit=limit,
                 )
             report["live_rows"] = count
             report["unarchived_rows"] = max(0, offset + count - int(manifest["archived_rows"]))
@@ -963,10 +1136,16 @@ def verify(
     return report
 
 
-def status(csv_path: Any = None, archive_dir: Any = None) -> dict[str, Any]:
+def status(csv_path: Any = None, archive_dir: Any = None, *, store: Any = None) -> dict[str, Any]:
     """What the store holds, by manifest and ``stat`` only (cheap)."""
-    csv_path, archive_dir = _paths(csv_path, archive_dir)
-    out: dict[str, Any] = {"csv": str(csv_path), "archive_dir": str(archive_dir)}
+    spec = _spec(store, csv_path, archive_dir)
+    csv_path, archive_dir = spec.csv_path, spec.archive_dir
+    out: dict[str, Any] = {
+        "store": spec.name,
+        "csv": str(csv_path),
+        "archive_dir": str(archive_dir),
+        "writer_lock": "none" if spec.writer_lock_key is None else "held by the writer",
+    }
     out["csv_bytes"] = csv_path.stat().st_size if csv_path.exists() else 0
     try:
         manifest = load_manifest(archive_dir)
@@ -998,7 +1177,8 @@ def trim(
     csv_path: Any = None,
     archive_dir: Any = None,
     *,
-    keep_days: int = DEFAULT_TRIM_KEEP_DAYS,
+    store: Any = None,
+    keep_days: int | None = None,
     today: date | None = None,
     apply: bool = False,
     lock_timeout: float = LOCK_TIMEOUT_SECONDS,
@@ -1006,26 +1186,34 @@ def trim(
 ) -> dict[str, Any]:
     """Drop the archived, proven head of the live CSV older than ``keep_days``.
 
-    A dry run unless ``apply``. Refuses (ArchiveRefused / VerifyFailed, nothing
-    changed) without the writer's lock, with an unreadable header, or when the
-    archive or the rows to remove do not verify.
+    ``keep_days`` defaults to the store's. A dry run unless ``apply``. Refuses
+    (ArchiveRefused / VerifyFailed, nothing changed) for a store whose writer
+    takes no lock (always, whatever any setting says), without the writer's
+    lock, with an unreadable header, or when the archive or the rows to remove
+    do not verify.
     """
-    csv_path, archive_dir = _paths(csv_path, archive_dir)
+    spec = _spec(store, csv_path, archive_dir)
+    if spec.writer_lock_key is None:
+        raise ArchiveRefused(
+            f"{spec.name}: its writer takes no lock, so the live file cannot be rewritten "
+            "without racing an append that would be lost; trim is refused. Turning trim on "
+            "needs the writer to take local_writer_lock first."
+        )
+    keep_days = spec.keep_days if keep_days is None else int(keep_days)
     today = today or date.today()
-    read_header(csv_path)  # refuse before taking any lock when the file is unreadable
+    read_header(spec.csv_path)  # refuse before taking any lock when the file is unreadable
     try:
-        with _locks(csv_path, archive_dir, lock_timeout):
-            return _trim_locked(csv_path, archive_dir, keep_days=int(keep_days), today=today,
-                                apply=apply, block_bytes=block_bytes)
+        with _locks(spec, lock_timeout):
+            return _trim_locked(spec, keep_days=keep_days, today=today, apply=apply, block_bytes=block_bytes)
     finally:
         _release_memory()
 
 
-def _trim_locked(
-    csv_path: Path, archive_dir: Path, *, keep_days: int, today: date, apply: bool, block_bytes: int
-) -> dict[str, Any]:
+def _trim_locked(spec: StoreSpec, *, keep_days: int, today: date, apply: bool, block_bytes: int) -> dict[str, Any]:
+    csv_path, archive_dir = spec.csv_path, spec.archive_dir
+    date_column = spec.date_column
     _sweep_stale_temps(csv_path, archive_dir)
-    manifest = _settle_pending(load_manifest(archive_dir), archive_dir, csv_path)
+    manifest = _settle_pending(load_manifest(archive_dir), spec)
     problems = _verify_files(manifest, archive_dir)
     if problems:
         raise VerifyFailed("archive does not verify; nothing trimmed: " + "; ".join(problems))
@@ -1033,7 +1221,7 @@ def _trim_locked(
     archived = int(manifest["archived_rows"])
     live_offset = int(manifest["live_offset"])
     _, problem = _check_live_against_archive(
-        csv_path, header, manifest, archive_dir, live_offset=live_offset, mode="keys", block_bytes=block_bytes
+        spec, header, manifest, live_offset=live_offset, mode="keys", block_bytes=block_bytes
     )
     if problem:
         raise VerifyFailed(f"live file does not match the archive; nothing trimmed: {problem}")
@@ -1042,11 +1230,11 @@ def _trim_locked(
     remove = 0
     stopped_by = "end_of_file"
     oldest_kept = ""
-    date_cols = [DATE_COLUMN] if DATE_COLUMN in header else []
+    date_cols = [date_column] if date_column in header else []
     live_count = 0
     done = False
     for batch in _iter_csv(csv_path, header, include=date_cols or header[:1], block_bytes=block_bytes):
-        texts = batch.column(DATE_COLUMN).to_pylist() if date_cols else [""] * batch.num_rows
+        texts = batch.column(date_column).to_pylist() if date_cols else [""] * batch.num_rows
         for text in texts:
             if not done:
                 parsed = _parse_run_date(text)
@@ -1076,7 +1264,7 @@ def _trim_locked(
     if remove == 0:
         return result
     _, problem = _check_live_against_archive(
-        csv_path, header, manifest, archive_dir, live_offset=live_offset, mode="proof",
+        spec, header, manifest, live_offset=live_offset, mode="proof",
         stop_row=remove, block_bytes=block_bytes,
     )
     if problem:
@@ -1198,6 +1386,7 @@ def read_history(
     *,
     csv_path: Any = None,
     archive_dir: Any = None,
+    store: Any = None,
     typed: bool = False,
     block_bytes: int = CSV_BLOCK_BYTES,
 ):
@@ -1217,18 +1406,22 @@ def read_history(
     bound reads fewer rows, and pandas may infer a different dtype from fewer
     rows (an int column whose blanks all fall outside the bounds stays int), as it
     would on a CSV holding only those rows.
+
+    ``store``: a registered store name or spec (default the D1 history); the
+    date bounds apply to that store's date column. For a store whose writer
+    takes no lock, the live part is read up to the last complete record.
     """
     import pandas as pd
 
-    csv_path, archive_dir = _paths(csv_path, archive_dir)
+    spec = _spec(store, csv_path, archive_dir)
     since_text, until_text = _date_text(since), _date_text(until)
     bounded = since_text is not None or until_text is not None
     last_error: Exception | None = None
     for _attempt in range(_READ_RETRIES):
         try:
-            before = load_manifest(archive_dir)
-            frame = _read_once(before, csv_path, archive_dir, columns, since_text, until_text, bounded, block_bytes)
-            after = load_manifest(archive_dir)
+            before = load_manifest(spec.archive_dir)
+            frame = _read_once(before, spec, columns, since_text, until_text, bounded, block_bytes)
+            after = load_manifest(spec.archive_dir)
         except (FileNotFoundError, pa.ArrowInvalid, OSError) as exc:
             last_error = exc
             time.sleep(0.05)
@@ -1245,10 +1438,14 @@ def read_history(
     return frame
 
 
-def _read_once(manifest, csv_path, archive_dir, columns, since_text, until_text, bounded, block_bytes):
+def _read_once(manifest, spec, columns, since_text, until_text, bounded, block_bytes):
     import pandas as pd
 
+    csv_path, archive_dir, date_column = spec.csv_path, spec.archive_dir, spec.date_column
     header = read_header(csv_path) if csv_path.exists() and csv_path.stat().st_size else []
+    limit = (
+        _snapshot_end(csv_path, writer_locked=False) if header and spec.writer_lock_key is None else None
+    )
     known = list(manifest.get("columns") or [])
     all_columns = known + [c for c in header if c not in known]
     if columns is None:
@@ -1259,7 +1456,7 @@ def _read_once(manifest, csv_path, archive_dir, columns, since_text, until_text,
         if missing:
             raise ValueError(f"columns not in the history: {missing}")
         wanted = [c for c in all_columns if c in set(requested)]
-    need = list(wanted) + ([DATE_COLUMN] if bounded and DATE_COLUMN not in wanted else [])
+    need = list(wanted) + ([date_column] if bounded and date_column not in wanted else [])
 
     pieces: list[pa.Table] = []
     archived = int(manifest.get("archived_rows", 0))
@@ -1267,9 +1464,9 @@ def _read_once(manifest, csv_path, archive_dir, columns, since_text, until_text,
     hi_month = until_text[:7] if until_text else None
     filters = []
     if since_text:
-        filters.append((DATE_COLUMN, ">=", since_text))
+        filters.append((date_column, ">=", since_text))
     if until_text:
-        filters.append((DATE_COLUMN, "<", (date.fromisoformat(until_text) + timedelta(days=1)).isoformat()))
+        filters.append((date_column, "<", (date.fromisoformat(until_text) + timedelta(days=1)).isoformat()))
     for month, entry in sorted(manifest.get("files", {}).items()):
         if bounded and (month == UNDATED or (lo_month and month < lo_month) or (hi_month and month > hi_month)):
             continue
@@ -1284,11 +1481,11 @@ def _read_once(manifest, csv_path, archive_dir, columns, since_text, until_text,
 
     live_tables: list[pa.Table] = []
     if header:
-        offset = _effective_live_offset(manifest, archive_dir, csv_path)
+        offset = _effective_live_offset(manifest, spec)
         skip = max(0, archived - offset)
         seen = 0
         include = [c for c in need if c in header] or header[:1]
-        for batch in _iter_csv(csv_path, header, include=include, block_bytes=block_bytes):
+        for batch in _iter_csv(csv_path, header, include=include, block_bytes=block_bytes, limit=limit):
             start = seen
             seen += batch.num_rows
             lo = max(0, skip - start)
@@ -1296,8 +1493,8 @@ def _read_once(manifest, csv_path, archive_dir, columns, since_text, until_text,
                 continue
             table = pa.Table.from_batches([batch]).slice(lo)
             if bounded:
-                dates = [_date_text_or_none(t) for t in table.column(DATE_COLUMN).to_pylist()] if (
-                    DATE_COLUMN in table.schema.names
+                dates = [_date_text_or_none(t) for t in table.column(date_column).to_pylist()] if (
+                    date_column in table.schema.names
                 ) else [None] * table.num_rows
                 mask = [
                     d is not None and (since_text is None or d >= since_text) and (until_text is None or d <= until_text)
@@ -1329,33 +1526,36 @@ def _date_text_or_none(text: str) -> str | None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="d1_feature_history_archive",
-        description="Lossless monthly Parquet packing of d1_features_history.csv.",
+        description="Lossless monthly Parquet packing of append-only CSV stores (default: the D1 history).",
     )
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("status", "archive", "verify", "trim"):
         cmd = sub.add_parser(name)
-        cmd.add_argument("--csv", default=None, help="history CSV (default: the live one)")
-        cmd.add_argument("--archive-dir", default=None, help="archive folder (default: beside the CSV)")
+        cmd.add_argument("--store", default=D1_STORE,
+                         help=f"registered store name (default: {D1_STORE})")
+        cmd.add_argument("--csv", default=None, help="live CSV (default: the store's)")
+        cmd.add_argument("--archive-dir", default=None, help="archive folder (default: the store's)")
         if name == "verify":
             cmd.add_argument("--deep", action="store_true", help="compare every cell of every live row")
         if name == "trim":
-            cmd.add_argument("--keep-days", type=int, default=DEFAULT_TRIM_KEEP_DAYS)
+            cmd.add_argument("--keep-days", type=int, default=None, help="default: the store's (30)")
             cmd.add_argument("--today", default=None, help="YYYY-MM-DD (default: today)")
             cmd.add_argument("--apply", action="store_true", help="really rewrite the live file")
     args = parser.parse_args(argv)
     try:
         if args.command == "status":
-            out = status(args.csv, args.archive_dir)
+            out = status(args.csv, args.archive_dir, store=args.store)
             code = 0
         elif args.command == "archive":
-            out = archive(args.csv, args.archive_dir)
+            out = archive(args.csv, args.archive_dir, store=args.store)
             code = 0
         elif args.command == "verify":
-            out = verify(args.csv, args.archive_dir, deep=args.deep)
+            out = verify(args.csv, args.archive_dir, store=args.store, deep=args.deep)
             code = 0 if out["ok"] else 1
         else:
             today = date.fromisoformat(args.today) if args.today else None
-            out = trim(args.csv, args.archive_dir, keep_days=args.keep_days, today=today, apply=args.apply)
+            out = trim(args.csv, args.archive_dir, store=args.store, keep_days=args.keep_days,
+                       today=today, apply=args.apply)
             if not args.apply:
                 print(f"DRY RUN: would remove {out['would_remove']} rows; pass --apply to trim.")
             code = 0
