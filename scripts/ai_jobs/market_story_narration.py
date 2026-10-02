@@ -6,16 +6,18 @@ else.  A failed call leaves the last verified narration untouched.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 PROMPT_VERSION = "market_story_narration_v1"
 SCHEMA = "market_story_narration_v1"
+SCHEMA_NAME = "tradingbot_market_story_narration"
 
 #: How many click options the overnight question may carry (TJ-14B). Four is a
 #: card row; a fifth is a list, and a list is not a click.
@@ -316,6 +318,30 @@ def _check_directions(narration: Mapping[str, Any], packs: Mapping[str, Mapping[
                 raise ValueError(f"narration says {symbol} {word}, which no measured bar or journal note says")
 
 
+def call_schema(allowed_ids: Sequence[str]) -> dict[str, Any]:
+    """The request schema for ONE call: `sources` closed to the allowed ids, so the grammar
+    cannot write a mistyped id (gpt-oss:20b failed the open check six of six times, 2026-10-02).
+    The module constant stays open; the local check below still decides."""
+    schema = copy.deepcopy(NARRATION_JSON_SCHEMA)
+    ids = [str(item) for item in allowed_ids if str(item)]
+    if ids:
+        schema["properties"]["sources"]["items"] = {"type": "string", "maxLength": 160, "enum": ids}
+    return schema
+
+
+def _check_sources(narration: Mapping[str, Any], allowed: set[str]) -> None:
+    """Every cited id must be one of the pack's ids; the rejection names the ones that are not."""
+    cited = [str(item) for item in narration.get("sources") or ()]
+    if not cited:
+        raise ValueError("narration cited no source; copy ids exactly from allowed_source_ids")
+    bad = [item for item in cited if item not in allowed]
+    if bad:
+        raise ValueError(
+            f"narration cited {bad!r}, which no fact pack carries; "
+            "copy ids exactly from allowed_source_ids"
+        )
+
+
 def _check_inline_sources(narration: Mapping[str, Any], allowed: set[str]) -> None:
     texts = [str(narration.get("summary") or "")] + [str(item) for item in narration.get("changes") or ()]
     for text in texts:
@@ -424,8 +450,8 @@ def run_market_story_narration(
             api_key="",
             evidence=dict(seen),
             timeout_seconds=900,
-            schema=NARRATION_JSON_SCHEMA,
-            schema_name="tradingbot_market_story_narration",
+            schema=call_schema(evidence["allowed_source_ids"]),
+            schema_name=SCHEMA_NAME,
             prompt_version=PROMPT_VERSION,
         )
 
@@ -434,12 +460,17 @@ def run_market_story_narration(
         if not isinstance(narration, Mapping):
             raise ValueError("local AI returned no narration")
         allowed = set(evidence["allowed_source_ids"])
-        cited = [str(item) for item in narration.get("sources") or ()]
-        if not cited or any(source not in allowed for source in cited):
-            raise ValueError("narration cited a source outside its fact packs")
-        _check_inline_sources(narration, allowed)
-        _check_directions(narration, packs)
-        _check_mentor_question_options(narration)
+        try:
+            _check_sources(narration, allowed)
+            _check_inline_sources(narration, allowed)
+            _check_directions(narration, packs)
+            _check_mentor_question_options(narration)
+        except ValueError as exc:
+            # Keep the rejected story beside the other slots' rejected replies (never raises).
+            ai_summary.record_rejected_reply(
+                schema_name=SCHEMA_NAME, text=json.dumps(narration, default=str), error=str(exc)
+            )
+            raise
         return narration
 
     try:

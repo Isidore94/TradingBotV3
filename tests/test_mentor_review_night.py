@@ -208,12 +208,15 @@ def test_the_model_call_is_capped_at_2500_output_tokens(monkeypatch):
     import ai_summary
 
     monkeypatch.setattr(ai_summary, "local_reasoning_tokens", lambda: 8000)
+    # The effort is the trader's setting, not a constant: gpt-oss:20b at high reasoned past the
+    # ceiling on every slot (2026-10-02 probe); medium answered.
+    monkeypatch.setattr(ai_summary, "local_reasoning_effort", lambda: "medium")
     sent = {}
     wrapped = mentor_review.capped_post(lambda url, **kw: sent.update(kw["json"]), model="gpt-oss:20b")
     wrapped("http://h/v1/chat/completions", json={"max_tokens": 4000})
     # A thinking tag: the 2500-token answer cap plus the reasoning allowance, since its reasoning
     # counts against max_tokens (gemma4:12b under a bare 600 cap answered nothing, 2026-09-30).
-    assert sent == {"max_tokens": 10500, "reasoning_effort": "high"}
+    assert sent == {"max_tokens": 10500, "reasoning_effort": "medium"}
     sent.clear()
     # gemma4 thinks unless told not to; the night tells it not to (it spent 11.5k tokens reasoning
     # and answered nothing in 8 of 8 night calls, 2026-10-01).

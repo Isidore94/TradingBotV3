@@ -183,3 +183,82 @@ def test_an_inline_citation_outside_the_packs_is_rejected(tmp_path):
         request=_story(["SPY fell (journal:mj-made-up)."]),
     )
     assert result["status"] == "degraded_no_narrative"
+
+
+def test_a_bad_citation_is_named_in_the_rejection_and_the_reply_is_kept(tmp_path, monkeypatch):
+    """gpt-oss:20b failed this check six times on 2026-10-02 and the retry only heard 'a source
+    outside its fact packs': the fed-back reason must name the id, and the reply must be kept."""
+    import ai_summary
+    from ai_jobs.market_story_narration import run_market_story_narration
+
+    rollups = tmp_path / "rollups"
+    _packs(rollups)
+    recorded: list[dict] = []
+    monkeypatch.setattr(ai_summary, "record_rejected_reply", lambda **kw: recorded.append(kw))
+    instructions: list[str] = []
+
+    def request(**kwargs):
+        instructions.append(kwargs["evidence"]["instructions"])
+        return {
+            "model": "local-test",
+            "summary": {
+                "summary": "Invented.",
+                "changes": [],
+                "open_questions": [],
+                "mentor_question": "",
+                "sources": ["journal:note-1", "journal:note-9"],
+            },
+        }
+
+    result = run_market_story_narration(
+        session_date="2026-09-14",
+        now=datetime(2026, 9, 15, 7, 0, tzinfo=timezone.utc),
+        rollups_dir=rollups,
+        out_dir=tmp_path / "narration",
+        request=request,
+    )
+    assert result["status"] == "degraded_no_narrative"
+    assert "'journal:note-9'" in result["reason"] and "allowed_source_ids" in result["reason"]
+    assert len(instructions) >= 2 and "'journal:note-9'" in instructions[1]
+    assert recorded and recorded[0]["schema_name"] == "tradingbot_market_story_narration"
+    assert "journal:note-9" in recorded[0]["text"] and "journal:note-9" in recorded[0]["error"]
+
+
+def test_the_call_schema_closes_sources_to_the_allowed_ids(tmp_path):
+    """The grammar forbids a mistyped id outright; the module constant stays open for other readers."""
+    from ai_jobs import market_story_narration as story
+
+    rollups = tmp_path / "rollups"
+    _packs(rollups)
+    schemas: list[dict] = []
+
+    def request(**kwargs):
+        schemas.append(kwargs["schema"])
+        return {
+            "model": "local-test",
+            "summary": {
+                "summary": "The trader expected SPY to hold 5400.",
+                "changes": [],
+                "open_questions": [],
+                "mentor_question": "What would make the 5400 thesis wrong today?",
+                "sources": ["journal:note-1"],
+            },
+        }
+
+    result = story.run_market_story_narration(
+        session_date="2026-09-14",
+        now=datetime(2026, 9, 15, tzinfo=timezone.utc),
+        rollups_dir=rollups,
+        out_dir=tmp_path / "narration",
+        request=request,
+    )
+    assert result["status"] == "ok"
+    items = schemas[0]["properties"]["sources"]["items"]
+    assert items["enum"] == [
+        "journal:note-1",
+        "rollup:monthly:2026-09",
+        "rollup:quarterly:2026-Q3",
+        "rollup:weekly:2026-W37",
+    ]
+    assert items["type"] == "string"
+    assert "enum" not in story.NARRATION_JSON_SCHEMA["properties"]["sources"]["items"]
