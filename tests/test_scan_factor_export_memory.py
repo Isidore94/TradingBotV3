@@ -231,6 +231,192 @@ def test_exports_match_the_builders_fed_the_full_width_history(frozen, tmp_path)
 
 
 # ---------------------------------------------------------------------------
+# Focused pins the sampled fixture does not reach on its own.
+# ---------------------------------------------------------------------------
+
+
+def _write_history(path: Path, rows: list[dict]) -> Path:
+    pd.DataFrame(rows).to_csv(path, index=False)
+    return path
+
+
+def test_same_day_repeat_scans_are_ordered_by_run_timestamp(tmp_path):
+    """`run_timestamp` breaks the tie between a symbol's same-day scans, and names a row with no run_id.
+
+    The live run ids sort the same way as their timestamps, so the sampled
+    fixture cannot tell the two apart. Here they disagree: the 15:00 scan has
+    the SMALLER run id and the earlier input position, and it is still the one
+    kept, because the timestamp sorts first.
+    """
+    history = _write_history(
+        tmp_path / "history.csv",
+        [
+            {"symbol": "AAA", "side": "LONG", "last_trade_date": "2026-09-01", "run_id": "r2",
+             "run_timestamp": "2026-09-01T15:00:00", "last_close": 11.0},
+            {"symbol": "AAA", "side": "LONG", "last_trade_date": "2026-09-01", "run_id": "r9",
+             "run_timestamp": "2026-09-01T10:00:00", "last_close": 12.0},
+            {"symbol": "AAA", "side": "LONG", "last_trade_date": "2026-09-02", "run_id": "",
+             "run_timestamp": "2026-09-02T10:00:00", "last_close": 13.0},
+        ],
+    )
+    result = legacy.export_scan_factor_views(
+        history, tmp_path / "obs.csv", tmp_path / "lb.csv", include_data=True
+    )
+    observations = result["_observation_rows"]
+    assert [(row["scan_row_id"], row["entry_close"], row["future_close"]) for row in observations] == [
+        ("AAA:2026-09-01:r2", 11.0, 13.0)
+    ]
+    prepared = legacy._prepare_scan_factor_history_frame(result["_history_df"])
+    assert list(prepared["_scan_row_id"]) == ["AAA:2026-09-01:r2", "AAA:2026-09-02:2026-09-02T10:00:00"]
+
+
+def test_the_session_horizon_study_families_read_sector(tmp_path, monkeypatch):
+    """`sector` decides `leader_pullback_long` when the family is not top_pattern_tracking."""
+    monkeypatch.setattr(
+        market_calendar, "last_completed_session", lambda now: FROZEN_LAST_COMPLETED_SESSION
+    )
+    rows = []
+    for symbol, sector in (("TEC", "Technology"), ("ENE", "Energy")):
+        rows.append(
+            {"symbol": symbol, "side": "LONG", "last_trade_date": "2026-09-30", "run_id": "r1",
+             "run_timestamp": "2026-09-30T10:00:00", "last_close": 50.0,
+             "setup_family": "avwap_band_bounce", "pct_from_current_vwap": -5.0, "sector": sector}
+        )
+    history = _write_history(tmp_path / "history.csv", rows)
+    out = tmp_path / "session.csv"
+    legacy.export_bot_tier_tracker_views(
+        history,
+        tmp_path / "list.csv",
+        tmp_path / "outcomes.csv",
+        tmp_path / "performance.csv",
+        tmp_path / "catch.csv",
+        session_horizon_path=out,
+    )
+    written = pd.read_csv(out, keep_default_na=False)
+    families = dict(zip(written["symbol"], written["study_families"].astype(str), strict=False))
+    assert families == {"TEC": "leader_pullback_long", "ENE": ""}
+
+
+# ---------------------------------------------------------------------------
+# The hand-kept column list, guarded by the names the code actually asks for.
+# ---------------------------------------------------------------------------
+
+_ACCESSED: set[str] = set()
+
+
+def _note(key) -> None:
+    if isinstance(key, str):
+        _ACCESSED.add(key)
+    elif isinstance(key, (list, tuple)):
+        _ACCESSED.update(item for item in key if isinstance(item, str))
+
+
+class _RecordingDict(dict):
+    def __getitem__(self, key):
+        _note(key)
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        _note(key)
+        return super().get(key, default)
+
+    def __contains__(self, key):
+        _note(key)
+        return super().__contains__(key)
+
+
+class _RecordingSeries(pd.Series):
+    @property
+    def _constructor(self):
+        return _RecordingSeries
+
+    @property
+    def _constructor_expanddim(self):
+        return _RecordingFrame
+
+    def get(self, key, default=None):
+        _note(key)
+        return super().get(key, default)
+
+
+class _RecordingFrame(pd.DataFrame):
+    """A history frame that remembers every column name read from it or its rows.
+
+    Subclassing survives the copies, filters, sorts and groupbys the builders
+    do, and `to_dict("records")` hands out dicts that record `get`/`[]`/`in`.
+    """
+
+    @property
+    def _constructor(self):
+        return _RecordingFrame
+
+    @property
+    def _constructor_sliced(self):
+        return _RecordingSeries
+
+    def __getitem__(self, key):
+        _note(key)
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        _note(key)
+        return super().get(key, default)
+
+    def to_dict(self, orient="dict", *args, **kwargs):
+        out = super().to_dict(orient, *args, **kwargs)
+        if orient == "records":
+            return [_RecordingDict(row) for row in out]
+        return out
+
+
+def test_every_history_column_the_exports_read_is_in_the_loaded_list(frozen, tmp_path, monkeypatch):
+    """A reader of a history column that `SCAN_FACTOR_HISTORY_COLUMNS` does not load would read None.
+
+    This records every column NAME the two exports (and the session-horizon
+    export and its study families) ask a history-derived frame, row or record
+    for, whatever its value, and requires each to be loaded or to be a column
+    the prepare step derives. It catches a new reader even of a column the
+    fixture does not carry. Its limit: a read made only on a branch the fixture
+    never takes, or from a plain-dict copy outside the two wrapped
+    `long_study_families` entry points, is not seen.
+    """
+    import long_study_families
+
+    real_read = legacy._read_scan_factor_history
+    monkeypatch.setattr(
+        legacy, "_read_scan_factor_history", lambda path: _RecordingFrame(real_read(path))
+    )
+    real_rs = long_study_families.session_rs_values
+    real_families = long_study_families.study_families
+    monkeypatch.setattr(
+        long_study_families,
+        "session_rs_values",
+        lambda rows: real_rs(_RecordingDict(row) for row in rows),
+    )
+    monkeypatch.setattr(
+        long_study_families,
+        "study_families",
+        lambda row, values: real_families(_RecordingDict(row), values),
+    )
+    _ACCESSED.clear()
+    run_runner_sequence(frozen, tmp_path / "runner")
+    run_standalone_tier_export(frozen, tmp_path / "standalone")
+    accessed = set(_ACCESSED)
+    _ACCESSED.clear()
+
+    # Sanity: the recorder saw the readers it is meant to watch.
+    assert {"priority_bucket", "assigned_tier", "sector", "perm_strength_filter", "setup_tags"} <= accessed
+    derived = set(legacy._SCAN_FACTOR_PREPARED_COLUMNS) | {
+        "_collapsed_same_session",  # session_horizon_outcomes adds it
+        "scan_date",  # session_horizon_outcomes sets it on the row it hands the study families
+    }
+    unlisted = sorted(accessed - legacy.SCAN_FACTOR_HISTORY_COLUMNS - derived)
+    assert not unlisted, (
+        f"the exports read history column(s) {unlisted} that SCAN_FACTOR_HISTORY_COLUMNS does not load"
+    )
+
+
+# ---------------------------------------------------------------------------
 # The improvement, pinned without a megabyte number.
 # ---------------------------------------------------------------------------
 
