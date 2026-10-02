@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
@@ -130,6 +131,8 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
 DAY_REVIEW_PAGE_TITLE = "Day Review"
 #: How often the desk re-stats the Trade Mentor app's slots file for the button badge.
 MENTOR_BADGE_POLL_MS = 5_000
+#: Persistent Auto Mode control (plan.md sec 15.2): the drop-down's choices.
+AUTO_MODE_CHOICES = ("OFF", "DESK", "AWAY", "EVENING")
 
 
 class MainWindow(MentorHostMixin, QMainWindow):
@@ -580,12 +583,12 @@ class MainWindow(MentorHostMixin, QMainWindow):
         status = QStatusBar()
         self.setStatusBar(status)
         # Persistent Auto Mode control (plan.md sec 15.2): visible and
-        # clickable from every page - OFF -> AUTO-DESK -> AUTO-AWAY ->
-        # AUTO-EVENING -> OFF.
+        # clickable from every page; the button opens a drop-down of
+        # all modes.
         self.auto_mode_button = QPushButton()
         self.auto_mode_button.setObjectName("AutoModeButton")
         self.auto_mode_button.setToolTip(
-            "Click to cycle Auto Mode: OFF -> AUTO-DESK -> AUTO-AWAY -> AUTO-EVENING -> OFF. "
+            "Click to choose Auto Mode: OFF, AUTO-DESK, AUTO-AWAY or AUTO-EVENING. "
             "Profiles change presentation only - never trading decisions. "
             "DESK sends nothing to your phone. "
             "EVENING = arm the night before a sleep-in morning: it scans like DESK, "
@@ -593,7 +596,7 @@ class MainWindow(MentorHostMixin, QMainWindow):
             "SPY 1% move or a price alert until you change mode; the flip out shows "
             "a catch-up card."
         )
-        self.auto_mode_button.clicked.connect(self._cycle_auto_mode)
+        self.auto_mode_button.setMenu(self._build_auto_mode_menu())
         self.autopilot_panel.service.enabledChanged.connect(lambda *_: self._sync_auto_mode_button())
         self._sync_auto_mode_button()
         status.addWidget(self.auto_mode_button)
@@ -835,18 +838,6 @@ class MainWindow(MentorHostMixin, QMainWindow):
 
         launch_or_focus()
 
-    def _cycle_auto_mode(self) -> None:
-        service = self.autopilot_panel.service
-        mode = service.auto_mode
-        if mode == "OFF":
-            self._set_auto_mode("DESK")
-        elif mode == "DESK":
-            self._set_auto_mode("AWAY")
-        elif mode == "AWAY":
-            self._set_auto_mode("EVENING")
-        else:
-            self._set_auto_mode("OFF")
-
     def _set_auto_mode(self, mode: str) -> None:
         """One entry point for every Auto mode change."""
         service = self.autopilot_panel.service
@@ -857,6 +848,26 @@ class MainWindow(MentorHostMixin, QMainWindow):
             service.set_enabled(True)
         self._sync_auto_mode_button()
 
+    def _build_auto_mode_menu(self) -> QMenu:
+        """Drop-down of every Auto Mode profile, with the current one checked."""
+        menu = QMenu(self.auto_mode_button)
+        menu.setObjectName("AutoModeMenu")
+        self._auto_mode_actions = {}
+        for mode in AUTO_MODE_CHOICES:
+            action = menu.addAction(f"Auto: {mode}")
+            action.setCheckable(True)
+            action.triggered.connect(lambda _checked=False, m=mode: self._set_auto_mode(m))
+            self._auto_mode_actions[mode] = action
+        menu.aboutToShow.connect(self._refresh_auto_mode_menu)
+        self.auto_mode_menu = menu
+        self._refresh_auto_mode_menu()
+        return menu
+
+    def _refresh_auto_mode_menu(self) -> None:
+        current = self.autopilot_panel.service.auto_mode
+        for mode, action in getattr(self, "_auto_mode_actions", {}).items():
+            action.setChecked(mode == current)
+
     def _sync_auto_mode_button(self) -> None:
         mode = self.autopilot_panel.service.auto_mode
         text = "Auto: OFF" if mode == "OFF" else f"Auto: {mode}"
@@ -865,6 +876,7 @@ class MainWindow(MentorHostMixin, QMainWindow):
         self.auto_mode_button.setStyleSheet(
             f"QPushButton#AutoModeButton {{ color: {color}; font-weight: 600; padding: 1px 10px; }}"
         )
+        self._refresh_auto_mode_menu()
 
     def _sync_scan_scheduler_owner(self, enabled: bool) -> None:
         owner = "Auto Pilot" if bool(enabled) else ""
