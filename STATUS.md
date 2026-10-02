@@ -23,13 +23,14 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   permutation report (#330, shadow). Merged 10-01 (#338): P19 night rejections, digest cap,
   mentor digest retry. Next: morning pre-brief queue; rule audit once plan lines exist.
 - **Night model: gpt-oss:20b, effort medium, allowance 24k** (trader's word 2026-10-02; Mentor chat
-  pinned to gemma4:12b via `mentor_model`; probe: medium 9/10 slots, high unusable). Merged:
-  story rejection names the ids, schema closed to the pack's ids. First gpt-oss night: 10-02.
+  pinned to gemma4:12b via `mentor_model`). Merged: story rejection names the ids, schema
+  closed to the pack's ids. First gpt-oss night 10-02.
 - **Merged 2026-10-02:** AVWAPE quick test (Setup Tracker rows, both sides); docked Mentor
-  hides off its desk page. **Unmerged:** `claude/gemma4-thinking-high-2026-10-01`.
-- **Night window:** 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435; the app uses
-  11436). No local models on the mini-PC: host down = facts only; rerun a missed night with
-  `--session <date> --force`. No builders, merges or test runs 22:00-02:00 PT.
+  hides off its desk page. **Unmerged:** `claude/gemma4-thinking-high-2026-10-01`,
+  `claude/plan-rule-gate-2026-10-02`.
+- **Night window:** 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435; app uses
+  11436). Mini-PC's one local model: plan-rule gate (Kev-4B CPU). Host down: facts only;
+  rerun a missed night with `--session <date> --force`. No builds/merges/tests 22:00-02:00 PT.
 - **Owed:** trial ledger index; rolling-RRS leftovers on % (ask first); TLT/USO/HYG bars
   (ask first); halted-name refetch; movers into the night AI; phone-brief rule line; theta store.
 - **Next action:** gates #305, #300-#301, #297-#298, #258-#287. Left: B10, B2, C4a, Phase C.
