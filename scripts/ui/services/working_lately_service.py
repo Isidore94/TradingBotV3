@@ -367,6 +367,25 @@ def read_long_leader_lines() -> list[str]:
     return lines
 
 
+def read_avwape_quick_test_lines() -> list[str]:
+    """The Setup Tracker's AVWAPE quick test section and its two grade lines. THE WORKER SIDE.
+
+    Cached on the two quick-test files; a missing file reads as "no scan yet".
+    """
+    import avwape_quick_test
+    import avwape_quick_test_store
+    import setup_grades
+    from project_paths import AVWAPE_QUICK_TEST_FILE, AVWAPE_QUICK_TEST_HISTORY_FILE
+
+    def build() -> list[str]:
+        lines = avwape_quick_test.tracker_lines(avwape_quick_test_store.read_avwape_quick_test(AVWAPE_QUICK_TEST_FILE))
+        cells = setup_grades.avwape_quick_test_cells(avwape_quick_test_store.read_history(AVWAPE_QUICK_TEST_HISTORY_FILE))
+        return [*lines, *(setup_grades.avwape_quick_test_line(cell) for cell in cells)]
+
+    key = (_file_key(Path(AVWAPE_QUICK_TEST_FILE)), _file_key(Path(AVWAPE_QUICK_TEST_HISTORY_FILE)))
+    return list(_cached("avwape_quick_test_lines", key, build))
+
+
 def _parquet_closes(path: Path) -> dict[str, float]:
     """One symbol's daily closes from the durable bar store, `{iso date: close}`; {} when unreadable."""
     try:

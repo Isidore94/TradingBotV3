@@ -727,6 +727,91 @@ def long_setup_line(cell: Mapping[str, Any] | None) -> str:
     return f"{line}; limit not filled {int(cell.get('no_fill') or 0)}"
 
 
+def avwape_quick_test_cells(history_rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The AVWAPE quick test's two graded cells (LONG, SHORT) over its settled history.
+
+    `long_setup_cells`' shape, per side. ``return_pct`` is already in the trade's favour.
+    ``raw`` = return > 0, only in windows where SPY moved the side's way by more than
+    `long_setups.GRADE_SPY_UP_MIN_PCT` (up for a LONG, down for a SHORT); ``tape`` = the return
+    beat SPY's same-side return (a SHORT beats the tape when its return > -SPY). A no-fill is
+    counted apart, never a loss; an unsettled row or an unknown SPY is left out. Display only.
+    """
+    import avwape_quick_test
+    import long_setups
+
+    tallies = {side: {"raw_n": 0, "raw_wins": 0, "raw_days": set(), "raw_values": [],
+                      "tape_n": 0, "tape_wins": 0, "tape_days": set(), "tape_values": [],
+                      "no_fill": 0, "days": set()} for side in avwape_quick_test.SIDES}
+    for row in history_rows or ():
+        side = str(row.get("side") or "").strip().upper()
+        tally = tallies.get(side)
+        outcome = str(row.get("outcome") or "")
+        if tally is None or not outcome:
+            continue
+        day = str(row.get("as_of") or "")[:10]
+        tally["days"].add(day)
+        if outcome == "no_fill":
+            tally["no_fill"] += 1
+            continue
+        side_return, spy_return = _float(row.get("return_pct")), _float(row.get("spy_return_pct"))
+        if outcome != "filled" or side_return is None or spy_return is None:
+            continue
+        spy_side = spy_return if side == "LONG" else -spy_return
+        tally["tape_n"] += 1
+        tally["tape_wins"] += 1 if side_return > spy_side else 0
+        tally["tape_days"].add(day)
+        tally["tape_values"].append(side_return - spy_side)
+        if spy_side > long_setups.GRADE_SPY_UP_MIN_PCT:
+            tally["raw_n"] += 1
+            tally["raw_wins"] += 1 if side_return > 0 else 0
+            tally["raw_days"].add(day)
+            tally["raw_values"].append(side_return)
+    cells = []
+    for side, tally in tallies.items():
+        days = sorted(tally["days"])
+        cells.append({
+            "family": avwape_quick_test.SETUP, "side": side, "headline": "raw", "no_fill": tally["no_fill"],
+            "raw": _study_side_cell(tally["raw_n"], tally["raw_wins"], tally["raw_days"], tally["raw_values"])
+            if tally["raw_n"] else None,
+            "tape": _study_side_cell(tally["tape_n"], tally["tape_wins"], tally["tape_days"], tally["tape_values"])
+            if tally["tape_n"] else None,
+            "first": days[0] if days else "", "last": days[-1] if days else "",
+        })
+    return cells
+
+
+def avwape_quick_test_line(cell: Mapping[str, Any] | None) -> str:
+    """``avwape_quick_test SHORT: raw in SPY-down (<-1%) windows C 55% ... · vs SPY ...; limit not filled 2``."""
+    import long_setups
+
+    cell = dict(cell or {})
+    side = str(cell.get("side") or "LONG")
+    head = f"{cell.get('family')} {side}"
+    no_fill = int(cell.get("no_fill") or 0)
+    if not cell.get("raw") and not cell.get("tape"):
+        extra = f" ({no_fill} limit(s) not filled)" if no_fill else ""
+        return f"{head}: no settled filled rows yet{extra}."
+    move = long_setups.GRADE_SPY_UP_MIN_PCT
+
+    def part(basis: str) -> str:
+        grade = cell.get(basis) or {}
+        n = int(grade.get("n") or 0)
+        if basis == "tape":
+            label = "vs SPY"
+        elif side == "LONG":
+            label = f"raw in SPY-up (>{move:g}%) windows"
+        else:
+            label = f"raw in SPY-down (<-{move:g}%) windows"
+        if not n:
+            return f"{label} unknown (n 0)"
+        mean = _float(grade.get("mean_pct"))
+        mean_text = f", {'avg' if basis == 'raw' else 'excess'} {mean:+.2f}%" if mean is not None else ""
+        return f"{label} {badge(grade.get('grade'))} {_pct(grade.get('win_rate') or 0)}{mean_text}, n {n}"
+
+    dates = f" (scan dates {cell.get('first')} to {cell.get('last')})" if cell.get("first") else ""
+    return f"{head}: {part('raw')} · {part('tape')}{dates}; limit not filled {no_fill}"
+
+
 # ---------------------------------------------------------------------------
 # day trade: +1R before -1R
 # ---------------------------------------------------------------------------

@@ -2,13 +2,13 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-10-02 07:40 PT (gpt-oss medium is the night model; story fix merged)
+**Updated:** 2026-10-02 08:10 PT (AVWAPE quick test built, unmerged)
 
 - **Live on `main`:** rounds 1-2, p9 phases 1-4, p10 research lake + auto regimes (research
   only); rolling RRS, cutoff 1.0 (`TRADINGBOTV3_RRS_ENGINE=desk` = old); Movers tint + SMA
   gate, Yahoo guard, Movers boxes, Dip anchors, focus preview, idle-probe skip; gates #257-#306.
 - **GUI:** 4K design live; selftests 105/105; long Qt runs still crash workers. Desk hitch
-  fixes merged 09-30 night (GIL waits under the Setup Tracker paint); gate #337 on the first session.
+  fixes merged 09-30 (gate #337 on the first session).
 - **Trade Mentor app (merged 09-30, P0-P17 + Pause AI):** chat on gemma4:12b with native
   tools, auto-attach from plain language, `/pick /vetoes /tape /check /news /book /mirror
   /tilt /debate /hypotheses /brief /issues /recaps /paste /feel /night /scorecard /rs /alerts`;
@@ -23,10 +23,11 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   permutation report (#330, shadow). Merged 10-01 (#338): P19 night rejections, digest cap,
   mentor digest retry. Next: morning pre-brief queue; rule audit once plan lines exist.
 - **Night model: gpt-oss:20b, effort medium, allowance 24k** (trader's word 2026-10-02; Mentor chat
-  pinned to gemma4:12b via `mentor_model`). Probe 10-02: medium wrote 9 of 10 verified slots
-  (gemma4 7; high unusable). Merged: story rejection names the ids, reply kept, schema
-  closed to the pack's ids; mentor digest uses the set effort. First gpt-oss night: 10-02.
-  Unmerged: `claude/gemma4-thinking-high-2026-10-01`.
+  pinned to gemma4:12b via `mentor_model`; probe: medium 9/10 slots, high unusable). Merged:
+  story rejection names the ids, schema closed to the pack's ids. First gpt-oss night: 10-02.
+- **In flight:** AVWAPE quick test (trader 2026-10-02): Setup Tracker rows only, both sides;
+  branch `claude/avwape-quick-test-2026-10-02`, ask to merge.
+  Unmerged too: `claude/gemma4-thinking-high-2026-10-01`.
 - **Night window:** 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435; the app uses
   11436). No local models on the mini-PC: host down = facts only; rerun a missed night with
   `--session <date> --force`. No builders, merges or test runs 22:00-02:00 PT.

@@ -627,6 +627,11 @@ class SetupTrackerPanel(QFrame):
         self.long_leaders_label.setObjectName("LongLeadersLabel")
         self.long_leaders_label.setWordWrap(True)
         self.long_leaders_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        # The AVWAPE quick test (testing only, both sides), right under the Long leaders. Display only.
+        self.avwape_quick_test_label = QLabel("")
+        self.avwape_quick_test_label.setObjectName("MutedLabel")
+        self.avwape_quick_test_label.setWordWrap(True)
+        self.avwape_quick_test_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         # S14: the long study families, raw then vs SPY, formatted on the worker.
         self.study_family_label = QLabel("")
         self.study_family_label.setObjectName("MutedLabel")
@@ -1142,6 +1147,7 @@ class SetupTrackerPanel(QFrame):
         layout.setSpacing(10)
         layout.addWidget(header)
         layout.addWidget(self.long_leaders_label)
+        layout.addWidget(self.avwape_quick_test_label)
         layout.addLayout(kpi_row)
         layout.addWidget(self.tape_side_label)
         layout.addWidget(self.study_family_label)
@@ -1644,6 +1650,8 @@ class SetupTrackerPanel(QFrame):
                                                                   if data.get("strength_filter_line") else [])]
         self.study_family_label.setText("\n".join(str(line) for line in study_lines))
         self.long_leaders_label.setText("\n".join(str(line) for line in data.get("long_leader_lines") or ()))
+        self.avwape_quick_test_label.setText(
+            "\n".join(str(line) for line in data.get("avwape_quick_test_lines") or ()))
 
         rendered: dict[str, tuple] = {}
         for table_name, model_name, rows, memo in _table_render_plan(
@@ -2082,6 +2090,14 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 - one section, never the tracker
         logging.debug("Setup Tracker Long leaders could not be built", exc_info=True)
         long_leader_lines = ["Long leaders: unreadable right now."]
+    # The AVWAPE quick test section and its grades (testing only). Display only; one line on failure.
+    try:
+        from ui.services import working_lately_service
+
+        avwape_quick_test_lines = working_lately_service.read_avwape_quick_test_lines()
+    except Exception:  # noqa: BLE001 - one section, never the tracker
+        logging.debug("Setup Tracker AVWAPE quick test could not be built", exc_info=True)
+        avwape_quick_test_lines = ["AVWAPE quick test: unreadable right now."]
     # S13: three exit models per family. Display only; unknown on failure.
     try:
         from ui.services import working_lately_service
@@ -2120,6 +2136,7 @@ def _read_tracker_exports(min_closed: int) -> dict[str, Any]:
         "study_family_lines": study_family_lines,
         "strength_filter_line": strength_filter_line,
         "long_leader_lines": long_leader_lines,
+        "avwape_quick_test_lines": avwape_quick_test_lines,
         "exit_model_sentence": exit_model_review.review_sentence(exit_models),
         "regime_sentence": regime_grades.status_sentence(regime_payload),
         "sp4_chip": points_challenger.chip_text(evidence),
