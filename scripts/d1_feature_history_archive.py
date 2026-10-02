@@ -68,6 +68,15 @@ writer takes NO lock (the bounce outcomes CSV): archive takes only the
 archive's lock and reads a length snapshot cut at the last complete record,
 so an append in flight is left for the next run; and trim refuses, always.
 
+REMOVAL FROM THE MIDDLE (2026-10-02)
+------------------------------------
+``remove_rows`` removes proven rows from anywhere in a live file whose writer
+takes a lock (the bounce candidates' startup clean-up). The manifest then
+carries a ``live_map`` (history ranges of the live file's first rows, then a
+contiguous tail at ``live_tail_start``) instead of a bare ``live_offset``; every
+check and ``read_history`` follows it. A dead removal is settled from the
+recorded size and sha256 of the file it was about to put down.
+
 CLI: ``python scripts/d1_feature_history_archive.py status|archive|verify|trim
 [--store NAME] [--apply]`` - the store defaults to the D1 history; trim is a
 dry run unless ``--apply``.

@@ -207,6 +207,21 @@ def test_a_row_the_archive_does_not_prove_is_never_removed(cands, monkeypatch):
     assert path.read_bytes() == before
 
 
+def test_the_night_packs_the_candidates_and_never_shrinks_them(cands, tmp_path, monkeypatch):
+    import project_paths as pp
+    from ai_jobs import history_pack
+
+    path, shadow = cands
+    monkeypatch.setattr(pp, "get_local_setting", lambda key, default=None: True)  # every switch on
+    assert "intraday_bounce_candidates" in arc.registered_stores()
+    result = history_pack.run_history_pack(specs=[_store(path)], report_path=tmp_path / "r.json", stores={})
+    assert result["status"] == "ok", result
+    assert path.read_bytes() == shadow.read_bytes()
+    report = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
+    block = report["stores_packed"]["intraday_bounce_candidates"]
+    assert block["archive"]["archived_rows"] == 140 and block["trim"]["enabled"] is False
+
+
 def test_the_live_file_store_uses_the_registered_archive_folder():
     import project_paths as pp
 
