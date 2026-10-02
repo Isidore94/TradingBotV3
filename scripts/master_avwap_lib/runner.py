@@ -15,6 +15,7 @@ from .d1_zone_arms import build_d1_zone_arms
 from .setup_tagging import apply_setup_tag_payload, canonicalize_priority_setup_tags
 from master_avwap_shared import build_active_bounce_summary, load_master_avwap_events_for_date
 from long_setups_store import publish_long_setups
+from avwape_quick_test_store import publish_avwape_quick_test
 from setup_permutation_context import load_market_caps as load_permutation_market_caps
 from setup_permutation_context import load_trader_regime as load_permutation_trader_regime
 from setup_permutation_context import stamp_scan_rows as stamp_permutation_scan_rows
@@ -3338,25 +3339,37 @@ def _run_master_impl(
         logging.debug("Setup permutation strength column skipped for this scan.", exc_info=True)
 
     # p9 long setups: leader pullbacks and the post-earnings drift, to their own file; reads, never edits, a row.
+    # The bar inputs are built once and shared with the AVWAPE quick test below.
+    swing_setup_inputs = None
     try:
-        publish_long_setups(
-            bars_by_symbol={
+        swing_setup_inputs = {
+            "bars_by_symbol": {
                 str(symbol).strip().upper(): _long_setup_bars(frame, completed_through)
                 for symbol, frame in (daily_frames_by_symbol or {}).items()
             },
-            spy_bars=_long_setup_bars(spy_frame, completed_through),
-            feature_rows=feature_rows,
+            "spy_bars": _long_setup_bars(spy_frame, completed_through),
+            "feature_rows": feature_rows,
+            "atr_by_symbol": _long_setup_scan_atrs(feature_rows, completed_through),
+            "market_cap_by_symbol": load_permutation_market_caps(),
+            "as_of": completed_through,
+        }
+        publish_long_setups(
+            **swing_setup_inputs,
             earnings_by_symbol=long_setup_earnings,
-            atr_by_symbol=_long_setup_scan_atrs(feature_rows, completed_through),
             sector_by_symbol={
                 str(symbol).strip().upper(): (context or {}).get("sector")
                 for symbol, context in (industry_context_by_symbol or {}).items()
             },
-            market_cap_by_symbol=load_permutation_market_caps(),
-            as_of=completed_through,
         )
     except Exception:
         logging.warning("Long setups skipped for this scan.", exc_info=True)
+
+    # AVWAPE quick test (trader, 2026-10-02): Setup Tracker rows only, its own files; never fails the scan.
+    try:
+        if swing_setup_inputs is not None:
+            publish_avwape_quick_test(**swing_setup_inputs)
+    except Exception:
+        logging.warning("AVWAPE quick test skipped for this scan.", exc_info=True)
 
     # P1-4 4a: stamp the shadow permutation key last, after every enricher; never fails the scan.
     try:
