@@ -58,8 +58,19 @@ deletes the new files and leaves the last good archive and manifest untouched.
 ``read_history`` takes no lock. It reads the manifest, then the files, then the
 manifest again, and retries when a pack or trim landed in between.
 
+MORE THAN ONE STORE (2026-10-02)
+--------------------------------
+The same core packs any append-only CSV described by a ``StoreSpec`` (CSV,
+archive folder, date column, key columns, the writer's lock, keep days, trim
+setting); ``registered_stores()`` lists the ones the CLI and the night slot
+use. Everything above holds per store, with two differences for a store whose
+writer takes NO lock (the bounce outcomes CSV): archive takes only the
+archive's lock and reads a length snapshot cut at the last complete record,
+so an append in flight is left for the next run; and trim refuses, always.
+
 CLI: ``python scripts/d1_feature_history_archive.py status|archive|verify|trim
-[--apply]`` - trim is a dry run unless ``--apply``.
+[--store NAME] [--apply]`` - the store defaults to the D1 history; trim is a
+dry run unless ``--apply``.
 """
 
 from __future__ import annotations
