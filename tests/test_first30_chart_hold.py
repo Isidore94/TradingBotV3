@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -335,7 +335,7 @@ def test_chart_watch_alert_carries_level_and_time(panel):
     watch = D1LevelWatch(symbol="LVL", direction="above", level=12.5, armed_at=datetime(*DAY, 8))
     hit = ChartWatchTrigger(
         watch=watch, price=12.9, bar_dt=datetime(*DAY, 9, 40), message="D1 level break",
-        resolved_side="long",
+        resolved_side="long", level=12.5,
     )
     moment = datetime(*DAY, 9, 45)
     alert = panel._chart_watch_alert(hit, moment)
@@ -344,7 +344,7 @@ def test_chart_watch_alert_carries_level_and_time(panel):
     assert alert.received_at is not None and alert.received_at.utcoffset() is not None
 
 
-def test_chart_watch_alert_without_a_watch_level_uses_the_trigger_price(panel):
+def test_a_hit_without_a_reference_level_is_no_level_never_the_trigger_price(panel):
     from chart_watch import ChartWatch, ChartWatchTrigger
 
     watch = ChartWatch(symbol="RB", kind="range_breakout", armed_at=datetime(*DAY, 8), side="LONG")
@@ -352,10 +352,46 @@ def test_chart_watch_alert_without_a_watch_level_uses_the_trigger_price(panel):
         watch=watch, price=33.3, bar_dt=datetime(*DAY, 9, 40), message="Range breakout"
     )
     alert = panel._chart_watch_alert(hit, datetime(*DAY, 9, 45))
-    assert alert.payload["alert_level"] == 33.3
+    assert alert.payload["alert_level"] is None
+    import alert_show_filter
+
+    assert alert_show_filter.alert_level(alert) is None
 
 
-def test_focus_d1_flag_alert_carries_the_trigger_price(panel, monkeypatch, tmp_path):
+def _d1_fixture():
+    daily = []
+    day = datetime(2026, 8, 20)
+    while len(daily) < 30:
+        day += timedelta(days=1)
+        if day.weekday() < 5:
+            daily.append({"dt": day, "open": 97.0, "high": 100.0, "low": 95.0, "close": 98.0})
+    m5 = [
+        {"dt": datetime(*DAY, 9, 30), "open": 99.0, "high": 99.5, "low": 98.5, "close": 99.2},
+        {"dt": datetime(*DAY, 9, 35), "open": 99.2, "high": 103.0, "low": 99.0, "close": 102.0},
+    ]
+    return daily, m5
+
+
+def test_a_new_20d_high_is_judged_against_the_prior_high_not_the_bar_high(panel):
+    """Reviewer's case: "New 20-day high: 103.00 > 100.00", 09:55 close 101.5 holds."""
+    from chart_watch import D1EventWatch, evaluate_d1_event_watch
+
+    daily, m5 = _d1_fixture()
+    watch = D1EventWatch(symbol="NEW", kind="new_20d_high", armed_at=datetime(*DAY, 8), side="LONG")
+    hit = evaluate_d1_event_watch(watch, m5, daily, now=datetime(*DAY, 9, 41))
+    assert hit is not None and "103.00 > 100.00" in hit.message
+    alert = panel._chart_watch_alert(hit, datetime(*DAY, 9, 41))
+    alert.received_at = _at(9, 41)
+    assert alert.payload["alert_level"] == 100.0
+    panel.test_clock["now"] = _at(9, 41)
+    panel.add_alert(alert)
+    assert "NEW" not in _review_symbols(panel)
+    panel.test_bars["NEW"] = [_bar(9, 55, 101.5), _bar(10, 0, 101.6)]
+    _release(panel)
+    assert "NEW" in _review_symbols(panel)
+
+
+def test_focus_d1_flag_alert_carries_the_reference_level(panel, monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     from ui.panels import alert_center_panel as panel_mod
@@ -370,7 +406,7 @@ def test_focus_d1_flag_alert_carries_the_trigger_price(panel, monkeypatch, tmp_p
         panel, "_update_focus_break_state", lambda *a, **k: datetime(*DAY, 9, 30)
     )
     monkeypatch.setattr(panel, "_note_focus_activity", lambda *a, **k: None)
-    hit = SimpleNamespace(price=21.5, resolved_side="long", message="15EMA reject")
+    hit = SimpleNamespace(price=21.9, level=21.5, resolved_side="long", message="15EMA reject")
     monkeypatch.setattr(panel_mod, "evaluate_d1_event_watch", lambda *a, **k: hit)
     panel._poll_focus_d1_interest(now=datetime(*DAY, 9, 40))
     assert captured

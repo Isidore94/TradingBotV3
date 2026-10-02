@@ -5497,7 +5497,7 @@ class AlertCenterPanel(
                     is_d1=True,
                     payload={
                         "focus_d1_kind": kind,
-                        alert_show_filter.PAYLOAD_LEVEL: getattr(hit, "price", None),
+                        alert_show_filter.PAYLOAD_LEVEL: getattr(hit, "level", None),
                         alert_show_filter.PAYLOAD_SIDE: (
                             str(getattr(hit, "resolved_side", "") or "").upper() or side_label
                         ),
@@ -6155,11 +6155,9 @@ class AlertCenterPanel(
             "source_text": getattr(watch, "source_text", "")
             or getattr(watch, "candle_date", ""),
         }
-        # First-30 chart hold: the level this hit is judged against at 10:00.
-        level = getattr(watch, "level", None)
-        payload[alert_show_filter.PAYLOAD_LEVEL] = (
-            level if level is not None else getattr(hit, "price", None)
-        )
+        # First-30 chart hold: the reference line this hit crossed, judged at
+        # 10:00. Never the trigger price; missing = "no level" (hidden).
+        payload[alert_show_filter.PAYLOAD_LEVEL] = getattr(hit, "level", None)
         watch_id = str(getattr(watch, "watch_id", "") or "")
         if watch_id:
             payload["watch_id"] = watch_id

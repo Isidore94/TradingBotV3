@@ -287,6 +287,9 @@ class ChartWatchTrigger:
     # Measured facts the hosting panel copies onto the fired alert's payload.
     # Empty for every kind whose message already says everything it measured.
     details: Mapping[str, Any] = field(default_factory=dict)
+    # The reference line the hit crossed or tagged (prior high/low, VWAP, band,
+    # SMA, EMA, AVWAPE, frozen trendline, armed level); None = not measured.
+    level: float | None = None
 
 
 def _naive(moment: datetime) -> datetime:
@@ -716,7 +719,9 @@ def _evaluate_extreme(
                     f"New LOD {value:.2f} < armed day low {baseline:.2f} "
                     f"(bar {stamp:%H:%M})"
                 )
-            return ChartWatchTrigger(watch=watch, price=value, bar_dt=stamp, message=message)
+            return ChartWatchTrigger(
+                watch=watch, price=value, bar_dt=stamp, message=message, level=baseline
+            )
     return None
 
 
@@ -769,6 +774,7 @@ def _evaluate_extreme_avwap(
                     f"(bar {stamp:%H:%M})"
                 ),
                 resolved_side="short",
+                level=avwap,
             )
         if not is_low_anchor and low <= avwap and close > avwap:
             return ChartWatchTrigger(
@@ -781,6 +787,7 @@ def _evaluate_extreme_avwap(
                     f"(bar {stamp:%H:%M})"
                 ),
                 resolved_side="long",
+                level=avwap,
             )
     return None
 
@@ -818,6 +825,7 @@ def _evaluate_vwap_bounce(
                     f"above at {close:.2f} (bar {stamp:%H:%M})"
                 ),
                 resolved_side="long",
+                level=vwap,
             )
         if want_short and high >= vwap and close < vwap:
             return ChartWatchTrigger(
@@ -829,6 +837,7 @@ def _evaluate_vwap_bounce(
                     f"below at {close:.2f} (bar {stamp:%H:%M})"
                 ),
                 resolved_side="short",
+                level=vwap,
             )
     return None
 
@@ -868,6 +877,7 @@ def _evaluate_band_bounce(
                     f"above at {close:.2f} (bar {stamp:%H:%M})"
                 ),
                 resolved_side="long",
+                level=upper,
             )
         if want_short and lower is not None and high >= lower and close < lower:
             return ChartWatchTrigger(
@@ -879,6 +889,7 @@ def _evaluate_band_bounce(
                     f"below at {close:.2f} (bar {stamp:%H:%M})"
                 ),
                 resolved_side="short",
+                level=lower,
             )
     return None
 
@@ -1314,14 +1325,27 @@ def _d1_event_hit(
     close: float,
 ) -> tuple[str, str, float] | None:
     """(message core, resolved side, trigger price) for one evidence bar."""
+    hit = _d1_event_hit_level(kind, levels, prev_close, high, low, close)
+    return hit[:3] if hit is not None else None
+
+
+def _d1_event_hit_level(
+    kind: str,
+    levels: Mapping[str, float],
+    prev_close: float | None,
+    high: float,
+    low: float,
+    close: float,
+) -> tuple[str, str, float, float] | None:
+    """`_d1_event_hit` plus the reference level the bar crossed or tagged."""
     if kind in ("d1_line_pullback", "line_break"):
         parts = D1_LINE_PULLBACK_PARTS if kind == "d1_line_pullback" else D1_LINE_BREAK_PARTS
         title = "Pullback to D1 line" if kind == "d1_line_pullback" else "Line break"
         for part in parts:
-            hit = _d1_event_hit(part, levels, prev_close, high, low, close)
+            hit = _d1_event_hit_level(part, levels, prev_close, high, low, close)
             if hit is not None:
-                message, side, price = hit
-                return f"{title}: {message}", side, price
+                message, side, price, level = hit
+                return f"{title}: {message}", side, price, level
         return None
     if kind == "range_breakout":
         atr = levels.get("atr14")
@@ -1342,12 +1366,14 @@ def _d1_event_hit(
                 f"Range breakout (long): {high:.2f} > {top:.2f} 20-day high ({tight})",
                 "long",
                 high,
+                top,
             )
         if low < bottom:
             return (
                 f"Range breakout (short): {low:.2f} < {bottom:.2f} 20-day low ({tight})",
                 "short",
                 low,
+                bottom,
             )
         return None
     if kind in ("new_5d_high", "new_20d_high"):
@@ -1359,6 +1385,7 @@ def _d1_event_hit(
                 f"New {days}-day high: {high:.2f} > {level:.2f} (prior {days}-session high)",
                 "long",
                 high,
+                level,
             )
         return None
     if kind in ("new_5d_low", "new_20d_low"):
@@ -1370,6 +1397,7 @@ def _d1_event_hit(
                 f"New {days}-day low: {low:.2f} < {level:.2f} (prior {days}-session low)",
                 "short",
                 low,
+                level,
             )
         return None
     if kind == "sma_break":
@@ -1384,12 +1412,14 @@ def _d1_event_hit(
                     f"SMA{period} break up: closed {close:.2f} over {sma:.2f}",
                     "long",
                     close,
+                    sma,
                 )
             if prev_close > sma and close < sma:
                 return (
                     f"SMA{period} break down: closed {close:.2f} under {sma:.2f}",
                     "short",
                     close,
+                    sma,
                 )
         return None
     if kind in ("avwape_bounce", "avwape_dev1_bounce"):
@@ -1417,6 +1447,7 @@ def _d1_event_hit(
                 f"{name} bounce (long): tagged {level:.2f}, closed back above at {close:.2f}",
                 "long",
                 close,
+                level,
             )
         short_hits = [
             (level, label)
@@ -1430,6 +1461,7 @@ def _d1_event_hit(
                 f"{name} bounce (short): tagged {level:.2f}, closed back below at {close:.2f}",
                 "short",
                 close,
+                level,
             )
         return None
     if kind in ("avwape_break", "avwape_dev1_break"):
@@ -1452,6 +1484,7 @@ def _d1_event_hit(
                 f"{name} break up: closed {close:.2f} over {level:.2f}",
                 "long",
                 close,
+                level,
             )
         crossed_down = [
             (level, label) for label, level in pairs if prev_close > level > close
@@ -1463,6 +1496,7 @@ def _d1_event_hit(
                 f"{name} break down: closed {close:.2f} under {level:.2f}",
                 "short",
                 close,
+                level,
             )
         return None
     if kind == "ema15_reject":
@@ -1476,12 +1510,14 @@ def _d1_event_hit(
                 f"D1 15EMA rejection (long): tagged {ema:.2f}, closed back above at {close:.2f}",
                 "long",
                 close,
+                ema,
             )
         if high >= ema and close < ema:
             return (
                 f"D1 15EMA rejection (short): tagged {ema:.2f}, closed back below at {close:.2f}",
                 "short",
                 close,
+                ema,
             )
         return None
     return None
@@ -1654,6 +1690,7 @@ def _evaluate_frozen_trendline_break(
             ),
             resolved_side=side.lower(),
             details={"break_date": break_date, "line_price": line},
+            level=line,
         )
     return None
 
@@ -1769,6 +1806,7 @@ def _evaluate_frozen_trendline_break_retest(
                 "line_price": line,
                 "atr": atr,
             },
+            level=line,
         )
     return None
 
@@ -1810,8 +1848,10 @@ def _evaluate_sma_break_retest(
     break_date: date | None = None
     sessions_since = 0
 
-    def _hit(stamp: datetime, retest: tuple[str, str, float], ema_label: str) -> ChartWatchTrigger:
-        _message, _side, price = retest
+    def _hit(
+        stamp: datetime, retest: tuple[str, str, float, float], ema_label: str
+    ) -> ChartWatchTrigger:
+        _message, _side, price, ema_level = retest
         return ChartWatchTrigger(
             watch=watch,  # type: ignore[arg-type]
             price=price,
@@ -1828,6 +1868,7 @@ def _evaluate_sma_break_retest(
                 "break_date": break_date.isoformat() if break_date else "",
                 "retest_date": stamp.date().isoformat(),
             },
+            level=ema_level,
         )
 
     for bar in daily:
@@ -1849,7 +1890,7 @@ def _evaluate_sma_break_retest(
             if failed or sessions_since > SMA_BREAK_RETEST_MAX_SESSIONS:
                 break_period, break_date, sessions_since = None, None, 0
             else:
-                retest = _d1_event_hit("ema15_reject", levels, prev_close, high, low, close)
+                retest = _d1_event_hit_level("ema15_reject", levels, prev_close, high, low, close)
                 if retest is not None and retest[1] == want:
                     return _hit(_naive(bar["dt"]), retest, f"D1 bar {bar_date:%m/%d}")
                 continue
@@ -1870,7 +1911,7 @@ def _evaluate_sma_break_retest(
     for bar in completed:
         if _bar_end(bar) <= armed_at:
             continue
-        retest = _d1_event_hit(
+        retest = _d1_event_hit_level(
             "ema15_reject",
             levels,
             None,
@@ -1967,10 +2008,10 @@ def evaluate_d1_event_watch(
             close = float(bar["close"])
             hit = None
             if _bar_end(bar) > armed_at:
-                hit = _d1_event_hit(watch.kind, levels, prev_close, high, low, close)
+                hit = _d1_event_hit_level(watch.kind, levels, prev_close, high, low, close)
             prev_close = close
             if hit is not None:
-                message, side, price = hit
+                message, side, price, level = hit
                 stamp = _naive(bar["dt"])
                 return ChartWatchTrigger(
                     watch=watch,  # type: ignore[arg-type] (duck-typed carrier)
@@ -1979,6 +2020,7 @@ def evaluate_d1_event_watch(
                     message=f"{message} (M5 bar {stamp:%m/%d %H:%M})",
                     resolved_side=side,
                     details=_d1_event_details(watch.kind, levels),
+                    level=level,
                 )
 
     for bar in daily:
@@ -1988,7 +2030,7 @@ def evaluate_d1_event_watch(
         if bar_date <= armed_at.date() or bar_date >= moment.date():
             continue
         levels = _cached_d1_event_levels(levels_cache, daily, bar_date, avwape_anchor)
-        hit = _d1_event_hit(
+        hit = _d1_event_hit_level(
             watch.kind,
             levels,
             levels.get("prev_close"),
@@ -1997,7 +2039,7 @@ def evaluate_d1_event_watch(
             float(bar["close"]),
         )
         if hit is not None:
-            message, side, price = hit
+            message, side, price, level = hit
             return ChartWatchTrigger(
                 watch=watch,  # type: ignore[arg-type]
                 price=price,
@@ -2005,6 +2047,7 @@ def evaluate_d1_event_watch(
                 message=f"{message} (D1 bar {bar_date:%m/%d})",
                 resolved_side=side,
                 details=_d1_event_details(watch.kind, levels),
+                level=level,
             )
     return None
 
@@ -2047,6 +2090,7 @@ def evaluate_d1_level_watch(
                     f"(M5 bar {stamp:%m/%d %H:%M})"
                 ),
                 resolved_side="long" if is_above else "short",
+                level=level,
             )
 
     for bar in d1_bars or []:
@@ -2069,6 +2113,7 @@ def evaluate_d1_level_watch(
                     f"(D1 bar {bar_date:%m/%d})"
                 ),
                 resolved_side="long" if is_above else "short",
+                level=level,
             )
     return None
 
