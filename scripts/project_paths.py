@@ -786,6 +786,8 @@ INTRADAY_BOUNCE_OUTCOMES_FILE = RUNTIME_DATA_DIR / "intraday_bounce_outcomes.csv
 # Lossless monthly Parquet packing of the outcomes CSV (archive only: its
 # writer takes no lock, so it is never trimmed). See d1_feature_history_archive.
 INTRADAY_BOUNCE_OUTCOMES_ARCHIVE_DIR = RUNTIME_DATA_DIR / "intraday_bounce_outcomes_archive"
+# The candidates CSV's archive: its startup clean-up removes only rows proven here.
+INTRADAY_BOUNCE_CANDIDATES_ARCHIVE_DIR = RUNTIME_DATA_DIR / "intraday_bounce_candidates_archive"
 INTRADAY_BOUNCE_OUTCOME_STATE_FILE = RUNTIME_DATA_DIR / "intraday_bounce_outcome_state.json"
 # P1-4 4a shadow sidecar: the setup key per M5 event_id; `m5_setup_key_stamp` is the only writer.
 M5_SETUP_KEY_STAMPS_FILE = RUNTIME_DATA_DIR / "m5_setup_key_stamps.jsonl"

@@ -79,11 +79,13 @@ def bounce(tmp_path):
     return spec
 
 
-def test_the_registry_holds_d1_and_the_outcomes_but_not_the_candidates():
+def test_the_registry_holds_d1_the_outcomes_and_the_candidates():
+    # 2026-10-02 (trader's yes): the candidates joined once their startup
+    # clean-up went through proven removal; this pin said "not the candidates".
     import project_paths as pp
 
     stores = arc.registered_stores()
-    assert set(stores) == {"d1_features_history", "intraday_bounce_outcomes"}
+    assert set(stores) == {"d1_features_history", "intraday_bounce_outcomes", "intraday_bounce_candidates"}
     d1 = stores["d1_features_history"]
     assert d1.csv_path == pp.D1_FEATURES_HISTORY_FILE and d1.archive_dir == pp.D1_FEATURES_HISTORY_ARCHIVE_DIR
     assert d1.date_column == "run_date" and d1.key_columns == ("run_id", "symbol", "side")
@@ -95,7 +97,11 @@ def test_the_registry_holds_d1_and_the_outcomes_but_not_the_candidates():
     assert out.date_column == "trade_date"
     assert out.key_columns == ("event_id", "event_type", "logged_at")
     assert out.writer_lock_key is None and out.trim_setting == ""
-    assert all(s.csv_path != pp.INTRADAY_BOUNCE_CANDIDATES_FILE for s in stores.values())
+    cand = stores["intraday_bounce_candidates"]
+    assert cand.csv_path == pp.INTRADAY_BOUNCE_CANDIDATES_FILE
+    assert cand.archive_dir == pp.INTRADAY_BOUNCE_CANDIDATES_ARCHIVE_DIR
+    assert cand.date_column == "trade_date" and cand.key_columns == ("event_id", "event_type", "logged_at")
+    assert cand.writer_lock_key is not None and cand.trim_setting == ""
 
 
 def test_a_no_lock_store_archives_and_reads_back_exactly(bounce):
