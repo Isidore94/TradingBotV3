@@ -2514,12 +2514,29 @@ class AlertCenterPanel(
 
     # -- First-30 chart hold (trader 2026-10-02) -------------------------
     #: How long after 10:00 the check waits for the 09:55 bar to reach the cache.
-    FIRST30_GRACE = timedelta(minutes=3)
+    FIRST30_GRACE = timedelta(minutes=5)
     FIRST30_RETRY_MS = 15_000
 
     @staticmethod
     def _first30_now() -> datetime:
         return datetime.now(timezone.utc)
+
+    @staticmethod
+    def _first30_refresh_service():
+        from ui.services.chart_bar_refresh import shared_refresh_service
+
+        return shared_refresh_service()
+
+    def _first30_bars(self, symbol: str, release_at: datetime, local_tz) -> list:
+        """The first fresh series: the display refetch, then the bot cache; else []."""
+        try:
+            refetched = self._first30_refresh_service().bars_for(symbol)
+        except Exception:  # noqa: BLE001 - no refetch = the bot cache only
+            refetched = []
+        for bars in (refetched, self._m5_bars_for(symbol)):
+            if alert_show_filter.first30_bars_fresh(bars, release_at, local_tz):
+                return bars
+        return []
 
     @staticmethod
     def _first30_local_tz():
@@ -2614,9 +2631,9 @@ class AlertCenterPanel(
             fresh = False
             if local_tz is not None:
                 try:
-                    bars = self._m5_bars_for(alert.symbol)
                     # Only bars fetched after 10:00 prove the 09:55 bar finished.
-                    fresh = alert_show_filter.first30_bars_fresh(bars, release_at, local_tz)
+                    bars = self._first30_bars(alert.symbol, release_at, local_tz)
+                    fresh = bool(bars)
                     if fresh:
                         bar = alert_show_filter.first30_check_bar(bars, release_at, local_tz)
                 except Exception:  # noqa: BLE001 - unreadable bars = no data
@@ -2636,6 +2653,14 @@ class AlertCenterPanel(
         self._first30_held = waiting
         if waiting:
             self._first30_timer.start(self.FIRST30_RETRY_MS)
+            # The scan rewrites the bot cache only every ~28 min (and never for
+            # names outside it): ask the display refetch for these few now.
+            try:
+                self._first30_refresh_service().refresh_now(
+                    [alert.symbol for alert in waiting.values()], self._current_bot()
+                )
+            except Exception as exc:  # noqa: BLE001 - the retry and grace still run
+                note_swallowed("first-30 refetch request failed", exc, quiet=True)
         self._requeue_first30(shown)
         self._refresh_first30_count()
 
@@ -3973,6 +3998,10 @@ class AlertCenterPanel(
 
     def _on_bars_refreshed(self, symbol: str) -> None:
         """Repaint when a refetch lands for the alert currently on the chart."""
+        symbol_key = str(symbol or "").strip().upper()
+        if any(key[0] == symbol_key for key in self._first30_held):
+            # A first-30 chart waiting on fresh bars: judge it now.
+            self._release_first30_holds()
         alert = self._current_review_alert
         if alert is None:
             return

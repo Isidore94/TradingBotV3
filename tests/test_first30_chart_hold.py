@@ -258,7 +258,7 @@ def test_no_data_no_level_or_no_side_is_hidden_after_the_grace(panel):
     _release(panel)
     assert set(panel._first30_held) == {("NOD", "LONG")}
     assert panel._first30_timer.isActive()
-    _release(panel, 10, 4)
+    _release(panel, 10, 5, 30)
     assert not panel._first30_held
     assert {key[0] for key in panel._first30_failed} == {"NOD", "NOL", "NOS"}
     assert not ({"NOD", "NOL", "NOS"} & _review_symbols(panel))
@@ -438,7 +438,7 @@ def test_a_0955_bar_without_a_later_bar_waits_then_counts_as_no_data(panel):
     panel.test_bars["LAT"] = [_bar(9, 55, 10.5), _bar(10, 0, 9.0)]
     _release(panel, 10, 1)
     assert "LAT" in _review_symbols(panel)
-    _release(panel, 10, 3, 30)
+    _release(panel, 10, 5, 30)
     assert "PAR" not in _review_symbols(panel)
     assert panel._first30_failed[("PAR", "LONG")][1] == "no_data"
 

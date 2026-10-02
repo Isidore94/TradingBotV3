@@ -45,6 +45,10 @@ REFRESH_COOLDOWN = timedelta(minutes=5)
 # budget rule above.
 DEFAULT_LOOKAHEAD = 3
 
+# `refresh_now` (the first-30 10:00 check, a handful of names) asks one symbol
+# at most this often, so a name IB answers late costs ~3 requests, not 20.
+FORCED_REFRESH_GAP = timedelta(seconds=90)
+
 
 def _last_dt(bars) -> datetime | None:
     """The last bar's timestamp, or None if these bars carry none."""
@@ -91,6 +95,7 @@ class ChartBarRefreshService(QObject):
         self._bars: dict[str, list[dict]] = {}
         self._fetched_at: dict[str, datetime] = {}
         self._attempted_at: dict[str, datetime] = {}
+        self._forced_at: dict[str, datetime] = {}
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
 
@@ -174,6 +179,43 @@ class ChartBarRefreshService(QObject):
             self._thread.start()
         return wanted
 
+    def refresh_now(self, symbols, bot, *, now=None) -> list[str]:
+        """Refetch these few symbols now, stale or not (the first-30 10:00 check).
+
+        Skips the staleness test and the queue cooldown: a 09:57 fetch cannot
+        prove the 09:55 bar finished. Each symbol at most once per
+        FORCED_REFRESH_GAP. A busy worker queues and marks nothing, so the
+        caller simply asks again on its next retry. Returns the symbols queued.
+        """
+        if bot is None:
+            return []
+        now = now or datetime.now()
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return []
+            wanted: list[str] = []
+            for raw in symbols or ():
+                symbol = str(raw or "").strip().upper()
+                if not symbol or symbol in wanted:
+                    continue
+                forced = self._forced_at.get(symbol)
+                if forced is not None and now - forced < FORCED_REFRESH_GAP:
+                    continue
+                wanted.append(symbol)
+            if not wanted:
+                return []
+            for symbol in wanted:
+                self._forced_at[symbol] = now
+                self._attempted_at[symbol] = now
+            self._thread = threading.Thread(
+                target=self._worker,
+                args=(list(wanted), bot),
+                name="chart-m5-refresh",
+                daemon=True,
+            )
+            self._thread.start()
+        return wanted
+
     def _cooldown_expired(self, symbol: str, now: datetime) -> bool:
         with self._lock:
             attempted = self._attempted_at.get(symbol)
@@ -202,6 +244,7 @@ class ChartBarRefreshService(QObject):
             self._bars.clear()
             self._fetched_at.clear()
             self._attempted_at.clear()
+            self._forced_at.clear()
 
 
 _SHARED: ChartBarRefreshService | None = None
