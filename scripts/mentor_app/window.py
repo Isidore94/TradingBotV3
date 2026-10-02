@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 
 import ai_pause
 from mentor_app import assess as pick_assess
-from mentor_app import attach, brain, challenge, commands, grounding, memory, pick_jobs, plan_infer, settings, style, tape
+from mentor_app import attach, brain, challenge, commands, grounding, memory, pick_jobs, plan_infer, rule_gate, settings, style, tape
 from mentor_app.chat_model import ChatModel
 from mentor_app.inbox import Inbox
 from mentor_app.prefetch import (
@@ -63,6 +63,8 @@ ASSESS_WAIT_MS = 90 * 1000
 RECONNECT_BACKOFF_SECONDS = 10 * 60
 #: On close the app waits at most this long for each model unload.
 SHUTDOWN_UNLOAD_SECONDS = 4
+#: Shutdown waits at most this long for the rule-gate server to stop (its terminate is sent first).
+SHUTDOWN_GATE_SECONDS = 2
 CHIP_KINDS = ("auto_mode", "d1_env", "regime")
 #: (label, command, tooltip): the quick-button row above the input box.
 QUICK_BUTTONS = (
@@ -241,6 +243,7 @@ class MentorWindow(QMainWindow):
         fund_builder: Callable[[str], Any] | None = None,
         desk_dock: Callable[[Any], Any] | None = None,
         get: Callable[[str, float], Any] | None = None,
+        rule_gate_server: Any = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -253,6 +256,10 @@ class MentorWindow(QMainWindow):
         self._post = post or brain.default_post
         #: GET for /api/ps; a test that fakes ``post`` and not ``get`` has no host to list.
         self._get = get or (brain.default_get if post is None else None)
+        #: The plan-rule gate's local server; like ``get``, a test that fakes ``post`` gets none by default.
+        self._rule_gate_server = rule_gate_server or (rule_gate.from_settings() if post is None else None)
+        #: Whether the gate was wanted at the last sync (None = not synced yet).
+        self._rule_gate_wanted: bool | None = None
         #: The previous user turn's planned packs (a topicless follow-up carries them).
         self._last_attachments: list[Any] = []
         self._brain_ok = False
@@ -764,6 +771,7 @@ class MentorWindow(QMainWindow):
         self._submit_io(self._load_view_state)
         self.refresh_context()
         self._paused_until = self._ai_paused_until()
+        self._sync_rule_gate()
         if self._paused_until is not None:
             # Started while paused: no tunnel, no warm-up, no model.
             self._brain_reason = self._pause_reason()
@@ -806,6 +814,11 @@ class MentorWindow(QMainWindow):
             unloader.join(SHUTDOWN_UNLOAD_SECONDS + 1)
         if self._tunnel is not None:
             self._tunnel.stop()
+        if self._rule_gate_server is not None:
+            # Off the Qt thread, like the unload above; close() also refuses any later start().
+            closer = threading.Thread(target=self._rule_gate_server.close, name="mentor-rule-gate-close", daemon=True)
+            closer.start()
+            closer.join(SHUTDOWN_GATE_SECONDS)
         self._io.shutdown(wait=True)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
@@ -1013,10 +1026,36 @@ class MentorWindow(QMainWindow):
         was, self._paused_until = self._paused_until, until
         if until is not None and was is None:
             self._enter_pause()
+            self._sync_rule_gate()
         elif until is None and was is not None:
             self._leave_pause()
+            self._sync_rule_gate()
         elif until != was:
             self._sync_status()
+
+    def _sync_rule_gate(self) -> None:
+        """Run the rule-gate server only while the app may use a model and the gate is on or shadow.
+
+        Reuses the app's model-refusal window (Pause AI, the night window and the 15 min before it);
+        the launch and the stop run on a worker thread, never the Qt thread.
+        """
+        server = self._rule_gate_server
+        if server is None:
+            return
+        try:
+            want = not self._shut and rule_gate.mode() != "off" and not self._gpu_reason()
+        except Exception:  # noqa: BLE001 - an unreadable setting keeps the gate off
+            want = False
+        was, self._rule_gate_wanted = self._rule_gate_wanted, want
+        # start() adopts a healthy server already on the port and backs off after a launch that exits.
+        if want and not server.running():
+            threading.Thread(target=server.start, name="mentor-rule-gate-start", daemon=True).start()
+        elif not want and was is not False:
+            # The not-wanted state begins (or the app starts in it): stop ours and sweep the port once.
+            threading.Thread(target=lambda: server.stop(sweep=True), name="mentor-rule-gate-stop",
+                             daemon=True).start()
+        elif not want and server.active():
+            threading.Thread(target=server.stop, name="mentor-rule-gate-stop", daemon=True).start()
 
     def _enter_pause(self) -> None:
         """Stop the turn, unload both models through the tunnel, then close the tunnel."""
@@ -1201,6 +1240,7 @@ class MentorWindow(QMainWindow):
         """Every minute: hand the GPU back before the night, take it again after."""
         was_paused = self._paused_until is not None
         self.check_ai_pause()
+        self._sync_rule_gate()
         if was_paused or self._paused_until is not None:
             return  # paused (or just resumed, already reconnecting): not an outage minute
         reason = self._gpu_reason()
@@ -1830,6 +1870,16 @@ class MentorWindow(QMainWindow):
     def _queue_plan_inference(self) -> None:
         """After a reply: one side call infers plan lines from the trader's new turns (queue thread, never Qt)."""
         endpoint, model, path, post = self._endpoint, self._model, self._plan_path, self._post
+        server = self._rule_gate_server
+        try:
+            gate_mode = rule_gate.mode() if server is not None else "off"
+        except Exception:  # noqa: BLE001 - an unreadable setting is "off"
+            gate_mode = "off"
+
+        def keep_gate_record(record: dict) -> None:
+            turn_id = str(record["turn_ids"][-1]).removeprefix("turn:")
+            value = json.dumps(record, sort_keys=True)
+            self._submit_io(lambda: self.store.set_state(rule_gate.RECORD_KEY.format(turn_id=turn_id), value))
 
         def job() -> list[dict]:
             if not self._brain_ok or self._session_id is None:
@@ -1840,8 +1890,12 @@ class MentorWindow(QMainWindow):
             if not turns or int(turns[-1]["id"]) <= self._plan_after:
                 return []
             after, self._plan_after = self._plan_after, int(turns[-1]["id"])
+            # The gate is asked only when the app may use a model now (Pause AI, the night window).
+            gate = (server.scorer(post) if gate_mode != "off" and server.active() and not self._gpu_reason()
+                    else None)
             return plan_infer.infer(turns, after=after, endpoint=endpoint, model=model, post=post,
-                                    keep_alive=settings.keep_alive(), num_ctx=settings.context_tokens(), path=path)
+                                    keep_alive=settings.keep_alive(), num_ctx=settings.context_tokens(), path=path,
+                                    gate=gate, gate_mode=gate_mode, on_gate=keep_gate_record)
 
         def written(ops: Any) -> None:
             if ops:

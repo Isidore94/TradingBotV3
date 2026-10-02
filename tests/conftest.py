@@ -234,8 +234,10 @@ def _forbid_the_autopilot_from_arming_itself() -> None:
     # `mentor_app_enabled` defaults ON in production since P15b (2026-09-30); the desk-Mentor
     # tests build the desk owner, the explicit-off rollback, so the test process pins it off.
     # Tests of the app owner and of the default set the key themselves through monkeypatch.
+    # `mentor_rule_gate` defaults to shadow: pinned off so no test can launch the real llama-server.
     (settings_dir / "local_settings.json").write_text(
-        json.dumps({"qt_autopilot_auto_arm": False, "mentor_app_enabled": False}, indent=1) + chr(10),
+        json.dumps({"qt_autopilot_auto_arm": False, "mentor_app_enabled": False, "mentor_rule_gate": "off"},
+                   indent=1) + chr(10),
         encoding="utf-8",
     )
 

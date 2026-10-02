@@ -294,6 +294,65 @@ def test_recorded_reply_shapes_parse(world, content):
     assert [op["text"] for op in ops] == ["Stop after two losses."]
 
 
+# ---------------------------------------------------------------- the plan-rule gate
+def _gated(world, *texts, scores, mode, after=0):
+    """Run infer with a fake gate; (ops, gemma calls, gate calls, records)."""
+    calls, asked, records = [], [], []
+    scores = list(scores)
+
+    def post(url, payload, timeout):
+        calls.append(url)
+        return {"message": {"content": json.dumps({"ops": [_add(turn_ids=[f"turn:{len(texts)}"])]})}}
+
+    def gate(text):
+        asked.append(text)
+        return scores.pop(0)
+
+    ops = plan_infer.infer(_turns(*texts), after=after, endpoint="http://h", model="m", post=post,
+                           path=world["plan"], gate=gate, gate_mode=mode, on_gate=records.append)
+    return ops, calls, asked, records
+
+
+def test_gate_on_low_score_skips_the_plan_call(world):
+    ops, calls, asked, records = _gated(world, "I traded the vwap setup on NVDA.", scores=[0.35], mode="on")
+    assert ops == [] and calls == [], "a low score in mode on never calls the chat model"
+    assert asked == ["I traded the vwap setup on NVDA."]
+    assert records == [{"turn_ids": ["turn:1"], "score": 0.35, "mode": "on", "cut": 0.5,
+                        "would_skip": True, "skipped": True, "ops": None}]
+
+
+def test_gate_on_high_score_calls_as_before(world):
+    ops, calls, _, records = _gated(world, "Stop after two losses.", scores=[0.9], mode="on")
+    assert len(calls) == 1 and [op["text"] for op in ops] == ["Stop after two losses."]
+    assert records[0]["skipped"] is False and records[0]["ops"] == 1
+
+
+def test_gate_with_no_answer_fails_open(world):
+    ops, calls, _, records = _gated(world, "Stop after two losses.", scores=[None], mode="on")
+    assert len(calls) == 1 and len(ops) == 1, "no answer from the gate: plan inference runs as before"
+    assert records[0]["score"] is None and records[0]["skipped"] is False
+
+
+def test_gate_shadow_never_skips_and_records_would_skip(world):
+    ops, calls, _, records = _gated(world, "I traded the vwap setup on NVDA.", scores=[0.1], mode="shadow")
+    assert len(calls) == 1 and len(ops) == 1, "shadow mode always calls the chat model"
+    assert records == [{"turn_ids": ["turn:1"], "score": 0.1, "mode": "shadow", "cut": 0.5,
+                        "would_skip": True, "skipped": False, "ops": 1}]
+
+
+def test_gate_off_is_never_asked(world):
+    ops, calls, asked, records = _gated(world, "Stop after two losses.", scores=[0.0], mode="off")
+    assert asked == [] and records == [] and len(calls) == 1 and len(ops) == 1
+
+
+def test_gate_takes_the_best_score_of_the_new_turns(world):
+    ops, calls, asked, records = _gated(world, "old turn", "Nice day.", "Stop after two losses.",
+                                        scores=[0.2, 0.8], mode="on", after=1)
+    assert asked == ["Nice day.", "Stop after two losses."], "only the new turns are scored"
+    assert len(calls) == 1 and len(ops) == 1
+    assert records[0]["turn_ids"] == ["turn:2", "turn:3"] and records[0]["score"] == 0.8
+
+
 def test_an_empty_reply_names_its_cause():
     from mentor_app import brain
 

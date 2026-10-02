@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import trading_plan
-from mentor_app import brain
+from mentor_app import brain, rule_gate
 
 #: The recent trader turns one inference reads.
 TURN_LIMIT = 8
@@ -369,8 +369,15 @@ def infer(
     num_ctx: int | None = None,
     path: Path | None = None,
     read_plan: Callable[..., Mapping[str, Any]] | None = None,
+    gate: Callable[[str], float | None] | None = None,
+    gate_mode: str = "off",
+    on_gate: Callable[[dict[str, Any]], Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Worker thread: read the plan, ask the model, check the reply. [] when anything fails (logged)."""
+    """Worker thread: read the plan, ask the model, check the reply. [] when anything fails (logged).
+
+    With a ``gate`` in mode ``on``/``shadow`` the new turns are scored first; ``on`` skips the call
+    when the best score is under the cut, ``shadow`` never skips. ``on_gate`` gets one record.
+    """
     plan = (read_plan or trading_plan.read_plan)(create=False, snapshot=False, path=path)
     if plan.get("error"):
         logging.info("Trade Mentor: plan inference skipped, the plan could not be read (%s)", plan["error"])
@@ -378,12 +385,53 @@ def infer(
     inputs = build_inputs(turns, plan.get("parsed") or {}, after=after)
     if not any(row["new"] for row in inputs["trader_turns"]):
         return []
+    record = _gate(inputs, gate, gate_mode)
+    if record is not None and record["skipped"]:
+        logging.info("Trade Mentor: plan inference skipped by the rule gate (score %.2f)", record["score"])
+        _record(record, on_gate)
+        return []
+    ops: list[dict[str, Any]] = []
     try:
         reply = request(inputs, endpoint=endpoint, model=model, post=post, keep_alive=keep_alive, num_ctx=num_ctx)
         ops, drops = check_reply(reply, inputs)
     except Exception as exc:  # noqa: BLE001 - model down, tunnel down or a bad reply: nothing is written
         logging.info("Trade Mentor: plan inference skipped (%s: %s)", type(exc).__name__, exc)
+        if record is not None:
+            _record(record, on_gate)
         return []
     if drops:
         logging.info("Trade Mentor: plan inference dropped %s", drops)
+    if record is not None:
+        _record({**record, "ops": len(ops)}, on_gate)
     return ops
+
+
+def _gate(inputs: Mapping[str, Any], gate: Callable[[str], float | None] | None, gate_mode: str) -> dict[str, Any] | None:
+    """Score the new turns; the record, or None when the gate is off. Only ever a skip, never an op."""
+    if gate is None or gate_mode not in ("shadow", "on"):
+        return None
+    new = [row for row in inputs["trader_turns"] if row["new"]]
+    scores = []
+    for row in new:
+        try:
+            scores.append(gate(row["text"]))
+        except Exception:  # noqa: BLE001 - a broken gate is "no answer"
+            scores.append(None)
+    top = None if any(value is None for value in scores) else max(scores)
+    if top is None:
+        logging.info("Trade Mentor: rule gate gave no answer; plan inference runs as before")
+    would_skip = top is not None and top < rule_gate.CUT
+    return {"turn_ids": [row["id"] for row in new], "score": top, "mode": gate_mode, "cut": rule_gate.CUT,
+            "would_skip": would_skip, "skipped": would_skip and gate_mode == "on", "ops": None}
+
+
+def _record(record: dict[str, Any], on_gate: Callable[[dict[str, Any]], Any] | None) -> None:
+    score = "none" if record["score"] is None else f"{record['score']:.2f}"
+    logging.info("Trade Mentor: rule gate (%s) score %s on %s: %s, plan inference returned %s ops",
+                 record["mode"], score, ",".join(record["turn_ids"]),
+                 "skip" if record["would_skip"] else "ask", "no" if record["ops"] is None else record["ops"])
+    if on_gate is not None:
+        try:
+            on_gate(record)
+        except Exception:  # noqa: BLE001 - a lost record never blocks plan inference
+            logging.warning("Trade Mentor: the rule gate record was not kept", exc_info=True)
