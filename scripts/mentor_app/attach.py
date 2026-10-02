@@ -490,6 +490,49 @@ def plan_attachments(
     return sorted(wanted, key=lambda request: request.priority)
 
 
+#: A short follow-up that leans on the last question ("what about just this morning?", "and yesterday?").
+_FOLLOW_UP = re.compile(r"^\s*(?:(?:and|so|ok(?:ay)?|but)[\s,]+)?(?:what|how) about\b|^\s*and\b"
+                        r"|^\s*same (?:for|but|with)\b|^\s*(?:just|only) (?:this|the|today|for|in)\b")
+FOLLOW_UP_MAX_WORDS = 8
+#: Plan reasons that are no topic of their own: a time word or a bare market cue.
+_TOPICLESS = frozenset({"trade intent", "time words"})
+
+
+def is_follow_up(text: str, planned: Iterable[AttachRequest]) -> bool:
+    """True for a short follow-up cue whose own plan has no topic (only time words or a bare market cue)."""
+    lowered = str(text or "").lower()
+    if not _FOLLOW_UP.search(lowered) or len(re.findall(r"[a-z0-9$'&]+", lowered)) > FOLLOW_UP_MAX_WORDS:
+        return False
+    return all(request.reason in _TOPICLESS for request in planned)
+
+
+def carry_follow_up(text: str, planned: list[AttachRequest], previous: Iterable[AttachRequest],
+                    now: datetime | None = None) -> list[AttachRequest]:
+    """A topicless follow-up re-attaches the previous user turn's packs (a day word moves their ``day``);
+    any other question keeps its own plan."""
+    previous = list(previous or ())
+    if not previous or not is_follow_up(text, planned):
+        return planned
+    day = resolve_day(text, now)
+    out: list[AttachRequest] = []
+    for request in previous:
+        args = dict(request.args)
+        if day and "day" in args:
+            args["day"] = day
+        reason = request.reason if request.reason.startswith("follow-up: ") else f"follow-up: {request.reason}"
+        out.append(AttachRequest(request.name, args, request.priority, reason))
+    carried = {request.name for request in out}
+    for request in planned:
+        if request.reason == "trade intent" or request.name in carried:
+            continue  # the bare market cue was the follow-up's time word, not a new topic
+        out.append(request)
+    unique: list[AttachRequest] = []
+    for request in out:
+        if all(existing.key() != request.key() for existing in unique):
+            unique.append(request)
+    return sorted(unique, key=lambda request: request.priority)
+
+
 def _group_side(lowered: str, which: str) -> str:
     """The side a group names: its own word ("shorts"), else the one side word in the question ("my focus longs")."""
     if which.startswith("long") or which.startswith("short"):

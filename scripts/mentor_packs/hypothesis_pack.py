@@ -187,6 +187,32 @@ def _facet_pairs(raw: Any) -> list[tuple[str, str]] | None:
     return items if all(name and value for name, value in items) else None
 
 
+def resolve_bare_facets(query: Any, report: Report | None) -> tuple[Any, list[str]]:
+    """A bare facet value (``"no_trigger"``) becomes ``name=value`` when exactly one facet name in the
+    report's vocabulary carries it; else it is dropped with a note. (query, notes); other shapes as given."""
+    if not isinstance(query, Mapping) or not isinstance(query.get("facets"), (list, tuple)):
+        return query, []
+    population = str(query.get("population") or "").strip().lower()
+    names = (vocabulary(report).get(population) or {}).get("facets") or {}
+    facets: list[Any] = []
+    notes: list[str] = []
+    for part in query["facets"]:
+        if not isinstance(part, str) or "=" in part or not part.strip():
+            facets.append(part)
+            continue
+        token = part.strip()
+        owners = [name for name, values in names.items() if token in values]
+        if len(owners) == 1:
+            facets.append(f"{owners[0]}={token}")
+            notes.append(f"facet {token} read as {owners[0]}={token}")
+        else:
+            why = "names more than one facet" if owners else "is not a value in the report's vocabulary"
+            notes.append(f"facet {token} dropped: it {why}")
+    if facets == list(query["facets"]):
+        return query, notes
+    return {**query, "facets": facets}, notes
+
+
 def normalise(query: Any) -> tuple[dict[str, Any] | None, str]:
     """(clean query, "") or (None, why it cannot be looked up). Shape only; no report needed."""
     if not isinstance(query, Mapping):
@@ -230,7 +256,7 @@ def find(query: Any, report: Report | None) -> tuple[Cell | None, str]:
     """(the published cell, "") or (None, the miss reason). Never guesses a cell."""
     import setup_permutation_search as sps
 
-    clean, why = normalise(query)
+    clean, why = normalise(resolve_bare_facets(query, report)[0])
     if clean is None:
         return None, f"not a valid query: {why}"
     if report is None:

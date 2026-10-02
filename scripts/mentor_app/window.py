@@ -240,6 +240,7 @@ class MentorWindow(QMainWindow):
         paste_prompt: Callable[[], Any] | None = None,
         fund_builder: Callable[[str], Any] | None = None,
         desk_dock: Callable[[Any], Any] | None = None,
+        get: Callable[[str, float], Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -250,6 +251,10 @@ class MentorWindow(QMainWindow):
         self._tunnel = tunnel
         self._stream_post = stream_post or brain.default_stream_post
         self._post = post or brain.default_post
+        #: GET for /api/ps; a test that fakes ``post`` and not ``get`` has no host to list.
+        self._get = get or (brain.default_get if post is None else None)
+        #: The previous user turn's planned packs (a topicless follow-up carries them).
+        self._last_attachments: list[Any] = []
         self._brain_ok = False
         self._brain_reason = "connecting to the GPU host..."
         self._connecting = False
@@ -1027,7 +1032,7 @@ class MentorWindow(QMainWindow):
 
         def release() -> None:
             if endpoint:
-                self._unload(endpoint, models[0], extra=models[1:])
+                self._unload_for_pause(endpoint, models)
             if tunnel is not None:
                 tunnel.stop()
 
@@ -1217,15 +1222,38 @@ class MentorWindow(QMainWindow):
             if time.monotonic() - self._last_connect >= RECONNECT_BACKOFF_SECONDS or self._last_connect == 0:
                 self.connect_brain()
 
-    def _unload(self, endpoint: str, model: str, timeout: float = 60, extra: tuple[str, ...] = ()) -> None:
+    def _unload_for_pause(self, endpoint: str, candidates: tuple[str, ...]) -> None:
+        """Unload what the host says is loaded (``/api/ps``); when it cannot say, the candidate tags."""
+        loaded = None
+        if self._get is not None:
+            try:
+                loaded = brain.loaded_models(endpoint, get=self._get)
+            except Exception as exc:  # noqa: BLE001 - no listing: fall back to the candidate tags
+                logging.info("Trade Mentor: /api/ps failed (%s); unloading the configured tags", exc)
+        if loaded is None:
+            self._unload(endpoint, candidates[0], extra=candidates[1:])
+            return
+        def is_embedder(name: str) -> bool:
+            return name.removesuffix(":latest") == settings.EMBED_MODEL.removesuffix(":latest")
+
+        chats = tuple(name for name in loaded if not is_embedder(name))
+        self._unload(endpoint, chats[0] if chats else "", extra=chats[1:],
+                     embedder=any(is_embedder(name) for name in loaded))
+
+    def _unload(self, endpoint: str, model: str, timeout: float = 60, extra: tuple[str, ...] = (),
+                embedder: bool = True) -> None:
         """Unload the chat model, any ``extra`` chat models, and the embedder (keep_alive 0)."""
         chats = [(name, brain.unload) for name in (model, *extra)]
-        for name, unload in (*chats, (settings.EMBED_MODEL, brain.unload_embedder)):
+        embed = [(settings.EMBED_MODEL, brain.unload_embedder)] if embedder else []
+        for name, unload in (*chats, *embed):
             if not name:
                 continue
             try:
                 unload(endpoint, name, post=self._post, timeout=timeout)
             except Exception as exc:  # noqa: BLE001
+                if "not found" in str(exc):
+                    logging.info("Trade Mentor: %s is not on the host, nothing to unload", name)
+                    continue
                 logging.warning("Trade Mentor: unload of %s failed: %s", name, exc)
 
     # ------------------------------------------------------------------ context
@@ -1408,7 +1436,12 @@ class MentorWindow(QMainWindow):
         known = attach.known_symbols(context_rows, self._liked_names, self._journal_symbols)
         attachments = attach.plan_attachments(text, known, self._now(), book=attach.book_symbols(context_rows),
                                               liked=self._liked_names)
+        # A topicless follow-up ("what about just this morning?") re-reads the last question's packs.
+        attachments = attach.carry_follow_up(text, attachments, self._last_attachments, self._now())
+        self._last_attachments = list(attachments)
         seen = attach.recent_cited_ids(self.chat.turns[:-1], attach.DEDUPE_TURNS)
+        if any(str(request.reason).startswith("follow-up: ") for request in attachments):
+            seen = set()  # a follow-up asks about the same rows again: none is held back as already seen
         # P14: a book_pack built from the journal (no fresh broker snapshot) queues the broker read on the
         # news thread and says so; the next turn reads the fresh snapshot.
         from mentor_app import book_jobs

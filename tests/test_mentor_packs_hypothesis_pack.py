@@ -79,6 +79,23 @@ def test_a_miss_says_why_and_never_guesses(report, query, reason):
     assert hp.MISS_NOT_IN_GRID.startswith("not in the grid (depth > 3 or under the floor")
 
 
+def test_bare_facet_values_map_to_their_one_facet_name(report):
+    """2026-10-01: the night wrote facets ["rvol_below_1"]; the lookup wants name=value and refused them."""
+    bare = {**Q, "facets": ["held", "up"]}
+    assert hp.lookup(bare, report) == hp.lookup(Q, report)
+    resolved, notes = hp.resolve_bare_facets(bare, report)
+    assert sorted(resolved["facets"]) == ["sma100_support=held", "spy_trend=up"]
+    assert "facet held read as sma100_support=held" in notes
+
+
+def test_a_bare_value_outside_the_vocabulary_is_dropped_with_a_note(report):
+    resolved, notes = hp.resolve_bare_facets({**Q, "facets": ["held", "no_trigger"]}, report)
+    assert resolved["facets"] == ["sma100_support=held"]
+    assert notes[-1] == "facet no_trigger dropped: it is not a value in the report's vocabulary"
+    cell, why = hp.find({**Q, "facets": ["no_trigger"]}, report)
+    assert cell is None and "not a valid query" in why
+
+
 def test_no_report_is_a_miss_not_a_guess():
     assert hp.find(Q, None) == (None, "no permutation report to look in")
 

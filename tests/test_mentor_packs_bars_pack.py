@@ -25,8 +25,10 @@ def test_golden_pack_never_shows_the_forming_bar():
     assert by_id["bars:ALL:bar:3"] == "09:55 ET O 105.00 H 106.00 L 104.50 C 105.50 V 6,000"
     assert by_id["bars:ALL:day"] == ("ALL 2026-09-30 regular session so far: open 100.00, high 106.00, low 99.50, "
                                      "6 bars; approx session VWAP 103.67 (typical price x volume of the cached "
-                                     "bars; VWAP not in cache)")
-    assert by_id["bars:ALL:last"] == "ALL last 105.50 at 10:00 ET (close of the last completed bar)"
+                                     "bars; VWAP not in cache); last 105.50 is above session VWAP 103.67 by 1.83 "
+                                     "(1.77%)")
+    assert by_id["bars:ALL:last"] == ("ALL last 105.50 at 10:00 ET (close of the last completed bar), above session "
+                                      "VWAP 103.67 by 1.83 (1.77%)")
     assert not any("10:00 ET O" in text for text in by_id.values())  # the 10:00-10:05 bar is still forming
     assert len(pack.ids) == len(set(pack.ids))
 
@@ -84,6 +86,27 @@ def test_vwap_unknown_when_the_session_is_partial():
     day = next(row["text"] for row in pack.rows if row["id"] == "bars:ALL:day")
     assert "VWAP not in cache" in day and "approx" not in day
     assert "cached from 09:40 ET only (today's open not cached)" in day
+
+
+def test_last_states_its_side_of_vwap_in_words():
+    """2026-10-01 HD: last 278.88 with VWAP 279.00 was called "above VWAP" by the model."""
+    rows = bars_pack.fixture_rows()
+    for row in rows:
+        row["vwap"] = 279.00
+    rows[-2]["close"] = 278.88
+    pack = bars_pack.build("ALL", now=bars_pack.FIXTURE_NOW, sources=bars_pack.fixture_sources(rows))
+    by_id = {row["id"]: row for row in pack.rows}
+    assert "last 278.88" in by_id["bars:ALL:last"]["text"]
+    assert "below session VWAP 279.00 by 0.12 (0.04%)" in by_id["bars:ALL:last"]["text"]
+    assert "is below session VWAP 279.00 by 0.12" in by_id["bars:ALL:day"]["text"]
+    assert by_id["bars:ALL:last"]["vwap"] == 279.0
+
+
+def test_vwap_side_is_unknown_without_a_vwap():
+    rows = bars_pack.fixture_rows()[2:]
+    pack = bars_pack.build("ALL", now=bars_pack.FIXTURE_NOW, sources=bars_pack.fixture_sources(rows))
+    last = next(row["text"] for row in pack.rows if row["id"] == "bars:ALL:last")
+    assert "above/below session VWAP unknown" in last
 
 
 def test_registered_and_attached():

@@ -178,6 +178,7 @@ def outcome_rows(label: str, units: list[journal_read.Unit]) -> list[dict[str, A
         unit = choose(pool, key=lambda u: (u.r if by == "R" else u.pnl))
         side = str(unit.trades[0].get("direction") or "?").upper() if len(unit.trades) == 1 else "SPREAD"
         result = f"{unit.r:+.2f}R ({_money(unit.pnl)} $)" if unit.r is not None else f"{_money(unit.pnl)} $"
+        result = f"{_outcome_text(unit, side)}; {result}"
         rows.append({"id": f"jrn:{label}:{key}", "kind": key, "symbol": unit.symbol, "by": by,
                      "trade": f"jrn:{label}:{'+'.join(unit.ids)}",
                      "text": f"{key.title()} trade: {side} {unit.symbol} {result}, held "
@@ -202,12 +203,48 @@ def _qty(trades: Iterable[Mapping[str, Any]]) -> str:
     return "unknown" if any(s is None for s in sizes) else "/".join(f"{s:g}" for s in sizes)
 
 
+def price_move(side: str, entry: float | None, exit_: float | None) -> float | None:
+    """Points in the trade's favour: exit - entry for a LONG, entry - exit for a SHORT; None when unknown."""
+    if entry is None or exit_ is None or not entry or not exit_:
+        return None
+    if side.startswith("LONG") or side == "BUY":
+        return exit_ - entry
+    if side.startswith("SHORT") or side == "SELL":
+        return entry - exit_
+    return None
+
+
+def result_word(pnl: float | None, move: float | None = None) -> str:
+    """WIN / LOSS / FLAT from the PnL, else from the points in the trade's favour; "result unknown" without either."""
+    value = pnl if pnl is not None else move
+    if value is None:
+        return "result unknown"
+    if abs(value) < 0.005:
+        return "FLAT"
+    return "WIN" if value > 0 else "LOSS"
+
+
+def _outcome_text(unit: journal_read.Unit, side: str) -> str:
+    """``WIN, short 18.83 -> 18.80 = +0.03 pts in your favour (short: exit below entry is a win)``."""
+    move = None
+    detail = ""
+    if len(unit.trades) == 1 and unit.kind != "option":
+        trade = unit.trades[0]
+        entry, exit_ = journal_read.num(trade.get("average_entry_price")), journal_read.num(trade.get("average_exit_price"))
+        move = price_move(side, entry, exit_)
+        if move is not None:
+            detail = (f", {side.lower()} {entry:.2f} -> {exit_:.2f} = {move:+.2f} pts in your favour"
+                      + (" (short: exit below entry is a win)" if side.startswith("SHORT") else ""))
+    return result_word(unit.pnl, move) + detail
+
+
 def _unit_row(label: str, unit: journal_read.Unit, accounts: Mapping[str, str]) -> dict[str, Any]:
     first = unit.trades[0]
     side = str(first.get("direction") or "?").upper() if len(unit.trades) == 1 else "SPREAD"
     kind = "spread" if unit.kind == "option" and len(unit.trades) > 1 else unit.kind
     result = (f"{unit.r:+.2f}R ({_money(unit.pnl)} $)" if unit.r is not None
               else f"{_money(unit.pnl)} $ (R unknown: no planned stop)")
+    result = f"{_outcome_text(unit, side)}; {result}"
     opened = unit.opened.strftime("%a %H:%M") if unit.opened else "unknown"
     closed = unit.closed.strftime("%a %H:%M") if unit.closed else "unknown"
     account = accounts.get(unit.account_number, "account type unknown")

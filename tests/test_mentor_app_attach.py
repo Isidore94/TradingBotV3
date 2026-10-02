@@ -7,6 +7,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
@@ -29,6 +31,37 @@ def test_a_known_uppercase_ticker_attaches_its_pick_and_news():
     got = _names(attach.plan_attachments("is NVDA still worth it with AMD reporting", KNOWN, NOW))
     assert ("pick_pack", {"symbol": "NVDA"}) in got and ("pick_pack", {"symbol": "AMD"}) in got
     assert ("news_pack", {"symbol": "NVDA"}) in got and ("news_pack", {"symbol": "AMD"}) in got
+
+
+def test_a_topicless_follow_up_reattaches_the_last_questions_packs():
+    """2026-10-01: "what about just this morning?" after the short-industries question got the econ calendar."""
+    first = attach.plan_attachments("what are some good industries to look to short?", KNOWN, NOW)
+    assert _names(first) == [("rs_pack", {"level": "industry"})]
+    own = attach.plan_attachments("what about just this morning?", KNOWN, NOW)
+    assert [r.reason for r in own] == ["trade intent"], "alone it is only a bare market cue"
+    got = attach.carry_follow_up("what about just this morning?", own, first, NOW)
+    assert _names(got) == [("rs_pack", {"level": "industry"})]
+    assert got[0].reason == "follow-up: relative strength words"
+    # A day word moves a carried journal read; the carry chains through a second follow-up.
+    journal = attach.plan_attachments("how did my trades go today", KNOWN, NOW)
+    moved = attach.carry_follow_up("and yesterday?", attach.plan_attachments("and yesterday?", KNOWN, NOW),
+                                   journal, NOW)
+    assert ("journal_pack", {"day": "2026-09-29"}) in _names(moved)
+    again = attach.carry_follow_up("what about monday?", [], moved, NOW)
+    assert again and all(r.reason.count("follow-up: ") == 1 for r in again)
+    assert ("journal_pack", {"day": "2026-09-28"}) in _names(again)
+
+
+@pytest.mark.parametrize("text", [
+    "what about NVDA?",                     # its own ticker
+    "what about my vetoes this week?",      # its own topic
+    "what are some good industries to look to short this morning and why do you think so?",  # not short
+    "is the market weak this morning?",     # no follow-up cue
+])
+def test_a_question_with_its_own_topic_keeps_its_own_plan(text):
+    previous = attach.plan_attachments("what are some good industries to look to short?", KNOWN, NOW)
+    own = attach.plan_attachments(text, KNOWN, NOW)
+    assert attach.carry_follow_up(text, own, previous, NOW) == own
 
 
 def test_all_v_and_it_are_tickers_only_inside_the_traders_universe():

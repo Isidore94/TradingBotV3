@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo
@@ -183,13 +183,22 @@ def _names_in(group: str, level: str, symbol_map: Mapping[str, Mapping[str, Any]
     return [text for _, text in sorted(tagged)]
 
 
-def _group_row(row_id: str, side: str, row: Mapping[str, Any], level: str, names: list[str]) -> dict[str, Any]:
+def day_label(stamp: datetime, session: date) -> str:
+    """What the board's 1d column is: today so far when built in today's session, else the last session's change."""
+    built = stamp.astimezone(ET)
+    if built.date() == session and built.time() >= time(9, 30):
+        return f"today so far (as of {built:%H:%M} ET)"
+    return "1d (last session)"
+
+
+def _group_row(row_id: str, side: str, row: Mapping[str, Any], level: str, names: list[str],
+               one_day: str = "1d") -> dict[str, Any]:
     label = str(row.get(level) or "").strip()
     members = row.get("member_count")
     rank = _float(row.get("rs_rank"))
     rank_text = "?" if rank is None else f"{rank:g}"
     extra = f", {members} members" if members not in (None, "") else (f" ({row.get('etf')})" if row.get("etf") else "")
-    text = (f"{side} {level} #{rank_text}: {label}{extra}, 1d {_pct(row.get('pct_change_1d'))}, "
+    text = (f"{side} {level} #{rank_text}: {label}{extra}, {one_day} {_pct(row.get('pct_change_1d'))}, "
             f"5d {_pct(row.get('return_5d_pct'))}; yours: {', '.join(names) if names else 'none'}")
     return {"id": row_id, "kind": f"rs_{side}", "level": level, "group": label, "rank": rank, "text": text}
 
@@ -236,11 +245,14 @@ def build(level: str = "industry", top: int = 5, liked: Any = (), *, now: dateti
     focus = {str(sym).strip().upper() for sym in src.focus() or () if sym}
     # Leaders and laggards never share a group: at most half the board on each side.
     top = max(1, min(top, len(board) // 2))
+    one_day = day_label(stamp, session)
     leaders, laggards = board[:top],list(reversed(board[-top:])) if len(board) > top else []
     for n, row in enumerate(leaders, 1):
-        rows.append(_group_row(f"rs:lead:{n}", "lead", row, level, _names_in(row[level], level, symbol_map, book, likes, focus)))
+        rows.append(_group_row(f"rs:lead:{n}", "lead", row, level,
+                               _names_in(row[level], level, symbol_map, book, likes, focus), one_day))
     for n, row in enumerate(laggards, 1):
-        rows.append(_group_row(f"rs:lag:{n}", "lag", row, level, _names_in(row[level], level, symbol_map, book, likes, focus)))
+        rows.append(_group_row(f"rs:lag:{n}", "lag", row, level,
+                               _names_in(row[level], level, symbol_map, book, likes, focus), one_day))
     by_label = {str(row.get(level) or "").strip().lower(): row for row in board}
     key = "industry" if level == "industry" else "sector"
     touched: dict[str, list[str]] = {}
@@ -257,7 +269,7 @@ def build(level: str = "industry", top: int = 5, liked: Any = (), *, now: dateti
         else:
             row_id = f"rs:you:{_slug(group)}"
             text = (f"Your {group} ({', '.join(syms)}): rank {_float(row.get('rs_rank')):g} of {len(board)}, "
-                    f"1d {_pct(row.get('pct_change_1d'))}, 5d {_pct(row.get('return_5d_pct'))}")
+                    f"{one_day} {_pct(row.get('pct_change_1d'))}, 5d {_pct(row.get('return_5d_pct'))}")
         if row_id in seen:
             continue
         seen.add(row_id)

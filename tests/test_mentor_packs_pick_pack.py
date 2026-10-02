@@ -67,6 +67,44 @@ def test_long_golden(world):
     assert pack.as_text() == NVDA_GOLDEN
 
 
+def _day_bars(moves):
+    """Six 5-minute bars 09:30-09:55 ET on 2026-09-29 per symbol, from 100 to 100 * (1 + move%)."""
+    from datetime import timedelta
+
+    out = {}
+    for sym, move in moves.items():
+        first = datetime.fromisoformat("2026-09-29T09:30:00-04:00")
+        closes = [100.0 + move * (i + 1) / 6 for i in range(6)]
+        out[sym] = [{"symbol": sym, "start": (first + timedelta(minutes=5 * i)).isoformat(),
+                     "interval_start": (first + timedelta(minutes=5 * i)).isoformat(),
+                     "open": 100.0 if i == 0 else closes[i - 1], "high": 101.0, "low": 99.0, "close": close}
+                    for i, close in enumerate(closes)]
+    return out
+
+
+def test_a_name_is_compared_with_its_industry_peers_today(world):
+    """2026-10-01: "RIOT is weak vs its industry" got no peer comparison; the pack now carries one."""
+    cached = _day_bars({"NVDA": -4.0, "AVGO": -1.0, "AMAT": 0.5, "MU": -2.0})
+    asked = []
+    paths = replace(world, day_bars=lambda symbols, day: asked.append((set(symbols), day))
+                    or {s: cached[s] for s in symbols if s in cached})
+    rows = _rows(pick_pack.build("NVDA", now=NOW, paths=paths))
+    row = rows["pick:NVDA:vspeers"]
+    assert asked == [({"NVDA", "AVGO", "AMAT", "MU", "AMD", "QCOM"}, "2026-09-29")]
+    assert row["text"] == ("NVDA since today's open -4.00% (cached M5 bars to 10:00 ET) vs the median -1.00% of 3 of "
+                           "5 Semiconductors peers with cached bars: weaker than the median by 3.00 pts. Weakest "
+                           "first: MU -2.00%, AVGO -1.00%, AMAT +0.50%")
+    hashed = pick_pack.pack_hash(pick_pack.build("NVDA", now=NOW, paths=paths))
+    moved = replace(world, day_bars=lambda symbols, day: _day_bars({"NVDA": 3.0, "AVGO": -1.0}))
+    assert pick_pack.pack_hash(pick_pack.build("NVDA", now=NOW, paths=moved)) == hashed, "a moving number is no new card"
+
+
+def test_no_cached_bars_is_unknown_never_a_comparison(world):
+    paths = replace(world, day_bars=lambda symbols, day: {})
+    text = _rows(pick_pack.build("NVDA", now=NOW, paths=paths))["pick:NVDA:vspeers"]["text"]
+    assert text == "Move vs Semiconductors peers today: unknown (no cached M5 bars from today's open for it)"
+
+
 def test_short_golden(world):
     rows = _rows(pick_pack.build("TSLA", now=NOW, paths=world))
     assert rows["pick:TSLA:membership"]["text"] == "Focus: swing short (pick clock from 2026-09-25, added)"

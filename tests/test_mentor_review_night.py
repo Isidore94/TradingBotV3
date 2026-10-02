@@ -348,6 +348,17 @@ def test_a_side_written_into_the_family_is_moved_to_side_before_the_lookup(monke
     assert "families are listed without a side" in mentor_review.INSTRUCTIONS
 
 
+def test_bare_facet_values_are_stored_as_name_value_and_found(chat, tmp_path):
+    # 2026-10-01: facets ["rvol_below_1"] / ["no_trigger"] missed as "facets must be 1 to 3 'name=value' items".
+    bare = {**HYP, "query": {**HYP["query"], "facets": ["held", "up"]}}
+    _run(chat, tmp_path, request=lambda **_: {"summary": _hyp_reply(bare), "model": "m"},
+         permutation_history=_perm_history(tmp_path), permutation_report=tmp_path / "none.json")
+    digest = json.loads((tmp_path / "ai" / f"mentor_day_digest_{SESSION}.json").read_text(encoding="utf-8"))
+    assert "n=64" in digest["hyp_lines"][0]
+    assert digest["hypotheses"][0]["query"]["facets"] == ["sma100_support=held", "spy_trend=up"]
+    assert "facet held read as sma100_support=held" in digest["hypotheses"][0]["lookup"]["facet_notes"]
+
+
 def test_a_side_in_the_family_still_finds_its_published_cell(chat, tmp_path):
     sided = {**HYP, "query": {**HYP["query"], "family": "avwap_breakout LONG"}}
     _run(chat, tmp_path, request=lambda **_: {"summary": _hyp_reply(sided), "model": "m"},

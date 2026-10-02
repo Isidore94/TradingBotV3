@@ -266,6 +266,41 @@ def test_the_side_call_is_one_structured_call_to_the_chat_model(world):
     assert len(calls) == 1
 
 
+def test_gemma4_is_told_not_to_think_so_the_cap_is_left_for_the_json(world):
+    """2026-10-01: gemma4:12b reasoned through the 600-token cap and sent an empty content (JSONDecodeError 3x)."""
+    good = json.dumps({"ops": [_add(turn_ids=["turn:1"])]})
+
+    def gemma4(url, payload, timeout):
+        if payload.get("think") is False:
+            return {"message": {"role": "assistant", "content": good}, "done_reason": "stop"}
+        return {"message": {"role": "assistant", "content": "", "thinking": "The trader said..."},
+                "done_reason": "length"}
+
+    ops = plan_infer.infer(_turns("Stop after two losses."), after=0, endpoint="http://h", model="gemma4:12b",
+                           post=gemma4, path=world["plan"])
+    assert [op["text"] for op in ops] == ["Stop after two losses."]
+
+
+@pytest.mark.parametrize("content", [
+    '```json\n{"ops": [OP]}\n```',
+    'Here is the JSON:\n{"ops": [OP]}',
+    '\n  {"ops": [OP]}  \n',
+])
+def test_recorded_reply_shapes_parse(world, content):
+    op = json.dumps(_add(turn_ids=["turn:1"]))
+    post = lambda url, payload, timeout: {"message": {"content": content.replace("OP", op)}}  # noqa: E731
+    ops = plan_infer.infer(_turns("Stop after two losses."), after=0, endpoint="http://h", model="gemma4:12b",
+                           post=post, path=world["plan"])
+    assert [op["text"] for op in ops] == ["Stop after two losses."]
+
+
+def test_an_empty_reply_names_its_cause():
+    from mentor_app import brain
+
+    with pytest.raises(ValueError, match="reasoning used the token cap"):
+        brain.json_reply({"message": {"content": "", "thinking": "hmm"}, "done_reason": "length"})
+
+
 # ---------------------------------------------------------------- commands
 def test_plan_and_drop_parse():
     assert commands.handle("/plan").action == "plan"

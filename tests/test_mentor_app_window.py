@@ -280,6 +280,41 @@ def _run_turn(window, app, text):
     _flush(window)
 
 
+def test_a_topicless_follow_up_rereads_the_last_questions_packs(app, tmp_path, monkeypatch):
+    """2026-10-01: "what about just this morning?" after an industries question got the econ calendar."""
+    from mentor_app.window import MentorWindow
+    from mentor_packs import context_pack
+    from mentor_packs.registry import make_pack
+
+    monkeypatch.setattr(settings, "gpu_block_reason", lambda now=None: "")
+    monkeypatch.setattr(settings, "context_tokens", lambda: 8192)
+    built: list = []
+    sent: list = []
+
+    def build(name, args):
+        built.append((name, dict(args)))
+        return make_pack(name, [{"id": "rs:lag:1", "text": "lag industry #72: Solar, today so far -3.2%"}])
+
+    win = MentorWindow(
+        store=MentorChatStore(tmp_path / "mentor_chat.sqlite3"), queue=PrefetchQueue(),
+        stream_post=lambda url, payload, cancelled: sent.append(payload) or _answer("Solar is weakest [rs:lag:1]."),
+        post=lambda url, payload, timeout: {}, pack_builder=build,
+    )
+    try:
+        win._brain_ok, win._endpoint, win._model, win._native_tools = True, "http://x", "gemma4:12b", True
+        win._on_context(context_pack.fixture())
+        _run_turn(win, app, "what are some good industries to look to short?")
+        assert built == [("rs_pack", {"level": "industry"})]
+        built.clear()
+        _run_turn(win, app, "what about just this morning?")
+        assert built == [("rs_pack", {"level": "industry"})], "the follow-up re-reads the board, not the calendar"
+        tool_texts = [m["content"] for m in sent[-1]["messages"] if m["role"] == "tool"]
+        assert any("rs:lag:1" in text for text in tool_texts), "a row cited last turn is shown again on a follow-up"
+    finally:
+        win.shutdown()
+        win.deleteLater()
+
+
 def test_a_plain_pre_trade_question_auto_attaches_the_gate_and_the_log_says_so(app, tmp_path, monkeypatch):
     from mentor_app.window import MentorWindow
     from mentor_packs import context_pack
