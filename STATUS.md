@@ -24,7 +24,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   mentor digest retry. Next: morning pre-brief queue; rule audit once plan lines exist.
 - **Night model: gpt-oss:20b, effort medium, allowance 24k** (trader's word 2026-10-02; Mentor chat
   pinned to gemma4:12b via `mentor_model`). Probe 10-02: medium wrote 9 of 10 verified slots
-  (gemma4 7; high unusable). Merged 10-02: story rejection names the ids, reply kept, schema
+  (gemma4 7; high unusable). Merged: story rejection names the ids, reply kept, schema
   closed to the pack's ids; mentor digest uses the set effort. First gpt-oss night: 10-02.
   Unmerged: `claude/gemma4-thinking-high-2026-10-01`.
 - **Night window:** 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435; the app uses
@@ -33,7 +33,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 - **Owed:** trial ledger index; rolling-RRS leftovers on % (ask first); TLT/USO/HYG bars
   (ask first); halted-name refetch; movers into the night AI; phone-brief rule line; theta store.
 - **Next action:** gates #305, #300-#301, #297-#298, #258-#287. Left: B10, B2, C4a, Phase C.
-- **Trader actions owed:** Risk per trade ($) in Settings > General; confirm setup tags (P2);
+- **Trader owes:** Risk per trade ($) in Settings > General; confirm setup tags (P2);
   night task "run whether logged on or not"; `map_freshness.py --apply`; desk down + market
   closed: `journal_pnl_repair.py` (#205), options-journal repair (#162),
   `journal_questrade_gaps.py --statement`; live click checks; rotate the market-prep OpenAI key.
