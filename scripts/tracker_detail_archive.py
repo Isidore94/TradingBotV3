@@ -16,6 +16,13 @@ pre-compaction record's JSON text.
 Different content for a key already archived is KEPT BESIDE the old row, never
 written over it: the archive's job is to lose nothing, and refusing would leave
 that record unstripped on every save forever. ``load_detail`` returns the newest.
+
+Which version belongs to a saved record: each archive pass also stores a hash of
+the record as compaction leaves it (its snapshot, short horizon and scenario
+outcomes; ``saved_as`` table), and ``restore_saved_record`` picks the version whose
+hash matches the record in hand; no match, or two, is an
+explicit ``NoMatchingDetail``, never a guess. Rows written by the first schema
+(no ``saved_as``) still load and verify, but cannot be matched to a saved record.
 """
 
 from __future__ import annotations
@@ -34,7 +41,13 @@ from typing import Any, Iterable
 FORMAT = "tracker_detail_v1"
 RECORD_NAMESPACES = ("setups", "control_setups", "study_setups")
 _COMPRESS_LEVEL = 6
-_BUSY_TIMEOUT_SECONDS = 10.0
+#: Lock wait on the tracker save path: short, because a miss only costs a retry next save.
+_BUSY_TIMEOUT_SECONDS = 1.0
+_CLI_BUSY_TIMEOUT_SECONDS = 10.0
+
+
+class NoMatchingDetail(LookupError):
+    """No single archived version belongs to the record asked about."""
 
 
 def default_archive_path() -> Path:
@@ -93,6 +106,33 @@ def encode_detail(detail: dict, json_default=None) -> str:
     return json.dumps(detail, ensure_ascii=False, separators=(",", ":"), default=json_default or str)
 
 
+def _match_hash(record: dict, json_default=None) -> str:
+    """Hash of what the stripped detail produced and compaction keeps: the latest
+    snapshot, ``short_horizon`` and each scenario's fields bar ``events``. Bookkeeping
+    the save stamps after compaction (``expiry_reason``, ...) is left out on purpose."""
+    scenarios = record.get("scenarios")
+    projection = {
+        "latest_snapshot": record.get("latest_snapshot"),
+        "short_horizon": record.get("short_horizon"),
+        "scenarios": {
+            str(name): {k: v for k, v in s.items() if k != "events"} if isinstance(s, dict) else s
+            for name, s in (scenarios.items() if isinstance(scenarios, dict) else ())
+        },
+    }
+    return _hash(json.dumps(projection, ensure_ascii=False, separators=(",", ":"), default=json_default or str))
+
+
+def _compacted_copy(setup: dict, compact) -> dict:
+    """``setup`` as ``compact`` would leave it, without touching ``setup``: compaction
+    only reassigns top-level and per-scenario keys, so shallow copies suffice."""
+    copied = dict(setup)
+    scenarios = copied.get("scenarios")
+    if isinstance(scenarios, dict):
+        copied["scenarios"] = {name: dict(s) if isinstance(s, dict) else s for name, s in scenarios.items()}
+    compact(copied)
+    return copied
+
+
 def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
 
@@ -123,15 +163,17 @@ class ArchiveResult:
 class DetailArchive:
     """SQLite file of compressed detail blobs keyed by (namespace, key, sha256)."""
 
-    def __init__(self, path: Path | str):
+    def __init__(self, path: Path | str, *, busy_timeout: float | None = None):
         self.path = Path(path)
+        self.busy_timeout = busy_timeout
 
     def _connect(self, *, create: bool) -> sqlite3.Connection:
+        timeout = _BUSY_TIMEOUT_SECONDS if self.busy_timeout is None else self.busy_timeout
         if create:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(str(self.path), timeout=_BUSY_TIMEOUT_SECONDS)
+            conn = sqlite3.connect(str(self.path), timeout=timeout)
         else:
-            conn = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=_BUSY_TIMEOUT_SECONDS)
+            conn = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=timeout)
         if create:
             conn.execute("PRAGMA journal_mode=DELETE")
             conn.execute("PRAGMA synchronous=FULL")
@@ -141,14 +183,27 @@ class DetailArchive:
                 " format TEXT NOT NULL, raw_bytes INTEGER NOT NULL, blob BLOB NOT NULL,"
                 " archived_at TEXT NOT NULL, PRIMARY KEY (namespace, setup_key, sha256))"
             )
+            # Which compacted record each version was archived for (added after the first schema).
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS saved_as ("
+                " namespace TEXT NOT NULL, setup_key TEXT NOT NULL, compacted_sha256 TEXT NOT NULL,"
+                " detail_sha256 TEXT NOT NULL, seen_at TEXT NOT NULL,"
+                " PRIMARY KEY (namespace, setup_key, compacted_sha256, detail_sha256))"
+            )
         return conn
 
-    def archive(self, items: Iterable[tuple[str, str, dict]], *, json_default=None) -> ArchiveResult:
+    def archive(
+        self, items: Iterable[tuple[str, str, dict]], *, json_default=None, compact=None
+    ) -> ArchiveResult:
         """Archive each item's strippable detail, then verify every row through a
-        fresh read-only connection. Never raises; the result says what is safe."""
+        fresh read-only connection. Never raises; the result says what is safe.
+        ``compact`` is the tracker's compaction function: with it, the hash of the
+        record as compaction will leave it is stored, so ``restore_saved_record``
+        can pick this version for that record."""
         items = list(items)
         result = ArchiveResult()
-        pending: list[tuple[str, str, str]] = []  # (namespace, key, sha256) written or already present
+        # (namespace, key, detail sha256, compacted sha256 or "") written or already present
+        pending: list[tuple[str, str, str, str]] = []
         try:
             conn = self._connect(create=True)
         except Exception as exc:
@@ -168,10 +223,18 @@ class DetailArchive:
                         text = encode_detail(detail, json_default)
                         digest = _hash(text)
                         blob = _compress(text)
+                        compacted = ""
+                        if compact is not None:
+                            compacted = _match_hash(_compacted_copy(setup, compact), json_default)
                         cursor = conn.execute(
                             "INSERT OR IGNORE INTO detail VALUES (?, ?, ?, ?, ?, ?, ?)",
                             (ident[0], ident[1], digest, FORMAT, len(text), blob, stamp),
                         )
+                        if compacted:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO saved_as VALUES (?, ?, ?, ?, ?)",
+                                (ident[0], ident[1], compacted, digest, stamp),
+                            )
                     except Exception as exc:
                         logging.warning("Tracker detail archive: could not write %s/%s: %s", *ident, exc)
                         result.failed.append(ident)
@@ -182,11 +245,11 @@ class DetailArchive:
                         result.stored_bytes += len(blob)
                     else:
                         result.already_archived += 1
-                    pending.append((ident[0], ident[1], digest))
+                    pending.append((ident[0], ident[1], digest, compacted))
         except Exception as exc:
             # The transaction rolled back: nothing from this pass is trusted.
             result.error = f"{type(exc).__name__}: {exc}"
-            result.failed.extend((ns, key) for ns, key, _ in pending)
+            result.failed.extend((ns, key) for ns, key, _, _ in pending)
             result.written = result.already_archived = result.raw_bytes = result.stored_bytes = 0
             pending = []
         finally:
@@ -195,26 +258,31 @@ class DetailArchive:
             self._verify_pending(pending, result)
         return result
 
-    def _verify_pending(self, pending: list[tuple[str, str, str]], result: ArchiveResult) -> None:
+    def _verify_pending(self, pending: list[tuple[str, str, str, str]], result: ArchiveResult) -> None:
         try:
             reader = self._connect(create=False)
         except Exception as exc:
             result.error = f"read-back unavailable: {type(exc).__name__}: {exc}"
-            result.failed.extend((ns, key) for ns, key, _ in pending)
+            result.failed.extend((ns, key) for ns, key, _, _ in pending)
             return
         try:
-            for namespace, key, digest in pending:
+            for namespace, key, digest, compacted in pending:
                 row = reader.execute(
                     "SELECT blob FROM detail WHERE namespace=? AND setup_key=? AND sha256=?",
                     (namespace, key, digest),
                 ).fetchone()
-                if row is not None and _blob_ok(row[0], digest):
+                linked = not compacted or reader.execute(
+                    "SELECT 1 FROM saved_as WHERE namespace=? AND setup_key=? AND compacted_sha256=?"
+                    " AND detail_sha256=?",
+                    (namespace, key, compacted, digest),
+                ).fetchone() is not None
+                if row is not None and linked and _blob_ok(row[0], digest):
                     result.safe.add((namespace, key))
                 else:
                     result.failed.append((namespace, key))
         except Exception as exc:
             result.error = f"read-back failed: {type(exc).__name__}: {exc}"
-            result.failed.extend((ns, key) for ns, key, _ in pending if (ns, key) not in result.safe)
+            result.failed.extend((ns, key) for ns, key, _, _ in pending if (ns, key) not in result.safe)
         finally:
             reader.close()
 
@@ -240,9 +308,46 @@ class DetailArchive:
         return versions
 
     def load_detail(self, namespace: str, key: str) -> dict | None:
-        """The newest archived detail for one record, or None."""
+        """The most recently FIRST-archived detail for one record, or None. Not
+        necessarily the saved record's: use ``restore_saved_record`` to restore."""
         versions = self.load_versions(namespace, key)
         return versions[-1] if versions else None
+
+    def restore_saved_record(self, namespace: str, key: str, record: dict, *, json_default=None) -> dict:
+        """``record`` (as the tracker holds it, compacted) with the detail archived
+        for that record put back, matched on its snapshot, short horizon and scenario
+        outcomes (``_match_hash``). Raises ``NoMatchingDetail`` when no version, or
+        more than one, was archived for those."""
+        namespace, key = str(namespace), str(key)
+        compacted = _match_hash(record, json_default)
+        rows: list = []
+        total = 0
+        if self.path.exists():
+            conn = self._connect(create=False)
+            try:
+                total = conn.execute(
+                    "SELECT COUNT(*) FROM detail WHERE namespace=? AND setup_key=?", (namespace, key)
+                ).fetchone()[0]
+                has_links = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='saved_as'"
+                ).fetchone()
+                if has_links:
+                    rows = conn.execute(
+                        "SELECT d.sha256, d.blob FROM saved_as s JOIN detail d"
+                        " ON d.namespace=s.namespace AND d.setup_key=s.setup_key AND d.sha256=s.detail_sha256"
+                        " WHERE s.namespace=? AND s.setup_key=? AND s.compacted_sha256=?",
+                        (namespace, key, compacted),
+                    ).fetchall()
+            finally:
+                conn.close()
+        if len(rows) != 1:
+            why = "none was archived for this record's content" if not rows else f"{len(rows)} match it"
+            raise NoMatchingDetail(f"{namespace}/{key}: {total} archived version(s), {why}")
+        digest, blob = rows[0]
+        text = _decompress(blob)
+        if _hash(text) != digest:
+            raise ValueError(f"archived detail for {namespace}/{key} fails its hash")
+        return restore_record(record, json.loads(text))
 
     def status(self) -> dict:
         if not self.path.exists():
@@ -299,15 +404,19 @@ def _blob_ok(blob: bytes, digest: str) -> bool:
 
 # -- the tracker save's hook ---------------------------------------------------
 def archive_before_compaction(
-    items: Iterable[tuple[str, str, dict]], *, json_default=None, path: Path | str | None = None
+    items: Iterable[tuple[str, str, dict]],
+    *,
+    json_default=None,
+    path: Path | str | None = None,
+    compact=None,
 ) -> set:
-    """Archive the detail of each (namespace, key, record) about to be compacted.
-    Returns the (namespace, key) pairs that are safe to compact. Never raises; a
-    failure is logged as an error with its count and costs only disk space."""
+    """Archive the detail of each (namespace, key, record) about to be compacted by
+    ``compact``. Returns the (namespace, key) pairs that are safe to compact. Never
+    raises; a failure is logged as an error with its count and costs only disk space."""
     items = list(items)
     try:
         archive = DetailArchive(path or default_archive_path())
-        result = archive.archive(items, json_default=json_default)
+        result = archive.archive(items, json_default=json_default, compact=compact)
     except Exception as exc:
         result = ArchiveResult(error=f"{type(exc).__name__}: {exc}")
         result.failed = [(ns, key) for ns, key, setup in items if extract_detail(setup)]
@@ -341,7 +450,9 @@ def _main(argv: list[str] | None = None) -> int:
     show.add_argument("--all-versions", action="store_true")
     args = parser.parse_args(argv)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    archive = DetailArchive(Path(args.db) if args.db else default_archive_path())
+    archive = DetailArchive(
+        Path(args.db) if args.db else default_archive_path(), busy_timeout=_CLI_BUSY_TIMEOUT_SECONDS
+    )
     if args.command == "status":
         print(json.dumps(archive.status(), indent=2))
         return 0

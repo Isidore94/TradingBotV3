@@ -14161,7 +14161,9 @@ def _compact_sealed_tracker_setups(tracker: dict, scan_date: str) -> int:
     try:
         from tracker_detail_archive import archive_before_compaction
 
-        archived = archive_before_compaction(sealed, json_default=_json_default)
+        archived = archive_before_compaction(
+            sealed, json_default=_json_default, compact=_compact_tracker_setup_record
+        )
     except Exception as exc:
         logging.error("Setup tracker detail archive unavailable (%s); no sealed record compacted this save.", exc)
         archived = set()

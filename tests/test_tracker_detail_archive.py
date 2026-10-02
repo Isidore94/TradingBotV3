@@ -348,3 +348,156 @@ def test_cli_verify_catches_a_corrupt_blob(archive_path, capsys):
     conn.close()
     assert tda._main(["--db", str(archive_path), "verify"]) == 1
     assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+# -- review advisories (2026-10-02) ------------------------------------------------
+def _archive_with_compactor(archive, namespace, key, record):
+    return archive.archive([(namespace, key, record)], json_default=m._json_default, compact=m._compact_tracker_setup_record)
+
+
+def _as_saved(record: dict) -> dict:
+    """The record as the tracker JSON holds it after compaction and a save/load."""
+    compacted = copy.deepcopy(record)
+    m._compact_tracker_setup_record(compacted)
+    return json.loads(_text(compacted))
+
+
+def test_restore_picks_the_version_that_belongs_to_the_saved_record(archive_path):
+    # Archive X (save failed), Y (save failed), X again (saved): rowid order says Y.
+    x = _record()
+    y = _record()
+    y["daily_marks"][0]["close"] = 555.0
+    y["latest_snapshot"]["close"] = 555.0
+    archive = tda.DetailArchive(archive_path)
+    for record in (x, y, x):
+        assert ("setups", "K") in _archive_with_compactor(archive, "setups", "K", record).safe
+    restored = archive.restore_saved_record("setups", "K", _as_saved(x), json_default=m._json_default)
+    assert _text(restored) == _text(x)
+    restored_y = archive.restore_saved_record("setups", "K", _as_saved(y), json_default=m._json_default)
+    assert _text(restored_y) == _text(y)
+
+
+def test_restore_tells_x_from_y_when_only_the_detail_differs(archive_path):
+    x = _record()
+    y = _record()
+    y["daily_marks"][2]["close"] = 555.0  # changes the short_horizon compaction writes, nothing else
+    archive = tda.DetailArchive(archive_path)
+    for record in (x, y, x):
+        _archive_with_compactor(archive, "setups", "K", record)
+    assert _as_saved(x) != _as_saved(y)
+    assert _text(archive.restore_saved_record("setups", "K", _as_saved(x), json_default=m._json_default)) == _text(x)
+
+
+def test_restore_says_so_when_no_version_matches(archive_path):
+    x = _record()
+    archive = tda.DetailArchive(archive_path)
+    _archive_with_compactor(archive, "setups", "K", x)
+    saved = _as_saved(x)
+    saved["scenarios"]["s1"]["total_r"] = 9.9  # an outcome no archived version produced
+    with pytest.raises(tda.NoMatchingDetail, match="1 archived version"):
+        archive.restore_saved_record("setups", "K", saved, json_default=m._json_default)
+    with pytest.raises(tda.NoMatchingDetail, match="0 archived version"):
+        archive.restore_saved_record("setups", "OTHER", saved, json_default=m._json_default)
+
+
+def test_the_tracker_save_records_which_version_each_saved_record_carries(archive_path):
+    tracker = _tracker()
+    for namespace in NAMESPACES:
+        for record in tracker[namespace].values():
+            record["expiry_reason"] = ""  # live records carry the sweep's stamp from earlier saves
+    originals = copy.deepcopy(tracker)
+    with mock.patch.object(tda, "default_archive_path", return_value=archive_path), \
+         mock.patch.object(m, "export_setup_tracker_views"), \
+         mock.patch.object(m, "write_control_discovery_report"), \
+         mock.patch.object(m, "write_master_avwap_study_report"), \
+         mock.patch.object(m, "fetch_daily_bars", return_value=pd.DataFrame()), \
+         mock.patch.object(m, "_load_cached_daily_bar_frame", return_value=None), \
+         mock.patch.object(m, "save_setup_tracker_payload") as save_mock:
+        m.update_setup_tracker_from_scan(
+            [], {"symbols": {}}, {}, {}, None, scan_date=SCAN, auto_tune=False, tracker_payload=tracker
+        )
+    saved = json.loads(_text(save_mock.call_args.args[0]))
+    archive = tda.DetailArchive(archive_path)
+    for namespace, key in (("setups", "sealed"), ("control_setups", "sealed_c"), ("study_setups", "sealed_s")):
+        restored = archive.restore_saved_record(namespace, key, saved[namespace][key], json_default=m._json_default)
+        assert _text(restored) == _text(originals[namespace][key])
+
+
+def test_an_archive_written_by_the_first_schema_still_reads_and_says_it_cannot_match(archive_path):
+    # The ba99fabb schema: one `detail` table, no record of which saved record a version belongs to.
+    x = _record()
+    text = tda.encode_detail(tda.extract_detail(x), m._json_default)
+    conn = sqlite3.connect(str(archive_path))
+    conn.execute(
+        "CREATE TABLE detail (namespace TEXT NOT NULL, setup_key TEXT NOT NULL, sha256 TEXT NOT NULL,"
+        " format TEXT NOT NULL, raw_bytes INTEGER NOT NULL, blob BLOB NOT NULL,"
+        " archived_at TEXT NOT NULL, PRIMARY KEY (namespace, setup_key, sha256))"
+    )
+    conn.execute(
+        "INSERT INTO detail VALUES ('setups', 'OLD', ?, 'tracker_detail_v1', ?, ?, '2026-10-02T00:00:00+00:00')",
+        (tda._hash(text), len(text), tda._compress(text)),
+    )
+    conn.commit()
+    conn.close()
+    archive = tda.DetailArchive(archive_path)
+    assert archive.load_detail("setups", "OLD") == json.loads(text)
+    with pytest.raises(tda.NoMatchingDetail):
+        archive.restore_saved_record("setups", "OLD", _as_saved(x), json_default=m._json_default)
+    assert ("setups", "NEW") in _archive_with_compactor(archive, "setups", "NEW", _record()).safe
+    assert archive.verify()["ok"]
+    assert archive.status()["records"] == 2
+
+
+def test_a_locked_archive_costs_the_tracker_save_about_a_second_not_fourteen(archive_path):
+    import time
+
+    tda.DetailArchive(archive_path).archive([], json_default=m._json_default)
+    tracker = _tracker()
+    holder = sqlite3.connect(str(archive_path))
+    holder.execute("BEGIN EXCLUSIVE")
+    try:
+        started = time.monotonic()
+        with mock.patch.object(tda, "default_archive_path", return_value=archive_path):
+            assert m._compact_sealed_tracker_setups(tracker, SCAN) == 0
+        elapsed = time.monotonic() - started
+    finally:
+        holder.rollback()
+        holder.close()
+    assert elapsed < 3.0, f"a locked archive held the save for {elapsed:.1f}s"
+
+
+def _bulky_record(seed: int) -> dict:
+    import random
+
+    rng = random.Random(seed)
+    record = _record(n_marks=40)
+    for mark in record["daily_marks"]:
+        mark["noise"] = [rng.random() for _ in range(40)]  # incompressible
+    return record
+
+
+def test_a_disk_full_rollback_is_caught_by_the_read_back(archive_path):
+    """SQLITE_FULL rolls back inserts the pass already counted; only the read-back
+    keeps those records from being compacted with their detail gone."""
+    tda.DetailArchive(archive_path).archive([], json_default=m._json_default)
+    real_connect = tda.DetailArchive._connect
+
+    def _capped(self, *, create):
+        conn = real_connect(self, create=create)
+        if create:
+            pages = conn.execute("PRAGMA page_count").fetchone()[0]
+            conn.execute(f"PRAGMA max_page_count={pages + 12}")
+        return conn
+
+    records = {f"K{i}": _bulky_record(i) for i in range(30)}
+    items = [("setups", key, record) for key, record in records.items()]
+    with mock.patch.object(tda.DetailArchive, "_connect", _capped):
+        result = tda.DetailArchive(archive_path).archive(
+            items, json_default=m._json_default, compact=m._compact_tracker_setup_record
+        )
+    assert result.failed, "the cap did not bite; the test is not exercising a full disk"
+    assert result.safe, "nothing fit under the cap; the test is not exercising a partial write"
+    archive = tda.DetailArchive(archive_path)
+    for namespace, key in result.safe:
+        restored = archive.restore_saved_record(namespace, key, _as_saved(records[key]), json_default=m._json_default)
+        assert _text(restored) == _text(records[key])
