@@ -14,11 +14,11 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   /tilt /debate /hypotheses /brief /issues /recaps /paste /feel /night /scorecard /rs /alerts`;
   memory stands on the night; `mentor_app_enabled` on by default; frontier OFF (trader).
   Gates #311-#318, #321-#326, #329, #332-#336.
-- **Merged 2026-10-01 (P18 + P20, live at the next desk + app restart):** journal mode (self talk
-  kept with mood tags, one-line reply), habits + routines counted by the night, `reads_pack`
-  (your reads and grades), desk-side 60 s M5 publisher, one table-driven trade-intent gate (a
-  wrong gate is a blocker); gates #341-#344. P20: brief asks answer in 3 plain sentences, simple
-  replies plain; gate #345. Mentor UI: card box hides when done, Tape/Tilt/Mirror/Scorecard buttons, Dock into the desk Mentor tab; gate #346. Book: broker-flat journal opens are not positions. Day-1 fixes: short WIN/LOSS, alert follow-through, VWAP side, plan infer, facets, pause, vs-peers, follow-up carry.
+- **Merged 2026-10-01 (live at the next desk + app restart):** P18 journal mode, habits/routines,
+  `reads_pack`, 60 s M5 publisher, trade-intent gate (#341-#344); P20 plain brief/simple replies (#345);
+  Mentor UI: card box hides, Tape/Tilt/Mirror/Scorecard, Dock into the desk Mentor tab, Clear,
+  A-/A+ (#346); book ignores broker-flat journal opens; day-1 fixes: short WIN/LOSS, alert
+  follow-through, VWAP side, plan infer, facets, pause unload, vs-peers, follow-up carry.
 - **Night (2026-09-30):** retries x3, budget 360, care names briefed nightly (#331), nightly
   permutation report (#330, shadow). Merged 10-01 (#338): P19 night rejections (econ time
   needs its id, regime read 1 retry, day show fits, idea with unknown ids dropped), digest
