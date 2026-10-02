@@ -26,7 +26,7 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   pinned to gemma4:12b via `mentor_model`; probe: medium 9/10 slots, high unusable). Merged:
   story rejection names the ids, schema closed to the pack's ids. First gpt-oss night: 10-02.
 - **In flight:** AVWAPE quick test (trader 2026-10-02): Setup Tracker rows only, both sides;
-  branch `claude/avwape-quick-test-2026-10-02`, ask before merge.
+  branch `claude/avwape-quick-test-2026-10-02`, ask to merge.
   Unmerged too: `claude/gemma4-thinking-high-2026-10-01`.
 - **Night window:** 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435; the app uses
   11436). No local models on the mini-PC: host down = facts only; rerun a missed night with
