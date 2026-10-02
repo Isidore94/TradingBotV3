@@ -1086,9 +1086,9 @@ def ask_brief(request: Callable[..., Mapping[str, Any]], *, model: str, post: Ca
 # the slot
 # ---------------------------------------------------------------------------
 def capped_post(post: Callable[..., Any], *, model: str, cap: int = MAX_OUTPUT_TOKENS) -> Callable[..., Any]:
-    """Wrap ``post``: at most ``cap`` answer tokens. A thinking tag (gpt-oss) also gets high reasoning
-    effort and the reasoning allowance on top, since its reasoning counts against max_tokens; a tag
-    that thinks unless told not to (gemma4) is told not to."""
+    """Wrap ``post``: at most ``cap`` answer tokens. A thinking tag (gpt-oss) also gets the set
+    reasoning effort and the reasoning allowance on top, since its reasoning counts against
+    max_tokens; a tag that thinks unless told not to (gemma4) is told not to."""
     import ai_summary
 
     thinks = ai_summary.model_thinks(model)
@@ -1098,7 +1098,7 @@ def capped_post(post: Callable[..., Any], *, model: str, cap: int = MAX_OUTPUT_T
         payload = dict(kwargs.get("json") or {})
         payload["max_tokens"] = min(int(payload.get("max_tokens") or cap), cap)
         if thinks:
-            payload["reasoning_effort"] = EFFORT
+            payload["reasoning_effort"] = ai_summary.local_reasoning_effort()
             payload["max_tokens"] += ai_summary.local_reasoning_tokens()
         elif thinking_off:
             payload["reasoning_effort"] = ai_summary.THINKING_OFF_EFFORT
