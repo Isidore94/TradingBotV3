@@ -2,7 +2,7 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-10-01 18:35 PT (Mentor day-1 fixes merged; restart desk + app)
+**Updated:** 2026-10-02 07:05 PT (gpt-oss probe read; story fix in flight)
 
 - **Live on `main`:** rounds 1-2, p9 phases 1-4, p10 research lake + auto regimes (research
   only); rolling RRS, cutoff 1.0 (`TRADINGBOTV3_RRS_ENGINE=desk` = old); Movers tint + SMA
@@ -23,8 +23,11 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   permutation report (#330, shadow). Merged 10-01 (#338): P19 night rejections (econ time
   needs its id, regime read 1 retry, day show fits, idea with unknown ids dropped), digest
   cap, mentor digest retry. Next: morning pre-brief queue; rule audit once plan lines exist.
-- **gemma4:12b is the night model** (live since 10-01, thinking OFF).
-  In flight, not merged: `claude/gemma4-thinking-high-2026-10-01`.
+- **Night model:** gemma4:12b live (thinking OFF). Probe 10-02: gpt-oss:20b at MEDIUM wrote 9 of 10
+  verified slots (gemma4 7, gpt-oss high unusable). Trader chose gpt-oss medium: flip = set
+  `ai_local_model_medium=gpt-oss:20b`, `ai_local_reasoning_effort=medium`, `mentor_model=gemma4:12b`
+  (owed: the trader's click). In flight: `claude/market-story-sources-2026-10-02` (story cites +
+  mentor effort); unmerged `claude/gemma4-thinking-high-2026-10-01`.
 - **Night window:** 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435; the app uses
   11436). No local models on the mini-PC: host down = facts only; rerun a missed night with
   `--session <date> --force`. No builders, merges or test runs 22:00-02:00 PT.

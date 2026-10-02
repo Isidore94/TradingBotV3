@@ -101,7 +101,6 @@ RESERVE_MINUTES = 10.0
 #: Digest calls one night may spend: the first, then one retry with the rejection quoted.
 DIGEST_ATTEMPTS = 2
 BUSY_TIMEOUT_MS = 5000
-EFFORT = "high"
 
 INSTRUCTIONS = (
     "You are reviewing ONE day of a trader's conversation with his Trade Mentor app. "
