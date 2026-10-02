@@ -2,7 +2,7 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-10-02 07:05 PT (gpt-oss probe read; story fix in flight)
+**Updated:** 2026-10-02 07:40 PT (gpt-oss medium is the night model; story fix merged)
 
 - **Live on `main`:** rounds 1-2, p9 phases 1-4, p10 research lake + auto regimes (research
   only); rolling RRS, cutoff 1.0 (`TRADINGBOTV3_RRS_ENGINE=desk` = old); Movers tint + SMA
@@ -22,10 +22,11 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 - **Night (2026-09-30):** retries x3, budget 360, care names briefed nightly (#331), nightly
   permutation report (#330, shadow). Merged 10-01 (#338): P19 night rejections, digest cap,
   mentor digest retry. Next: morning pre-brief queue; rule audit once plan lines exist.
-- **Night model:** gemma4:12b live (thinking OFF). Probe 10-02: gpt-oss:20b MEDIUM wrote 9 of
-  10 verified slots (gemma4 7; high unusable). Trader chose gpt-oss medium; flip owed (trader's
-  click): medium=gpt-oss:20b, effort=medium, `mentor_model=gemma4:12b`. In flight:
-  `claude/market-story-sources-2026-10-02`; unmerged `claude/gemma4-thinking-high-2026-10-01`.
+- **Night model: gpt-oss:20b, effort medium, allowance 24k** (trader's word 2026-10-02; Mentor chat
+  pinned to gemma4:12b via `mentor_model`). Probe 10-02: medium wrote 9 of 10 verified slots
+  (gemma4 7; high unusable). Merged 10-02: story rejection names the ids, reply kept, schema
+  closed to the pack's ids; mentor digest uses the set effort. First gpt-oss night = tonight:
+  read the ledger. Unmerged: `claude/gemma4-thinking-high-2026-10-01`.
 - **Night window:** 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435; the app uses
   11436). No local models on the mini-PC: host down = facts only; rerun a missed night with
   `--session <date> --force`. No builders, merges or test runs 22:00-02:00 PT.
