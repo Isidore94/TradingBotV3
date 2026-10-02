@@ -90,6 +90,9 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "outcome_semantics",
     "outcome_path",
     "setup_tracker_ledger",
+    # The tracker save archives sealed records' per-bar detail before compaction;
+    # a bundle missing it compacts nothing (records stay full size) rather than failing.
+    "tracker_detail_archive",
     "focus_membership_events",
     # WS-5D: the Watchlists page and the Focus store both import it at call
     # time, so a bundle missing it dies at the first watchlist edit.

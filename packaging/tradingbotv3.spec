@@ -182,6 +182,8 @@ hiddenimports += ["market_regimes", "market_structure"]
 # P1-7: the plan view's worker and the Mentor's answer writer import the plan
 # and its challenge store inside functions.
 hiddenimports += ["trading_plan", "plan_challenges"]
+# The scan worker's tracker save imports the compaction detail archive inside a function.
+hiddenimports += ["tracker_detail_archive"]
 # P2-11d: the desk moves two secrets into Windows Credential Manager on a
 # worker; secret_store imports keyring inside functions (keyring's own hook
 # collects its backends and entry-point metadata).

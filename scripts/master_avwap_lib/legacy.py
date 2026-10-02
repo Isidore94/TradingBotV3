@@ -14147,18 +14147,28 @@ def _compact_tracker_setup_record(setup: dict) -> bool:
 def _compact_sealed_tracker_setups(tracker: dict, scan_date: str) -> int:
     """Compact every sealed record across all namespaces. Sealed records are recompute
     no-ops (see _tracker_setup_recompute_is_sealed), so their per-bar detail is never
-    rebuilt -- dropping it just shrinks the on-disk tracker. Returns the count changed."""
+    rebuilt -- dropping it just shrinks the on-disk tracker. Returns the count changed.
+    The detail is archived and verified first (tracker_detail_archive); a record whose
+    archive write did not verify is left whole and retried on the next save."""
     if not isinstance(tracker, dict):
         return 0
+    sealed = [
+        (namespace, str(key), setup)
+        for namespace in ("setups", "control_setups", "study_setups")
+        for key, setup in (tracker.get(namespace) or {}).items()
+        if isinstance(setup, dict) and _tracker_setup_recompute_is_sealed(setup, scan_date)
+    ]
+    try:
+        from tracker_detail_archive import archive_before_compaction
+
+        archived = archive_before_compaction(sealed, json_default=_json_default)
+    except Exception as exc:
+        logging.error("Setup tracker detail archive unavailable (%s); no sealed record compacted this save.", exc)
+        archived = set()
     compacted = 0
-    for namespace in ("setups", "control_setups", "study_setups"):
-        for setup in (tracker.get(namespace) or {}).values():
-            if not isinstance(setup, dict):
-                continue
-            if not _tracker_setup_recompute_is_sealed(setup, scan_date):
-                continue
-            if _compact_tracker_setup_record(setup):
-                compacted += 1
+    for namespace, key, setup in sealed:
+        if (namespace, key) in archived and _compact_tracker_setup_record(setup):
+            compacted += 1
     return compacted
 
 
