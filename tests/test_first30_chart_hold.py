@@ -174,10 +174,8 @@ def test_check_bar_is_the_last_completed_bar_at_or_before_10():
     bars = [_bar(9, 25, 1.0), _bar(9, 50, 2.0), _bar(9, 55, 3.0), _bar(10, 0, 4.0)]
     bar = f.first30_check_bar(bars, release, ET)
     assert bar["close"] == 3.0
-    assert f.first30_bar_is_final(bar, release, ET) is True
     early = f.first30_check_bar(bars[:2], release, ET)
     assert early["close"] == 2.0
-    assert f.first30_bar_is_final(early, release, ET) is False
     # Only pre-open bars, or yesterday's: nothing to check.
     assert f.first30_check_bar([_bar(9, 25, 1.0)], release, ET) is None
     yesterday = {"dt": datetime(2026, 10, 1, 9, 55), "close": 9.0}
@@ -189,8 +187,20 @@ def test_check_bar_reads_bars_in_the_desk_zone():
 
     pacific = ZoneInfo("America/Los_Angeles")
     release = f.first30_release_at(_at(9, 40))
-    bar = f.first30_check_bar([_bar(9, 55, 3.0, tz=pacific)], release, pacific)
-    assert bar is not None and f.first30_bar_is_final(bar, release, pacific)
+    bars = [_bar(9, 55, 3.0, tz=pacific), _bar(10, 0, 3.1, tz=pacific)]
+    assert f.first30_check_bar(bars, release, pacific)["close"] == 3.0
+    assert f.first30_bars_fresh(bars, release, pacific) is True
+
+
+def test_only_a_bar_from_10_00_on_proves_the_0955_bar_finished():
+    import alert_show_filter as f
+
+    release = f.first30_release_at(_at(9, 40))
+    assert f.first30_bars_fresh([_bar(9, 50, 1.0), _bar(9, 55, 2.0)], release, ET) is False
+    assert f.first30_bars_fresh([_bar(9, 55, 2.0), _bar(10, 0, 2.1)], release, ET) is True
+    assert f.first30_bars_fresh([], release, ET) is False
+    tomorrow = {"dt": datetime(2026, 10, 3, 9, 30), "close": 1.0}
+    assert f.first30_bars_fresh([tomorrow], release, ET) is False
 
 
 def test_verdicts():
@@ -212,7 +222,7 @@ def test_a_first30_focus_d1_chart_waits_and_shows_at_10_when_it_held(panel):
     assert "HBM" not in _review_symbols(panel)
     assert panel._first30_timer.isActive()
     assert "1 wait for 10:00" in panel.chart_review.first30_button.text()
-    panel.test_bars["HBM"] = [_bar(9, 50, 9.0), _bar(9, 55, 10.4)]
+    panel.test_bars["HBM"] = [_bar(9, 50, 9.0), _bar(9, 55, 10.4), _bar(10, 0, 9.0)]
     _release(panel)
     assert "HBM" in _review_symbols(panel)
     assert not panel._first30_held and not panel._first30_failed
@@ -222,7 +232,7 @@ def test_a_first30_focus_d1_chart_waits_and_shows_at_10_when_it_held(panel):
 def test_a_chart_watch_that_failed_is_counted_and_one_click_shows_it(panel):
     panel.add_alert(_chart_watch("GTLB", _at(9, 38), level=50.0))
     assert "GTLB" not in _review_symbols(panel)
-    panel.test_bars["GTLB"] = [_bar(9, 55, 49.0)]
+    panel.test_bars["GTLB"] = [_bar(9, 55, 49.0), _bar(10, 0, 49.0)]
     _release(panel)
     assert "GTLB" not in _review_symbols(panel)
     assert panel.chart_review.first30_button.text() == "1 failed by 10:00 - show"
@@ -233,7 +243,7 @@ def test_a_chart_watch_that_failed_is_counted_and_one_click_shows_it(panel):
 
 def test_a_short_holds_below_its_level(panel):
     panel.add_alert(_focus_d1("SHO", _at(9, 45), side="SHORT", level=20.0))
-    panel.test_bars["SHO"] = [_bar(9, 55, 19.5)]
+    panel.test_bars["SHO"] = [_bar(9, 55, 19.5), _bar(10, 0, 19.5)]
     _release(panel)
     assert "SHO" in _review_symbols(panel)
 
@@ -242,8 +252,8 @@ def test_no_data_no_level_or_no_side_is_hidden_after_the_grace(panel):
     panel.add_alert(_focus_d1("NOD", _at(9, 40)))
     panel.add_alert(_chart_watch("NOL", _at(9, 41), level=None))
     panel.add_alert(_chart_watch("NOS", _at(9, 42), side="WATCH"))
-    panel.test_bars["NOL"] = [_bar(9, 55, 99.0)]
-    panel.test_bars["NOS"] = [_bar(9, 55, 99.0)]
+    panel.test_bars["NOL"] = [_bar(9, 55, 99.0), _bar(10, 0, 99.0)]
+    panel.test_bars["NOS"] = [_bar(9, 55, 99.0), _bar(10, 0, 99.0)]
     # Just after 10:00 the 09:55 bar may not be cached yet: NOD keeps waiting.
     _release(panel)
     assert set(panel._first30_held) == {("NOD", "LONG")}
@@ -286,7 +296,7 @@ def test_same_symbol_twice_keeps_the_latest(panel):
     panel.add_alert(_focus_d1("DUP", _at(9, 40), level=10.0))
     panel.add_alert(_focus_d1("DUP", _at(9, 50), level=12.0))
     assert list(panel._first30_held) == [("DUP", "LONG")]
-    panel.test_bars["DUP"] = [_bar(9, 55, 11.0)]
+    panel.test_bars["DUP"] = [_bar(9, 55, 11.0), _bar(10, 0, 11.0)]
     _release(panel)
     # Judged against the latest level (12.0): 11.0 did not hold.
     assert ("DUP", "LONG") in panel._first30_failed
@@ -414,3 +424,59 @@ def test_focus_d1_flag_alert_carries_the_reference_level(panel, monkeypatch, tmp
     assert alert.payload["alert_level"] == 21.5
     assert alert.payload["alert_side"] == "LONG"
     assert alert.received_at is not None and alert.received_at.utcoffset() is not None
+
+
+def test_a_0955_bar_without_a_later_bar_waits_then_counts_as_no_data(panel):
+    """Advisory 2: a 09:55 bar fetched mid-print is not proof; wait for a 10:00 bar."""
+    panel.add_alert(_focus_d1("PAR", _at(9, 40), level=10.0))
+    panel.add_alert(_focus_d1("LAT", _at(9, 41), level=10.0))
+    panel.test_bars["PAR"] = [_bar(9, 55, 10.5)]
+    panel.test_bars["LAT"] = [_bar(9, 55, 10.5)]
+    _release(panel)
+    assert set(panel._first30_held) == {("PAR", "LONG"), ("LAT", "LONG")}
+    # LAT's cache refreshes after 10:00 within the grace: judged on its 09:55 bar.
+    panel.test_bars["LAT"] = [_bar(9, 55, 10.5), _bar(10, 0, 9.0)]
+    _release(panel, 10, 1)
+    assert "LAT" in _review_symbols(panel)
+    _release(panel, 10, 3, 30)
+    assert "PAR" not in _review_symbols(panel)
+    assert panel._first30_failed[("PAR", "LONG")][1] == "no_data"
+
+
+def _scan(symbol, when, *, level):
+    from ui.models.bounce import BounceAlert
+
+    return BounceAlert(
+        time_text=when.strftime("%H:%M:%S"),
+        symbol=symbol,
+        side="LONG",
+        trigger="D1 flag",
+        timeframe="D1",
+        tag="d1_flag_long",
+        raw_text=f"MASTER_AVWAP_D1_FLAG: {symbol} (long) Favorite upgrade: AVWAPE@{level:.2f}",
+        is_d1=True,
+        received_at=when,
+    )
+
+
+def test_a_waiting_scan_shown_by_show_all_before_10_joins_the_hold(panel):
+    panel.add_alert(_scan("SCN", _at(9, 40), level=20.0))
+    assert "SCN" in panel._held_d1_scan_reviews
+    panel._toggle_d1_scan_review_view()
+    assert "SCN" not in _review_symbols(panel)
+    assert ("SCN", "LONG") in panel._first30_held
+
+
+def test_a_waiting_scan_shown_by_show_all_after_10_faces_the_verdict(panel):
+    panel.add_alert(_scan("FAL", _at(9, 40), level=20.0))
+    panel.add_alert(_scan("HLD", _at(9, 45), level=20.0))
+    assert not panel._first30_held
+    panel.test_bars["FAL"] = [_bar(9, 55, 19.0), _bar(10, 0, 19.0)]
+    panel.test_bars["HLD"] = [_bar(9, 55, 21.0), _bar(10, 0, 21.0)]
+    panel.test_clock["now"] = _at(10, 20)
+    panel._toggle_d1_scan_review_view()
+    assert not ({"FAL", "HLD"} & _review_symbols(panel))
+    panel._release_first30_holds()
+    assert "HLD" in _review_symbols(panel)
+    assert "FAL" not in _review_symbols(panel)
+    assert ("FAL", "LONG") in panel._first30_failed

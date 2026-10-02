@@ -17,7 +17,8 @@ and names with an open position still show, and an unknown market shows.
 First-30 chart hold (the trader 2026-10-02): with the same switch on, a D1 scan,
 Focus D1 or chart-watch chart received 09:30-10:00 ET waits; at 10:00 it shows
 only if the last completed M5 bar at/before 10:00 ET closed past its alert level
-on its side. No bars, level or side = failed (hidden, counted, one click shows).
+on its side; the cache must hold a bar from 10:00 on, proving the 09:55 bar
+finished. No fresh bars, level or side = failed (hidden, counted, one click shows).
 Price alerts, auto-picks, Focus reviews, manual charts and the phone never wait.
 """
 
@@ -199,14 +200,27 @@ def first30_check_bar(
     return best[1] if best else None
 
 
-def first30_bar_is_final(bar: Mapping[str, Any] | None, release_at: datetime, local_tz: tzinfo) -> bool:
-    """True when `bar` is the 09:55 ET bar (the last one before 10:00)."""
-    if bar is None or not isinstance(bar.get("dt"), datetime):
-        return False
-    stamp = bar["dt"]
-    if stamp.tzinfo is not None:
-        stamp = stamp.astimezone(local_tz).replace(tzinfo=None)
-    return stamp + _M5_BAR == release_at.astimezone(local_tz).replace(tzinfo=None)
+def first30_bars_fresh(
+    bars: Sequence[Mapping[str, Any]] | None, release_at: datetime, local_tz: tzinfo
+) -> bool:
+    """True when the series holds a bar starting at/after 10:00 ET.
+
+    That bar proves the series was fetched after 10:00, so its 09:55 bar is
+    complete; a series ending at 09:55 may hold a bar fetched mid-print.
+    """
+    end = release_at.astimezone(local_tz).replace(tzinfo=None)
+    for bar in bars or ():
+        try:
+            stamp = bar["dt"]
+        except (KeyError, TypeError):
+            continue
+        if not isinstance(stamp, datetime):
+            continue
+        if stamp.tzinfo is not None:
+            stamp = stamp.astimezone(local_tz).replace(tzinfo=None)
+        if stamp >= end and stamp.date() == end.date():
+            return True
+    return False
 
 
 def first30_verdict(side: str, level: float | None, bar: Mapping[str, Any] | None) -> str:

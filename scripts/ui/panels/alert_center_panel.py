@@ -2545,8 +2545,10 @@ class AlertCenterPanel(
         when = alert_show_filter.alert_time(alert)
         if not alert_show_filter.in_first30(when):
             return False
-        # A desk that sees the alert after 10:00 (late start) holds nothing.
-        return self._first30_now() < alert_show_filter.first30_release_at(when)
+        # Today's 09:30-10:00 charts only. One that reaches this door after
+        # 10:00 (a Show-all click, a Focus promotion) is judged at once.
+        release_at = alert_show_filter.first30_release_at(when)
+        return release_at == alert_show_filter.first30_release_at(self._first30_now())
 
     def _hold_first30(self, alert: BounceAlert) -> None:
         side = alert_show_filter.alert_direction(alert) or str(alert.side or "").upper()
@@ -2609,17 +2611,17 @@ class AlertCenterPanel(
         shown: list = []
         for key, alert in self._first30_held.items():
             bar = None
+            fresh = False
             if local_tz is not None:
                 try:
-                    bar = alert_show_filter.first30_check_bar(
-                        self._m5_bars_for(alert.symbol), release_at, local_tz
-                    )
+                    bars = self._m5_bars_for(alert.symbol)
+                    # Only bars fetched after 10:00 prove the 09:55 bar finished.
+                    fresh = alert_show_filter.first30_bars_fresh(bars, release_at, local_tz)
+                    if fresh:
+                        bar = alert_show_filter.first30_check_bar(bars, release_at, local_tz)
                 except Exception:  # noqa: BLE001 - unreadable bars = no data
                     bar = None
-            final = local_tz is not None and alert_show_filter.first30_bar_is_final(
-                bar, release_at, local_tz
-            )
-            if not final and not grace_over:
+            if not fresh and not grace_over:
                 waiting[key] = alert
                 continue
             verdict = alert_show_filter.first30_verdict(
