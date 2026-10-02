@@ -25,8 +25,8 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 - **Night model: gpt-oss:20b, effort medium, allowance 24k** (trader's word 2026-10-02; Mentor chat
   pinned to gemma4:12b via `mentor_model`). Probe 10-02: medium wrote 9 of 10 verified slots
   (gemma4 7; high unusable). Merged 10-02: story rejection names the ids, reply kept, schema
-  closed to the pack's ids; mentor digest uses the set effort. First gpt-oss night = tonight:
-  read the ledger. Unmerged: `claude/gemma4-thinking-high-2026-10-01`.
+  closed to the pack's ids; mentor digest uses the set effort. First gpt-oss night: 10-02.
+  Unmerged: `claude/gemma4-thinking-high-2026-10-01`.
 - **Night window:** 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435; the app uses
   11436). No local models on the mini-PC: host down = facts only; rerun a missed night with
   `--session <date> --force`. No builders, merges or test runs 22:00-02:00 PT.
