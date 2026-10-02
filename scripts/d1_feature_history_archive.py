@@ -629,12 +629,27 @@ def _cells_prove(live_text: str, archived: str | None) -> bool:
     return a == b or (math.isnan(a) and math.isnan(b))
 
 
+def _keys_match(live_text: str, archived: str | None) -> bool:
+    """The key check's equivalence: narrower than the trim proof on purpose.
+
+    Exact text, or a live "" where the archive holds pandas-NA text (or no
+    cell): the one thing the writer's widening rewrite does to a key, e.g. a
+    ticker literally named ``NA``. Never float equality - '0' and '0.0' are
+    different keys.
+    """
+    if archived is None:
+        return live_text == ""
+    return live_text == archived or (live_text == "" and archived in _PANDAS_NA_TEXT)
+
+
 def _compare(live: pa.Table, arch: pa.Table, seqs: list[int], columns: list[str], mode: str) -> str | None:
     """None when ``arch`` holds ``live`` at ``seqs``; else the first difference.
 
     ``exact``: identical text, and columns the live row lacks are null.
     ``proof``: identical, or equal after the writer's widening rewrite.
+    ``keys``: identical, or live "" for archived pandas-NA text (`_keys_match`).
     """
+    match = _keys_match if mode == "keys" else _cells_prove
     if arch is None or arch.num_rows != live.num_rows:
         return f"archive has {0 if arch is None else arch.num_rows} rows where the live file has {live.num_rows}"
     got = arch.column(SEQ_COLUMN).to_pylist()
@@ -657,7 +672,7 @@ def _compare(live: pa.Table, arch: pa.Table, seqs: list[int], columns: list[str]
         live_values = live_col.to_pylist()
         arch_values = arch_col.to_pylist()
         for i, ok in enumerate(equal.to_pylist()):
-            if not ok and not _cells_prove(live_values[i], arch_values[i]):
+            if not ok and not match(live_values[i], arch_values[i]):
                 return (
                     f"column {name!r} at history position {seqs[i]}: live {live_values[i]!r} "
                     f"vs archived {arch_values[i]!r}"
@@ -725,11 +740,10 @@ def _walk_live(spec, header, manifest, cursors, *, columns, include, live_offset
                 month_seqs = seq_by_month[month]
                 cursor = _Cursor(_file_batches(archive_dir / entry["file"], columns, seq_from=month_seqs[0]))
                 cursors[month] = cursor
-            # Keys are compared with the trim proof's equivalence: the writer's
+            # Keys use their own narrow equivalence (`_keys_match`): the writer's
             # widening rewrite turns a ticker `NA` into "", and that must not
             # make every night refuse. Any other difference still refuses.
-            problem = _compare(rows, cursor.take(rows.num_rows), seq_by_month[month], columns,
-                               "proof" if mode == "keys" else mode)
+            problem = _compare(rows, cursor.take(rows.num_rows), seq_by_month[month], columns, mode)
             if problem:
                 return count, f"{month}: {problem}"
     if live_offset + count < archived and stop_row is None:
@@ -845,11 +859,57 @@ def archive(
     started = time.monotonic()
     try:
         with _locks(spec, lock_timeout):
-            result = _archive_locked(spec, block_bytes=block_bytes, now=now)
+            before = _file_state(spec.csv_path)
+            try:
+                result = _archive_locked(spec, block_bytes=block_bytes, now=now)
+            except (pa.ArrowInvalid, ArchiveError) as exc:
+                _refuse_if_changed_under_read(spec, before, exc)
+                raise
     finally:
         _release_memory()
     result["seconds"] = round(time.monotonic() - started, 3)
     return result
+
+
+class _ChangedUnderRead(RuntimeError):
+    """The live file of a no-lock store changed while it was being read."""
+
+
+def _file_state(csv_path: Path) -> tuple[int, tuple[str, ...] | None]:
+    """(size, header) now; header None when it cannot be read."""
+    try:
+        size = csv_path.stat().st_size
+    except OSError:
+        return -1, None
+    try:
+        return size, tuple(read_header(csv_path))
+    except ArchiveRefused:
+        return size, None
+
+
+def _changed_since(csv_path: Path, before: tuple[int, tuple[str, ...] | None]) -> bool:
+    """Did the file shrink or its header change? An appender only ever grows it."""
+    size, header = _file_state(csv_path)
+    return size < before[0] or header != before[1]
+
+
+def _refuse_if_changed_under_read(spec: StoreSpec, before, exc: BaseException) -> None:
+    """For a store whose writer takes no lock, turn a read that ran into a
+    concurrent rewrite (the bounce writer's in-place ``open("w")`` header
+    widening) into a refusal: nothing was written, the next run retries.
+
+    A parse error on a no-lock store is taken as that rewrite even when the
+    file looks settled again; a locked store's errors are never touched here -
+    a corrupt D1 file still fails loudly.
+    """
+    if spec.writer_lock_key is not None or isinstance(exc, ArchiveRefused):
+        return
+    if isinstance(exc, pa.ArrowInvalid) or _changed_since(spec.csv_path, before):
+        raise ArchiveRefused(
+            f"{spec.name}: the live file changed during the read (its writer takes no lock and "
+            f"rewrites the file in place when its header widens); nothing written, retry next run "
+            f"({type(exc).__name__}: {exc})"
+        ) from exc
 
 
 def _release_memory() -> None:
@@ -1130,13 +1190,20 @@ def verify(
     if not report["problems"] and csv_path.exists() and csv_path.stat().st_size:
         try:
             with _locks(spec, lock_timeout):
+                before = _file_state(csv_path)
                 limit = _snapshot_end(csv_path, writer_locked=spec.writer_lock_key is not None)
-                header = read_header(csv_path)
-                offset = _effective_live_offset(manifest, spec)
-                count, problem = _check_live_against_archive(
-                    spec, header, manifest, live_offset=offset,
-                    mode="proof" if deep else "keys", block_bytes=block_bytes, limit=limit,
-                )
+                try:
+                    header = read_header(csv_path)
+                    offset = _effective_live_offset(manifest, spec)
+                    count, problem = _check_live_against_archive(
+                        spec, header, manifest, live_offset=offset,
+                        mode="proof" if deep else "keys", block_bytes=block_bytes, limit=limit,
+                    )
+                    if problem:
+                        _refuse_if_changed_under_read(spec, before, VerifyFailed(problem))
+                except (pa.ArrowInvalid, ArchiveError) as exc:
+                    _refuse_if_changed_under_read(spec, before, exc)
+                    raise
             report["live_rows"] = count
             report["unarchived_rows"] = max(0, offset + count - int(manifest["archived_rows"]))
             if problem:
@@ -1433,9 +1500,9 @@ def read_history(
             before = load_manifest(spec.archive_dir)
             frame = _read_once(before, spec, columns, since_text, until_text, bounded, block_bytes)
             after = load_manifest(spec.archive_dir)
-        except (FileNotFoundError, pa.ArrowInvalid, OSError) as exc:
+        except (FileNotFoundError, pa.ArrowInvalid, OSError, _ChangedUnderRead) as exc:
             last_error = exc
-            time.sleep(0.05)
+            time.sleep(0.05 * (_attempt + 1))
             continue
         if _manifest_signature(before) == _manifest_signature(after):
             break
@@ -1453,6 +1520,7 @@ def _read_once(manifest, spec, columns, since_text, until_text, bounded, block_b
     import pandas as pd
 
     csv_path, archive_dir, date_column = spec.csv_path, spec.archive_dir, spec.date_column
+    state_before = _file_state(csv_path)
     header = read_header(csv_path) if csv_path.exists() and csv_path.stat().st_size else []
     limit = (
         _snapshot_end(csv_path, writer_locked=False) if header and spec.writer_lock_key is None else None
@@ -1513,6 +1581,13 @@ def _read_once(manifest, spec, columns, since_text, until_text, bounded, block_b
                 ]
                 table = table.filter(pa.array(mask, pa.bool_()))
             live_tables.append(_conform(table, need, with_seq=False))
+        if seen < skip:
+            # The live file holds fewer rows than the archive says it does: a
+            # rewrite in progress, a trim between our reads, or real loss.
+            # Never return the short frame; retry, then raise.
+            raise _ChangedUnderRead(f"live file has {seen} rows, the archive expects at least {skip}")
+    if spec.writer_lock_key is None and _changed_since(csv_path, state_before):
+        raise _ChangedUnderRead("the live file shrank or its header changed during the read")
     archive_part = archive_part.drop_columns([SEQ_COLUMN])
     combined = pa.concat_tables([archive_part, *live_tables]) if live_tables else archive_part
     combined = combined.select(wanted)
