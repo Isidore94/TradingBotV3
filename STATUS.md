@@ -26,8 +26,8 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   pinned to gemma4:12b via `mentor_model`). Merged: story rejection names the ids, schema
   closed to the pack's ids. First gpt-oss night 10-02.
 - **Merged 2026-10-02:** AVWAPE quick test (Setup Tracker rows, both sides); docked Mentor
-  hides off its desk page. **Unmerged:** `claude/gemma4-thinking-high-2026-10-01`,
-  `claude/plan-rule-gate-2026-10-02`.
+  hides off its desk page; plan-rule gate, shadow (#348). **Unmerged:**
+  `claude/gemma4-thinking-high-2026-10-01`.
 - **Night window:** 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435; app uses
   11436). Mini-PC's one local model: plan-rule gate (Kev-4B CPU). Host down: facts only;
   rerun a missed night with `--session <date> --force`. No builds/merges/tests 22:00-02:00 PT.
