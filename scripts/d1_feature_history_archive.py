@@ -197,10 +197,10 @@ class StoreSpec:
 def registered_stores() -> dict[str, StoreSpec]:
     """Every store the CLI and the night slot pack, by name (paths resolved now).
 
-    ``intraday_bounce_candidates.csv`` is deliberately NOT here: the bot's
-    startup ``compact_bounce_candidates_csv`` rewrites it and drops rows from
-    the middle (old near_miss rows), which a position-ordered archive cannot
-    follow. It needs that compaction changed first (ask-first file).
+    ``intraday_bounce_candidates.csv`` joined on 2026-10-02 (trader's yes): its
+    startup clean-up drops old rows from the middle of the file, which it now
+    does only through ``remove_rows`` - packed, proven, and recorded in the
+    manifest's live map - so ``read_history`` still returns every row.
     """
     import project_paths as pp
 
@@ -220,8 +220,24 @@ def registered_stores() -> dict[str, StoreSpec]:
             # rows (one event, many milestone rows); with event_type and
             # logged_at it repeats once. A key check needs a match, not uniqueness.
             key_columns=("event_id", "event_type", "logged_at"),
-            # `bounce_bot_lib.legacy._append_learning_row` takes no lock.
+            # Archive only. `_append_learning_row` takes the path lock since
+            # 2026-10-02, but this spec stays "none" until a packet switches it
+            # (with its tests) - archive-only is what was authorized for it.
             writer_lock=WRITER_LOCK_NONE,
+        ),
+        "intraday_bounce_candidates": StoreSpec(
+            name="intraday_bounce_candidates",
+            csv_path=Path(pp.INTRADAY_BOUNCE_CANDIDATES_FILE),
+            archive_dir=Path(pp.INTRADAY_BOUNCE_CANDIDATES_ARCHIVE_DIR),
+            date_column="trade_date",
+            # Measured 2026-10-02: unique over 210,280 rows.
+            key_columns=("event_id", "event_type", "logged_at"),
+            # `_append_learning_row` takes local_writer_lock(lock_key_for_path(csv))
+            # around the header check and the append; the startup clean-up
+            # (`compact_bounce_candidates_csv`) removes only proven rows under it.
+            writer_lock=WRITER_LOCK_PATH,
+            # The night never trims it: its clean-up is the bot's startup job.
+            trim_setting="",
         ),
     }
 
@@ -303,7 +319,92 @@ def _manifest_signature(manifest: dict[str, Any]) -> tuple:
         manifest.get("archived_rows"),
         manifest.get("live_offset"),
         manifest.get("pending_live_offset"),
+        json.dumps(manifest.get("live_map")),
+        manifest.get("live_tail_start"),
+        json.dumps(manifest.get("pending_live_map"), sort_keys=True),
     )
+
+
+class _LiveMap:
+    """Live row index -> history position (``_archive_seq``).
+
+    Most stores only ever lose a HEAD of rows (trim), so live row ``i`` is at
+    ``live_offset + i`` and the manifest carries just ``live_offset``. A store
+    whose clean-up removes proven rows from the MIDDLE (the bounce candidates)
+    carries ``live_map``: the history ranges [start, stop) of the live file's
+    first rows, in order, followed by a contiguous tail starting at
+    ``live_tail_start``. Every mapped position is already archived.
+    """
+
+    def __init__(self, ranges: Iterable[Iterable[int]] = (), tail_start: int = 0):
+        self.ranges = [(int(a), int(b)) for a, b in ranges if int(b) > int(a)]
+        self.tail_start = int(tail_start)
+        self._starts: list[int] = []
+        total = 0
+        for a, b in self.ranges:
+            self._starts.append(total)
+            total += b - a
+        self.mapped = total
+
+    @classmethod
+    def from_fields(cls, fields: dict[str, Any]) -> _LiveMap:
+        if fields.get("live_map"):
+            return cls(fields["live_map"], fields.get("live_tail_start", 0))
+        return cls((), int(fields.get("live_offset", 0)))
+
+    def seqs(self, lo: int, hi: int) -> list[int]:
+        """History positions of live rows ``lo..hi-1``."""
+        import bisect
+
+        out: list[int] = []
+        i = lo
+        while i < hi and i < self.mapped:
+            k = bisect.bisect_right(self._starts, i) - 1
+            a, b = self.ranges[k]
+            begin = a + (i - self._starts[k])
+            take = min(hi - i, b - begin)
+            out.extend(range(begin, begin + take))
+            i += take
+        if i < hi:
+            out.extend(range(self.tail_start + i - self.mapped, self.tail_start + hi - self.mapped))
+        return out
+
+    def archived_rows(self, archived: int) -> int:
+        """How many live rows (from the top) are already in the archive."""
+        return self.mapped + max(0, int(archived) - self.tail_start)
+
+    def first_seq(self) -> int:
+        return self.ranges[0][0] if self.ranges else self.tail_start
+
+    def fields(self) -> dict[str, Any]:
+        """Manifest fields. The plain ``live_offset`` form whenever it suffices."""
+        if not self.ranges:
+            return {"live_offset": self.tail_start}
+        return {
+            "live_offset": self.first_seq(),
+            "live_map": [list(r) for r in self.ranges],
+            "live_tail_start": self.tail_start,
+        }
+
+    @classmethod
+    def from_kept(cls, kept: list[int], tail_start: int) -> _LiveMap:
+        """Compress ascending kept history positions, then a tail at ``tail_start``."""
+        ranges: list[list[int]] = []
+        for seq in kept:
+            if ranges and ranges[-1][1] == seq:
+                ranges[-1][1] = seq + 1
+            else:
+                ranges.append([seq, seq + 1])
+        if ranges and ranges[-1][1] == tail_start:
+            # The last kept run runs straight into the tail: fold it in.
+            tail_start = ranges.pop()[0]
+        return cls(ranges, tail_start)
+
+
+def _with_live_map(manifest: dict[str, Any], live: _LiveMap) -> dict[str, Any]:
+    out = {k: v for k, v in manifest.items() if k not in ("live_map", "live_tail_start", "pending_live_map")}
+    out.update(live.fields())
+    return out
 
 
 @contextmanager
@@ -473,6 +574,23 @@ class _Cursor:
         self._pending = tail.to_batches() if tail.num_rows else []
         self._count = tail.num_rows
         return head
+
+    def take_through(self, column: str, last: int) -> pa.Table | None:
+        """Every row up to and including ``column == last`` (the column ascends)."""
+        pieces: list[pa.Table] = []
+        while True:
+            table = self.take(4096)
+            if table is None:
+                break
+            inside = pc.sum(pc.less_equal(table.column(column), last)).as_py() or 0
+            if inside < table.num_rows:
+                pieces.append(table.slice(0, inside))
+                rest = table.slice(inside)
+                self._pending = rest.to_batches() + self._pending
+                self._count += rest.num_rows
+                break
+            pieces.append(table)
+        return pa.concat_tables(pieces) if pieces else None
 
     def exhausted(self) -> bool:
         return self.take(1) is None
@@ -685,7 +803,7 @@ def _check_live_against_archive(
     header: list[str],
     manifest: dict[str, Any],
     *,
-    live_offset: int,
+    live: _LiveMap | int,
     mode: str,
     stop_row: int | None = None,
     block_bytes: int = CSV_BLOCK_BYTES,
@@ -705,28 +823,31 @@ def _check_live_against_archive(
     else:
         columns = list(header)
         include = None
+    if not isinstance(live, _LiveMap):
+        live = _LiveMap((), int(live))
     with _closing_all({}) as cursors:
         return _walk_live(
             spec, header, manifest, cursors, columns=columns, include=include,
-            live_offset=live_offset, mode=mode, stop_row=stop_row, block_bytes=block_bytes, limit=limit,
+            live=live, mode=mode, stop_row=stop_row, block_bytes=block_bytes, limit=limit,
         )
 
 
-def _walk_live(spec, header, manifest, cursors, *, columns, include, live_offset, mode,
+def _walk_live(spec, header, manifest, cursors, *, columns, include, live, mode,
                stop_row, block_bytes, limit) -> tuple[int, str | None]:
     archive_dir = spec.archive_dir
     archived = int(manifest.get("archived_rows", 0))
     files = manifest.get("files", {})
-    upto = archived if stop_row is None else min(archived, live_offset + stop_row)
+    covered = live.archived_rows(archived)
+    upto = covered if stop_row is None else min(covered, stop_row)
     count = 0
     for batch in _iter_csv(spec.csv_path, header, include=include, block_bytes=block_bytes, limit=limit):
-        start = live_offset + count
+        start = count
         count += batch.num_rows
         lo, hi = start, min(start + batch.num_rows, upto)
         if hi <= lo:
             continue
         table = pa.Table.from_batches([batch]).slice(0, hi - lo)
-        seqs = list(range(lo, hi))
+        seqs = live.seqs(lo, hi)
         keys = _month_keys(table, spec.date_column)
         seq_by_month: dict[str, list[int]] = {}
         for seq, key in zip(seqs, keys, strict=True):
@@ -743,13 +864,22 @@ def _walk_live(spec, header, manifest, cursors, *, columns, include, live_offset
             # Keys use their own narrow equivalence (`_keys_match`): the writer's
             # widening rewrite turns a ticker `NA` into "", and that must not
             # make every night refuse. Any other difference still refuses.
-            problem = _compare(rows, cursor.take(rows.num_rows), seq_by_month[month], columns, mode)
+            wanted = seq_by_month[month]
+            if live.ranges:
+                # Rows were removed from the middle of the live file: the month
+                # file also holds positions that are no longer live; skip them.
+                arch = cursor.take_through(SEQ_COLUMN, wanted[-1])
+                if arch is not None:
+                    arch = arch.filter(pc.is_in(arch.column(SEQ_COLUMN), value_set=pa.array(wanted, pa.int64())))
+            else:
+                arch = cursor.take(rows.num_rows)
+            problem = _compare(rows, arch, wanted, columns, mode)
             if problem:
                 return count, f"{month}: {problem}"
-    if live_offset + count < archived and stop_row is None:
+    if count < covered and stop_row is None:
         return count, (
-            f"the live file ends at history position {live_offset + count} but the archive "
-            f"covers {archived}: rows were lost or the file was replaced"
+            f"the live file has {count} rows but the archive says {covered} of its rows are "
+            f"packed (history up to {archived}): rows were lost or the file was replaced"
         )
     return count, None
 
@@ -822,8 +952,50 @@ def _effective_live_offset(manifest: dict[str, Any], spec: StoreSpec) -> int:
     return pending
 
 
+def _prefix_sha256(path: Path, size: int) -> str | None:
+    """sha256 of the first ``size`` bytes, or None when the file is shorter."""
+    try:
+        if path.stat().st_size < size:
+            return None
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            left = size
+            while left > 0:
+                chunk = handle.read(min(1 << 20, left))
+                if not chunk:
+                    return None
+                digest.update(chunk)
+                left -= len(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def _removal_landed(pending: dict[str, Any], spec: StoreSpec) -> bool:
+    """Did a dead removal's replace reach the live file? The new file's bytes
+    were hashed before the replace; appends since only add bytes after them."""
+    return _prefix_sha256(spec.csv_path, int(pending["size"])) == pending.get("sha256")
+
+
+def _live_map(manifest: dict[str, Any], spec: StoreSpec) -> _LiveMap:
+    """The live row -> history position map, settling a dead trim or removal read-only."""
+    pending_map = manifest.get("pending_live_map")
+    if pending_map and _removal_landed(pending_map, spec):
+        return _LiveMap.from_fields(pending_map)
+    if manifest.get("live_map"):
+        return _LiveMap.from_fields(manifest)
+    return _LiveMap((), _effective_live_offset(manifest, spec))
+
+
 def _settle_pending(manifest: dict[str, Any], spec: StoreSpec) -> dict[str, Any]:
-    """Under the locks: write down which offset a dead trim left behind."""
+    """Under the locks: write down which map a dead trim or removal left behind."""
+    pending_map = manifest.get("pending_live_map")
+    if pending_map:
+        live = _live_map(manifest, spec)
+        settled = _with_live_map(manifest, live)
+        _write_manifest(spec.archive_dir / MANIFEST_NAME, settled)
+        _log.warning("d1 history archive: settled an interrupted removal (%s)", spec.name)
+        return settled
     if manifest.get("pending_live_offset") is None:
         return manifest
     settled = dict(manifest)
@@ -941,13 +1113,14 @@ def _archive_locked(spec: StoreSpec, *, block_bytes: int, now: datetime | None) 
             "the live header no longer starts with the archived columns; the writer only "
             "ever appends columns, so the file was changed by something else"
         )
-    live_offset = int(manifest["live_offset"])
+    live = _live_map(manifest, spec)
+    covered = live.archived_rows(archived)
     live_rows, problem = _check_live_against_archive(
-        spec, header, manifest, live_offset=live_offset, mode="keys", block_bytes=block_bytes, limit=limit
+        spec, header, manifest, live=live, mode="keys", block_bytes=block_bytes, limit=limit
     )
     if problem:
         raise VerifyFailed(f"live file does not match the archive; nothing packed: {problem}")
-    new_rows = live_offset + live_rows - archived
+    new_rows = live_rows - covered
     if new_rows <= 0:
         return {**base, "live_rows": live_rows, "reason": "nothing new to pack"}
 
@@ -964,13 +1137,13 @@ def _archive_locked(spec: StoreSpec, *, block_bytes: int, now: datetime | None) 
         # Pass 1: write. Old rows of a touched month are copied first.
         count = 0
         for batch in stream:
-            start = live_offset + count
+            start = count
             count += batch.num_rows
-            skip = max(0, archived - start)
+            skip = max(0, covered - start)
             if skip >= batch.num_rows:
                 continue
             table = pa.Table.from_batches([batch]).slice(skip)
-            first = start + skip
+            first = archived + (start + skip - covered)  # the tail is contiguous
             keys = _month_keys(table, spec.date_column)
             seq_by_month: dict[str, list[int]] = {}
             for offset, key in enumerate(keys):
@@ -1016,7 +1189,7 @@ def _archive_locked(spec: StoreSpec, *, block_bytes: int, now: datetime | None) 
         }
         _, problem = _check_live_against_archive_from(
             spec, header, verify_manifest,
-            live_offset=live_offset, seq_from=archived, block_bytes=block_bytes, limit=limit,
+            first_row=covered, seq_from=archived, block_bytes=block_bytes, limit=limit,
         )
         if problem:
             raise VerifyFailed(f"packed rows do not read back as written: {problem}")
@@ -1076,21 +1249,24 @@ def _check_live_against_archive_from(
     header: list[str],
     manifest: dict[str, Any],
     *,
-    live_offset: int,
+    first_row: int,
     seq_from: int,
     block_bytes: int,
     limit: int | None,
 ) -> tuple[int, str | None]:
-    """Exact comparison of live rows at history positions >= ``seq_from``."""
+    """Exact comparison of the live rows from index ``first_row`` on, which sit
+    at history positions ``seq_from`` onward (the contiguous unarchived tail)."""
     with _closing_all({}) as cursors:
-        return _walk_from(spec, header, manifest, cursors, live_offset=live_offset,
+        return _walk_from(spec, header, manifest, cursors, first_row=first_row,
                           seq_from=seq_from, block_bytes=block_bytes, limit=limit)
 
 
-def _walk_from(spec, header, manifest, cursors, *, live_offset, seq_from, block_bytes, limit):
+def _walk_from(spec, header, manifest, cursors, *, first_row, seq_from, block_bytes, limit):
     archive_dir = spec.archive_dir
     archived = int(manifest["archived_rows"])
     files = manifest["files"]
+    # Live row i stands at seq_from + (i - first_row) for every i >= first_row.
+    live_offset = seq_from - first_row
     count = 0
     for batch in _iter_csv(spec.csv_path, header, block_bytes=block_bytes, limit=limit):
         start = live_offset + count
@@ -1194,9 +1370,9 @@ def verify(
                 limit = _snapshot_end(csv_path, writer_locked=spec.writer_lock_key is not None)
                 try:
                     header = read_header(csv_path)
-                    offset = _effective_live_offset(manifest, spec)
+                    live = _live_map(manifest, spec)
                     count, problem = _check_live_against_archive(
-                        spec, header, manifest, live_offset=offset,
+                        spec, header, manifest, live=live,
                         mode="proof" if deep else "keys", block_bytes=block_bytes, limit=limit,
                     )
                     if problem:
@@ -1205,7 +1381,7 @@ def verify(
                     _refuse_if_changed_under_read(spec, before, exc)
                     raise
             report["live_rows"] = count
-            report["unarchived_rows"] = max(0, offset + count - int(manifest["archived_rows"]))
+            report["unarchived_rows"] = max(0, count - live.archived_rows(int(manifest["archived_rows"])))
             if problem:
                 report["problems"].append(problem)
         except ArchiveError as exc:
@@ -1234,6 +1410,8 @@ def status(csv_path: Any = None, archive_dir: Any = None, *, store: Any = None) 
         archived_rows=manifest["archived_rows"],
         live_offset=manifest["live_offset"],
         pending_live_offset=manifest["pending_live_offset"],
+        removed_from_middle=bool(manifest.get("live_map")),
+        live_map_ranges=len(manifest.get("live_map") or []),
         generation=manifest["generation"],
         updated_at=manifest.get("updated_at", ""),
         months={month: entry.get("rows") for month, entry in sorted(manifest["files"].items())},
@@ -1297,9 +1475,11 @@ def _trim_locked(spec: StoreSpec, *, keep_days: int, today: date, apply: bool, b
         raise VerifyFailed("archive does not verify; nothing trimmed: " + "; ".join(problems))
     header = read_header(csv_path)
     archived = int(manifest["archived_rows"])
-    live_offset = int(manifest["live_offset"])
+    live = _live_map(manifest, spec)
+    live_offset = live.tail_start
+    covered = live.archived_rows(archived)
     _, problem = _check_live_against_archive(
-        spec, header, manifest, live_offset=live_offset, mode="keys", block_bytes=block_bytes
+        spec, header, manifest, live=live, mode="keys", block_bytes=block_bytes
     )
     if problem:
         raise VerifyFailed(f"live file does not match the archive; nothing trimmed: {problem}")
@@ -1316,7 +1496,7 @@ def _trim_locked(spec: StoreSpec, *, keep_days: int, today: date, apply: bool, b
         for text in texts:
             if not done:
                 parsed = _parse_run_date(text)
-                if live_offset + live_count >= archived:
+                if live_count >= covered:
                     stopped_by, done = "unarchived", True
                 elif parsed is None:
                     stopped_by, done = "undated", True
@@ -1342,12 +1522,18 @@ def _trim_locked(spec: StoreSpec, *, keep_days: int, today: date, apply: bool, b
     if remove == 0:
         return result
     _, problem = _check_live_against_archive(
-        spec, header, manifest, live_offset=live_offset, mode="proof",
+        spec, header, manifest, live=live, mode="proof",
         stop_row=remove, block_bytes=block_bytes,
     )
     if problem:
         raise VerifyFailed(f"rows to remove are not proven in the archive; nothing trimmed: {problem}")
     if not apply:
+        return result
+    if live.ranges:
+        # A store that has had rows removed from the middle keeps a live map;
+        # its trim is the general proven removal of the head rows.
+        _remove_positions_locked(spec, header, manifest, live, list(range(remove)), block_bytes=block_bytes)
+        result.update(applied=True, removed=remove, would_remove=remove)
         return result
 
     temp = csv_path.with_name(csv_path.name + f".trim-tmp-{os.getpid()}")
@@ -1436,6 +1622,170 @@ def _walk_same(mine: _Cursor, original: Path, header: list[str], *, skip: int, b
             return f"rows differ after original row {start + lo}"
     if not mine.exhausted():
         return "trimmed copy has extra rows"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Proven removal from anywhere in the live file (the bounce candidates clean-up)
+# ---------------------------------------------------------------------------
+
+
+def remove_rows(
+    csv_path: Any = None,
+    archive_dir: Any = None,
+    *,
+    store: Any = None,
+    drop: Any,
+    columns: Iterable[str],
+    lock_timeout: float = LOCK_TIMEOUT_SECONDS,
+    block_bytes: int = CSV_BLOCK_BYTES,
+) -> dict[str, Any]:
+    """Pack, verify, then remove the live rows ``drop(row)`` says to - losslessly.
+
+    Holding the writer's lock and the archive's for the whole operation:
+
+    1. archive every complete row not yet packed, verified cell for cell;
+    2. ``drop`` is called with each live row as ``{column: text}`` for the
+       named ``columns``; only rows already in the archive can be removed;
+    3. every row to remove is proven cell for cell against the archive;
+    4. the kept records are byte-copied to a temp file, which is re-read and
+       compared with the live rows minus the removed ones;
+    5. the manifest records the new live map as pending (with the new file's
+       size and sha256), the file is replaced, the manifest commits.
+
+    Any failure before the replace changes nothing in the live file. A store
+    whose writer takes no lock is refused: a rewrite would race its appends.
+    ``read_history`` then still returns every row ever written, in order.
+    """
+    spec = _spec(store, csv_path, archive_dir)
+    if spec.writer_lock_key is None:
+        raise ArchiveRefused(
+            f"{spec.name}: its writer takes no lock, so the live file cannot be rewritten; nothing removed"
+        )
+    columns = list(columns)
+    started = time.monotonic()
+    try:
+        with _locks(spec, lock_timeout):
+            packed = _archive_locked(spec, block_bytes=block_bytes, now=None)
+            manifest = load_manifest(spec.archive_dir)
+            header = read_header(spec.csv_path)
+            missing = [c for c in columns if c not in header]
+            if missing:
+                raise ArchiveRefused(f"{spec.name}: columns {missing} are not in the live header")
+            archived = int(manifest["archived_rows"])
+            live = _live_map(manifest, spec)
+            covered = live.archived_rows(archived)
+            positions: list[int] = []
+            count = 0
+            for batch in _iter_csv(spec.csv_path, header, include=columns, block_bytes=block_bytes):
+                data = batch.to_pydict()
+                for i in range(batch.num_rows):
+                    if count + i < covered and drop({c: data[c][i] for c in columns}):
+                        positions.append(count + i)
+                count += batch.num_rows
+            result: dict[str, Any] = {
+                "archive": packed,
+                "live_rows_before": count,
+                "removed": 0,
+                "kept": count,
+                "bytes_before": spec.csv_path.stat().st_size,
+            }
+            if positions:
+                _remove_positions_locked(spec, header, manifest, live, positions, block_bytes=block_bytes)
+                result.update(removed=len(positions), kept=count - len(positions))
+            result["bytes_after"] = spec.csv_path.stat().st_size
+    finally:
+        _release_memory()
+    result["seconds"] = round(time.monotonic() - started, 3)
+    return result
+
+
+def _remove_positions_locked(
+    spec: StoreSpec,
+    header: list[str],
+    manifest: dict[str, Any],
+    live: _LiveMap,
+    positions: list[int],
+    *,
+    block_bytes: int,
+) -> None:
+    """Remove live rows at ``positions`` (sorted, all archived). Caller holds the locks."""
+    csv_path, archive_dir = spec.csv_path, spec.archive_dir
+    archived = int(manifest["archived_rows"])
+    covered = live.archived_rows(archived)
+    drop = set(positions)
+    if not drop:
+        return
+    if max(drop) >= covered or min(drop) < 0:
+        raise ArchiveRefused("a row to remove is not in the archive yet; nothing removed")
+    _, problem = _check_live_against_archive(
+        spec, header, manifest, live=live, mode="proof", stop_row=max(drop) + 1, block_bytes=block_bytes
+    )
+    if problem:
+        raise VerifyFailed(f"rows to remove are not proven in the archive; nothing removed: {problem}")
+    kept_seqs = [seq for i, seq in enumerate(live.seqs(0, covered)) if i not in drop]
+    new_live = _LiveMap.from_kept(kept_seqs, archived)
+
+    temp = csv_path.with_name(csv_path.name + f".trim-tmp-{os.getpid()}")
+    manifest_path = archive_dir / MANIFEST_NAME
+    replaced = False
+    try:
+        with open(csv_path, "rb") as source, open(temp, "wb") as target:
+            head = _read_record(source)
+            if head is None:
+                raise ArchiveRefused("history header unreadable")
+            target.write(head)
+            index = 0
+            while True:
+                record = _read_record(source)
+                if record is None:
+                    break
+                if index not in drop:
+                    target.write(record)
+                index += 1
+            target.flush()
+            os.fsync(target.fileno())
+        problem = _same_rows_except(temp, csv_path, header, drop, block_bytes=block_bytes)
+        if problem:
+            raise VerifyFailed(f"cleaned copy does not equal the kept rows; nothing removed: {problem}")
+        pending = {
+            **manifest,
+            "pending_live_map": {**new_live.fields(), "size": temp.stat().st_size, "sha256": _sha256(temp)},
+        }
+        _write_manifest(manifest_path, pending)
+        try:
+            os.replace(temp, csv_path)
+            replaced = True
+        except OSError as exc:
+            _write_manifest(manifest_path, manifest)
+            raise ArchiveError(f"could not replace the live file ({exc}); nothing removed") from exc
+        _write_manifest(manifest_path, _with_live_map(manifest, new_live))
+    finally:
+        _unlink_quietly(temp)
+        if not replaced:
+            _log.error("history archive removal (%s): not applied; the live file is unchanged", spec.name)
+
+
+def _same_rows_except(trimmed: Path, original: Path, header: list[str], drop: set[int], *,
+                      block_bytes: int) -> str | None:
+    if read_header(trimmed) != header:
+        return "header differs"
+    mine = _Cursor(_iter_csv(trimmed, header, block_bytes=block_bytes))
+    with _closing_all([mine]):
+        seen = 0
+        for batch in _iter_csv(original, header, block_bytes=block_bytes):
+            keep = [i for i in range(batch.num_rows) if seen + i not in drop]
+            seen += batch.num_rows
+            if not keep:
+                continue
+            table = pa.Table.from_batches([batch])
+            if len(keep) != batch.num_rows:
+                table = table.take(pa.array(keep, pa.int64()))
+            other = mine.take(table.num_rows)
+            if other is None or not other.equals(table):
+                return f"rows differ near original row {seen - batch.num_rows + keep[0]}"
+        if not mine.exhausted():
+            return "cleaned copy has extra rows"
     return None
 
 
@@ -1560,8 +1910,7 @@ def _read_once(manifest, spec, columns, since_text, until_text, bounded, block_b
 
     live_tables: list[pa.Table] = []
     if header:
-        offset = _effective_live_offset(manifest, spec)
-        skip = max(0, archived - offset)
+        skip = _live_map(manifest, spec).archived_rows(archived)
         seen = 0
         include = [c for c in need if c in header] or header[:1]
         for batch in _iter_csv(csv_path, header, include=include, block_bytes=block_bytes, limit=limit):
