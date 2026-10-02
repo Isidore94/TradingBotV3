@@ -555,8 +555,11 @@ def _walk_live(csv_path, header, manifest, archive_dir, cursors, *, columns, inc
                 month_seqs = seq_by_month[month]
                 cursor = _Cursor(_file_batches(archive_dir / entry["file"], columns, seq_from=month_seqs[0]))
                 cursors[month] = cursor
+            # Keys are compared with the trim proof's equivalence: the writer's
+            # widening rewrite turns a ticker `NA` into "", and that must not
+            # make every night refuse. Any other difference still refuses.
             problem = _compare(rows, cursor.take(rows.num_rows), seq_by_month[month], columns,
-                               "exact" if mode == "keys" else mode)
+                               "proof" if mode == "keys" else mode)
             if problem:
                 return count, f"{month}: {problem}"
     if live_offset + count < archived and stop_row is None:
@@ -684,6 +687,7 @@ def _release_memory() -> None:
 
 
 def _archive_locked(csv_path: Path, archive_dir: Path, *, block_bytes: int, now: datetime | None) -> dict[str, Any]:
+    _sweep_stale_temps(csv_path, archive_dir)
     manifest = _settle_pending(load_manifest(archive_dir), archive_dir, csv_path)
     problems = _verify_files(manifest, archive_dir)
     if problems:
@@ -876,6 +880,32 @@ def _walk_from(csv_path, header, manifest, archive_dir, cursors, *, live_offset,
     return count, None
 
 
+def _sweep_stale_temps(csv_path: Path, archive_dir: Path) -> list[str]:
+    """Remove temp files a hard-killed archive or trim left behind.
+
+    Called only while holding the archive's lock (and the writer's, where the
+    store has one), which every archive and trim holds for as long as its temp
+    files exist - so any file matching OUR naming pattern now is an orphan.
+    Only these exact patterns are touched: ``<csv>.trim-tmp-<pid>``, and in the
+    archive folder ``*.parquet.tmp-<pid>`` and ``manifest.json.tmp-<pid>``.
+    """
+    removed: list[str] = []
+    trim_pattern = re.compile(re.escape(csv_path.name) + r"\.trim-tmp-\d+$")
+    archive_pattern = re.compile(r"(\.parquet|" + re.escape(MANIFEST_NAME) + r")\.tmp-\d+$")
+    candidates = []
+    if csv_path.parent.is_dir():
+        candidates += [p for p in csv_path.parent.iterdir() if trim_pattern.fullmatch(p.name)]
+    if archive_dir.is_dir():
+        candidates += [p for p in archive_dir.iterdir() if archive_pattern.search(p.name)]
+    for path in candidates:
+        if path.is_file():
+            _unlink_quietly(path)
+            if not path.exists():
+                removed.append(path.name)
+                _log.warning("d1 history archive: removed stale temp %s from an interrupted run", path)
+    return removed
+
+
 def _collect_garbage(archive_dir: Path, manifest: dict[str, Any]) -> None:
     """Remove archive files the committed manifest no longer names (superseded)."""
     keep = {entry["file"] for entry in manifest.get("files", {}).values()} | {MANIFEST_NAME}
@@ -994,6 +1024,7 @@ def trim(
 def _trim_locked(
     csv_path: Path, archive_dir: Path, *, keep_days: int, today: date, apply: bool, block_bytes: int
 ) -> dict[str, Any]:
+    _sweep_stale_temps(csv_path, archive_dir)
     manifest = _settle_pending(load_manifest(archive_dir), archive_dir, csv_path)
     problems = _verify_files(manifest, archive_dir)
     if problems:
