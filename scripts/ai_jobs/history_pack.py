@@ -1,17 +1,21 @@
 """The `history_pack` night slot (trader 2026-10-02): deterministic, no model.
 
-Every night: pack the D1 feature history into its lossless monthly Parquet
-archive (`d1_feature_history_archive.archive`, which verifies cell for cell
-before it commits), verify the whole archive, and write ONE small JSON report
-(`HISTORY_PACK_REPORT_FILE`): what was packed, the verify result, and for each
-large live store its size now and at the previous report, by `stat` only.
+Every night, for every store registered in
+`d1_feature_history_archive.registered_stores()` (the D1 feature history and
+the bounce outcomes CSV today): pack it into its lossless monthly Parquet
+archive (`archive`, which verifies cell for cell before it commits) and verify
+the whole archive. Then write ONE small JSON report (`HISTORY_PACK_REPORT_FILE`):
+one result block per store, and for each large live store its size now and at
+the previous report, by `stat` only.
 
-TRIM STAYS OFF. Seven readers still read `d1_features_history.csv` directly,
-so trimming it today would silently shorten their history. The trim runs only
-when the local setting `TRIM_SETTING` is true, which a later packet switches
-on after those readers move to `read_history`.
+TRIM STAYS OFF. Readers still read the live CSVs directly, so trimming would
+silently shorten their history. A store is trimmed only when its own local
+setting (`StoreSpec.trim_setting`; the D1 one is `TRIM_SETTING`) is true AND
+its writer takes a lock; a store whose writer takes no lock (the bounce
+outcomes) is never trimmed, whatever any setting says.
 
-A failure returns `failed` and leaves the last good report where it was.
+One store failing never stops another from packing. Any failure returns
+`failed` and leaves the last good report where it was.
 """
 
 from __future__ import annotations
@@ -25,15 +29,17 @@ from typing import Any
 
 _log = logging.getLogger(__name__)
 
-#: Local setting that lets the night trim the live CSV. Default False.
+#: Local setting that lets the night trim the D1 history CSV. Default False.
 TRIM_SETTING = "d1_history_trim_enabled"
-REPORT_SCHEMA = 1
+REPORT_SCHEMA = 2
 
 
-def trim_enabled() -> bool:
+def trim_enabled(setting: str = TRIM_SETTING) -> bool:
     import project_paths as pp
 
-    value = pp.get_local_setting(TRIM_SETTING, False)
+    if not setting:
+        return False
+    value = pp.get_local_setting(setting, False)
     if isinstance(value, str):
         return value.strip().lower() in ("1", "true", "yes", "on")
     return value is True
@@ -110,6 +116,32 @@ def _write_report(path: Path, report: dict[str, Any]) -> None:
             temp.unlink()
 
 
+def _pack_one(spec, *, today: date | None = None) -> dict[str, Any]:
+    """Archive + verify + (only when allowed) trim one store. Raises ArchiveError."""
+    import d1_feature_history_archive as arc
+
+    packed = arc.archive(store=spec)
+    checked = arc.verify(store=spec)
+    if not checked["ok"]:
+        raise arc.VerifyFailed("archive verify failed: " + "; ".join(checked["problems"]))
+    if spec.writer_lock_key is None:
+        trim: dict[str, Any] = {
+            "enabled": False,
+            "reason": "its writer takes no lock; trim is refused for this store whatever the setting",
+        }
+    elif not trim_enabled(spec.trim_setting):
+        trim = {"enabled": False, "reason": f"local setting {spec.trim_setting or '(none)'} is off"}
+    else:
+        trim = {"enabled": True}
+        trim.update(arc.trim(store=spec, today=today, apply=True))
+    return {
+        "archive": packed,
+        "verify": {k: checked.get(k) for k in ("ok", "problems", "archived_rows", "files",
+                                                "live_rows", "unarchived_rows")},
+        "trim": trim,
+    }
+
+
 def run_history_pack(
     *,
     session_date: str = "",
@@ -117,50 +149,61 @@ def run_history_pack(
     archive_dir: Any = None,
     report_path: Any = None,
     stores: dict[str, Path] | None = None,
+    specs: list | None = None,
     today: date | None = None,
     **_ignored: Any,
 ) -> dict[str, Any]:
     import d1_feature_history_archive as arc
     import project_paths as pp
 
-    csv_path = Path(csv_path or pp.D1_FEATURES_HISTORY_FILE)
-    archive_dir = Path(archive_dir or pp.D1_FEATURES_HISTORY_ARCHIVE_DIR)
     report_path = Path(report_path or pp.HISTORY_PACK_REPORT_FILE)
-    failed = {"status": "failed", "model": "", "outputs": []}
-    try:
-        packed = arc.archive(csv_path=csv_path, archive_dir=archive_dir)
-        checked = arc.verify(csv_path=csv_path, archive_dir=archive_dir)
-        if not checked["ok"]:
-            return {**failed, "reason": "archive verify failed: " + "; ".join(checked["problems"])
-                    + "; last report kept"}
-        trim: dict[str, Any] = {"enabled": trim_enabled()}
-        if trim["enabled"]:
-            trim.update(arc.trim(csv_path=csv_path, archive_dir=archive_dir, today=today, apply=True))
-    except arc.ArchiveError as exc:
-        _log.error("history_pack: %s", exc)
-        return {**failed, "reason": f"history not packed ({type(exc).__name__}: {exc}); last report kept"}
-    except Exception as exc:  # noqa: BLE001 - the night goes on; the last report stays
-        _log.exception("history_pack: failed")
-        return {**failed, "reason": f"history pack failed ({type(exc).__name__}: {exc}); last report kept"}
+    if specs is None:
+        if csv_path is not None or archive_dir is not None:
+            # An explicit D1 path (a manual run, a test) packs that store only.
+            specs = [arc.registered_stores()[arc.D1_STORE].with_paths(csv_path, archive_dir)]
+        else:
+            specs = list(arc.registered_stores().values())
+
+    blocks: dict[str, dict[str, Any]] = {}
+    failures: list[str] = []
+    for spec in specs:
+        try:
+            blocks[spec.name] = _pack_one(spec, today=today)
+        except arc.ArchiveError as exc:
+            _log.error("history_pack %s: %s", spec.name, exc)
+            failures.append(f"{spec.name}: history not packed ({type(exc).__name__}: {exc})")
+        except Exception as exc:  # noqa: BLE001 - the night goes on; the last report stays
+            _log.exception("history_pack %s: failed", spec.name)
+            failures.append(f"{spec.name}: history pack failed ({type(exc).__name__}: {exc})")
+    if failures:
+        return {"status": "failed", "model": "", "outputs": [],
+                "reason": "; ".join(failures) + "; last report kept"}
 
     tracked = dict(stores if stores is not None else default_stores())
-    tracked.setdefault("d1_features_history_archive", archive_dir)
+    for spec in specs:
+        tracked.setdefault(f"{spec.name}_archive", Path(spec.archive_dir))
+    first = blocks[specs[0].name] if specs else {"archive": {}, "verify": {}, "trim": {"enabled": False}}
     report = {
         "schema": REPORT_SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "session_date": session_date,
-        "archive": packed,
-        "verify": {k: checked.get(k) for k in ("ok", "problems", "archived_rows", "files",
-                                                "live_rows", "unarchived_rows")},
-        "trim": trim,
+        "stores_packed": blocks,
+        # The first store's block again at the top level (the D1 history on the
+        # night slate), where the first version of this report put it.
+        "archive": first["archive"],
+        "verify": first["verify"],
+        "trim": first["trim"],
         "stores": _store_rows(tracked, _previous_sizes(report_path)),
     }
     try:
         _write_report(report_path, report)
     except OSError as exc:
-        return {**failed, "reason": f"history packed but the report was not written ({exc})"}
-    reason = (
-        f"packed {packed.get('archived_rows', 0)} rows ({packed.get('total_archived', 0)} archived), "
-        f"verify ok; trim {'removed ' + str(trim.get('removed', 0)) + ' rows' if trim['enabled'] else 'off'}"
-    )
-    return {"status": "ok", "model": "", "reason": reason, "outputs": [str(report_path)]}
+        return {"status": "failed", "model": "", "outputs": [],
+                "reason": f"history packed but the report was not written ({exc})"}
+    parts = []
+    for name, block in blocks.items():
+        trim = block["trim"]
+        trimmed = f"trim removed {trim.get('removed', 0)}" if trim.get("enabled") else "trim off"
+        parts.append(f"{name}: packed {block['archive'].get('archived_rows', 0)} rows "
+                     f"({block['archive'].get('total_archived', 0)} archived), verify ok, {trimmed}")
+    return {"status": "ok", "model": "", "reason": "; ".join(parts), "outputs": [str(report_path)]}

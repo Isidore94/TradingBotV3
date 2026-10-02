@@ -1507,8 +1507,9 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             run=history_pack.run_history_pack,
             reserve_minutes=10.0,
             description=(
-                "Pack d1_features_history.csv into its lossless monthly Parquet archive, "
-                "verify it, and report live store sizes (deterministic, no model; trim off)"
+                "Pack each registered history CSV (D1 features, bounce outcomes) into its lossless "
+                "monthly Parquet archive, verify it, and report live store sizes "
+                "(deterministic, no model; trim off)"
             ),
             max_attempts=3,
         ),
