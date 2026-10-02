@@ -2,7 +2,7 @@
 
 Setup table bucket chip + tooltip, the M5 alert row's grade line, the chart
 review header, the Movers weak (Rip-weak) row. Annotate only: nothing hidden,
-re-ordered or muted, and LONG rows are untouched.
+re-ordered or muted, and LONG rows get the plain long line.
 """
 
 from __future__ import annotations
@@ -142,8 +142,10 @@ def test_setup_short_within_14_days_paints_an_earnings_chip(app, warm):
     assert _caution_pixels(_render(_setup("SHORT", 15))) == 0
 
 
-def test_setup_long_row_paints_what_it_paints_today(app, warm):
-    assert _render(_setup("LONG", 5)) == _render(_setup("LONG", None))
+def test_setup_long_within_14_days_paints_an_earnings_chip(app, warm):
+    assert _caution_pixels(_render(_setup("LONG", 5))) > 0
+    assert _render(_setup("LONG", 15)) == _render(_setup("LONG", None))
+    assert _caution_pixels(_render(_setup("LONG", 15))) == 0
 
 
 def test_setup_chip_stays_in_the_bucket_cell(app, warm):
@@ -155,7 +157,8 @@ def test_setup_bucket_tooltip_carries_the_warning(app, warm):
     text = _hover(_setup("SHORT", 4))
     assert WARNING in text
     assert "Near" in text, "the bucket's own tooltip is kept"
-    assert "earnings in" not in _hover(_setup("LONG", 4))
+    assert "earnings in 4 d - long into earnings" in _hover(_setup("LONG", 4))
+    assert "shorts 3-14 d" not in _hover(_setup("LONG", 4))
     assert "earnings in" not in _hover(_setup("SHORT", 20))
 
 
@@ -187,7 +190,8 @@ def test_m5_short_row_grade_line_carries_the_warning(app, warm):
         bar.post(_m5("FAR", "SHORT"))
         bar.post(_m5("MU", "LONG"))
         tips = [bar.list.item(i).toolTip() for i in range(bar.list.count())]
-        assert sum("earnings in" in tip for tip in tips) == 1
+        assert sum("earnings in" in tip for tip in tips) == 2
+        assert sum("long into earnings" in tip for tip in tips) == 1
         assert bar.count() == 3, "nothing hidden"
     finally:
         bar.deleteLater()
@@ -216,8 +220,8 @@ def test_chart_review_header_warns_on_a_short(app, warm, tmp_path, monkeypatch):
         assert pane.title.text().endswith("⚠ earnings in 4 d")
         assert pane.title.toolTip() == WARNING
         pane.set_alert(_d1("MU", "LONG"))
-        assert "earnings" not in pane.title.text()
-        assert pane.title.toolTip() == ""
+        assert pane.title.text().endswith("⚠ earnings in 4 d")
+        assert pane.title.toolTip() == "earnings in 4 d - long into earnings"
         pane.set_alert(_d1("FAR", "SHORT"))
         assert "earnings" not in pane.title.text()
     finally:
