@@ -354,6 +354,10 @@ EXPECTED_SLOT_ORDER = (
     # Nightly permutation report (trader 2026-09-30): backfill + search, deterministic,
     # directly after `market_regime_daily` (pinned right after `lake_history_topup`).
     "permutation_report",
+    # D1 history packing (trader 2026-10-02): lossless archive + verify of
+    # d1_features_history.csv, deterministic, no model, trim off; directly after
+    # `permutation_report` and ahead of the `market_story_rollups` chain.
+    "history_pack",
     # WS-10D (2026-09-12): the Market Journal's weekly/monthly/quarterly rollups.
     # Deterministic, no model; it reads the daily stories and the exchange calendar
     # and feeds nothing above it, so it CLOSES the deterministic stage.

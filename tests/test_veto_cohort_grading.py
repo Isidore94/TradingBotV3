@@ -646,6 +646,8 @@ def test_the_scope_can_be_selected_on_demand():
         "market_regime_daily",
         # Nightly permutation report (2026-09-30), stage 1 after the lake regime rows.
         "permutation_report",
+        # D1 history packing (trader 2026-10-02), stage 1 after the permutation report.
+        "history_pack",
         "market_story_rollups",
         "measured_report",
         # AI-R3 keeps the factual day pack current before stage-2 stories.
