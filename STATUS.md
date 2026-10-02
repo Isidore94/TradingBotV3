@@ -15,19 +15,17 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   memory stands on the night; `mentor_app_enabled` on by default; frontier OFF (trader).
   Gates #311-#318, #321-#326, #329, #332-#336.
 - **Merged 2026-10-01 (live at the next desk + app restart):** P18 journal mode, habits/routines,
-  `reads_pack`, 60 s M5 publisher, trade-intent gate (#341-#344); P20 plain brief/simple replies (#345);
-  Mentor UI: card box hides, Tape/Tilt/Mirror/Scorecard, Dock into the desk Mentor tab, Clear,
-  A-/A+ (#346); book ignores broker-flat journal opens; day-1 fixes: short WIN/LOSS, alert
-  follow-through, VWAP side, plan infer, facets, pause unload, vs-peers, follow-up carry.
+  `reads_pack`, 60 s M5 publisher, trade-intent gate (#341-#344); P20 plain replies (#345);
+  Mentor UI: Tape/Tilt/Mirror/Scorecard, Dock tab, Clear, A-/A+ (#346); book ignores
+  broker-flat journal opens; day-1 fixes (short WIN/LOSS, alert follow-through, VWAP side, plan
+  infer, facets, pause unload, vs-peers, follow-up carry).
 - **Night (2026-09-30):** retries x3, budget 360, care names briefed nightly (#331), nightly
-  permutation report (#330, shadow). Merged 10-01 (#338): P19 night rejections (econ time
-  needs its id, regime read 1 retry, day show fits, idea with unknown ids dropped), digest
-  cap, mentor digest retry. Next: morning pre-brief queue; rule audit once plan lines exist.
-- **Night model:** gemma4:12b live (thinking OFF). Probe 10-02: gpt-oss:20b at MEDIUM wrote 9 of 10
-  verified slots (gemma4 7, gpt-oss high unusable). Trader chose gpt-oss medium: flip = set
-  `ai_local_model_medium=gpt-oss:20b`, `ai_local_reasoning_effort=medium`, `mentor_model=gemma4:12b`
-  (owed: the trader's click). In flight: `claude/market-story-sources-2026-10-02` (story cites +
-  mentor effort); unmerged `claude/gemma4-thinking-high-2026-10-01`.
+  permutation report (#330, shadow). Merged 10-01 (#338): P19 night rejections, digest cap,
+  mentor digest retry. Next: morning pre-brief queue; rule audit once plan lines exist.
+- **Night model:** gemma4:12b live (thinking OFF). Probe 10-02: gpt-oss:20b MEDIUM wrote 9 of
+  10 verified slots (gemma4 7; high unusable). Trader chose gpt-oss medium; flip owed (trader's
+  click): medium=gpt-oss:20b, effort=medium, `mentor_model=gemma4:12b`. In flight:
+  `claude/market-story-sources-2026-10-02`; unmerged `claude/gemma4-thinking-high-2026-10-01`.
 - **Night window:** 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435; the app uses
   11436). No local models on the mini-PC: host down = facts only; rerun a missed night with
   `--session <date> --force`. No builders, merges or test runs 22:00-02:00 PT.
