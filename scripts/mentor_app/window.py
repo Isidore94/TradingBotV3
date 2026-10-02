@@ -63,6 +63,8 @@ ASSESS_WAIT_MS = 90 * 1000
 RECONNECT_BACKOFF_SECONDS = 10 * 60
 #: On close the app waits at most this long for each model unload.
 SHUTDOWN_UNLOAD_SECONDS = 4
+#: Shutdown waits at most this long for the rule-gate server to stop (its terminate is sent first).
+SHUTDOWN_GATE_SECONDS = 2
 CHIP_KINDS = ("auto_mode", "d1_env", "regime")
 #: (label, command, tooltip): the quick-button row above the input box.
 QUICK_BUTTONS = (
@@ -256,6 +258,8 @@ class MentorWindow(QMainWindow):
         self._get = get or (brain.default_get if post is None else None)
         #: The plan-rule gate's local server; like ``get``, a test that fakes ``post`` gets none by default.
         self._rule_gate_server = rule_gate_server or (rule_gate.from_settings() if post is None else None)
+        #: Whether the gate was wanted at the last sync (None = not synced yet).
+        self._rule_gate_wanted: bool | None = None
         #: The previous user turn's planned packs (a topicless follow-up carries them).
         self._last_attachments: list[Any] = []
         self._brain_ok = False
@@ -811,7 +815,10 @@ class MentorWindow(QMainWindow):
         if self._tunnel is not None:
             self._tunnel.stop()
         if self._rule_gate_server is not None:
-            self._rule_gate_server.stop()
+            # Off the Qt thread, like the unload above; close() also refuses any later start().
+            closer = threading.Thread(target=self._rule_gate_server.close, name="mentor-rule-gate-close", daemon=True)
+            closer.start()
+            closer.join(SHUTDOWN_GATE_SECONDS)
         self._io.shutdown(wait=True)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
@@ -1039,9 +1046,14 @@ class MentorWindow(QMainWindow):
             want = not self._shut and rule_gate.mode() != "off" and not self._gpu_reason()
         except Exception:  # noqa: BLE001 - an unreadable setting keeps the gate off
             want = False
+        was, self._rule_gate_wanted = self._rule_gate_wanted, want
         # start() adopts a healthy server already on the port and backs off after a launch that exits.
         if want and not server.running():
             threading.Thread(target=server.start, name="mentor-rule-gate-start", daemon=True).start()
+        elif not want and was is not False:
+            # The not-wanted state begins (or the app starts in it): stop ours and sweep the port once.
+            threading.Thread(target=lambda: server.stop(sweep=True), name="mentor-rule-gate-stop",
+                             daemon=True).start()
         elif not want and server.active():
             threading.Thread(target=server.stop, name="mentor-rule-gate-stop", daemon=True).start()
 

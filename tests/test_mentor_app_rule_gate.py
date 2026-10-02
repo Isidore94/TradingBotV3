@@ -321,9 +321,12 @@ class _FakeServer:
         self.alive = True
         return True
 
-    def stop(self):
+    def stop(self, *, sweep=False):
         self.stops += 1
         self.alive = False
+
+    def close(self):
+        self.stop()
 
     def scorer(self, post):
         def gate(text):
@@ -494,3 +497,91 @@ def test_a_launch_that_exits_at_once_is_not_relaunched_on_the_next_minute_tick(w
         window.check_gpu_share()
         _settle()
     assert len(popen.calls) == 1
+
+
+# ---------------------------------------------------------------- review follow-up (2026-10-02)
+def test_start_after_close_is_a_no_op_but_after_a_pause_stop_it_starts_again():
+    popen = _Popen()
+    server = _server(popen)
+    server.start()
+    server.stop()  # a pause stop
+    assert server.start() is True and len(popen.calls) == 2, "a pause stop allows a later start"
+    server.close()
+    assert server.start() is False and len(popen.calls) == 2, "after close no start launches anything"
+    assert not server.active()
+
+
+def _netstats(runner):
+    return [cmd for cmd in runner.calls if cmd[0] == "netstat"]
+
+
+def test_an_orphan_is_swept_once_when_the_app_starts_paused(window):
+    import ai_pause
+
+    ai_pause.pause_for("until_resumed", NOW)
+    window._paused_until = window._ai_paused_until()
+    runner = _Runner()
+    window._rule_gate_server = _server(_Popen(), run=runner)  # /health refuses: never adopted
+    window._sync_rule_gate()
+    _settle()
+    assert runner.killed() == [["taskkill", "/PID", "4242", "/F"]]
+    for _ in range(5):
+        window.check_gpu_share()
+        _settle()
+    assert len(_netstats(runner)) == 1, "one sweep per not-wanted stretch, not one a minute"
+
+
+def test_an_orphan_is_swept_once_when_the_refusal_window_begins(window):
+    popen, runner = _Popen(), _Runner()
+    window._rule_gate_server = _server(popen, run=runner)
+    window.check_gpu_share()
+    _settle()
+    assert len(popen.calls) == 1 and _netstats(runner) == []
+    window.block[0] = "the night AI starts within 15 minutes; the model is handed back"
+    for _ in range(4):
+        window.check_gpu_share()
+        _settle()
+    assert popen.procs[0].terminated == 1
+    assert runner.killed() == [["taskkill", "/PID", "4242", "/F"]] and len(_netstats(runner)) == 1
+
+
+def test_a_port_held_by_something_else_is_left_alone_with_one_line(window, caplog):
+    import ai_pause
+
+    ai_pause.pause_for("until_resumed", NOW)
+    window._paused_until = window._ai_paused_until()
+    runner = _Runner(image="python.exe")
+    window._rule_gate_server = _server(_Popen(), run=runner)
+    with caplog.at_level(logging.INFO):
+        for _ in range(3):
+            window.check_gpu_share()
+            _settle()
+    assert runner.killed() == []
+    assert len([r for r in caplog.records if "left alone" in r.getMessage()]) == 1
+
+
+def test_shutdown_does_not_wait_on_a_slow_gate_stop(window, monkeypatch):
+    from mentor_app import window as window_module
+
+    monkeypatch.setattr(window_module, "SHUTDOWN_GATE_SECONDS", 0.2, raising=False)
+    release = threading.Event()
+
+    class _Slow(_FakeServer):
+        def stop(self, *, sweep=False):
+            release.wait(10)
+            super().stop(sweep=sweep)
+
+    window._rule_gate_server = _Slow()
+    began = time.monotonic()
+    window.shutdown()
+    took = time.monotonic() - began
+    release.set()
+    assert took < 2.0, f"shutdown blocked {took:.1f} s on the gate stop"
+
+
+def test_a_start_after_shutdown_launches_nothing(window):
+    popen = _Popen()
+    window._rule_gate_server = server = _server(popen)
+    window.shutdown()
+    _settle()
+    assert server.start() is False and popen.calls == []

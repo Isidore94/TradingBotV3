@@ -138,6 +138,8 @@ class GateServer:
         #: A healthy llama-server already on the port that this app did not launch (e.g. after a crash).
         self.adopted = False
         self._next_launch = 0.0
+        #: Set by close() at app shutdown; a pause stop leaves it clear so the gate can start again.
+        self._closed = False
 
     @property
     def endpoint(self) -> str:
@@ -165,6 +167,8 @@ class GateServer:
         A launch that exited on its own is not retried for RETRY_SECONDS. False when nothing serves.
         """
         with self._lock:
+            if self._closed:
+                return False
             if self.running():
                 return True
             if self.ready():
@@ -206,18 +210,23 @@ class GateServer:
         except Exception:  # noqa: BLE001
             return False
 
-    def stop(self) -> None:
+    def stop(self, *, sweep: bool = False) -> None:
         """Terminate the child (kill when it does not exit within STOP_WAIT_SECONDS); an adopted
-        server is stopped by its pid, only when the port's listener is llama-server.exe."""
+        server (or, with ``sweep``, any listener on the port) is stopped by its pid, only when it
+        is llama-server.exe. A later ``start()`` may launch again."""
         with self._lock:
             proc, self._proc = self._proc, None
             adopted, self.adopted = self.adopted, False
-            if adopted:
+            if proc is not None:
+                try:
+                    proc.terminate()
+                except Exception:  # noqa: BLE001
+                    pass
+            if adopted or sweep:
                 self._stop_listener()
             if proc is None:
                 return
             try:
-                proc.terminate()
                 proc.wait(timeout=STOP_WAIT_SECONDS)
             except Exception:  # noqa: BLE001
                 try:
@@ -225,6 +234,11 @@ class GateServer:
                 except Exception:  # noqa: BLE001
                     pass
             logging.info("Trade Mentor: rule gate server stopped")
+
+    def close(self) -> None:
+        """The app is closing: stop, and make every later ``start()`` a no-op."""
+        self._closed = True
+        self.stop()
 
     def _output(self, cmd: list[str]) -> str:
         done = self._run(cmd, capture_output=True, text=True, timeout=15, creationflags=_NO_WINDOW)
@@ -252,6 +266,8 @@ class GateServer:
     def _stop_listener(self) -> None:
         try:
             pids = self.listener_pids()
+            if not pids:
+                return
             confirmed = [pid for pid in pids if self.image_name(pid).lower() == SERVER_IMAGE]
             if not confirmed or len(confirmed) != len(pids):
                 logging.info("Trade Mentor: rule gate: port %d listener not confirmed as %s (pids %s); left alone",
@@ -260,9 +276,10 @@ class GateServer:
             for pid in confirmed:
                 self._run(["taskkill", "/PID", str(pid), "/F"], capture_output=True, text=True, timeout=15,
                           creationflags=_NO_WINDOW)
-            logging.info("Trade Mentor: rule gate: stopped the adopted llama-server (pid %s)", confirmed)
+            logging.info("Trade Mentor: rule gate: stopped the llama-server on port %d (pid %s)", self.port, confirmed)
         except Exception as exc:  # noqa: BLE001 - unconfirmed: leave it alone
-            logging.info("Trade Mentor: rule gate: the adopted server was not stopped (%s: %s)", type(exc).__name__, exc)
+            logging.info("Trade Mentor: rule gate: the server on port %d was not stopped (%s: %s)", self.port,
+                         type(exc).__name__, exc)
 
     def scorer(self, post: brain.Post = brain.default_post) -> Callable[[str], float | None]:
         return lambda text: score(text, endpoint=self.endpoint, post=post)
