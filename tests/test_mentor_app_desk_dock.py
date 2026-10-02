@@ -72,6 +72,39 @@ def test_the_publisher_writes_the_spot_on_tab_change(app, tmp_path):
         tabs.close()
 
 
+def test_leaving_the_desk_page_hides_the_mentor(app, tmp_path):
+    from PySide6.QtWidgets import QStackedWidget
+
+    from ui.services.mentor_dock_publisher import MentorDockPublisher
+
+    pages = QStackedWidget()
+    tabs = QTabWidget()
+    spot = QWidget()
+    tabs.addTab(QLabel("setups"), "Setups")
+    tabs.addTab(spot, "Mentor")
+    journal = QLabel("journal")
+    pages.addWidget(tabs)
+    pages.addWidget(journal)
+    pages.resize(600, 400)
+    pages.show()
+    written: list[dict] = []
+    publisher = MentorDockPublisher(tabs, spot, path=tmp_path / "dock.json", writer=lambda _p, d: written.append(d),
+                                    clock=lambda: 1000.0)
+    try:
+        tabs.setCurrentWidget(spot)
+        _wait(app)
+        assert written[-1]["tab_current"] is True
+        pages.setCurrentWidget(journal)
+        _wait(app)
+        assert written[-1]["tab_current"] is False, "another desk page (Journal) hides the docked Mentor"
+        pages.setCurrentWidget(tabs)
+        _wait(app)
+        assert written[-1]["tab_current"] is True, "coming back shows it again"
+    finally:
+        publisher.shutdown()
+        pages.close()
+
+
 def test_a_failed_write_never_raises(tmp_path):
     from ui.services.mentor_dock_publisher import read_dock_file, write_dock_file
 
@@ -94,9 +127,13 @@ def test_the_desk_has_a_mentor_tab_that_publishes(app, monkeypatch):
         assert "Mentor" in names and names[0] == "Setups"
         written: list[dict] = []
         workspace.mentor_dock_publisher._writer = lambda _p, d: written.append(d)
+        window.trading_panel.set_setups_visible(True)
         workspace.tabs.setCurrentWidget(workspace.mentor_placeholder)
         workspace.mentor_dock_publisher.publish_now()
         assert written and written[-1]["tab_current"] is True
+        window.trading_panel.set_setups_visible(False)
+        workspace.mentor_dock_publisher.publish_now()
+        assert written[-1]["tab_current"] is False, "hiding the setups column hides the docked Mentor too"
         assert "Dock" in workspace.mentor_placeholder.hint.text()
     finally:
         window.close()

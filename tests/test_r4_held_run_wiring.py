@@ -23,6 +23,17 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
+
+@pytest.fixture(autouse=True)
+def _as_of_the_fixture_week(monkeypatch):
+    """The rows are from 2026-09; a bare "today" would age them out of the rolling window."""
+    import held_run_score
+
+    real = held_run_score._as_of_text
+    monkeypatch.setattr(
+        held_run_score, "_as_of_text", lambda value: real("2026-09-02" if value in (None, "") else value)
+    )
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 

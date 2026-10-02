@@ -770,6 +770,9 @@ D1_FEATURES_HISTORY_FILE = RUNTIME_DATA_DIR / "d1_features_history.csv"
 # p9 long setups (leader pullback, post-earnings drift) and their settled history; the scan runner is the only writer.
 LONG_SETUPS_FILE = RUNTIME_DATA_DIR / "long_setups.json"
 LONG_SETUPS_HISTORY_FILE = RUNTIME_DATA_DIR / "long_setups_history.json"
+# AVWAPE quick test (Setup Tracker, testing only) and its settled history; the scan runner is the only writer.
+AVWAPE_QUICK_TEST_FILE = RUNTIME_DATA_DIR / "avwape_quick_test.json"
+AVWAPE_QUICK_TEST_HISTORY_FILE = RUNTIME_DATA_DIR / "avwape_quick_test_history.json"
 # p9 runner dip watch: strong names near the earnings AVWAP; `long_setups_store` is the only writer.
 RUNNER_DIP_WATCH_FILE = RUNTIME_DATA_DIR / "runner_dip_watch.json"
 INTRADAY_BOUNCES_FILE = RUNTIME_DATA_DIR / "intraday_bounces.csv"

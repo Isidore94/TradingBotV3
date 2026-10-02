@@ -110,7 +110,9 @@ def test_missing_leaderboard_file_gives_no_stat(tmp_path):
     assert ew.read_stat(tmp_path / "absent.csv") is None
 
 
-def test_warm_cache_reads_board_and_history(tmp_path):
+def test_warm_cache_reads_board_and_history(tmp_path, monkeypatch):
+    # The cache keeps dates from yesterday on; pin the market day the dates below assume.
+    monkeypatch.setattr(ew, "market_today", lambda: date(2026, 9, 26))
     board = _write_board(
         tmp_path / "board.csv", [_row("3 to < 7", -2.0, 100), _row("7 to < 14", -5.0, 300)]
     )
