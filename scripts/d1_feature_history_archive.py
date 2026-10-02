@@ -106,7 +106,9 @@ UNDATED = "undated"
 #: Calendar days of run_date the live CSV keeps after a trim.
 DEFAULT_TRIM_KEEP_DAYS = 30
 #: CSV parse block. Bounded memory: one block (plus its parsed copy) at a time.
-CSV_BLOCK_BYTES = 16 << 20
+#: Measured on the 900 MB file (2026-10-02): 16 MB peaked at 1.3 GB RSS, 4 MB
+#: at ~0.8 GB for ~7 s more.
+CSV_BLOCK_BYTES = 4 << 20
 #: How long archive/trim wait for the writer's lock before refusing.
 LOCK_TIMEOUT_SECONDS = 60.0
 PARQUET_COMPRESSION = "zstd"
@@ -664,10 +666,21 @@ def archive(
     """
     csv_path, archive_dir = _paths(csv_path, archive_dir)
     started = time.monotonic()
-    with _locks(csv_path, archive_dir, lock_timeout):
-        result = _archive_locked(csv_path, archive_dir, block_bytes=block_bytes, now=now)
+    try:
+        with _locks(csv_path, archive_dir, lock_timeout):
+            result = _archive_locked(csv_path, archive_dir, block_bytes=block_bytes, now=now)
+    finally:
+        _release_memory()
     result["seconds"] = round(time.monotonic() - started, 3)
     return result
+
+
+def _release_memory() -> None:
+    """Hand arrow's pooled memory back: the night loads a 20 GB model after this."""
+    try:
+        pa.default_memory_pool().release_unused()
+    except Exception as exc:  # noqa: BLE001 - best effort only
+        _log.debug("d1 history archive: release_unused failed (%s)", exc)
 
 
 def _archive_locked(csv_path: Path, archive_dir: Path, *, block_bytes: int, now: datetime | None) -> dict[str, Any]:
@@ -970,9 +983,12 @@ def trim(
     csv_path, archive_dir = _paths(csv_path, archive_dir)
     today = today or date.today()
     read_header(csv_path)  # refuse before taking any lock when the file is unreadable
-    with _locks(csv_path, archive_dir, lock_timeout):
-        return _trim_locked(csv_path, archive_dir, keep_days=int(keep_days), today=today,
-                            apply=apply, block_bytes=block_bytes)
+    try:
+        with _locks(csv_path, archive_dir, lock_timeout):
+            return _trim_locked(csv_path, archive_dir, keep_days=int(keep_days), today=today,
+                                apply=apply, block_bytes=block_bytes)
+    finally:
+        _release_memory()
 
 
 def _trim_locked(
