@@ -196,6 +196,8 @@ class AlertChartReview(QWidget):
     # request to REVEAL, never to change what was recorded: the host still owns
     # every store, and nothing was removed to begin with.
     revealHiddenRequested = Signal()
+    # "N failed by 10:00 - show": reveal the charts the first-30 hold kept back.
+    revealFirst30Requested = Signal()
     scanReviewViewToggled = Signal()
     d1LevelAlertRequested = Signal(str, str, float, str)  # symbol, direction, level, candle date
     symbolRequested = Signal(str)  # type-a-ticker: chart it on demand
@@ -440,6 +442,16 @@ class AlertChartReview(QWidget):
         )
         self.hidden_button.clicked.connect(self.revealHiddenRequested)
 
+        # First-30 chart hold: "N wait for 10:00" while held, then
+        # "N failed by 10:00 - show" (a click shows the failed charts).
+        self.first30_button = QPushButton("")
+        self.first30_button.setObjectName("First30HeldButton")
+        self.first30_button.setFlat(True)
+        self.first30_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.first30_button.setVisible(False)
+        self.first30_button.clicked.connect(self._on_first30_clicked)
+        self._first30_failed = 0
+
         # AR-2B shares the existing verb row: ordinary D1 scan ideas are a
         # view choice, never a new alert state.  The host owns the backing
         # queue and tells this compact switch what is currently held.
@@ -648,6 +660,7 @@ class AlertChartReview(QWidget):
         row.addStretch(1)
         for widget in (
             self.hidden_button,
+            self.first30_button,
             self.scan_view_button,
             self.claimed_skipped_label,
             self.armed_summary,
@@ -1437,6 +1450,29 @@ class AlertChartReview(QWidget):
                 f"{count} hidden (inside yesterday's range / wrong side of VWAP or SMA"
                 " / at a wall) - show"
             )
+
+    def set_first30_counts(self, waiting: int = 0, failed: int = 0, tooltip: str = "") -> None:
+        """The first-30 hold's line: charts waiting for 10:00 and charts that failed."""
+        waiting = max(0, int(waiting or 0))
+        failed = max(0, int(failed or 0))
+        self._first30_failed = failed
+        parts = []
+        if waiting:
+            parts.append(f"{waiting} wait for 10:00")
+        if failed:
+            parts.append(f"{failed} failed by 10:00 - show")
+        self.first30_button.setText(" · ".join(parts))
+        self.first30_button.setVisible(bool(parts))
+        self.first30_button.setToolTip(
+            tooltip
+            or "Hide first 30 min: charts that came in 9:30-10:00 ET wait. At 10:00 each "
+            "shows only if its last 5-minute bar closed past its alert level. Nothing "
+            "was deleted. Click to show the ones that failed."
+        )
+
+    def _on_first30_clicked(self) -> None:
+        if self._first30_failed:
+            self.revealFirst30Requested.emit()
 
     def set_scan_review_view(self, *, show_all: bool, hidden_count: int = 0) -> None:
         """Reflect the AR-2B D1 scan view without owning its queue."""

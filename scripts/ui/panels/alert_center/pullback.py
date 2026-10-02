@@ -320,6 +320,7 @@ class PullbackWatchMixin:
                         bar_dt=result.confirm_bar_dt or moment,
                         message=h1_bounce_message(watch, result),
                         resolved_side=result.side,
+                        level=result.ema,
                         details={
                             "watch_id": watch.watch_id,
                             "reason": watch.reason,
@@ -904,6 +905,7 @@ class PullbackWatchMixin:
                         message=str(fire.get("message") or ""),
                         resolved_side=str(fire.get("side") or ""),
                         details=details,
+                        level=details.get("sma"),
                     )
                 )
         if updated:
