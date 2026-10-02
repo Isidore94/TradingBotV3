@@ -2,7 +2,7 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-10-02 PT (AVWAPE quick test, Mentor dock hide, date tests merged)
+**Updated:** 2026-10-02 PT (AVWAPE test + dock fix merged)
 
 - **Live on `main`:** rounds 1-2, p9 phases 1-4, p10 research lake + auto regimes (research
   only); rolling RRS, cutoff 1.0 (`TRADINGBOTV3_RRS_ENGINE=desk` = old); Movers tint + SMA
