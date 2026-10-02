@@ -61,6 +61,14 @@ def _claim_session_matches_the_fixture(monkeypatch):
 
     monkeypatch.setattr(claimed_picks, "current_session_date", lambda _now=None: "2026-09-14")
 
+    # Claims fade 10 trading days after their session; pin the fade clock to the fixture's week.
+    class _FixtureDate(claimed_picks.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 9, 17)
+
+    monkeypatch.setattr(claimed_picks, "date", _FixtureDate)
+
 
 CHIP_FAV = "favorite_setup"
 CHIP_HC = "high_conviction"
