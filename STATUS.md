@@ -2,7 +2,7 @@
 
 Overwrite, don't append. Under 3 KB. History is `git log`.
 
-**Updated:** 2026-10-02 PT (AVWAPE test + dock fix merged)
+**Updated:** 2026-10-02 PT (data compaction merged)
 
 - **Live on `main`:** rounds 1-2, p9 phases 1-4, p10 research lake + auto regimes (research
   only); rolling RRS, cutoff 1.0 (`TRADINGBOTV3_RRS_ENGINE=desk` = old); Movers tint + SMA
@@ -28,6 +28,14 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 - **Merged 2026-10-02:** AVWAPE quick test (Setup Tracker rows, both sides); docked Mentor
   hides off its desk page; plan-rule gate, shadow (#348). **Unmerged:**
   `claude/gemma4-thinking-high-2026-10-01`.
+- **Data compaction (merged 2026-10-02, trader: "lose nothing"):** D1 scan peak ~3.4 GB (was
+  ~15 GB), outputs byte-identical; lossless Parquet archive `d1_feature_history_archive.py`
+  (D1 history + bounce outcomes + candidates, night slot `history_pack`, 30-day trim built but
+  OFF until readers move to `read_history`); tracker detail archived before compaction;
+  candidates clean-up packs before it deletes. Gates #349-#351. Next: move the D1 history
+  readers to `read_history`, then switch trim on; bounce outcomes writer lock -> trim; tracker
+  gate #57 count (1/5 clean on 10-02); the ~half of old stripped tracker records whose replay
+  disagrees with the stored outcome (unexplained, report only).
 - **Night window:** 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435; app uses
   11436). Mini-PC's one local model: plan-rule gate (Kev-4B CPU). Host down: facts only;
   rerun a missed night with `--session <date> --force`. No builds/merges/tests 22:00-02:00 PT.
