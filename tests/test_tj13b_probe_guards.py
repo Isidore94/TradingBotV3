@@ -681,6 +681,9 @@ def test_the_weeknight_slate_is_e8c04f88s_set_moved_only_at_12_to_14():
         # Nightly permutation report (2026-09-30): pinned by `EXPECTED_SLOT_ORDER`
         # directly after `market_regime_daily` and set aside here.
         "permutation_report",
+        # D1 history packing (trader 2026-10-02): pinned by `EXPECTED_SLOT_ORDER`
+        # directly after `permutation_report` and set aside here.
+        "history_pack",
         # Trader 2026-09-30: `setup_keys_narration` joins the weeknight slate, pinned
         # by `EXPECTED_SLOT_ORDER` directly before `setup_research`; set aside here.
         "setup_keys_narration",

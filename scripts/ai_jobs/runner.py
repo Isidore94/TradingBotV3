@@ -1106,6 +1106,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         exit_note_fields,
         exit_windows_night,
         family_side_evidence,
+        history_pack,
         improvement_ideas,
         journal_auto_tag,
         lake_history_topup,
@@ -1493,6 +1494,24 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
                 "report, history and verdicts (deterministic, no model; shadow only)"
             ),
             max_attempts=2,
+        ),
+        # D1 history packing (trader 2026-10-02, "I want a solution where I lose
+        # nothing"): stage 1 directly after `permutation_report` and before the
+        # `market_story_rollups` -> `measured_report` -> `day_review_facts` chain,
+        # so no model is loaded while it streams the history CSV. Archive +
+        # verify only; the trim stays off (`history_pack.TRIM_SETTING`) until the
+        # CSV's readers move to `read_history`.
+        JobSlot(
+            name="history_pack",
+            goal="ops",
+            run=history_pack.run_history_pack,
+            reserve_minutes=10.0,
+            description=(
+                "Pack each registered history CSV (D1 features, bounce outcomes) into its lossless "
+                "monthly Parquet archive, verify it, and report live store sizes "
+                "(deterministic, no model; trim off)"
+            ),
+            max_attempts=3,
         ),
         # Packet WS-10D (2026-09-12), APPENDED at the END of the deterministic
         # stage, after `theta_pick_grading`, and it CLOSES the block. It reads

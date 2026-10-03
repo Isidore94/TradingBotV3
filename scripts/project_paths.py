@@ -767,6 +767,11 @@ AVWAP_SIGNALS_FILE = RUNTIME_DATA_DIR / "avwap_signals.csv"
 MASTER_AVWAP_ACTIVE_EVENTS_FILE = RUNTIME_DATA_DIR / "master_avwap_active_events.json"
 D1_FEATURES_FILE = RUNTIME_DATA_DIR / "d1_features.csv"
 D1_FEATURES_HISTORY_FILE = RUNTIME_DATA_DIR / "d1_features_history.csv"
+# Lossless monthly Parquet packing of the history CSV plus its manifest
+# (`d1_feature_history_archive.py`, created on first archive), and the night
+# `history_pack` slot's store-size report.
+D1_FEATURES_HISTORY_ARCHIVE_DIR = RUNTIME_DATA_DIR / "d1_features_history_archive"
+HISTORY_PACK_REPORT_FILE = RUNTIME_DATA_DIR / "history_pack_report.json"
 # p9 long setups (leader pullback, post-earnings drift) and their settled history; the scan runner is the only writer.
 LONG_SETUPS_FILE = RUNTIME_DATA_DIR / "long_setups.json"
 LONG_SETUPS_HISTORY_FILE = RUNTIME_DATA_DIR / "long_setups_history.json"
@@ -778,6 +783,11 @@ RUNNER_DIP_WATCH_FILE = RUNTIME_DATA_DIR / "runner_dip_watch.json"
 INTRADAY_BOUNCES_FILE = RUNTIME_DATA_DIR / "intraday_bounces.csv"
 INTRADAY_BOUNCE_CANDIDATES_FILE = RUNTIME_DATA_DIR / "intraday_bounce_candidates.csv"
 INTRADAY_BOUNCE_OUTCOMES_FILE = RUNTIME_DATA_DIR / "intraday_bounce_outcomes.csv"
+# Lossless monthly Parquet packing of the outcomes CSV (archive only: its
+# writer takes no lock, so it is never trimmed). See d1_feature_history_archive.
+INTRADAY_BOUNCE_OUTCOMES_ARCHIVE_DIR = RUNTIME_DATA_DIR / "intraday_bounce_outcomes_archive"
+# The candidates CSV's archive: its startup clean-up removes only rows proven here.
+INTRADAY_BOUNCE_CANDIDATES_ARCHIVE_DIR = RUNTIME_DATA_DIR / "intraday_bounce_candidates_archive"
 INTRADAY_BOUNCE_OUTCOME_STATE_FILE = RUNTIME_DATA_DIR / "intraday_bounce_outcome_state.json"
 # P1-4 4a shadow sidecar: the setup key per M5 event_id; `m5_setup_key_stamp` is the only writer.
 M5_SETUP_KEY_STAMPS_FILE = RUNTIME_DATA_DIR / "m5_setup_key_stamps.jsonl"
@@ -817,6 +827,9 @@ MASTER_AVWAP_SETUP_TRACKER_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_se
 # F3 step 1 (2026-09-04): the SQLite mirror of the tracker, one row per record, written
 # AFTER the JSON save and never read by the scanner yet (scripts/tracker_store.py).
 MASTER_AVWAP_SETUP_TRACKER_DB = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_tracker.sqlite"
+# The per-bar detail (daily_marks, scenario events) compaction strips from sealed tracker
+# records, archived and verified before the strip (scripts/tracker_detail_archive.py).
+SETUP_TRACKER_DETAIL_ARCHIVE_DB = PERSISTENT_RUNTIME_DATA_DIR / "setup_tracker_detail_archive.sqlite"
 # Small stamp of the last tracker write attempt (last good / last failed), read by Health + digest.
 SETUP_TRACKER_WRITE_STATE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "setup_tracker_write_state.json"
 MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_tracker_scoring_snapshot.json"

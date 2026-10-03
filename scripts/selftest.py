@@ -90,6 +90,9 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "outcome_semantics",
     "outcome_path",
     "setup_tracker_ledger",
+    # The tracker save archives sealed records' per-bar detail before compaction;
+    # a bundle missing it compacts nothing (records stay full size) rather than failing.
+    "tracker_detail_archive",
     "focus_membership_events",
     # WS-5D: the Watchlists page and the Focus store both import it at call
     # time, so a bundle missing it dies at the first watchlist edit.
@@ -254,6 +257,12 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     # imports keyring inside functions. Import only - no credential is read.
     "secret_store",
     "keyring.backends.Windows",
+    # 2026-10-02: the bounce bot's startup candidates clean-up imports the
+    # history archive (and through it pyarrow.csv / .parquet / .compute) inside
+    # `compact_bounce_candidates_csv`; a bundle without it would refuse the
+    # clean-up rather than fail at launch.
+    "d1_feature_history_archive",
+    "local_writer_lock",
     # the desk itself
     "ui.app",
     "ui.theme",

@@ -19,11 +19,9 @@ focus picks are never muted (the caller enforces that).
 
 from __future__ import annotations
 
-import csv
 import json
 import logging
 import os
-import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -716,20 +714,51 @@ NEAR_MISS_KEEP_DAYS = 30
 DEFAULT_EVENT_KEEP_DAYS = 365
 
 
+def candidates_archive_store(path: Path, archive_dir: Path | None = None):
+    """The history-archive store for a candidates CSV at ``path``.
+
+    The live file uses the registered store's archive folder; any other path
+    (a test, a copy) gets ``<stem>_archive`` beside it.
+    """
+    import d1_feature_history_archive as arc
+
+    registered = arc.registered_stores()["intraday_bounce_candidates"]
+    csv_path = Path(path)
+    if archive_dir is None:
+        same = os.path.normcase(os.path.abspath(csv_path)) == os.path.normcase(
+            os.path.abspath(registered.csv_path)
+        )
+        archive_dir = registered.archive_dir if same else csv_path.parent / f"{csv_path.stem}_archive"
+    return registered.with_paths(csv_path, archive_dir)
+
+
 def compact_bounce_candidates_csv(
     path: Path,
     *,
     max_age_days: int = DEFAULT_EVENT_KEEP_DAYS,
     near_miss_keep_days: int = NEAR_MISS_KEEP_DAYS,
     min_bytes_to_bother: int = 50_000_000,
+    archive_dir: Path | None = None,
 ) -> dict:
-    """Trim the candidates CSV with event-type-aware retention (streamed, atomic).
+    """Shrink the candidates CSV with event-type-aware retention - losing nothing.
 
-    ``near_miss`` rows older than ``near_miss_keep_days`` are dropped; all other
-    event types (confirmed/detected/invalidated/expired) keep ``max_age_days``.
-    Outcomes join by event_id against confirmed rows, so learning history is
-    preserved. Returns a summary dict; no-ops when the file is small or missing.
+    ``near_miss`` rows older than ``near_miss_keep_days`` leave the live file;
+    all other event types (confirmed/detected/invalidated/expired) keep
+    ``max_age_days``; a row with no trade_date leaves too. Exactly as before
+    (trader 2026-10-02, "lose nothing"), except that a row now leaves the live
+    file only after it is packed into the candidates' lossless archive and
+    proven cell for cell against it
+    (``d1_feature_history_archive.remove_rows``, under the writer's lock).
+    ``read_history(store="intraday_bounce_candidates")`` still returns every
+    row ever written, in order, with its exact text.
+
+    A pack or proof that fails removes nothing and returns ``compacted: False``
+    with the reason; the bot carries on either way. Returns a summary dict;
+    no-ops when the file is small or missing.
     """
+    import d1_feature_history_archive as arc
+    import pyarrow as pa
+
     csv_path = Path(path)
     try:
         size_before = csv_path.stat().st_size
@@ -737,55 +766,50 @@ def compact_bounce_candidates_csv(
         return {"compacted": False, "reason": "missing"}
     if size_before < int(min_bytes_to_bother):
         return {"compacted": False, "reason": "below size threshold", "bytes": size_before}
+    try:
+        header = arc.read_header(csv_path)
+    except arc.ArchiveRefused as exc:
+        # e.g. an empty file, or one that starts with a byte-order mark.
+        return {"compacted": False, "reason": f"header not usable ({exc}); nothing removed", "bytes": size_before}
+    if "trade_date" not in header or "event_type" not in header:
+        return {"compacted": False, "reason": "missing trade_date/event_type column"}
 
     today = datetime.now().date()
     cutoff_default = (today - timedelta(days=int(max_age_days))).isoformat()
     cutoff_near_miss = (today - timedelta(days=int(near_miss_keep_days))).isoformat()
-    kept = dropped = 0
-    fd, temp_name = tempfile.mkstemp(prefix=csv_path.stem, suffix=".csv", dir=str(csv_path.parent))
+
+    def leaves(row: dict) -> bool:
+        trade_date = row["trade_date"]
+        event_type = row["event_type"].strip().lower()
+        cutoff = cutoff_near_miss if event_type == "near_miss" else cutoff_default
+        return not (trade_date and trade_date >= cutoff)
+
+    store = candidates_archive_store(csv_path, archive_dir)
     try:
-        with os.fdopen(fd, "w", newline="", encoding="utf-8") as out_handle, open(
-            csv_path, "r", newline="", encoding="utf-8-sig"
-        ) as in_handle:
-            reader = csv.reader(in_handle)
-            writer = csv.writer(out_handle)
-            header = next(reader, None)
-            if header is None:
-                return {"compacted": False, "reason": "empty"}
-            writer.writerow(header)
-            try:
-                date_idx = header.index("trade_date")
-                type_idx = header.index("event_type")
-            except ValueError:
-                return {"compacted": False, "reason": "missing trade_date/event_type column"}
-            for row in reader:
-                trade_date = row[date_idx] if date_idx < len(row) else ""
-                event_type = (row[type_idx] if type_idx < len(row) else "").strip().lower()
-                cutoff = cutoff_near_miss if event_type == "near_miss" else cutoff_default
-                if trade_date and trade_date >= cutoff:
-                    writer.writerow(row)
-                    kept += 1
-                else:
-                    dropped += 1
-        os.replace(temp_name, csv_path)
-        temp_name = None
-    finally:
-        if temp_name and os.path.exists(temp_name):
-            try:
-                os.unlink(temp_name)
-            except OSError:
-                # A locked staging file (cloud sync, AV scanner) must not mask the
-                # real failure from the try block, and must not abort a successful
-                # compaction either. project_paths.sweep_stale_atomic_write_temps
-                # reclaims whatever is left behind on the next startup.
-                logging.warning("Could not remove staging file %s; left for the startup sweep.", temp_name)
+        result = arc.remove_rows(store=store, drop=leaves, columns=["trade_date", "event_type"])
+    except arc.ArchiveError as exc:
+        logging.warning(
+            "Candidates clean-up removed nothing: the rows are not proven in the archive (%s).", exc
+        )
+        return {"compacted": False, "reason": f"not proven in the archive; nothing removed ({exc})",
+                "bytes": size_before}
+    except (pa.ArrowInvalid, UnicodeDecodeError) as exc:
+        # A row the strict CSV reader cannot read (e.g. fewer cells than the
+        # header). The old clean-up skipped past such rows; this one cannot
+        # pack them, so it removes nothing and the rest of startup maintenance
+        # (the learning refresh) still runs.
+        logging.warning("Candidates clean-up removed nothing: the file could not be read (%s).", exc)
+        return {"compacted": False, "reason": f"the file could not be read ({exc}); nothing removed",
+                "bytes": size_before}
 
     size_after = csv_path.stat().st_size
     logging.info(
-        "Compacted %s: kept %s rows, dropped %s (near_miss < %s, others < %s); %.1fMB -> %.1fMB",
+        "Compacted %s: packed %s new rows, kept %s, removed %s proven rows (near_miss < %s, others < %s); "
+        "%.1fMB -> %.1fMB",
         csv_path.name,
-        kept,
-        dropped,
+        result["archive"].get("archived_rows", 0),
+        result["kept"],
+        result["removed"],
         cutoff_near_miss,
         cutoff_default,
         size_before / 1e6,
@@ -793,8 +817,10 @@ def compact_bounce_candidates_csv(
     )
     return {
         "compacted": True,
-        "kept": kept,
-        "dropped": dropped,
+        "kept": result["kept"],
+        "dropped": result["removed"],
+        "archived": result["archive"].get("archived_rows", 0),
+        "archive_dir": str(store.archive_dir),
         "cutoff": cutoff_default,
         "near_miss_cutoff": cutoff_near_miss,
         "bytes_before": size_before,

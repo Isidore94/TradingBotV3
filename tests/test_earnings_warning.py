@@ -67,10 +67,27 @@ def test_unknown_date_is_silent(days):
     assert ew.short_into_earnings(days, "SHORT", STAT) == ""
 
 
-@pytest.mark.parametrize("side", ["LONG", "long", "", None])
-def test_long_side_is_silent(side):
+@pytest.mark.parametrize("side", ["", None, "BOTH", "FLAT"])
+def test_unknown_side_is_silent(side):
     assert ew.short_into_earnings(5, side, STAT) == ""
     assert ew.badge_text(5, side) == ""
+    assert ew.is_warned(5, side) is False
+
+
+@pytest.mark.parametrize("side", ["LONG", "long", " Long "])
+@pytest.mark.parametrize("days", [0, 3, 14])
+def test_long_inside_window_is_warned_without_the_short_stat(side, days):
+    assert ew.is_warned(days, side) is True
+    assert ew.short_into_earnings(days, side, STAT) == f"earnings in {days} d - long into earnings"
+    assert ew.short_into_earnings(days, side, None) == f"earnings in {days} d - long into earnings"
+    assert ew.badge_text(days, side) == f"ER {days}d"
+
+
+@pytest.mark.parametrize("days", [15, 30, -1, None, "", "nan"])
+def test_long_outside_window_or_unknown_is_silent(days):
+    assert ew.short_into_earnings(days, "LONG", STAT) == ""
+    assert ew.badge_text(days, "LONG") == ""
+    assert ew.is_warned(days, "LONG") is False
 
 
 def test_lowercase_short_counts():
@@ -131,7 +148,9 @@ def test_warm_cache_reads_board_and_history(tmp_path, monkeypatch):
     assert ew.warning_for_symbol("MU", "SHORT", today=today) == (
         "earnings in 4 d - shorts 3-14 d before earnings: -4.2% vs SPY (60 d)"
     )
-    assert ew.warning_for_symbol("MU", "LONG", today=today) == ""
+    assert ew.warning_for_symbol("MU", "LONG", today=today) == "earnings in 4 d - long into earnings"
+    assert ew.warning_for_symbol("MU", "", today=today) == ""
+    assert ew.warning_for_symbol("NOPE", "LONG", today=today) == ""
     assert ew.warning_for_symbol("NOPE", "SHORT", today=today) == ""
     # An unchanged pair of files is not re-read.
     assert ew.warm_cache(board, history) is False

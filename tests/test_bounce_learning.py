@@ -442,17 +442,22 @@ def test_compact_candidates_csv_locked_staging_file_does_not_mask_real_error(tmp
     monkeypatch.setattr(_os, "replace", _boom)
     monkeypatch.setattr(_os, "unlink", _locked)
 
+    before = path.read_bytes()
     with pytest.raises(RuntimeError, match="the real failure"):
         learning.compact_bounce_candidates_csv(path, min_bytes_to_bother=1)
 
     monkeypatch.undo()
 
-    # The orphan is deliberately left behind: reclaiming it is the startup
-    # sweep's job (project_paths.sweep_stale_atomic_write_temps). This function's
-    # obligation is only to surface the original error rather than the unlink's.
+    # 2026-10-02 (lossless clean-up, trader's yes): the clean-up now packs the
+    # rows into `candidates_archive/` BEFORE it removes anything, so the first
+    # replace that fails is the archive's own and no staging CSV is ever made.
+    # The obligation is unchanged - the original error surfaces, not the
+    # unlink's - and now also: the live file is untouched and no staging CSV
+    # is left beside it (the archive folder is the only new entry).
+    assert path.read_bytes() == before
     staged = [p.name for p in tmp_path.iterdir() if p.name != "candidates.csv"]
-    assert len(staged) == 1, f"expected exactly one leaked staging file, got {staged}"
-    assert staged[0].startswith("candidates") and staged[0].endswith(".csv")
+    assert staged == ["candidates_archive"], staged
+    assert not [p for p in tmp_path.iterdir() if p.is_file() and p.name != "candidates.csv"]
 
 
 def test_priority_watchlist_emphasis_cycle_logic():

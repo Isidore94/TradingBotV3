@@ -1,6 +1,6 @@
-"""Earnings warning on SHORT setups (S10b). Display only.
+"""Earnings warning on SHORT and LONG setups (S10b). Display only.
 
-A SHORT within 0-14 calendar days of its next earnings date gets one warning
+A SHORT or LONG within 0-14 calendar days of its next earnings date gets one warning
 line, with the scan-factor leaderboard's measured edge for shorts 3-14 days
 before earnings (SHORT, horizon 5, SPY-relative). It never hides, sorts or
 mutes anything. Unknown days = no warning, never a guess.
@@ -26,6 +26,7 @@ from typing import Any
 WARN_MAX_DAYS = 14
 FACTOR_KEY = "days_to_next_earnings"
 STAT_SIDE = "SHORT"
+WARN_SIDES = ("SHORT", "LONG")
 STAT_HORIZON = "5"
 #: The leaderboard buckets that make up "3-14 d before earnings".
 STAT_BUCKETS = ("3 to < 7", "7 to < 14")
@@ -54,8 +55,8 @@ def _days_or_none(value: Any) -> int | None:
 
 
 def is_warned(days_to_next_earnings: Any, side: Any) -> bool:
-    """True for a SHORT with a known next earnings date 0-14 days out."""
-    if str(side or "").strip().upper() != "SHORT":
+    """True for a SHORT or LONG with a known next earnings date 0-14 days out."""
+    if str(side or "").strip().upper() not in WARN_SIDES:
         return False
     days = _days_or_none(days_to_next_earnings)
     return days is not None and 0 <= days <= WARN_MAX_DAYS
@@ -68,6 +69,8 @@ def short_into_earnings(
     if not is_warned(days_to_next_earnings, side):
         return ""
     days = _days_or_none(days_to_next_earnings)
+    if str(side or "").strip().upper() == "LONG":
+        return f"earnings in {days} d - long into earnings"
     if stat is None:
         return f"earnings in {days} d - short into earnings"
     return (
@@ -283,7 +286,7 @@ def cached_days_to_next_earnings(symbol: Any, *, today: date | None = None) -> i
 
 def warning_for_symbol(symbol: Any, side: Any, *, today: date | None = None) -> str:
     """The warning line for a symbol and side from memory only ("" when none)."""
-    if str(side or "").strip().upper() != "SHORT":
+    if str(side or "").strip().upper() not in WARN_SIDES:
         return ""
     request_warm()
     return short_into_earnings(

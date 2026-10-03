@@ -1,0 +1,53 @@
+{
+ "acquired_at": "2026-10-02T20:30:00+00:00",
+ "as_of": "2026-10-02T20:30:00+00:00",
+ "expected_keys": [
+  "expected_outputs"
+ ],
+ "expected_outputs": {
+  "scan_factor_counts": {
+   "leaderboard_count": 1703,
+   "observation_count": 2043
+  },
+  "sha256": {
+   "scan_factor_leaderboard": "757f143f34208b6fcc55740b1c64f4e41f9143c98b294f76b42a1aa6288cafa0",
+   "scan_factor_observations": "08bc19b20366ab04edbaca83a0d03adc3f82334411d7e4ed9935d186d8a35e15",
+   "session_horizon_outcomes": "6402c16ce7e345f5f6d2fdaa412ffe496096eea61c2c19be3157d2fc2446426a",
+   "tier_catch_rate": "7025afa572fcabaf8239e05737232d5cd5be320485fbca143a43387d3574463b",
+   "tier_list": "173724dcd7c46ebc9d8bb7bd2a7944d860260691db013da78839140913e6f5dc",
+   "tier_outcomes": "9d05acfb9f6e7f312f8745b5a1bf2b5b6dc3074eec18b716aaed07607909fbe2",
+   "tier_performance": "c5d5c60af0c20a8ca7a0bef7c233b0bb73ebba7ff41a3a7e4794137f2ded9a05"
+  },
+  "tier_tracker_counts": {
+   "session_horizon_collapsed_same_session": 1075,
+   "session_horizon_dropped_duplicates": 0,
+   "session_horizon_measured_count": 308,
+   "session_horizon_outcome_count": 1420,
+   "tier_catch_rate_count": 12,
+   "tier_outcome_count": 823,
+   "tier_performance_count": 36,
+   "tier_pick_count": 10
+  }
+ },
+ "feature_version": "legacy export_scan_factor_views + export_bot_tier_tracker_views at main 3168c0b6",
+ "history_input": {
+  "fixture_file": "scan_factor_export_memory_v1/history.csv.gz",
+  "frozen_closes_for": "every other sorted symbol has its own last_close per scan date as a daily bar; the rest have none",
+  "frozen_last_completed_session": "2026-10-02",
+  "frozen_now": "2026-10-02T16:30:00",
+  "frozen_spy_closes": "400 + (i % 7) * 1.25 - i * 0.1 over the sorted fixture dates",
+  "history_csv_gz_sha256": "4defe8630b4213f9c3917ca651620a41d361db90b0079f3f88f3f720717b57a0",
+  "history_csv_sha256": "cbfae4ad9b92a869ecf9915ab63c657f4dd65d4c3fee18c0a902eedc4d4909f8",
+  "line_count": 2685,
+  "source": "verbatim lines of a COPY of C:/TradingBotData/data/runtime/d1_features_history.csv (sha256 de431f8f74...3c50da, 211,005 rows x 300 columns, taken 2026-10-02): the header plus every row of the 20 symbols random.Random(20261002).sample(sorted symbols, 20) picks"
+ },
+ "intentional_difference": "",
+ "numeric_tolerance": 0.0,
+ "provider_assumptions": "no provider: the clock, the last completed session, the cached SPY closes and the caller's daily closes are frozen by the test",
+ "raw_input_keys": [
+  "history_input"
+ ],
+ "raw_input_sha256": "0d683125ec73ebb7c2331d3333e135d0ddebda4f726b64e2fc278c48ac0f0977",
+ "schema": "scan_factor_export_memory_v1",
+ "universe_version": "20 whole symbols sampled from the live D1 feature history, 2026-03-17..2026-10-02"
+}

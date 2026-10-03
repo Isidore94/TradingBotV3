@@ -11885,6 +11885,132 @@ def _scan_factor_row_id(row: pd.Series | dict) -> str:
     return f"{symbol}:{scan_date}:{suffix}".rstrip(":")
 
 
+#: The columns `_prepare_scan_factor_history_frame` adds, in the order it adds them.
+_SCAN_FACTOR_PREPARED_COLUMNS = (
+    "_input_order",
+    "_symbol",
+    "_scan_date_dt",
+    "_scan_date_text",
+    "_entry_close",
+    "_side",
+    "_run_id_text",
+    "_run_timestamp_text",
+    "_scan_row_id",
+)
+
+#: Every D1 feature-history column the scan-factor and tier-tracker exports
+#: read, including the session-horizon export they hand the same frame to
+#: (`session_horizon_outcomes` and `long_study_families`). The exports load
+#: only these; the full 300-column file is ~9 GB once boxed. A reader that
+#: starts using another history column must add it here, or it reads None -
+#: `test_scan_factor_export_memory` compares the exports against the builders
+#: fed the full-width file to catch exactly that.
+SCAN_FACTOR_HISTORY_COLUMNS = frozenset(
+    {
+        # the row identity, the scan date, the entry close and the side
+        "symbol",
+        "last_trade_date",
+        "run_date",
+        "last_close",
+        "side",
+        "run_id",
+        "run_timestamp",
+        "watchlist_label",
+        # tier picks / outcomes (`tier_for_tracker_row` and the row fields)
+        "assigned_tier",
+        "priority_bucket",
+        "priority_score",
+        "setup_family",
+        "favorite_zone",
+        "current_band_zone",
+        "trend_20d",
+        # session-horizon export and its study families
+        "perm_strength_filter",
+        "rs_vs_industry",
+        "pct_from_current_vwap",
+        "sector",
+        "spy_above_sma20",
+    }
+    | set(SCAN_FACTOR_CATEGORICAL_FIELDS)
+    | set(SCAN_FACTOR_BOOL_FIELDS)
+    | set(SCAN_FACTOR_LIST_FIELDS)
+    | set(SCAN_FACTOR_NUMERIC_FIELDS)
+)
+
+
+def _history_rows_fit_header(history_path: Path) -> bool:
+    """True when no data row has more fields than the header.
+
+    `pd.read_csv(usecols=...)` silently DROPS the extra fields of a too-wide
+    row, where the full read raises `ParserError` - the error that surfaced the
+    2026-08-27 corruption. Anything this scan cannot vouch for answers False,
+    and the caller falls back to the full read, which behaves exactly as before.
+    """
+    try:
+        with open(history_path, newline="", encoding="utf-8") as handle:
+            reader = csv.reader(handle)
+            header = next(reader, None)
+            if not header:
+                return False
+            width = len(header)
+            return all(len(row) <= width for row in reader)
+    except Exception:
+        return False
+
+
+def _read_scan_factor_history(history_path: Path) -> pd.DataFrame:
+    """The D1 feature history, holding only `SCAN_FACTOR_HISTORY_COLUMNS`.
+
+    Each column's values and dtype are what the full read gives it: with
+    `low_memory=False` pandas infers every column from the whole column alone.
+    """
+    if _history_rows_fit_header(history_path):
+        return pd.read_csv(
+            history_path,
+            low_memory=False,
+            usecols=lambda column: column in SCAN_FACTOR_HISTORY_COLUMNS,
+        )
+    history_df = pd.read_csv(history_path, low_memory=False)
+    return history_df[[column for column in history_df.columns if column in SCAN_FACTOR_HISTORY_COLUMNS]]
+
+
+#: The prepared-frame fields `_scan_factor_items_from_row` reads, plus the row id.
+_SCAN_FACTOR_ITEM_FIELDS = (
+    "_scan_row_id",
+    *SCAN_FACTOR_CATEGORICAL_FIELDS,
+    *SCAN_FACTOR_BOOL_FIELDS,
+    *SCAN_FACTOR_LIST_FIELDS,
+    *SCAN_FACTOR_NUMERIC_FIELDS,
+)
+
+
+def _scan_factor_source_rows(
+    frame: pd.DataFrame,
+    scan_row_ids,
+    *,
+    columns: tuple[str, ...] | None = None,
+) -> dict[str, dict]:
+    """`{_scan_row_id: row dict}` for the WANTED scan rows of a prepared frame.
+
+    The same dict `{str(row["_scan_row_id"]): row for row in frame.to_dict("records")}`
+    gave for those ids, without boxing every row of the history to look up a
+    few. `columns` narrows each dict to the fields its reader uses.
+    """
+    wanted = {str(key) for key in scan_row_ids if key}
+    if not wanted or frame.empty or "_scan_row_id" not in frame.columns:
+        return {}
+    mask = frame["_scan_row_id"].map(lambda value: str(value or "")).isin(wanted).to_numpy()
+    if columns is None:
+        subset = frame[mask]
+    else:
+        subset = frame.loc[mask, [column for column in columns if column in frame.columns]]
+    return {
+        str(row.get("_scan_row_id") or ""): row
+        for row in subset.to_dict("records")
+        if str(row.get("_scan_row_id") or "")
+    }
+
+
 def _prepare_scan_factor_history_frame(history_df: pd.DataFrame | None) -> pd.DataFrame:
     if history_df is None or not isinstance(history_df, pd.DataFrame) or history_df.empty:
         return pd.DataFrame()
@@ -11894,7 +12020,16 @@ def _prepare_scan_factor_history_frame(history_df: pd.DataFrame | None) -> pd.Da
     if "last_trade_date" not in history_df.columns and "run_date" not in history_df.columns:
         return pd.DataFrame()
 
-    frame = history_df.copy()
+    # MEMORY (2026-10-02): the filter, sort and de-dupe run on the few columns
+    # they read, and only the rows that survive are copied at full width. The
+    # live history is ~211k rows and ~48k survive; copying all of it first,
+    # twice, was most of a 9 GB spike. Same rows, same order, same columns.
+    key_columns = [
+        column
+        for column in ("symbol", "last_trade_date", "run_date", "last_close", "side", "run_id", "run_timestamp")
+        if column in history_df.columns
+    ]
+    frame = history_df[key_columns].copy()
     frame["_input_order"] = range(len(frame))
     frame["_symbol"] = frame["symbol"].apply(lambda value: _scan_factor_text(value).upper())
     date_source = frame["last_trade_date"] if "last_trade_date" in frame.columns else frame["run_date"]
@@ -11926,7 +12061,11 @@ def _prepare_scan_factor_history_frame(history_df: pd.DataFrame | None) -> pd.Da
     )
     frame.drop_duplicates(["_symbol", "_scan_date_text"], keep="last", inplace=True)
     frame["_scan_row_id"] = frame.apply(_scan_factor_row_id, axis=1)
-    return frame
+
+    prepared = history_df.iloc[frame["_input_order"].to_numpy()].copy()
+    for column in _SCAN_FACTOR_PREPARED_COLUMNS:
+        prepared[column] = frame[column].set_axis(prepared.index)
+    return prepared
 
 
 def _cached_spy_closes() -> dict[str, float]:
@@ -11978,8 +12117,11 @@ def build_scan_factor_observation_rows(
     history_df: pd.DataFrame | None,
     *,
     horizons: tuple[int, ...] = SCAN_FACTOR_HORIZONS,
+    prepared_frame: pd.DataFrame | None = None,
 ) -> list[dict]:
-    frame = _prepare_scan_factor_history_frame(history_df)
+    """`prepared_frame` is `_prepare_scan_factor_history_frame(history_df)`, when
+    the caller already holds it - an export prepares once and shares it."""
+    frame = prepared_frame if prepared_frame is not None else _prepare_scan_factor_history_frame(history_df)
     if frame.empty:
         return []
 
@@ -11999,8 +12141,31 @@ def build_scan_factor_observation_rows(
         benchmark_closes = _cached_spy_closes()
 
     normalized_horizons = tuple(sorted({int(horizon) for horizon in horizons if int(horizon) > 0}))
+    # Only the fields the loop below reads are boxed into dicts (the row id
+    # fallback's included), not every history column.
+    record_columns = [
+        column
+        for column in (
+            "_symbol",
+            "_scan_date_dt",
+            "_scan_date_text",
+            "_entry_close",
+            "_side",
+            "_scan_row_id",
+            "_run_id_text",
+            "_run_timestamp_text",
+            "symbol",
+            "side",
+            "last_trade_date",
+            "run_id",
+            "run_timestamp",
+            "run_date",
+            "watchlist_label",
+        )
+        if column in frame.columns
+    ]
     rows = []
-    for symbol, symbol_frame in frame.groupby("_symbol", sort=True):
+    for symbol, symbol_frame in frame[record_columns].groupby("_symbol", sort=True):
         symbol_frame = symbol_frame.sort_values("_scan_date_dt").reset_index(drop=True)
         records = symbol_frame.to_dict("records")
         for idx, entry in enumerate(records):
@@ -12097,11 +12262,16 @@ def build_scan_factor_leaderboard_rows(
     lookback_days: int = SCAN_FACTOR_LOOKBACK_DAYS,
     min_observations: int = SCAN_FACTOR_MIN_OBSERVATIONS,
     reference_date: date | datetime | str | None = None,
+    prepared_frame: pd.DataFrame | None = None,
 ) -> list[dict]:
-    observations = observation_rows if observation_rows is not None else build_scan_factor_observation_rows(history_df)
+    """`prepared_frame`: see `build_scan_factor_observation_rows`."""
+    frame = prepared_frame if prepared_frame is not None else _prepare_scan_factor_history_frame(history_df)
+    if observation_rows is None:
+        observations = build_scan_factor_observation_rows(history_df, prepared_frame=frame)
+    else:
+        observations = observation_rows
     if not observations:
         return []
-    frame = _prepare_scan_factor_history_frame(history_df)
     if frame.empty:
         return []
 
@@ -12160,20 +12330,31 @@ def build_scan_factor_leaderboard_rows(
     if recent_obs.empty:
         return []
 
-    source_rows = {
-        str(row.get("_scan_row_id") or ""): row
-        for row in frame.to_dict("records")
-        if str(row.get("_scan_row_id") or "")
-    }
+    recent_obs_records = recent_obs.to_dict("records")
+    # Only the scan rows inside the window, and only the fields
+    # `_scan_factor_items_from_row` reads.
+    source_rows = _scan_factor_source_rows(
+        frame,
+        (str(obs.get("scan_row_id") or "") for obs in recent_obs_records),
+        columns=_SCAN_FACTOR_ITEM_FIELDS,
+    )
     baseline_map = {
         (int(group_key[0]), str(group_key[1])): _scan_factor_baseline_summary(group_df)
         for group_key, group_df in recent_obs.groupby(["horizon_sessions", "side"], dropna=False)
     }
 
-    factor_observations = []
+    # One row per (observation, factor), in observation order then factor
+    # order. MEMORY (2026-10-02): this used to be one merged dict per pair -
+    # millions of 30-key dicts on the live history, the bulk of a 9 GB spike.
+    # It is built column-wise now, holding only the observation fields the
+    # loop below reads; the rows, their order and each column's dtype are
+    # what the dicts produced.
+    factor_fields = ("factor_key", "factor_group", "factor_label", "value_kind", "value_label")
+    obs_positions: list[int] = []
+    factor_values: dict[str, list] = {field: [] for field in factor_fields}
     # One scan row feeds up to four horizons; its factor list is computed once.
     factor_items_by_row_id: dict[str, list[dict]] = {}
-    for obs in recent_obs.to_dict("records"):
+    for position, obs in enumerate(recent_obs_records):
         scan_row_id = str(obs.get("scan_row_id") or "")
         source_row = source_rows.get(scan_row_id)
         if not source_row:
@@ -12183,13 +12364,33 @@ def build_scan_factor_leaderboard_rows(
             factor_items = _scan_factor_items_from_row(source_row)
             factor_items_by_row_id[scan_row_id] = factor_items
         for factor in factor_items:
-            merged = dict(obs)
-            merged.update(factor)
-            factor_observations.append(merged)
-    if not factor_observations:
+            obs_positions.append(position)
+            for field in factor_fields:
+                factor_values[field].append(factor[field])
+    del recent_obs_records, source_rows, factor_items_by_row_id
+    if not obs_positions:
         return []
 
-    factor_df = pd.DataFrame(factor_observations)
+    obs_columns = [
+        column
+        for column in (
+            "observation_id",
+            "horizon_sessions",
+            "side",
+            "symbol",
+            "scan_date",
+            "future_scan_date",
+            "side_return_pct",
+            "raw_return_pct",
+            "spy_relative_side_return_pct",
+            "win",
+        )
+        if column in recent_obs.columns
+    ]
+    factor_df = recent_obs[obs_columns].iloc[obs_positions].reset_index(drop=True)
+    del obs_positions
+    for field in factor_fields:
+        factor_df[field] = factor_values.pop(field)
     generated_at = datetime.now().isoformat(timespec="seconds")
     window_start = window_start_ts.strftime("%Y-%m-%d")
     window_end = window_end_ts.strftime("%Y-%m-%d")
@@ -12349,14 +12550,17 @@ def export_scan_factor_views(
         _write_scan_factor_csv(leaderboard_path, [], SCAN_FACTOR_LEADERBOARD_COLUMNS)
         return {"observation_count": 0, "leaderboard_count": 0}
 
-    history_df = pd.read_csv(history_path, low_memory=False)
-    observation_rows = build_scan_factor_observation_rows(history_df)
+    history_df = _read_scan_factor_history(history_path)
+    prepared_frame = _prepare_scan_factor_history_frame(history_df)
+    observation_rows = build_scan_factor_observation_rows(history_df, prepared_frame=prepared_frame)
     leaderboard_rows = build_scan_factor_leaderboard_rows(
         history_df,
         observation_rows,
         lookback_days=lookback_days,
         min_observations=min_observations,
+        prepared_frame=prepared_frame,
     )
+    del prepared_frame
     _write_scan_factor_csv(observations_path, observation_rows, SCAN_FACTOR_OBSERVATION_COLUMNS)
     _write_scan_factor_csv(leaderboard_path, leaderboard_rows, SCAN_FACTOR_LEADERBOARD_COLUMNS)
     result = {
@@ -12548,8 +12752,11 @@ def _format_positive_scan_factor_matches(matches: list[dict], *, limit: int = 8)
 def build_bot_tier_pick_rows(
     history_df: pd.DataFrame | None,
     leaderboard_rows: list[dict] | None = None,
+    *,
+    prepared_frame: pd.DataFrame | None = None,
 ) -> list[dict]:
-    frame = _prepare_scan_factor_history_frame(history_df)
+    """`prepared_frame`: see `build_scan_factor_observation_rows`."""
+    frame = prepared_frame if prepared_frame is not None else _prepare_scan_factor_history_frame(history_df)
     if frame.empty:
         return []
     latest_scan_date = frame["_scan_date_dt"].max()
@@ -12603,18 +12810,23 @@ def build_bot_tier_outcome_rows(
     history_df: pd.DataFrame | None,
     observation_rows: list[dict] | None = None,
     leaderboard_rows: list[dict] | None = None,
+    *,
+    prepared_frame: pd.DataFrame | None = None,
 ) -> list[dict]:
-    frame = _prepare_scan_factor_history_frame(history_df)
+    """`prepared_frame`: see `build_scan_factor_observation_rows`."""
+    frame = prepared_frame if prepared_frame is not None else _prepare_scan_factor_history_frame(history_df)
     if frame.empty:
         return []
-    observations = observation_rows if observation_rows is not None else build_scan_factor_observation_rows(history_df)
+    if observation_rows is None:
+        observations = build_scan_factor_observation_rows(history_df, prepared_frame=frame)
+    else:
+        observations = observation_rows
     if not observations:
         return []
-    source_rows = {
-        str(row.get("_scan_row_id") or ""): row
-        for row in frame.to_dict("records")
-        if str(row.get("_scan_row_id") or "")
-    }
+    source_rows = _scan_factor_source_rows(
+        frame,
+        (str(obs.get("scan_row_id") or "") for obs in observations if isinstance(obs, dict)),
+    )
     positive_factor_groups = _positive_scan_factor_groups(leaderboard_rows)
     rows = []
     for obs in observations:
@@ -12963,8 +13175,10 @@ def build_bot_tier_catch_rate_rows(
     *,
     lookback_days: int = SCAN_FACTOR_LOOKBACK_DAYS,
     reference_date: date | datetime | str | None = None,
+    prepared_frame: pd.DataFrame | None = None,
 ) -> list[dict]:
-    frame = _prepare_scan_factor_history_frame(history_df)
+    """`prepared_frame`: see `build_scan_factor_observation_rows`."""
+    frame = prepared_frame if prepared_frame is not None else _prepare_scan_factor_history_frame(history_df)
     observations = observation_rows or []
     positive_groups = _positive_scan_factor_groups(leaderboard_rows)
     if frame.empty or not observations or not positive_groups:
@@ -12990,13 +13204,14 @@ def build_bot_tier_catch_rate_rows(
     if obs_df.empty:
         return []
 
-    source_rows = {
-        str(row.get("_scan_row_id") or ""): row
-        for row in frame.to_dict("records")
-        if str(row.get("_scan_row_id") or "")
-    }
+    obs_records = obs_df.to_dict("records")
+    # Only the scan rows inside the window are boxed.
+    source_rows = _scan_factor_source_rows(
+        frame,
+        (str(obs.get("scan_row_id") or "") for obs in obs_records),
+    )
     opportunities = []
-    for obs in obs_df.to_dict("records"):
+    for obs in obs_records:
         source_row = source_rows.get(str(obs.get("scan_row_id") or ""))
         if not source_row:
             continue
@@ -13107,18 +13322,22 @@ def export_bot_tier_tracker_views(
         return {"tier_pick_count": 0, "tier_outcome_count": 0, "tier_performance_count": 0, "tier_catch_rate_count": 0}
 
     if history_df is None:
-        history_df = pd.read_csv(history_path, low_memory=False)
+        history_df = _read_scan_factor_history(history_path)
+    prepared_frame = _prepare_scan_factor_history_frame(history_df)
     if observation_rows is None:
-        observation_rows = build_scan_factor_observation_rows(history_df)
+        observation_rows = build_scan_factor_observation_rows(history_df, prepared_frame=prepared_frame)
     if leaderboard_rows is None:
         leaderboard_rows = build_scan_factor_leaderboard_rows(
             history_df,
             observation_rows,
             lookback_days=lookback_days,
             min_observations=min_observations,
+            prepared_frame=prepared_frame,
         )
-    tier_pick_rows = build_bot_tier_pick_rows(history_df, leaderboard_rows)
-    tier_outcome_rows = build_bot_tier_outcome_rows(history_df, observation_rows, leaderboard_rows)
+    tier_pick_rows = build_bot_tier_pick_rows(history_df, leaderboard_rows, prepared_frame=prepared_frame)
+    tier_outcome_rows = build_bot_tier_outcome_rows(
+        history_df, observation_rows, leaderboard_rows, prepared_frame=prepared_frame
+    )
     tier_performance_rows = build_bot_tier_performance_rows(
         tier_outcome_rows,
         observation_rows,
@@ -13129,7 +13348,9 @@ def export_bot_tier_tracker_views(
         observation_rows,
         leaderboard_rows,
         lookback_days=lookback_days,
+        prepared_frame=prepared_frame,
     )
+    del prepared_frame
     _write_scan_factor_csv(tier_list_path, tier_pick_rows, TIER_LIST_COLUMNS)
     _write_scan_factor_csv(tier_outcomes_path, tier_outcome_rows, TIER_OUTCOME_COLUMNS)
     _write_scan_factor_csv(tier_performance_path, tier_performance_rows, TIER_PERFORMANCE_COLUMNS)
@@ -14147,18 +14368,30 @@ def _compact_tracker_setup_record(setup: dict) -> bool:
 def _compact_sealed_tracker_setups(tracker: dict, scan_date: str) -> int:
     """Compact every sealed record across all namespaces. Sealed records are recompute
     no-ops (see _tracker_setup_recompute_is_sealed), so their per-bar detail is never
-    rebuilt -- dropping it just shrinks the on-disk tracker. Returns the count changed."""
+    rebuilt -- dropping it just shrinks the on-disk tracker. Returns the count changed.
+    The detail is archived and verified first (tracker_detail_archive); a record whose
+    archive write did not verify is left whole and retried on the next save."""
     if not isinstance(tracker, dict):
         return 0
+    sealed = [
+        (namespace, str(key), setup)
+        for namespace in ("setups", "control_setups", "study_setups")
+        for key, setup in (tracker.get(namespace) or {}).items()
+        if isinstance(setup, dict) and _tracker_setup_recompute_is_sealed(setup, scan_date)
+    ]
+    try:
+        from tracker_detail_archive import archive_before_compaction
+
+        archived = archive_before_compaction(
+            sealed, json_default=_json_default, compact=_compact_tracker_setup_record
+        )
+    except Exception as exc:
+        logging.error("Setup tracker detail archive unavailable (%s); no sealed record compacted this save.", exc)
+        archived = set()
     compacted = 0
-    for namespace in ("setups", "control_setups", "study_setups"):
-        for setup in (tracker.get(namespace) or {}).values():
-            if not isinstance(setup, dict):
-                continue
-            if not _tracker_setup_recompute_is_sealed(setup, scan_date):
-                continue
-            if _compact_tracker_setup_record(setup):
-                compacted += 1
+    for namespace, key, setup in sealed:
+        if (namespace, key) in archived and _compact_tracker_setup_record(setup):
+            compacted += 1
     return compacted
 
 
