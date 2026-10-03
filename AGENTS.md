@@ -26,9 +26,9 @@ the tests that pin it in the plan.
 ## Commands
 
 - Test: `.venv\Scripts\python.exe -m pytest tests/ -q -n 8` (~10k tests, 4-7 min; ALWAYS
-  `-n 8` (capped to 4 in market hours and 2 from 22:00-02:00 PT; one parallel run at a
+  `-n 8` (capped to 4 in market hours and 2 from 02:00-06:00 PT; one parallel run at a
   time machine-wide, enforced in conftest) - trader rule 2026-09-22). No builders or test runs
-  22:00-02:00 PT: the night AI's model takes ~20 GB and the machine bluescreened 2026-09-24. Run the full suite in the background: it can pass
+  02:00-06:00 PT (the night AI window; it was 22:00-02:00 until 2026-10-02): the night AI's model takes ~20 GB and the machine bluescreened 2026-09-24. Run the full suite in the background: it can pass
   the 10-minute tool limit and be killed at 99%. While building, run
   your area only (`pytest tests/test_<area>*.py -q`); run the full suite before every
   commit and merge. Check pytest's exit code, not a piped tail. Always set
@@ -42,7 +42,7 @@ the tests that pin it in the plan.
 - Run: `trading_desk.cmd` (= `launch_gui.py`). **The desk runs from SOURCE on `main`**, so a
   pushed commit goes live at the next restart. One desk per machine.
 - Install: the venv has no pip — `uv pip install -r requirements-dev.txt -c constraints.txt --python .venv\Scripts\python.exe`.
-- The nightly AI lock (22:00–06:00 ET) makes ~40 `run_slots` tests fail; run the full
+- The nightly AI lock (02:00–06:00 PT) makes ~40 `run_slots` tests fail; run the full
   suite outside that window.
 
 ## Code map

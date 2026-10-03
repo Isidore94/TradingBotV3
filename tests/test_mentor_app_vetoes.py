@@ -377,7 +377,7 @@ def test_no_morning_card_on_a_weekend_or_after_a_session_without_vetoes(window, 
 def test_grading_is_queued_once_a_day_at_idle_priority_without_the_model(window, app):
     from mentor_app.prefetch import PRIORITY_IDLE
 
-    # P4: 22:00-06:00 PT the night's mentor_review owns grading, so the app's first chance is 06:00.
+    # P4: 02:00-06:00 PT the night's mentor_review owns grading, so the app's first chance is 06:00.
     window.clock["now"] = datetime(2026, 9, 30, 5, 0, tzinfo=PT)
     window.maybe_veto_card()
     assert "grade_challenges" not in window.queue.pending(), "the night owns grading until 06:00 PT"

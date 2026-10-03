@@ -23,10 +23,11 @@
 #   Unregister-ScheduledTask -TaskName 'TradingBotV3 AI Jobs Morning Retry' -Confirm:$false
 
 param(
-    # Defaults are the ET window (01:00-09:00) expressed in DESK LOCAL time,
+    # Defaults are the ET window (05:00-09:00) expressed in DESK LOCAL time,
     # because Task Scheduler triggers are local. On this Pacific desk that is
-    # 22:00-06:00. Change both if the desk moves timezone.
-    [string]$StartLocal = "22:00",
+    # 02:00-06:00 (was 22:00 until 2026-10-02: the trader codes with the local
+    # model into the early night). Change both if the desk moves timezone.
+    [string]$StartLocal = "02:00",
     # The last firing. Nothing fires at the 06:00 window end (trader 2026-09-29).
     [string]$LastStartLocal = "05:30",
     [int]$RepeatMinutes = 30,

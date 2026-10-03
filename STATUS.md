@@ -29,9 +29,9 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
   outcomes, candidates; night slot `history_pack`; 30-day trim OFF until readers use
   `read_history`); tracker detail archived before compaction; candidates clean-up packs before
   deleting. Gates #349-#351. Next: readers -> `read_history`, then trim on; gate #57 (1/5).
-- **Night window:** 22:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435; app uses
+- **Night window:** 02:00-06:00 PT on the RTX 5080 host (`claude-host`, tunnel 11435; app uses
   11436). Mini-PC's one local model: plan-rule gate (Kev-4B CPU). Host down: facts only;
-  rerun a missed night with `--session <date> --force`. No builds/merges/tests 22:00-02:00 PT.
+  rerun a missed night with `--session <date> --force`. No builds/merges/tests 02:00-06:00 PT.
 - **Owed:** trial ledger index; rolling-RRS leftovers on % (ask first); TLT/USO/HYG bars
   (ask first); halted-name refetch; movers into the night AI; phone-brief rule line; theta store.
 - **Next action:** gates #305, #300-#301, #297-#298, #258-#287. Left: B10, B2, C4a, Phase C.

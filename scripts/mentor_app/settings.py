@@ -1,7 +1,7 @@
 """The Trade Mentor app's settings and the GPU time-share clock. Qt-free.
 
 Every value is read through ``project_paths.get_local_setting``. The night AI owns
-the 5080 from 22:00 to 06:00 PT (its ai_jobs window) on tunnel port 11435; the app
+the 5080 from 02:00 to 06:00 PT (its ai_jobs window) on tunnel port 11435; the app
 stops using the model 15 minutes before that window opens and stays off until it
 closes, on its own port (11436 by default).
 """

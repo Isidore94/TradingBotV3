@@ -332,16 +332,18 @@ def is_session_day(now: datetime) -> bool:
 
 
 # ---------------------------------------------------------------- grading (no model)
-#: The night's `mentor_review` slot owns grading 22:00-06:00 PT; the app's idle job owns it the rest
+#: The night's `mentor_review` slot owns grading 02:00-06:00 PT; the app's idle job owns it the rest
 #: of the day. Both call :func:`grade_open`; the clock keeps them apart by construction.
-NIGHT_GRADING_START = time(22, 0)
+NIGHT_GRADING_START = time(2, 0)
 NIGHT_GRADING_END = time(6, 0)
 
 
 def night_owns_grading(now: datetime) -> bool:
-    """True from 22:00 to 06:00 PT: only the night slot may grade then, only the app outside it."""
+    """True from 02:00 to 06:00 PT: only the night slot may grade then, only the app outside it."""
     local = (now if now.tzinfo else now.astimezone()).astimezone(PT).time()
-    return local >= NIGHT_GRADING_START or local < NIGHT_GRADING_END
+    if NIGHT_GRADING_START <= NIGHT_GRADING_END:
+        return NIGHT_GRADING_START <= local < NIGHT_GRADING_END
+    return local >= NIGHT_GRADING_START or local < NIGHT_GRADING_END  # a window that wraps midnight
 
 
 def _veto_outcomes_path() -> Path:
