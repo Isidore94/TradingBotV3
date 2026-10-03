@@ -21,7 +21,7 @@ from mentor_app import settings, tunnel  # noqa: E402
 
 PT = ZoneInfo("America/Los_Angeles")
 LIVE_LIKE = {
-    "ai_offhours_start": "01:00",
+    "ai_offhours_start": "05:00",
     "ai_offhours_end": "09:00",
     "ai_local_model_medium": "gemma3:12b-tbv3ctx-64k",
     "ai_remote_gpu_ssh_alias": "claude-host",
@@ -66,9 +66,9 @@ def test_model_and_keep_alive_defaults(local_settings):
 @pytest.mark.parametrize(
     ("hh", "mm", "blocked"),
     [
-        (21, 44, False),  # the last free minute before the hand-back
-        (21, 45, True),   # 15 minutes before the 22:00 PT night window
-        (23, 30, True),
+        (1, 44, False),   # the last free minute before the hand-back
+        (1, 45, True),    # 15 minutes before the 02:00 PT night window
+        (3, 30, True),
         (5, 59, True),    # the night still owns it
         (6, 0, False),    # window closed: the app may load the model again
         (12, 0, False),

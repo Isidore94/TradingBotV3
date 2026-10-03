@@ -29,9 +29,9 @@ DESK_LIVE_START = dtime(6, 0)
 DESK_LIVE_END = dtime(13, 30)
 MARKET_HOURS_WORKER_CAP = 4
 
-#: Night-AI window, desk-local time, every day: the local model takes ~20 GB of RAM.
-NIGHT_AI_START = dtime(22, 0)
-NIGHT_AI_END = dtime(2, 0)
+#: Night-AI window, desk-local time, every day (02:00-06:00 PT since 2026-10-02).
+NIGHT_AI_START = dtime(2, 0)
+NIGHT_AI_END = dtime(6, 0)
 NIGHT_AI_WORKER_CAP = 2
 
 #: Default wait for another parallel run to finish before giving up.
@@ -66,7 +66,9 @@ def night_ai_could_be_running(now: datetime) -> bool:
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     local = now.astimezone(ZoneInfo(DESK_TIMEZONE)).time()
-    return local >= NIGHT_AI_START or local < NIGHT_AI_END
+    if NIGHT_AI_START <= NIGHT_AI_END:
+        return NIGHT_AI_START <= local < NIGHT_AI_END
+    return local >= NIGHT_AI_START or local < NIGHT_AI_END  # a window that wraps midnight
 
 
 def window_cap(now: datetime) -> int | None:

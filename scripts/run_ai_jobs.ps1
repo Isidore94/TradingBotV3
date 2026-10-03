@@ -98,7 +98,7 @@ function Test-LocalEndpoint {
 # child gets TRADINGBOTV3_AI_ENDPOINT_OVERRIDE pointing at the tunnel. Any
 # failure leaves the override unset and falls through to the local server.
 #
-# Night flags (one night = the evening's date, so 22:00-05:30 share one key):
+# Night flags (one night = the evening's date, so 02:00-05:30 share one key):
 #   gpu_host_dead-<night>.flag   the host failed tonight (preflight, or the job
 #                                lost it mid-run); later firings go local at once.
 #   gpu_host_woken-<night>.flag  this job woke the host, so this job powers it off

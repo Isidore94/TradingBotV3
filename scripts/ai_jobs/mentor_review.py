@@ -2,7 +2,7 @@
 
 Deterministic half (always, also with ``ask=False``, a budget cut or the model down):
 open ``MENTOR_CHAT_DB_FILE`` read-only, grade open challenges with
-``mentor_app.challenge.grade_open`` (model-free; only 22:00-06:00 PT, when the night
+``mentor_app.challenge.grade_open`` (model-free; only 02:00-06:00 PT, when the night
 owns grading), count the day's facts and publish them as ``mentor_day_facts`` to the
 ai_store. The counts also ride on the ledger row.
 
@@ -25,7 +25,7 @@ one line; ``check_brief`` rejects a foreign id and drops uncited items. Never a 
 Hypotheses (P11): the reply may carry <= 3 ``hypotheses``, each a query into the shadow
 permutation grid (the pack shows the newest report's vocabulary). The deterministic half
 looks each one up (``mentor_packs.hypothesis_pack.find``: no new compute), records it as a
-``hypothesis`` challenge (22:00-06:00 PT only, the night's write window) and publishes the
+``hypothesis`` challenge (02:00-06:00 PT only, the night's write window) and publishes the
 cell numbers or the miss reason in the digest as ``hyp:*`` lines. Nothing is applied.
 
 The chat DB writes are the grading columns (``outcome_json``, ``graded_utc``) and the new
@@ -1128,7 +1128,7 @@ def _grade(path: Path, moment: datetime, veto_outcomes: Any, *, permutation_hist
     from mentor_app import challenge
 
     if not challenge.night_owns_grading(moment):
-        return {"owner": "app", "graded": 0, "updated": 0, "reason": "outside 22:00-06:00 PT the app grades"}
+        return {"owner": "app", "graded": 0, "updated": 0, "reason": "outside 02:00-06:00 PT the app grades"}
     night_store = NightChallengeStore(path)
     try:
         updated = challenge.grade_open(night_store, moment, veto_outcomes=veto_outcomes,

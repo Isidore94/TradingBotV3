@@ -1769,7 +1769,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             uses_model=True,
         ),
         # Trade Mentor app P4 (2026-09-30), after `exit_note_fields`. Deterministic half
-        # (`ask=False`): grade open challenges 22:00-06:00 PT and publish the day's facts. Model
+        # (`ask=False`): grade open challenges 02:00-06:00 PT and publish the day's facts. Model
         # half: one cited day digest, then the coach brief, to the ai_store. P15a: the budget ranks
         # it right after the day review (`MODEL_SLOT_PRIORITY`); the run order is unchanged. Its
         # only chat-DB writes are the grading columns and its own hypothesis rows.
@@ -2023,8 +2023,8 @@ _STAGE_ONE_LAST_SLOT = "swing_path_facts"
 def _night_evening_date(moment: datetime):
     """The calendar date of the EVENING this night started, in ET.
 
-    A night is one night. The scheduled task fires every 30 minutes from 22:00
-    to 06:00 Pacific, so most of a night's firings happen on the FOLLOWING
+    A night is one night. The scheduled task fires every 30 minutes from 02:00
+    to 06:00 Pacific, so a night's firings happen on the FOLLOWING
     calendar date - and in ET, where the window is stored, Saturday night's
     firings are already stamped Sunday. Reading the date off the clock is
     exactly the seam that would file Saturday night's heavy slate under Sunday.

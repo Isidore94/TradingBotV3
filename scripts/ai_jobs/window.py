@@ -24,8 +24,8 @@ Gate 2 is the invariant; gate 1 is the preference. Both must pass to launch.
 
 The window bounds are stored in ET because every other time-reasoning surface
 in this system is market-local, and a desk that moves timezone should not
-silently move its inference schedule. On a Pacific desk, 22:00-06:00 local is
-01:00-09:00 ET.
+silently move its inference schedule. On a Pacific desk, 02:00-06:00 local is
+05:00-09:00 ET (trader 2026-10-02; it was 22:00-06:00 before).
 """
 
 from __future__ import annotations

@@ -25,8 +25,8 @@ from mentor_app.store import MentorChatStore  # noqa: E402
 PT = ZoneInfo("America/Los_Angeles")
 ET = ZoneInfo("America/New_York")
 SESSION = "2026-09-29"
-#: 23:00 PT Tuesday = 02:00 ET Wednesday: inside the night, processing Tuesday.
-NIGHT = datetime(2026, 9, 29, 23, 0, tzinfo=PT)
+#: 03:00 PT Wednesday = 06:00 ET: inside the 02:00-06:00 PT night, processing Tuesday.
+NIGHT = datetime(2026, 9, 30, 3, 0, tzinfo=PT)
 DAY_STAMP = "2026-09-29T17:00:00.000+00:00"  # 10:00 PT on the session
 
 
@@ -617,7 +617,7 @@ def test_an_issue_left_out_of_the_brief_keeps_its_first_seen_in_the_registry(ric
     assert len(published) == 5 and left_out, "six candidates, five in the brief"
     assert all(registry[key]["first_seen"] == SESSION and registry[key]["nights_seen"] == 1 for key in left_out)
     later = "2026-09-30"
-    mentor_review.run_mentor_review(session_date=later, now=datetime(2026, 9, 30, 23, 0, tzinfo=PT),
+    mentor_review.run_mentor_review(session_date=later, now=datetime(2026, 10, 1, 3, 0, tzinfo=PT),
                                     chat_db=rich["chat"], ai_root=tmp_path / "ai", ask=False,
                                     night_paths=rich["night_paths"], mirror_builder=rich["mirror_builder"])
     again = mentor_review.read_issue_registry(tmp_path / "ai")
@@ -625,7 +625,7 @@ def test_an_issue_left_out_of_the_brief_keeps_its_first_seen_in_the_registry(ric
     candidates = mentor_review.issue_candidates(rich["chat"], later, night_paths=rich["night_paths"],
                                                 registry=again)
     assert all(item["first_seen"] == SESSION for item in candidates if item["key"] in left_out)
-    mentor_review.run_mentor_review(session_date=later, now=datetime(2026, 9, 30, 23, 30, tzinfo=PT),
+    mentor_review.run_mentor_review(session_date=later, now=datetime(2026, 10, 1, 3, 30, tzinfo=PT),
                                     chat_db=rich["chat"], ai_root=tmp_path / "ai", ask=False,
                                     night_paths=rich["night_paths"], mirror_builder=rich["mirror_builder"])
     assert mentor_review.read_issue_registry(tmp_path / "ai")[left_out[0]]["nights_seen"] == 2, "a rerun counts once"
