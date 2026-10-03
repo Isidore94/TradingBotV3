@@ -10,15 +10,11 @@ Overwrite, don't append. Under 3 KB. History is `git log`.
 - **GUI:** 4K design live; selftests 105/105; long Qt runs still crash workers. Desk hitch
   fixes merged 09-30 (gate #337 on the first session).
 - **Trade Mentor app (merged 09-30, P0-P17 + Pause AI):** chat on gemma4:12b with native
-  tools, auto-attach from plain language, `/pick /vetoes /tape /check /news /book /mirror
-  /tilt /debate /hypotheses /brief /issues /recaps /paste /feel /night /scorecard /rs /alerts`;
-  memory stands on the night; `mentor_app_enabled` on by default; frontier OFF (trader).
-  Gates #311-#318, #321-#326, #329, #332-#336.
-- **Merged 2026-10-01 (live at the next desk + app restart):** P18 journal mode, habits/routines,
-  `reads_pack`, 60 s M5 publisher, trade-intent gate (#341-#344); P20 plain replies (#345);
-  Mentor UI: Tape/Tilt/Mirror/Scorecard, Dock tab, Clear, A-/A+ (#346); book ignores
-  broker-flat journal opens; day-1 fixes (short WIN/LOSS, alert follow-through, VWAP side, plan
-  infer, facets, pause unload, vs-peers, follow-up carry).
+  tools, auto-attach from plain language, slash commands (`/pick` ... `/alerts`); memory stands
+  on the night; `mentor_app_enabled` on by default; frontier OFF. Gates #311-#336 (part).
+- **Merged 2026-10-01:** P18 journal mode, habits/routines, `reads_pack`, 60 s M5 publisher,
+  trade-intent gate (#341-#344); P20 plain replies (#345); Mentor UI: Tape/Tilt/Mirror/Scorecard,
+  Dock tab (#346); book ignores broker-flat journal opens; day-1 fixes.
 - **Night (2026-09-30):** retries x3, budget 360, care names briefed nightly (#331), nightly
   permutation report (#330, shadow). Merged 10-01 (#338): P19 night rejections, digest cap,
   mentor digest retry. Next: morning pre-brief queue; rule audit once plan lines exist.
